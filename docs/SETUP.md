@@ -2,7 +2,7 @@
 
 ## 1. Install Android
 
-Download `RLLM-Lab.apk` from the published release asset when available, or the [verified Drive backup](https://drive.google.com/file/d/1vwBMBsHQ_9Nz2wCQBHXd_onkl2PfksLz/view). Open the APK on a compatible Android 8.0+ ARM64 or x86-64 device and follow Android's installation prompts. If Android asks, allow installation for the browser or file manager you used; this is not permission for RLLM to install other apps.
+Download [RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793062000/RLLM-Lab.apk) from the GitHub pre-release. Open the APK on a compatible Android 8.0+ ARM64 or x86-64 device and follow Android's installation prompts. If Android asks, allow installation for the browser or file manager you used; this is not permission for RLLM to install other apps.
 
 For an existing **RLLM Lab** installation, install the newer APK over it. Do not uninstall or clear storage to resolve an update error: that can remove local history. A signature mismatch means the APK was signed by a different key. Keep the original installation and check the artifact first. The publisher's Lab package is `com.local.client.lab`.
 
