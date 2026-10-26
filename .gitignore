@@ -1,0 +1,13 @@
+output/
+private/
+*.p12
+*.jks
+*.keystore
+*.password
+.env
+local.properties
+build-env.sh
+*.apk
+!release/RLLM-Lab.apk
+*.idsig
+.DS_Store
