@@ -10,9 +10,9 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://drive.google.com/file/d/1vwBMBsHQ_9Nz2wCQBHXd_onkl2PfksLz/view) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793062000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
-The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). A GitHub Release and its direct-download URL have not yet been published; the link above is the verified Drive copy.
+The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
 Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793062000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
 
