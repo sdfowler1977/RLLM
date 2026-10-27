@@ -437,6 +437,7 @@ public final class Activity extends android.app.Activity {
                 total+=count;if(total>Math.min(2*1024*1024,limit))throw new IOException("Stream exceeds the current response memory budget");
                 JSONObject part=(JSONObject)Core.call(new JSONObject().put("op","stream_feed").put("id",id).put("data",Base64.encodeToString(Arrays.copyOf(buffer,count),Base64.NO_WRAP)));
                 text.append(part.optString("delta"));long now=android.os.SystemClock.elapsedRealtime();if(metrics[2]<0&&text.length()>0)metrics[2]=now-started;
+                if(part.has("error"))throw new IOException(part.getString("error"));
                 if(text.length()!=published&&now-previous>=250){streamProgress(token,text.toString(),ticket,started);published=text.length();previous=now;}
                 if(part.optBoolean("complete"))break;
             }
