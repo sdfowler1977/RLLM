@@ -49,5 +49,9 @@ pub(super) fn modal_for(st:&Json)->Json {
     fields.push(field_ui("context_bytes","Context budget (UTF-8 bytes; optional)",&text(p,"context_bytes"),"text"));
     fields.push(field_ui("compaction_bytes","Compaction reminder (UTF-8 bytes; optional)",&text(p,"compaction_bytes"),"text"));
     fields.push(field_ui("support","Provider support","Choose only settings supported by this model/server. Server default sends no thinking override. Estimated token budgets are approximate. Byte budgets count exact UTF-8 message content. Neither increases server capacity.","readonly"));
-    modal("Thinking and context",fields,vec![button("Apply to connection","generation_apply"),button("Reset overrides","profile_generation_reset")])
+    fields.push(field_ui("model_metadata","Model-reported capabilities",&model_metadata::display(st),"readonly"));
+    let mut buttons=vec![button("Apply to connection","generation_apply"),button("Reset overrides","profile_generation_reset")];
+    if ["content","local"].contains(&protocol.as_str()) {buttons.insert(0,button("Read model capabilities","model_metadata"));}
+    if protocol=="local" {buttons.insert(1,button("Read server version","model_metadata_version"));}
+    modal("Thinking and context",fields,buttons)
 }

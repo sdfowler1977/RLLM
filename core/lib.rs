@@ -9,6 +9,9 @@ mod provider;
 mod generation;
 mod resources;
 mod stream;
+mod mcp_lifecycle;
+mod mcp_schema;
+mod mcp_identity;
 mod document;
 use std::{collections::BTreeMap, ffi::CString, os::raw::c_char};
 
@@ -394,7 +397,9 @@ fn response(v: &Json) -> Result<Json> {
 fn operation(input: &str) -> Result<Json> {
     let v = parse(input)?;
     match field(&v, "op")? {
-        "stream_open" | "stream_feed" | "stream_finish" | "stream_close" => stream::operation(&v),
+        "stream_open" | "stream_feed" | "stream_finish" | "stream_close" | "stream_control_ack" | "stream_control_probe" | "stream_abandon" | "stream_suspend" | "stream_resume" | "stream_resume_close" | "stream_resume_probe" | "stream_resume_summary" | "stream_prepare" | "stream_open_cleanup" | "stream_owner_cancel" => stream::operation(&v),
+        "mcp_cleanup_response" => mcp_lifecycle::response(&v),
+        "mcp_cleanup_plan" => mcp_lifecycle::plan(v.get("context")?,field(v.get("context")?,"session")?,false),
         "phone_revision_check" => document::operation(&v),
         "layout" => layout::plan(&v),
         "script" => execution::run(&v),

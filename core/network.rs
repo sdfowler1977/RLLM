@@ -137,7 +137,7 @@ pub fn wire(
     if body.len() > 4 * 1024 * 1024 {
         return Err("Request exceeds 4 MiB".into());
     }
-    if !["GET", "POST", "PUT", "PROPFIND", "MKCOL"].contains(&method) {
+    if !["GET", "POST", "PUT", "PROPFIND", "MKCOL", "DELETE"].contains(&method) {
         return Err("Unsupported HTTP method".into());
     }
     let host = if u.host.contains(':') {
