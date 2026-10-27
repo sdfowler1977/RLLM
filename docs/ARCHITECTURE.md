@@ -14,13 +14,13 @@ App state is encrypted using an Android Keystore-backed key and AES-GCM. This is
 
 ## Requests and observations
 
-Each model operation gets a ticket. Late callbacks cannot simply attach to the next request. Streaming progress is provisional until completion; interruptions retain partial text with its status. Request history holds a bounded set of observations.
+Each model operation gets a ticket. Late callbacks cannot simply attach to the next request. Streaming progress is provisional until completion; interruptions retain partial text with its status. Rust decoders support local NDJSON plus chat-completions, Messages and Content SSE. HTTP integrity and the selected protocol completion marker are both required. Decoder/session bounds prevent unbounded accumulation, and visible text is separate from hidden reasoning and provider-reported token metadata. Request history holds a bounded set of observations.
 
 `core/throughput.rs` derives the marked local estimate from received response text and elapsed request time. `core/monitor.rs` presents it alongside duration, first-text, character-rate and error information. Provider token usage and optional remote hardware metrics are separate sources.
 
 ## Tool boundary
 
-Profiles specify permitted tools, reusable skills and callable subagents. The app reviews proposed operations and executes the accepted operation through the appropriate owned core/platform implementation. A model's prose, tool result or saved lesson is not a permission grant. Current refinement uses bounded baseline/proposal/probe/composition/adoption stages, while delegation captures parent and child context separately.
+Profiles specify permitted tools, reusable skills and callable subagents. The app reviews proposed operations and executes the accepted operation through the appropriate owned core/platform implementation. A model's prose, tool result or saved lesson is not a permission grant. Current refinement uses bounded baseline/proposal/probe/composition/adoption stages, while delegation captures parent and child context separately. Explicit refinement can snapshot up to four recent global adopted lessons as bounded, untrusted proposal/composition examples. The user can opt out; historical examples never grant tools or override protected instructions.
 
 ## Platform boundaries
 

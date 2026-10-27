@@ -2,7 +2,7 @@
 
 ## 1. Install Android
 
-Download [RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793062000/RLLM-Lab.apk) from the GitHub pre-release. Open the APK on a compatible Android 8.0+ ARM64 or x86-64 device and follow Android's installation prompts. If Android asks, allow installation for the browser or file manager you used; this is not permission for RLLM to install other apps.
+Download [RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793072000/RLLM-Lab.apk) from the GitHub pre-release. Open the APK on a compatible Android 8.0+ ARM64 or x86-64 device and follow Android's installation prompts. If Android asks, allow installation for the browser or file manager you used; this is not permission for RLLM to install other apps.
 
 For an existing **RLLM Lab** installation, install the newer APK over it. Do not uninstall or clear storage to resolve an update error: that can remove local history. A signature mismatch means the APK was signed by a different key. Keep the original installation and check the artifact first. The publisher's Lab package is `com.local.client.lab`.
 
@@ -57,7 +57,7 @@ API type:        OpenAI-compatible chat
 | Anthropic messages | `/v1/messages` | `x-api-key` |
 | Google content | `/v1beta/models/{model}:generateContent` | `x-goog-api-key` |
 
-For OpenAI chat, a URL ending in `/v1` is expanded to `/v1/chat/completions`. The older `/v1/completions` text endpoint is a different API. A custom full path is preserved. Advanced options expose streaming and custom authentication header/prefix controls; change these only when the service requires them.
+For OpenAI chat, a URL ending in `/v1` is expanded to `/v1/chat/completions`. The older `/v1/completions` text endpoint is a different API. A custom full path is preserved. Advanced options expose streaming and custom authentication header/prefix controls; change these only when the service requires them. All four text API formats now support streaming. Turn off **Stream replies** for a server that requires complete JSON. Messages keeps its required output-token setting. Content standard method URLs switch between `:streamGenerateContent?alt=sse` and `:generateContent` only for the request; the saved connection remains intact. Custom paths and unrelated query fields remain, while conflicting/duplicate `alt` settings are refused before sending.
 
 Use the actual scheme supported by the server. A plain HTTP listener cannot accept HTTPS merely because an `s` is added to its URL. Explicit `http://` is supported for a trusted LAN/VPN; hosted connections should use the provider's documented HTTPS endpoint.
 

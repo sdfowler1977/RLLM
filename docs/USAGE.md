@@ -6,6 +6,12 @@ The top pencil edits the current connection. The footer's left control selects a
 
 The plus beside the composer opens conversation actions. On very constrained keyboard layouts, the compact connection menu also provides access to conversation actions and the main-agent picker. The navigation menu keeps **Chat**, **History**, **Workspace**, **App settings**, and **Agent settings** separate.
 
+## Streaming replies
+
+Local chat, chat-completions, Messages and Content connections stream visible text by default. Use the connection pencil → Advanced → **Stream replies** to opt out. Compatible complete JSON replies remain supported. Content standard method URLs derive the streaming or complete-response method for the current request without changing the saved URL; custom proxy paths and unrelated query fields stay intact. Conflicting streaming query options fail before dispatch.
+
+Hidden reasoning/thoughts, signatures and structured tool fields do not become transcript text or input to the approximate rate. Unsupported structured tools/code/media are refused without execution. Completion requires the provider completion signal and a complete HTTP response; cancellation, server error or truncation retains received text marked Interrupted. Provider-reported usage remains separate from the local estimate.
+
 ## History and deletion
 
 Open **History** to return to an earlier conversation. Its options control exposes that conversation's actions. **Delete conversation** asks for confirmation and moves the selected chat to **Trash**. Trash can restore the chat or permanently delete that specific item after another confirmation. Closing a confirmation makes no deletion. An active chat's saved draft stays with the trashed conversation.
@@ -40,7 +46,7 @@ Set the default compaction connection in **Agent settings → Default models**. 
 
 ## Refinement
 
-The task refinement workflow captures a baseline, proposes a candidate profile, runs a bounded read-only probe, composes a result, and lets you explicitly adopt the new profile. The original profile and global tool restrictions remain protected. Saved refinement records are inspectable, but this build does not automatically feed all saved lessons into later tasks or train the underlying model.
+The task refinement workflow captures a baseline, proposes a candidate profile, runs a bounded read-only probe, composes a result, and lets you explicitly adopt the new profile. The original profile and global tool restrictions remain protected. The Refine form has a default-on **Use recent adopted lessons when refining (shared across profiles)** checkbox. It captures up to four valid records from the latest sixteen, with bounded UTF-8 fields. Turn it off to opt out for that refinement. The snapshot stays fixed through review and restart; review shows captured records, truncation and unknown legacy provenance. These untrusted examples enter only proposal/composition user messages, never protected instructions, baseline/probe/chat/delegate/compaction requests or tool permissions. Explicit adoption still creates a separate profile and preserves the original. This does not train model weights or enable automatic background learning or multi-round parallel refinement.
 
 ## Workspace and exports
 

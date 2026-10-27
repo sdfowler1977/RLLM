@@ -49,7 +49,7 @@ unset CLIENT_KEY_PASSWORD
 
 The default `main` variant uses `com.local.client`, separately from the distributed `com.local.client.lab`. Your signing key is not the publisher's key. A differently signed APK cannot update the publisher's installed Lab app. Do not change, publish, or request the publisher's private key to make an update work.
 
-For authorized maintainers using the existing Lab signing identity, set `CLIENT_VARIANT=lab` and an increasing integer `CLIENT_VERSION_CODE` before running the same script. Preserve the established signing identity. The provided Lab build has version code `1793062000`; subsequent Lab updates must increase it.
+For authorized maintainers using the existing Lab signing identity, set `CLIENT_VARIANT=lab` and an increasing integer `CLIENT_VERSION_CODE` before running the same script. Preserve the established signing identity. The provided Lab build has version code `1793072000`; subsequent Lab updates must increase it.
 
 ## Core checks
 
@@ -58,10 +58,11 @@ On a supported Linux host, from the repository root:
 ```bash
 mkdir -p output/checks
 rustc --edition=2021 --test core/lib.rs -o output/checks/core-checks
-output/checks/core-checks
+output/checks/core-checks --skip archive --skip network_project_zip_routes_to_review_without_text_decoding \
+  --skip binary_network_zip_reaches_import_preview
 ```
 
-The publication copy preserves the product files, including inline core checks. The source used for this APK passed 145 Rust checks. Those checks are not a substitute for installed Android behavior or the separately outstanding archive-import review.
+The publication copy preserves the product files, including inline core checks. The current source defines 155 Rust checks. The final owner run passed 138 non-archive checks with 17 filtered out. A separate reviewer ran 17 stream and five provider checks, four public C ABI/real-TCP Content groups and fresh related regressions, then rebuilt both Android Rust/JNI libraries, DEX, resources and manifest: all 24 runtime payload members matched the supplied APK exactly. v2/v3 signatures and ZIP/ELF 16 KiB alignment passed. The command above excludes the archive checks covered by an unresolved independent-review restriction; this publication does not certify archive behavior. Installed Android and live-provider acceptance remain open.
 
 ## Verify the supplied APK
 
@@ -73,7 +74,7 @@ sha256sum release/RLLM-Lab.apk
 Expected SHA-256:
 
 ```text
-b8c756cc2987921148521a7e018f1c2d125864adf68766ab44fcc31f14870153
+7fad882d3fb59d795f991106fa373ba9b7070edffad6f1c604a3c688ca9616f4
 ```
 
 Expected signer certificate SHA-256:
