@@ -2,9 +2,9 @@
 
 The public repository is [sdfowler1977/RLLM](https://github.com/sdfowler1977/RLLM).
 
-The Android test build is published as [lab-1793141800](https://github.com/sdfowler1977/RLLM/releases/tag/lab-1793141800). [Download RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793141800/RLLM-Lab.apk).
+The Android test build is published as [lab-1793143400](https://github.com/sdfowler1977/RLLM/releases/tag/lab-1793143400). [Download RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793143400/RLLM-Lab.apk).
 
-The verified APK SHA-256 is `a27f11f6f43e417c1dce091a7be9536ce37296309fc98015d292516c5a9eaa97`. The APK is 5,871,577 bytes.
+The verified APK SHA-256 is `ceef4561106dca94a331939c505a7b3a500ada370b2ea1319e4ee3c47fa8dd66`. The APK is 5,912,537 bytes.
 
 ## Repository contents
 
@@ -20,4 +20,4 @@ Build and sign using the documented Lab identity, update the artifact checksum a
 
 GitHub publication does not create an iOS build. No IPA is included.
 
-GitHub is the primary destination for public source and test APKs. Routine duplicate Drive uploads of these public deliverables are discontinued. Existing Drive backups are retained; private signing material and private checkpoints remain excluded from this public repository.
+Public source, test APKs and checksums are saved to BOTH GitHub and the authorized Google Drive folder, as requested. Prior copies are retained. Full private engineering checkpoints and signing material remain private and excluded from this public repository.

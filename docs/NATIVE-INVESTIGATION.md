@@ -1,3 +1,15 @@
+# Finding and using native investigation
+
+The native engines are Rust modules linked into the app's `libclient.so`, loaded by the existing Android/JNI binding. There is no separate REA executable, binary path, native process to launch, or native `discover` handshake. `rea` is the optional remote MCP operation; it does not invoke the built-in engines. An empty workspace means no input files are present, not that the APK lacks its native code.
+
+The harness supplies compiled capability facts to ordinary and recursive model requests, even when optional additional guidance is off. The same facts are visible at **App settings → Diagnostics → Implementation status**. The prior status modal had no navigation button; this build fixes that route.
+
+Ask ordinary questions about what you want to understand, build or debug. The model should locate the relevant input with permitted `list`, `read` and `search`, use `inspect(path)` for structural observations or `compare(path,other)` for byte comparisons, and base the next step on actual results. These are internal operations; you do not need to name a REA skill.
+
+For a tool proposal, the model's entire response must be bare JSON, for example `{"tool":"list","args":{"path":"."}}`. No prose, Markdown fences or XML wrappers may accompany the proposal. An empty list calls for an input file or target location. It is not evidence that the built-in engine is absent. To check behavior, create or provide a known JSON/Rust/text fixture, inspect it, and compare the returned observations to the actual fixture.
+
+Current compiled passes: JSON structure; CSV/TSV record shape; Unicode text; byte comparison; RIFF/WAVE; WebAssembly sections; Rust lexical declarations; ELF32/64 structure and linkage candidates; HTML source-order structure; CSS token structure. Static web reading returns page text, links and native HTML counts. The HTML/CSS machinery is a foundation for capture, not a completed browser renderer. Full upstream feature parity, deeper analysis, cascade/layout/painting, JavaScript and rendered screenshots remain implementation work, not capabilities to infer from the language used.
+
 # Native investigation
 
 Investigation is part of ordinary questions, programming, debugging and recursive tasks. You do not need to select a REA skill or supply a computer running an analysis server. Original Rust components inside the harness produce observations for the model to use.

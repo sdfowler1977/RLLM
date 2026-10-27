@@ -77,3 +77,6 @@ The model can propose these internal operations as part of an ordinary question;
 
 
 The native Rust-source and ELF passes read only the already captured inspection bytes. They perform no network requests, program execution, dependency loading or additional file reads. The source pass reports lexical names/locations; the ELF pass reports declared offsets, mappings and names. Existing file access and task routing remain in force.
+
+
+HTML structure and CSS token summaries are produced locally from captured bytes. They contain counts/status; the internal trees preserve source spans for future native rendering work. The parsers do not fetch referenced URLs, execute scripts or render pages. Existing extraction/file samples remain separate returned evidence.
