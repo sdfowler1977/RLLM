@@ -2,8 +2,12 @@
 
 The native `capture` operation reads the selected workspace HTML file and selected workspace TrueType font, or a compatible Android system font when the font field is blank. Font data is read through original Rust code; no external analysis/browser program is installed or launched. It creates a new PNG in the app workspace and verifies the bytes. It never overwrites an existing filename. Captured pixels can contain the selected document's visible data; the result identifies the output file and observed rendering scope. Existing operation review and agent tool choices apply. The PNG is not automatically uploaded or inserted as a model image; the textual operation result follows the current model route. Export the file explicitly through the existing project-file storage action. Interrupted new output can remain for inspection.
 
-The current renderer handles supported local HTML/CSS and unhinted TrueType glyphs only. It does not fetch external resources, run scripts, retain browser cookies or create a browser session. Complete web capture/interaction remains active work. Android default-font resolution has compiled bindings but still needs installed-device validation. No earlier permission or storage control is removed.
+The current renderer handles supported local HTML/CSS, unhinted TrueType glyphs and decoded PNG images. Relative workspace stylesheet and image files are read as part of the reviewed capture, including local paths qualified by URL query/fragment. Inline base64 PNG data is decoded. It does not yet fetch remote resources, run scripts, retain browser cookies or create a browser session. Complete web capture/interaction remains active work. Android default-font resolution has compiled bindings but still needs installed-device validation. No earlier permission or storage control is removed.
 
+---
+## Native Rust source observations — 2026-10-27
+
+Selected `.rs` files now pass through an original bounded Rust lexical observer in the existing inspect path. It reports declaration-shaped names/locations and unresolved use/module/impl relationships while excluding comments and string/character contents from this lexical section. Actual ordinary and recursive model continuation was independently exercised. This does not yet compile, expand macros, resolve types/modules, or reconstruct a call graph. Full native universal investigation and rendered capture remain active implementation work. This addition is later than the published1793140000 APK.
 
 ## Local model URL entry — HTTP default correction
 
@@ -81,13 +85,3 @@ The harness accepts reviewed tool proposals as bare JSON. A model response begin
 Investigation is part of ordinary and recursive tasks. The local Rust `inspect` operation reads the selected workspace file and reports observed bytes, document structure and supported format fields. File sampling and each analyzer state their coverage; a sampled prefix is not treated as the whole file. `compare` reads two selected workspace files and reports positional byte differences; matching incomplete prefixes do not establish full-file equality. Neither operation launches Node, REA, desktop analyzers or an external analysis server.
 
 The model can propose these internal operations as part of an ordinary question; the existing operation review and agent tool choices remain. Results return through the originating task/model route, so approved observations may be sent to that configured model provider. Additional investigation guidance preferences do not switch off the underlying native process. An optional configured remote MCP connection remains separate from local analysis. Full universal investigation and rendered webpage capture are still implementation work.
-
-
-The native Rust-source and ELF passes read only the already captured inspection bytes. They perform no network requests, program execution, dependency loading or additional file reads. The source pass reports lexical names/locations; the ELF pass reports declared offsets, mappings and names. Existing file access and task routing remain in force.
-
-
-HTML structure and CSS token summaries are produced locally from captured bytes. They contain counts/status; the internal trees preserve source spans for future native rendering work. The parsers do not fetch referenced URLs, execute scripts or render pages. Existing extraction/file samples remain separate returned evidence.
-
-## Selected chat attachments
-
-The Android file picker reads only the file you select for attachment. PNG/JPEG image bytes are retained with the conversation draft in encrypted app state and sent to the selected provider only when you send or explicitly start a task using that draft. UTF-8 text files append to the draft. Switching chats, changing the agent/connection or restarting invalidates pending picker results. Removing an unsent image removes it from that draft; previously sent images remain in conversation history and provider requests until context is explicitly changed. The UI receives attachment metadata without a duplicate encoded payload.
