@@ -1,5 +1,6 @@
 //! Bounded, non-executing file and web evidence tools.
 use super::*;
+pub(super) const NATIVE_CAPABILITIES:&str="Compiled native investigation capabilities: original Rust modules inside this Android app's client native library, called through the harness. There is no separate REA executable, binary path, process launch, or native discover handshake. The rea operation denotes only an optional configured remote MCP connection. An empty workspace means no input files are present, not that the built-in analyzers are absent. Use permitted list/read/search to locate actual inputs, inspect(path) for local observations, and compare(path,other) for byte differences; return findings to the current question or recursive task. Inspect includes JSON structure, CSV/TSV record shape, Unicode text, RIFF/WAVE structure, WebAssembly section envelopes, Rust lexical declarations, ELF32/64 headers/mappings/symbol and dependency-name candidates, HTML source-order structure, and CSS token structure. These are bounded observations with complete/prefix status. Web reading includes static text/links and HTML structure counts. Full upstream REA parity, native rendered capture, CSS cascade/layout/painting, JavaScript execution and deep decompilation remain implementation work; do not infer those capabilities from the Rust implementation language. Use this compiled description rather than earlier conversational guesses when explaining what is implemented. To demonstrate behavior, inspect an available target and use its actual returned result. If the workspace is empty, ask for the target/input location instead of inventing a binary path.";
 pub(super) fn inspect(p: &Path) -> Result<String> {
     let mut f=fs::File::open(p).map_err(|e|e.to_string())?;
     let meta=f.metadata().map_err(|e|e.to_string())?;
@@ -20,6 +21,12 @@ pub(super) fn inspect(p: &Path) -> Result<String> {
     }
     if data.starts_with(b"\x7fELF") {
         structure.push('\n');structure.push_str(&super::elf_observation::analyze(&data,complete,after.len()));
+    }
+    if matches!(p.extension().and_then(|v|v.to_str()),Some("html"|"htm")) {
+        structure.push('\n');structure.push_str(&super::html_document::parse(&data,complete).summary());
+    }
+    if p.extension().and_then(|v|v.to_str())==Some("css") {
+        structure.push('\n');structure.push_str(&super::css_syntax::tokenize(&data,complete).summary());
     }
     if [b"RIFF".as_slice(),b"RIFX",b"RF64",b"\0asm"].iter().any(|magic|data.starts_with(magic)) {
         structure.push('\n');structure.push_str(&super::binary_observation::analyze(&data,complete,after.len()));
@@ -69,7 +76,10 @@ pub(super) fn page(body:&str)->Result<String>{
         }else{let i=rest.find('<').unwrap_or(rest.len());if hidden.is_empty(){for c in rest[..i].chars(){if output.len()+c.len_utf8()>98304{break;}output.push(c);}}rest=&rest[i..];}
     }
     for(a,b)in [("&amp;","&"),("&lt;","<"),("&gt;",">"),("&quot;","\""),("&#39;","'"),("&nbsp;"," ")]{output=output.replace(a,b);}
-    Ok(byte_limit(&format!("{}\n\nPage link targets (may be relative; not fetched):\n{}\nStatic extraction only; website JavaScript was not executed.",output.trim(),links.join("\n")),120000))
+    let document=super::html_document::parse(body.as_bytes(),true);
+    let summary=document.summary();
+    let observed=format!("{}\n\nPage link targets (may be relative; not fetched):\n{}\nStatic extraction only; website JavaScript was not executed.",output.trim(),links.join("\n"));
+    Ok(format!("{}\n\n{}",byte_limit(&observed,120000usize.saturating_sub(summary.len()+2)),summary))
 }
 fn byte_limit(text:&str,max:usize)->String{let mut n=text.len().min(max);while !text.is_char_boundary(n){n-=1;}text[..n].to_string()}
 #[cfg(test)]mod checks{use super::*;
