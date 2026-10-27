@@ -1,26 +1,18 @@
-# RLLM Lab — native Rust investigation
+# RLLM Lab — Rust source and ELF investigation
 
-Test build `0.1-lab.1793140000`, package `com.local.client.lab`. Install over existing Lab without uninstalling or clearing data. Earlier releases remain available.
+Test build `0.1-lab.1793141800`, package `com.local.client.lab`. Install over existing Lab without uninstalling or clearing data. Prior releases remain available.
 
-## Implemented
+This build adds original, local Rust source and ELF analysis to ordinary questions and recursive tasks:
 
-- Repaired the advertised `inspect` operation being rejected by model-tool validation before reaching its Rust handler.
-- Original local Rust JSON structure, delimited-record, Unicode text and heading observations, connected to ordinary questions and recursive tasks.
-- Original local byte comparison with observed differing offsets and explicit full-file versus prefix coverage.
-- Original RIFF/WAVE chunk/format observations and WebAssembly v1 section/custom-name envelopes. No external REA program, Node/npm or computer-hosted analysis server is required for these engines.
-- Inherent investigation guidance throughout ordinary and recursive work. Existing custom guidance controls now clearly edit additional preferences. Optional remote MCP is advertised only when configured and permitted; it is not the native implementation.
-- Published format feedback and latest web-proposal capacity fixes are merged; existing app usage, profiles, storage, analytics and provider behavior are retained.
+- Rust source: declaration-shaped names and locations, unresolved module/use/impl relationships, with comments and ordinary/raw/byte/C strings excluded from the lexical section.
+- ELF32/ELF64, either byte order: declared LOAD file/address mappings, section names, bounded symbol and dynamic dependency-name candidates, and explicit incomplete/compressed/malformed observations.
+- Investigation settings now consistently edit additional guidance; the existing remote connection is clearly optional. No Node/npm, external REA installation or required computer/server provides these engines.
+- Retains prior native JSON/table/text/WAVE/WASM inspection, byte comparison, format feedback, web-result handling, profiles, storage and analytics.
 
-See [native investigation](https://github.com/sdfowler1977/RLLM/blob/main/docs/NATIVE-INVESTIGATION.md) and the [complete retained scope](https://github.com/sdfowler1977/RLLM/blob/main/docs/INVESTIGATION-SCOPE.md). These functional pieces do not reduce the universal investigation requirement. Full reconstruction/runtime analysis, native rendered browser capture and the remaining domains are still open.
+These passes return actual local observations to the originating model request in ordinary and recursive workflows. Full native universal exploration remains the scope; deeper reconstruction, execution analysis and native rendered capture remain open.
 
-## Validation
+Independent connected tests cover both new engines and previous structural, binary, format and web paths. Independent package reconstruction matched all24 runtime payloads: both native/JNI ABIs, DEX and21resources/assets. Stable signer, v2/v3, CRC and ZIP/ELF16KiB alignment passed. No installed-device or full-project acceptance is claimed. The unchanged archive importer retains its recorded independent-review limitation.
 
-Independent public C ABI checks cover document structure, byte comparison, binary envelopes, ordinary and recursive actual-result continuation, malformed/sample/bounds cases, plus format and web regressions. Focused Rust checks also passed. Independent reconstruction matched all 24 APK runtime entries (both native/JNI ABIs, DEX and 21 resources). Stable Lab signer, ZIP integrity and ZIP/ELF alignment were checked. No installed-device or full-project acceptance is claimed. The unchanged archive-import repair retains its previously recorded independent-review limitation.
+APK: 5871577 bytes. SHA-256 `a27f11f6f43e417c1dce091a7be9536ce37296309fc98015d292516c5a9eaa97`. Stable Lab certificate `a36bcaabf60626403ccffd32aaf442182efcd3cae82104f2e17c0cfc344749a2`.
 
-## Download identity
-
-`RLLM-Lab.apk`: 5822425 bytes; version code `1793140000`.
-SHA-256: `73557310e2a68ce14b99ead26722d0fe9eb0af82c10f77949270cfdbd3ddd8c7`.
-Stable Lab certificate: `a36bcaabf60626403ccffd32aaf442182efcd3cae82104f2e17c0cfc344749a2`.
-
-Matching public source and checksums are attached. GitHub remains the primary destination for public code/APKs; no duplicate routine Drive upload of these public deliverables. Private configuration, checkpoints and signing material are excluded.
+Use attached `RLLM-source.zip` for matching full public source. Private checkpoints and signing material are excluded.
