@@ -8,8 +8,8 @@
     "sha256": "b6369c2196bf4bbff999a1ee29392ff7ee45b3d23f2ec482e500873673ae102e"
   },
   "README.md": {
-    "bytes": 7190,
-    "sha256": "d11b3f4292905701eefd838618766c730174a68e87ce081d1e04b5c3da795f57"
+    "bytes": 7652,
+    "sha256": "dc9666589f041627c77d7b995b425b61b43b89e3722895f30d1e4e90f0a246bd"
   },
   "core/.gitkeep": {
     "bytes": 1,
@@ -20,12 +20,20 @@
     "sha256": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be"
   },
   "core/application.rs": {
-    "bytes": 250044,
-    "sha256": "6627a5dc8cb0c0e2563aa941369713a6cdb6e65a7237c7d8ce480d333de7348b"
+    "bytes": 251490,
+    "sha256": "27536d7dd0094f1567ad71c03933fe85c28f7dc49deaa6721d3238c72074f877"
   },
   "core/archive.rs": {
     "bytes": 58552,
     "sha256": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b"
+  },
+  "core/binary_observation.rs": {
+    "bytes": 17215,
+    "sha256": "4fd20bc6289d1fa6156cc6e4e63c32a7064519347f5cd29de7c29615cae75d67"
+  },
+  "core/comparison.rs": {
+    "bytes": 3142,
+    "sha256": "8d356637f5584c0248fe16e7b44530a9a6e7f1843b80e0a74022faf0322c811d"
   },
   "core/compression.rs": {
     "bytes": 8718,
@@ -43,6 +51,10 @@
     "bytes": 4287,
     "sha256": "03244c704548c9b5420584d01f8babb480b2d3d5ce2d4d429b7c7a7470a35134"
   },
+  "core/exploration.rs": {
+    "bytes": 14715,
+    "sha256": "fae803621412bb23577bcfb4157841ba6cea93a8bd2aebba8ae07650a0ecbefe"
+  },
   "core/gateway.rs": {
     "bytes": 9470,
     "sha256": "0e7cf3c61fc46b92d031be49478e6b317c7b5b505d70bf8e442be1f4a3385a02"
@@ -56,16 +68,16 @@
     "sha256": "98f194459bdbc47b25e1bec5f8a45d2a393984453a135b1153f03a83dd562823"
   },
   "core/harness.rs": {
-    "bytes": 86799,
-    "sha256": "533c405591e313dadda140266d69bbe8f1c042828e40d2613085531d3af8341b"
+    "bytes": 87341,
+    "sha256": "c50caaedad1de40c13e505407b515c8381cce889ccf66d044838810a9599fd30"
   },
   "core/interaction.rs": {
     "bytes": 10061,
     "sha256": "0b1ee0fde7f92c95ca46188d159eac22552a73fc33b94e8f0e72aa2d59dd6281"
   },
   "core/investigation.rs": {
-    "bytes": 7771,
-    "sha256": "0aa3209424d2da805145471ee7c5a3bb0edd2c5f12816cbcc9d2cf5da50de32a"
+    "bytes": 8790,
+    "sha256": "0b240d4dfd18a8d1845e1b67e20e58fa85522c639291360e7756a9424e1017e5"
   },
   "core/layout.rs": {
     "bytes": 5621,
@@ -144,16 +156,16 @@
     "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
   },
   "docs/ACCESS-AND-DATA.md": {
-    "bytes": 15588,
-    "sha256": "d3d5ef169492b3e43ea8d2df5e21daac570bd94a0936582e5a131a4831b622c2"
+    "bytes": 15185,
+    "sha256": "df0b98a129861a4e9f688ca11253cbb2ca950c47f2f34f0f8014ce5caef5fa37"
   },
   "docs/ANALYTICS.md": {
     "bytes": 2681,
     "sha256": "f8587e86cdc266df8933b4185e01545249a24ca545a61d6d43af3d1e888131ed"
   },
   "docs/ARCHITECTURE.md": {
-    "bytes": 3769,
-    "sha256": "d32a44b978814a87d1c614843e455ab58a0861d0ab8f101769f9f0ec8febe3de"
+    "bytes": 4408,
+    "sha256": "9ad5f8c7f5f359a57301bfcde8f38f57c5f4cf4e5bb890e3f8db00393e6af4e6"
   },
   "docs/ASSETS.md": {
     "bytes": 1460,
@@ -161,7 +173,7 @@
   },
   "docs/BUILD.md": {
     "bytes": 4146,
-    "sha256": "32cbfd45e470eaf8308e8cb22bd04ce7f22464ae6c78356edeb710c3d06bb663"
+    "sha256": "b440b35a6a80517c50bdd378b890a76d7d5d9449e4b0c627d0c7c75a0198dd23"
   },
   "docs/CONNECTIONS.md": {
     "bytes": 2564,
@@ -171,17 +183,25 @@
     "bytes": 3297,
     "sha256": "0ab8287ec27843afee98da21a3c2b013965625c42ab1cd7f25bad027d1d7489f"
   },
+  "docs/INVESTIGATION-SCOPE.md": {
+    "bytes": 19961,
+    "sha256": "4cce49e28907b4b539fd85c19d641347827154dddab8d4e08b2612c8d2306629"
+  },
   "docs/IOS.md": {
     "bytes": 3710,
     "sha256": "801e4558b6f1a7e2c8652223ee2f8fa2bc23d59e4994457aae151238a90342f8"
   },
+  "docs/NATIVE-INVESTIGATION.md": {
+    "bytes": 2629,
+    "sha256": "9a436d01633c0c379a2d974155dc9578dc0c82188539ed1d28968ce3a6fce249"
+  },
   "docs/PUBLICATION.md": {
-    "bytes": 1934,
-    "sha256": "9967bb13eb13f6d8fa6d8143ea175d45df6bad0f17d85ce6194381fe9267a12b"
+    "bytes": 2038,
+    "sha256": "7de3316dcd65b78b51afdd84447758caf20b1d8f677b07b363f368636f19ea3b"
   },
   "docs/SETUP.md": {
-    "bytes": 10104,
-    "sha256": "cd5a3e1d89aedd86682a612611297e96dfd15a4042515ea25d83cde1b219fdca"
+    "bytes": 10438,
+    "sha256": "11a8e28f7e8474f71932a22956a8e81e311151c3617f16871fecc0d60aba8c7f"
   },
   "docs/TOOL-FEEDBACK.md": {
     "bytes": 1681,
@@ -268,16 +288,16 @@
     "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
   },
   "release/NOTES.md": {
-    "bytes": 3135,
-    "sha256": "e901f646510d8fb424fe6409c78f860b19b798181b0bbe02cf4f92f85c30dc09"
+    "bytes": 2717,
+    "sha256": "06ef3c3ee2e0b6ee8fe97cd8d09b3b80a9cfa95a3672b630771ba80bc347c843"
   },
   "release/RLLM-Lab.apk": {
-    "bytes": 5789657,
-    "sha256": "178d03ed9aa337d46e2ca6fc672b5930d9138154b7bc9fa06625547abdd19f58"
+    "bytes": 5822425,
+    "sha256": "73557310e2a68ce14b99ead26722d0fe9eb0af82c10f77949270cfdbd3ddd8c7"
   },
   "release/SHA256SUMS.txt": {
     "bytes": 79,
-    "sha256": "b0e411f7a3adefa6b31b353da91ea49dd23011e6acf192131ce48817bd427317"
+    "sha256": "b7da3e3f1edf5e8c97f41e9e708635b6cd7a28f79df145af74ab8b5758ed0bcf"
   },
   "res/drawable/.gitkeep": {
     "bytes": 1,

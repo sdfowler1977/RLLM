@@ -10,11 +10,11 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793135100/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793140000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
 The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
-Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793135100`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793140000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
 
 ## What you can do
 
@@ -80,3 +80,7 @@ No iOS build or voice/open-microphone feature is included. Full MCP/ACP/A2A, OAu
 ## Source and notices
 
 The application core is Rust, with Android Java bindings and a small JNI bridge. There is no browser/WebView UI. The public package omits private configuration, credentials, internal work logs, and personal screenshots. Required asset/runtime notices are retained in [`notices/`](notices/) and described in [asset provenance](docs/ASSETS.md). A project-wide reuse license has not been selected; no new license grant is implied by publication.
+
+## Native investigation
+
+Original Rust document structure, local byte comparison, RIFF/WAVE format observations and WebAssembly section observations now connect to ordinary and recursive task result paths. No separate REA program or required remote analysis server. See [native investigation](docs/NATIVE-INVESTIGATION.md) and the [full retained scope](docs/INVESTIGATION-SCOPE.md). Rendered browser capture and the full universal engine remain in development.
