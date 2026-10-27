@@ -10,11 +10,11 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793127500/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793128100/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
 The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
-Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793127500`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793128100`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
 
 ## What you can do
 
@@ -28,6 +28,10 @@ Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version 
 - Use reviewed workspace, web, storage, investigation, and delegation tools with profile-specific permissions.
 - Read a quiet live `≈tok/s` estimate on the chat screen and tap it to open analytics. App observations and server-reported data remain separate.
 - Save supported work to a granted phone folder or a configured WebDAV destination, including a reachable network drive.
+
+## Local and remote LLM connections
+
+Bare local/Tailscale IP addresses now default to HTTP. Explicit HTTP/HTTPS stays as entered; saved URLs are not silently changed. See the short [Tailscale setup and connection troubleshooting guide](docs/CONNECTIONS.md) for remote access, ports and common HTTP/HTTPS errors.
 
 ## Phone access and app inspection
 
@@ -63,7 +67,7 @@ See [Setup](docs/SETUP.md) for HTTP versus HTTPS, provider formats, storage, and
 
 ## Development status
 
-The Android app is an active test build. Current source defines 209 Rust checks; this release does not claim a full-suite run. Independent focused app-inspection, malformed-tool-response and interface checks passed. Independent reconstruction matched all 24 APK runtime payloads, including both ABIs, DEX and resources; stable signing and 16 KiB alignment passed. Archive-import repair independent review and current installed-device, accessibility, live-provider and full-project acceptance remain open. See [release notes](release/NOTES.md).
+The Android app is an active test build. Current source defines 210 Rust checks; this release does not claim a full-suite run. Independent focused app-inspection, malformed-tool-response and interface checks passed. Independent reconstruction matched all 24 APK runtime payloads, including both ABIs, DEX and resources; stable signing and 16 KiB alignment passed. Archive-import repair independent review and current installed-device, accessibility, live-provider and full-project acceptance remain open. See [release notes](release/NOTES.md).
 
 No iOS build or voice/open-microphone feature is included. Full MCP/ACP/A2A, OAuth, broader storage and local inference/compiler work remain unfinished. Adopted lesson reuse is explicit and bounded; no automatic training or background learning is claimed.
 
