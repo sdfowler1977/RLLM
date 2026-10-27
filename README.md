@@ -10,11 +10,17 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793152000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793154100/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
 The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
-Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793152000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793154100`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+
+## Key-free native web search
+
+Web search defaults to DuckDuckGo HTML with no API key or custom endpoint setup. In Web access, leave **Custom search URL** blank. Normal chat and recursive investigation use the same original Rust HTTP path; a secondary model is optional. Existing custom services keep their separate credentials, which are never sent to built-in search or ordinary page reads.
+
+Search responses are returned as evidence through the existing request/result flow. Known verification pages are reported as unsuccessful retrievals, not accepted as results or automatically retried. Controlled app-level tests cover normal, recursive and secondary-agent routing; live source availability is not certified. No Node, Chromium or third-party engine was added.
 
 ## Native PNG and stylesheet capture
 
