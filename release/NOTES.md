@@ -1,6 +1,10 @@
+## Local model address correction
+
+Bare local/Tailscale IPs and addresses entered using the Local API format now default to HTTP. Explicit HTTPS remains HTTPS, including when an old plain flag was set. Public chat-provider addresses keep their HTTPS default. No TLS-error fallback, automatic retry or saved-profile migration. Existing incorrect HTTPS URLs must be edited. See [Tailscale setup and troubleshooting](../docs/CONNECTIONS.md).
+
 # RLLM Lab — phone access, app inspection and tool-response handling
 
-Disclosed test build 0.1-lab.1793127500, package com.local.client.lab; Android 8.0+, ARM64 and x86-64. Install over existing Lab without uninstalling or clearing data. Previous releases remain available.
+Disclosed test build 0.1-lab.1793128100, package com.local.client.lab; Android 8.0+, ARM64 and x86-64. Install over existing Lab without uninstalling or clearing data. Previous releases remain available.
 
 ## Changes since the previous public release
 
@@ -14,7 +18,7 @@ See [Access and data controls](../docs/ACCESS-AND-DATA.md). Powerful capabilitie
 
 ## Validation and limits
 
-209 Rust checks are defined; no full-suite pass is claimed for this release. Independent review passed 20 focused Rust checks, eight app C ABI groups, one actual Java/Core/JNI/Rust collector group, four malformed-markup C ABI groups, one actual JVM executor group and seven unchanged interface groups. Independent reconstruction matched all 24 APK runtime payloads. Stable signer, v2/v3 signatures, CRC and ZIP/ELF 16 KiB alignment passed. APK full raw Drive readback matched.
+210 Rust checks are defined; no full-suite pass is claimed for this release. Current independent review passed five provider Rust checks, five setup/request C ABI groups, seven interface groups, four malformed-markup groups and eight app-inspection groups. Earlier 7500 collector/executor host coverage remains historical; it is not a new device or full-suite claim. Independent reconstruction matched all 24 APK runtime payloads. Stable signer, v2/v3 signatures, CRC and ZIP/ELF 16 KiB alignment passed. APK full raw Drive readback matched.
 
 This is not production or whole-project acceptance. Current installed Android/Samsung permissions, visual/IME/TalkBack/lifecycle/Keystore, live providers/MCP/NAS and private-app inspection are not certified. The unchanged archive-import repair remains independently unaccepted after an earlier automatic review rejection; these scoped checks do not replace that review. Preserve original backups and use disposable data for import testing.
 
@@ -22,8 +26,8 @@ Full MCP conformance/OAuth/newer transports/built-in MCP/ACP/A2A, streaming ZIP 
 
 ## Artifact identity
 
-RLLM-Lab.apk: 5892057 bytes; version code 1793127500.
-SHA-256: `f806a70d4dd94d37c783e2f7e501dde8a23fc31f7e6e177457abe14d6f9dec27`
+RLLM-Lab.apk: 5896153 bytes; version code 1793128100.
+SHA-256: `1c085b506ff0d74f53a5febe773be35972dae2f639645ce629f685a4e8dba4e2`
 Signer SHA-256: `a36bcaabf60626403ccffd32aaf442182efcd3cae82104f2e17c0cfc344749a2`.
 
 The release tag and attached source archive match the public source. Private checkpoints, personal screenshots, credentials, toolchains and signing material are excluded. No project-wide license grant is invented; existing notices are retained.
