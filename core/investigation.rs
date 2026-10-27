@@ -1,6 +1,6 @@
 //! Bounded, non-executing file and web evidence tools.
 use super::*;
-pub(super) const NATIVE_CAPABILITIES:&str="Compiled native investigation capabilities: original Rust modules inside this Android app's client native library, called through the harness. There is no separate REA executable, binary path, process launch, or native discover handshake. The rea operation denotes only an optional configured remote MCP connection. An empty workspace means no input files are present, not that the built-in analyzers are absent. Use permitted list/read/search to locate actual inputs, inspect(path) for local observations, and compare(path,other) for byte differences; return findings to the current question or recursive task. Inspect includes JSON structure, CSV/TSV record shape, Unicode text, RIFF/WAVE structure, WebAssembly section envelopes, Rust lexical declarations, ELF32/64 headers/mappings/symbol and dependency-name candidates, HTML source-order structure, and CSS token structure. These are bounded observations with complete/prefix status. Web reading includes static text/links and HTML structure counts. Full upstream REA parity, native rendered capture, CSS cascade/layout/painting, JavaScript execution and deep decompilation remain implementation work; do not infer those capabilities from the Rust implementation language. Use this compiled description rather than earlier conversational guesses when explaining what is implemented. To demonstrate behavior, inspect an available target and use its actual returned result. If the workspace is empty, ask for the target/input location instead of inventing a binary path.";
+pub(super) const NATIVE_CAPABILITIES:&str="Compiled native investigation capabilities: original Rust modules inside this Android app's client native library, called through the harness. There is no separate REA executable, binary path, process launch, or native discover handshake. The rea operation denotes only an optional configured remote MCP connection. An empty workspace means no input files are present, not that the built-in analyzers are absent. Use permitted list/read/search to locate actual inputs, inspect(path) for local observations, and compare(path,other) for byte differences; return findings to the current question or recursive task. Inspect includes JSON structure, CSV/TSV record shape, Unicode text, RIFF/WAVE structure, WebAssembly section envelopes, Rust lexical declarations, ELF32/64 headers/mappings/symbol and dependency-name candidates, HTML source-order structure, and CSS token structure, stylesheet declarations/selectors, supported author-style cascade and approximate normal-flow geometry. These are bounded observations with complete/prefix status. Web reading includes static text/links and HTML structure counts. The capture(path,font,output,width,height) operation renders supported local HTML and author CSS into a new workspace PNG using original Rust TrueType outline decoding, actual selected-font advances and unhinted coverage painting. A blank font selects a supported Android system face when available; a workspace TrueType file can be selected explicitly. Width/height default to 800/600. This is a fixed-viewport static subset; unsupported styles/layout are reported. It does not fetch external resources or execute scripts. Full upstream REA parity, complete native rendered capture with browser sessions, full CSS layout, shaping, JavaScript execution and deep decompilation remain implementation work; do not infer those capabilities from the Rust implementation language. Use this compiled description rather than earlier conversational guesses when explaining what is implemented. To demonstrate behavior, inspect an available target and use its actual returned result. If the workspace is empty, ask for the target/input location instead of inventing a binary path.";
 pub(super) fn inspect(p: &Path) -> Result<String> {
     let mut f=fs::File::open(p).map_err(|e|e.to_string())?;
     let meta=f.metadata().map_err(|e|e.to_string())?;
@@ -23,10 +23,11 @@ pub(super) fn inspect(p: &Path) -> Result<String> {
         structure.push('\n');structure.push_str(&super::elf_observation::analyze(&data,complete,after.len()));
     }
     if matches!(p.extension().and_then(|v|v.to_str()),Some("html"|"htm")) {
-        structure.push('\n');structure.push_str(&super::html_document::parse(&data,complete).summary());
+        structure.push('\n');let document=super::html_document::parse(&data,complete);structure.push_str(&document.summary());
+        structure.push('\n');structure.push_str(&page_geometry(&document));
     }
     if p.extension().and_then(|v|v.to_str())==Some("css") {
-        structure.push('\n');structure.push_str(&super::css_syntax::tokenize(&data,complete).summary());
+        structure.push('\n');let tokens=super::css_syntax::tokenize(&data,complete);structure.push_str(&tokens.summary());structure.push('\n');structure.push_str(&super::css_stylesheet::parse(&tokens).summary());
     }
     if [b"RIFF".as_slice(),b"RIFX",b"RF64",b"\0asm"].iter().any(|magic|data.starts_with(magic)) {
         structure.push('\n');structure.push_str(&super::binary_observation::analyze(&data,complete,after.len()));
@@ -77,10 +78,27 @@ pub(super) fn page(body:&str)->Result<String>{
     }
     for(a,b)in [("&amp;","&"),("&lt;","<"),("&gt;",">"),("&quot;","\""),("&#39;","'"),("&nbsp;"," ")]{output=output.replace(a,b);}
     let document=super::html_document::parse(body.as_bytes(),true);
-    let summary=document.summary();
+    let summary=format!("{}\n{}",document.summary(),page_geometry(&document));
     let observed=format!("{}\n\nPage link targets (may be relative; not fetched):\n{}\nStatic extraction only; website JavaScript was not executed.",output.trim(),links.join("\n"));
     Ok(format!("{}\n\n{}",byte_limit(&observed,120000usize.saturating_sub(summary.len()+2)),summary))
 }
+fn page_geometry(document:&super::html_document::Document)->String{
+ let cascade=super::css_cascade::compute(document);let mut output=cascade.describe(document);
+ if cascade.incomplete{return output;}
+ match super::page_layout::layout(document,&cascade.styles,800.,super::page_layout::TextMetrics::default()){
+  Ok(layout)=>{output.push('\n');output.push_str(&layout.summary());output.push_str("\nObservation viewport: 800 CSS px (not the phone screen). Geometry is approximate and is not a screenshot.");
+   for b in layout.boxes.iter().take(16){output.push_str(&format!("\nBox node {}: x={} y={} width={} height={}",b.node,b.bounds.x,b.bounds.y,b.bounds.width,b.bounds.height));}
+   if layout.boxes.len()>16{output.push_str("\nFurther box records omitted from this observation.");}
+   for command in layout.commands.iter().take(24){match command{
+    super::page_layout::Draw::Rect{node,bounds,color}=>output.push_str(&format!("\nPaint rectangle node {node}: ({},{}) {}x{} rgba{:?}",bounds.x,bounds.y,bounds.width,bounds.height,color)),
+    super::page_layout::Draw::Text{node,bounds,text,..}=>output.push_str(&format!("\nText fragment node {node}: ({},{}) {}x{} {:?}",bounds.x,bounds.y,bounds.width,bounds.height,byte_limit(text,128))),
+   }}
+   if layout.commands.len()>24{output.push_str("\nFurther display commands omitted from this observation.");}
+   for issue in layout.issues.iter().take(16){output.push_str(&format!("\nLayout observation node {}: {}",issue.node,issue.code));}
+  },Err(error)=>{output.push_str("\nPage geometry unavailable for this input: ");output.push_str(&error);}
+ }output
+}
+
 fn byte_limit(text:&str,max:usize)->String{let mut n=text.len().min(max);while !text.is_char_boundary(n){n-=1;}text[..n].to_string()}
 #[cfg(test)]mod checks{use super::*;
     #[test]fn static_page_excludes_active_content(){let p=page("<p>Hello &amp; welcome</p><script>steal()</script><style>private</style><a href='https://example.org/?a=>'>Link</a>").unwrap();assert!(p.contains("Hello & welcome"));assert!(!p.contains("steal"));assert!(!p.contains("private"));assert!(p.contains("https://example.org/?a=>"));assert!(page("<p attr='unterminated").is_err());assert!(page("<script>if(x<2){}</script><p>Visible</p>").unwrap().contains("Visible"));assert!(page(&"界".repeat(100000)).unwrap().len()<=98304);}
