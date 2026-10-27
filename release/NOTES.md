@@ -1,18 +1,16 @@
-# RLLM Lab — Rust source and ELF investigation
+# RLLM Lab — built-in investigation discovery
 
-Test build `0.1-lab.1793141800`, package `com.local.client.lab`. Install over existing Lab without uninstalling or clearing data. Prior releases remain available.
+Test build `0.1-lab.1793143400`, package `com.local.client.lab`. Install over existing Lab without uninstalling or clearing data.
 
-This build adds original, local Rust source and ELF analysis to ordinary questions and recursive tasks:
+- Fixes missing self-description: ordinary and recursive model requests receive the actual compiled native capabilities, explaining built-in Rust library versus optional remote MCP, no separate REA binary/discover handshake, and empty workspace versus missing engine.
+- Fixes the unreachable Implementation status screen: App settings → Diagnostics → Implementation status now opens the same compiled capability description.
+- Integrates original Rust HTML source-order parsing into local HTML inspection and static web-result summaries, plus CSS token inspection. Partial CSS inputs require a full rescan; all tokens remain provisional.
+- Preserves JSON/table/text, byte comparison, WAVE/WASM, Rust source and ELF observations, along with existing profiles, storage, approvals, analytics and provider behavior.
 
-- Rust source: declaration-shaped names and locations, unresolved module/use/impl relationships, with comments and ordinary/raw/byte/C strings excluded from the lexical section.
-- ELF32/ELF64, either byte order: declared LOAD file/address mappings, section names, bounded symbol and dynamic dependency-name candidates, and explicit incomplete/compressed/malformed observations.
-- Investigation settings now consistently edit additional guidance; the existing remote connection is clearly optional. No Node/npm, external REA installation or required computer/server provides these engines.
-- Retains prior native JSON/table/text/WAVE/WASM inspection, byte comparison, format feedback, web-result handling, profiles, storage and analytics.
+[How to find and use native investigation](https://github.com/sdfowler1977/RLLM/blob/main/docs/NATIVE-INVESTIGATION.md).
 
-These passes return actual local observations to the originating model request in ordinary and recursive workflows. Full native universal exploration remains the scope; deeper reconstruction, execution analysis and native rendered capture remain open.
+Independent connected tests cover actual ordinary/recursive inspection, real fixture HTTP response continuation, empty workspace/guidance-off capability facts, and the actual settings menu path. Independent package reconstruction matched all24 runtime files; stable signer, v2/v3, CRC and ZIP/ELF16KiB alignment passed. Native rendered capture, CSS cascade/layout/painting, JavaScript and complete upstream parity remain open. This is a test build; installed-device and unchanged archive-behavior acceptance remain as previously recorded.
 
-Independent connected tests cover both new engines and previous structural, binary, format and web paths. Independent package reconstruction matched all24 runtime payloads: both native/JNI ABIs, DEX and21resources/assets. Stable signer, v2/v3, CRC and ZIP/ELF16KiB alignment passed. No installed-device or full-project acceptance is claimed. The unchanged archive importer retains its recorded independent-review limitation.
+APK 5912537bytes; SHA256 `ceef4561106dca94a331939c505a7b3a500ada370b2ea1319e4ee3c47fa8dd66`. Stable Lab certificate `a36bcaabf60626403ccffd32aaf442182efcd3cae82104f2e17c0cfc344749a2`.
 
-APK: 5871577 bytes. SHA-256 `a27f11f6f43e417c1dce091a7be9536ce37296309fc98015d292516c5a9eaa97`. Stable Lab certificate `a36bcaabf60626403ccffd32aaf442182efcd3cae82104f2e17c0cfc344749a2`.
-
-Use attached `RLLM-source.zip` for matching full public source. Private checkpoints and signing material are excluded.
+Public APK/source/checksums are saved to both GitHub and the authorized Google Drive folder. Private engineering checkpoints and signing material remain private. Prior releases are retained.
