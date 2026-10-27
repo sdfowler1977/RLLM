@@ -1,3 +1,9 @@
+## Local model URL entry — HTTP default correction
+
+When no scheme is entered, model setup uses HTTP for private, loopback and link-local IPs, the 100.64.0.0/10 shared address range used by Tailscale, localhost/.localhost/.local names, and addresses entered with the Local API format. An explicitly entered http:// or https:// scheme wins. Public chat-provider hostnames still default to HTTPS. The saved URL shows the selected scheme; there is no automatic TLS-error fallback or request replay. Existing saved HTTPS URLs are not silently rewritten: edit an incorrectly saved local endpoint and enter http:// explicitly or re-enter its bare local IP.
+
+HTTP is not application-layer TLS. Use the scheme your server actually supports and a network you trust. Selecting a local API format does not prove that a remote host is private or secure.
+
 # Access, investigation features and your data
 
 RLLM deliberately supports user-controlled file inspection and reviewed tools. These capabilities are features. Their existence does not make unauthorized access, unintended disclosure, unsafe writes or an incorrect permission check acceptable: those are defects to report. Enable the access you want, and disable capabilities you do not want. Protect your data to the level you need.

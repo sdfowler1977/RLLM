@@ -2,9 +2,9 @@
 
 The public repository is [sdfowler1977/RLLM](https://github.com/sdfowler1977/RLLM).
 
-The Android test build is published as [lab-1793127500](https://github.com/sdfowler1977/RLLM/releases/tag/lab-1793127500). [Download RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793127500/RLLM-Lab.apk).
+The Android test build is published as [lab-1793128100](https://github.com/sdfowler1977/RLLM/releases/tag/lab-1793128100). [Download RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793128100/RLLM-Lab.apk).
 
-The verified APK SHA-256 is `f806a70d4dd94d37c783e2f7e501dde8a23fc31f7e6e177457abe14d6f9dec27`, matching the signed local artifact and its full downloaded Drive readback. The APK is 5,617,625 bytes.
+The verified APK SHA-256 is `1c085b506ff0d74f53a5febe773be35972dae2f639645ce629f685a4e8dba4e2`. The APK is 5,896,153 bytes.
 
 ## Repository contents
 
@@ -12,7 +12,7 @@ The source, build files, required notices, documentation and fictional illustrat
 
 No project-wide reuse license has been selected. Required runtime and asset notices remain in `notices/`.
 
-This version adds bounded adopted-lesson reuse plus Messages and Content streaming. The previous `lab-1793062000` release is preserved. Create the new tag after committing this source update so the automatic tag archives and release source agree. This remains a test build; see [release notes](../release/NOTES.md) for the exact review boundaries.
+This version corrects bare local/Tailscale address setup and adds a linked connection troubleshooting guide. Earlier releases are preserved. This remains a test build; see [release notes](../release/NOTES.md) for exact review boundaries.
 
 ## Future releases
 

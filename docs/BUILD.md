@@ -49,7 +49,7 @@ unset CLIENT_KEY_PASSWORD
 
 The default `main` variant uses `com.local.client`, separately from the distributed `com.local.client.lab`. Your signing key is not the publisher's key. A differently signed APK cannot update the publisher's installed Lab app. Do not change, publish, or request the publisher's private key to make an update work.
 
-For authorized maintainers using the existing Lab signing identity, set `CLIENT_VARIANT=lab` and an increasing integer `CLIENT_VERSION_CODE` before running the same script. Preserve the established signing identity. The provided Lab build has version code `1793127500`; subsequent Lab updates must increase it.
+For authorized maintainers using the existing Lab signing identity, set `CLIENT_VARIANT=lab` and an increasing integer `CLIENT_VERSION_CODE` before running the same script. Preserve the established signing identity. The provided Lab build has version code `1793128100`; subsequent Lab updates must increase it.
 
 ## Core checks
 
@@ -62,7 +62,7 @@ output/checks/core-checks --skip archive --skip network_project_zip_routes_to_re
   --skip binary_network_zip_reaches_import_preview
 ```
 
-The publication copy preserves product source and inline checks. Current source defines 209 checks; only focused checks were rerun for this release. See [release notes](../release/NOTES.md) for exact validation scope. All 24 runtime payloads were independently rebuilt and matched the supplied APK. Archive behavior and installed-device acceptance remain unverified.
+The publication copy preserves product source and inline checks. Current source defines 210 checks; only focused checks were rerun for this release. See [release notes](../release/NOTES.md) for exact validation scope. All 24 runtime payloads were independently rebuilt and matched the supplied APK. Archive behavior and installed-device acceptance remain unverified.
 
 ## Verify the supplied APK
 
@@ -74,7 +74,7 @@ sha256sum release/RLLM-Lab.apk
 Expected SHA-256:
 
 ```text
-f806a70d4dd94d37c783e2f7e501dde8a23fc31f7e6e177457abe14d6f9dec27
+1c085b506ff0d74f53a5febe773be35972dae2f639645ce629f685a4e8dba4e2
 ```
 
 Expected signer certificate SHA-256:
