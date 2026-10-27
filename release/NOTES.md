@@ -1,11 +1,11 @@
-# RLLM Lab 1793152000 — PNG and linked stylesheet capture
+# RLLM Lab 1793154100 — key-free native web search
 
-Original Rust capture now loads relative workspace CSS and PNG images, applies source-order CSS and image dimensions, and paints actual decoded pixels. Ordinary, recursive and manual capture use the same code. Native inspect also decodes PNG structure/samples and reports transparency counts. Existing History and phone image attachments are preserved.
+Blank search settings now use DuckDuckGo HTML through original Rust HTTP code, without an API key, Node runtime or external browser. Normal chat, recursive tasks and optional secondary-agent workflows use the same request/result flow. Custom search services retain isolated credentials. Changing settings cannot redirect an already displayed proposal to another destination.
 
-PNG support covers legal color/depth families, five filters, Adam7, palette/tRNS and16-bit samples. Capture explicitly converts to8-bit nearest-neighbour output. Color transforms, APNG playback, remote resources, responsive sources, full browser layout/JavaScript/shaping and the complete original roadmap remain open. No Node/npm, upstream REA installation or required computer.
+Independent app-level checks cover nine search and settings-binding groups plus nine existing web-operation groups. Synthetic verification pages are rejected as results, while quoted/inert examples do not trigger that check. Live DuckDuckGo availability and installed Android behavior remain unverified. Previous native PNG/CSS capture, History deletion and phone attachments are preserved.
 
-Signed package com.local.client.lab, version0.1-lab.1793152000, existing Lab certificate. Install over Lab without uninstalling or clearing data.
+Signed package com.local.client.lab, version0.1-lab.1793154100, existing Lab certificate. Install over Lab without uninstalling or clearing data.
 
-APK:6166489 bytes; SHA256174083c55c93fc16fec59452bf3f3506df1dcbe819ed4f43c68023af3465f719.
+APK SHA256: `14a432087fd9abf2e17802ca961938b943df53cbaafc3d76f83dd8d34c1326ae`.
 
-Independent source checks:57 layout/raster checks,11 decoder groups with17 exact PNG fixtures and128 zlib oracle matrices; actual ordinary/recursive capture compares3200 output pixels with an independent oracle. Current related regressions pass. All24 APK runtime payloads match an independent Android rebuild;78 build inputs stayed unchanged. Stable signer,v2/v3,ZIP/ELF16KiB andCRC checks pass. Installed Android/system-font/visual/IME/TalkBack/lifecycle/live-provider/full-project acceptance remains open, as does the unchanged archive independent-review restriction. This is a disclosed test build, not a completed program.
+This is a disclosed test build. Full browser rendering/interactions, remote capture integration and the original universal harness roadmap remain open. The unchanged archive independent-review restriction and installed-device/full-project acceptance remain open. No third-party REA program was installed or copied.
