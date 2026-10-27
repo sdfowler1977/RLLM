@@ -2,9 +2,9 @@
 
 The public repository is [sdfowler1977/RLLM](https://github.com/sdfowler1977/RLLM).
 
-The Android test build is published as [lab-1793140000](https://github.com/sdfowler1977/RLLM/releases/tag/lab-1793140000). [Download RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793140000/RLLM-Lab.apk).
+The Android test build is published as [lab-1793141800](https://github.com/sdfowler1977/RLLM/releases/tag/lab-1793141800). [Download RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793141800/RLLM-Lab.apk).
 
-The verified APK SHA-256 is `73557310e2a68ce14b99ead26722d0fe9eb0af82c10f77949270cfdbd3ddd8c7`. The APK is 5,822,425 bytes.
+The verified APK SHA-256 is `a27f11f6f43e417c1dce091a7be9536ce37296309fc98015d292516c5a9eaa97`. The APK is 5,871,577 bytes.
 
 ## Repository contents
 
