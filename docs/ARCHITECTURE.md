@@ -29,3 +29,7 @@ Profiles specify permitted tools, reusable skills and callable subagents. The ap
 ## Platform boundaries
 
 The Rust core offers reusable domain logic, not an already portable end-user application. Android services, Keystore, document URIs, UI lifecycle and platform network bindings need replacements on another operating system. The archive implementation includes Linux/Android-specific descriptor bindings. See [the iOS assessment](IOS.md).
+
+## Native investigation execution
+
+`core/exploration.rs`, `core/comparison.rs` and `core/binary_observation.rs` implement original Rust structural document observations, held-file byte comparison and selected binary envelopes. `investigation.rs` connects these readers to actual file input. The same application tool dispatch and harness result paths carry observations into ordinary chat and recursive tasks. The universal process is inherent; custom investigation preferences add guidance rather than installing an engine. Optional remote MCP does not supply or certify native capability. [Full retained scope](INVESTIGATION-SCOPE.md).

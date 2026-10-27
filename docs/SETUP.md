@@ -8,7 +8,7 @@ See [Access and data controls](ACCESS-AND-DATA.md) for broad shared-storage, sel
 
 ## 1. Install Android
 
-Download [RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793135100/RLLM-Lab.apk) from the GitHub pre-release. Open the APK on a compatible Android 8.0+ ARM64 or x86-64 device and follow Android's installation prompts. If Android asks, allow installation for the browser or file manager you used; this is not permission for RLLM to install other apps.
+Download [RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793140000/RLLM-Lab.apk) from the GitHub pre-release. Open the APK on a compatible Android 8.0+ ARM64 or x86-64 device and follow Android's installation prompts. If Android asks, allow installation for the browser or file manager you used; this is not permission for RLLM to install other apps.
 
 For an existing **RLLM Lab** installation, install the newer APK over it. Do not uninstall or clear storage to resolve an update error: that can remove local history. A signature mismatch means the APK was signed by a different key. Keep the original installation and check the artifact first. The publisher's Lab package is `com.local.client.lab`.
 
@@ -97,7 +97,7 @@ Conversation/configuration exports can also use Android's document picker. Googl
 
 A local LLM does not need its own browser connection. The harness can perform permitted, reviewed web operations. Configure **App settings → Network services → Web access** with a search API URL containing `{query}` and any required separate search key/header. Permit `web_read` and/or `web_search` in the relevant agent profile. The current tools fetch/search content; they are not a full Playwright browser session and do not automatically interact with arbitrary JavaScript sites.
 
-REA appears as a shared investigation skill under **Agent settings → Skills**. Remote REA capabilities require their own configured endpoint and reviewed tool calls. A skill does not grant extra permissions by itself.
+Investigation is inherent in ordinary and recursive requests. Ask your question normally; the model can use the harness's original Rust file/document inspection and comparison operations and receive their actual findings. No separate skill invocation or remote REA server is needed for these native engines. **Investigation preferences** edits optional additional guidance. A configured remote MCP connection remains a separate optional capability. See [native investigation](NATIVE-INVESTIGATION.md) for implemented readers and the full retained scope.
 
 ## Troubleshooting
 

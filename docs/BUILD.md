@@ -49,7 +49,7 @@ unset CLIENT_KEY_PASSWORD
 
 The default `main` variant uses `com.local.client`, separately from the distributed `com.local.client.lab`. Your signing key is not the publisher's key. A differently signed APK cannot update the publisher's installed Lab app. Do not change, publish, or request the publisher's private key to make an update work.
 
-For authorized maintainers using the existing Lab signing identity, set `CLIENT_VARIANT=lab` and an increasing integer `CLIENT_VERSION_CODE` before running the same script. Preserve the established signing identity. The provided Lab build has version code `1793135100`; subsequent Lab updates must increase it.
+For authorized maintainers using the existing Lab signing identity, set `CLIENT_VARIANT=lab` and an increasing integer `CLIENT_VERSION_CODE` before running the same script. Preserve the established signing identity. The provided Lab build has version code `1793140000`; subsequent Lab updates must increase it.
 
 ## Core checks
 
