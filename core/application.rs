@@ -3,6 +3,7 @@ use super::*;
 #[path="tool_format.rs"] mod tool_format;
 #[path="app_observation.rs"] mod app_observation;
 #[path="interaction.rs"] mod interaction;
+#[path="history_view.rs"] mod history_view;
 #[path="generation_controls.rs"] pub(super) mod generation;
 #[path="delegation.rs"] mod delegation;
 #[path="investigation.rs"] mod investigation;
@@ -144,6 +145,7 @@ fn replace_chat(st: &mut Json, c: Json) {
     put(st, "chats", Arr(chats));
 }
 fn new_chat(st: &mut Json) -> Result<()> {
+    put(st,"history_empty_intentional",Bool(false));
     if array(st, "chats").len() >= 200 {
         return Err(
             "History contains 200 conversations. Export a backup before starting more.".into(),
@@ -355,23 +357,7 @@ fn ui(st: &Json) -> Json {
     let busy = boolean(st, "busy");
     let mut rows = vec![];
     match page.as_str() {
-        "history" => {
-            rows.push(button("New conversation", "new"));
-            for c in array(st, "chats") {
-                rows.push(button(
-                    &format!(
-                        "{}{} · {} messages",
-                        if text(&c,"id")==text(st,"active") {"Current: "} else {""},
-                        text(&c, "title"),
-                        array(&c, "messages").len()
-                    ),
-                    &format!("history:{}", text(&c, "id")),
-                ))
-            }
-            rows.push(button("Trash", "trash"));
-            rows.push(button("Import conversation backup", "conversation_import"));
-            rows.push(button("Export current conversation", "conversation_export"));
-        }
+        "history" => { rows=history_view::rows(st); }
         "settings" | "config" => {rows.extend(array(&app_settings_menu(),"buttons"));}
         "workspace" => {
             rows.push(button("Files and access", "phone_access"));
@@ -394,7 +380,7 @@ fn ui(st: &Json) -> Json {
                 button("Copy network text into project", "drive_copy"),
                 button("Check a shell program", "script_check"),
                 button("Run a shell program", "script_run"),
-                button("Import phone document", "phone_file"),
+                button("Attach image or text file", "phone_file"),
                 button("Grant phone folder access", "phone_folder"),
                 button("List phone files in current scope", "phone_files"),
                 button("Read phone file in current scope", "phone_reader"),
@@ -452,7 +438,7 @@ fn ui(st: &Json) -> Json {
                 number(get(st, "policy"), "workers")
             )),
         ),
-        ("messages", {let mut messages=array(&current,"messages");let partial=text(st,"stream_text");if !partial.is_empty(){messages.push(obj(vec![("role",s("assistant")),("content",s(&partial)),("model",s(&text(st,"request_model"))),("streaming",Bool(true))]));}for message in &mut messages {let model=text(message,"model");let speaker=if boolean(message,"harness_outcome"){"RLLM · Tool status".to_string()}else if text(message,"role")=="user" {"You".to_string()}else{format!("{}{}",if model.is_empty(){"Assistant"}else{&model},if boolean(message,"interrupted"){" · Interrupted"}else if boolean(message,"streaming"){" · Responding"}else{""})};put(message,"speaker",s(&speaker));if text(message,"role")=="assistant" && (boolean(message,"tool_format_error")||unsupported_tool_markup(&text(message,"content"))){put(message,"content",s(&tool_format::display(message)));}}Arr(messages)}),
+        ("messages", {let mut messages=array(&current,"messages");let partial=text(st,"stream_text");if !partial.is_empty(){messages.push(obj(vec![("role",s("assistant")),("content",s(&partial)),("model",s(&text(st,"request_model"))),("streaming",Bool(true))]));}for message in &mut messages {if get(message,"attachments")!=&Null{let metadata=array(message,"attachments").iter().filter_map(|value|crate::attachments::metadata(value).ok()).collect();put(message,"attachments",Arr(metadata));}let model=text(message,"model");let speaker=if boolean(message,"harness_outcome"){"RLLM · Tool status".to_string()}else if text(message,"role")=="user" {"You".to_string()}else{format!("{}{}",if model.is_empty(){"Assistant"}else{&model},if boolean(message,"interrupted"){" · Interrupted"}else if boolean(message,"streaming"){" · Responding"}else{""})};put(message,"speaker",s(&speaker));if text(message,"role")=="assistant" && (boolean(message,"tool_format_error")||unsupported_tool_markup(&text(message,"content"))){put(message,"content",s(&tool_format::display(message)));}}Arr(messages)}),
         ("telemetry", get(st, "telemetry").clone()),
         ("local_rate",throughput::ui(st)),
         ("palette", interaction::palette(st)),
@@ -475,6 +461,7 @@ fn ui(st: &Json) -> Json {
         ),
         ("rows", Arr(rows)),
         ("draft", s(&text(st, "draft"))),
+        ("draft_attachments",Arr(array(&current,"draft_attachments").iter().filter_map(|v|crate::attachments::metadata(v).ok()).collect())),
         (
             "profile_fields",
             Num(if p == Null { "0" } else { "9" }.into()),
@@ -487,7 +474,7 @@ fn ui(st: &Json) -> Json {
     let edit = get(st, "edit");
     let mut pop=match dialog.as_str(){
  "chat_actions"=>modal("Conversation actions",vec![],{
-    let mut actions=vec![button("Main agent profile","chat_agents"),button("Agent task / compact context","task"),button("New conversation","new"),button("Import phone document","phone_file"),button("Save conversation to default storage","save_drive"),button("Export conversation","conversation_export"),button(if get(st,"pending")!=&Null {"Review proposed operation"}else{"Retry last request"},if get(st,"pending")!=&Null {"review"}else{"retry"})];
+    let mut actions=vec![button("Main agent profile","chat_agents"),button("Agent task / compact context","task"),button("New conversation","new"),button("Attach image or text file","phone_file"),button("Save conversation to default storage","save_drive"),button("Export conversation","conversation_export"),button(if get(st,"pending")!=&Null {"Review proposed operation"}else{"Retry last request"},if get(st,"pending")!=&Null {"review"}else{"retry"})];
     if array(&current,"messages").last().map(|m|text(m,"role")=="assistant").unwrap_or(false){actions.push(button("Regenerate reply in new branch","regenerate"));}if tool_format::available(st){actions.push(button("Request format correction","format_correction"));}actions
  }),
  "chat_models"=>model_picker(st),
@@ -533,7 +520,7 @@ fn ui(st: &Json) -> Json {
  "conversation_review"=>modal("Review conversation import",vec![field_ui("summary","Separate history entry",&format!("{} · {} messages\nExisting conversations will be preserved.",text(get(st,"conversation_candidate"),"title"),array(get(st,"conversation_candidate"),"messages").len()),"readonly")],vec![button("Import conversation","conversation_accept"),button("Cancel","conversation_reject")]),
  "generation"=>generation::modal_for(st),
  "appearance"|"chat_agents"|"chat_options"|"chat_delete_review"|"trash"|"trash_options"|"chat_purge_review"=>interaction::modal_for(st),
- "capabilities"=>modal("Implementation status",vec![field_ui("native_investigation","Built-in native investigation",investigation::NATIVE_CAPABILITIES,"readonly"),field_ui("status","Current capabilities","Server profiles; four text API formats, with incremental replies for /api/chat, chat completions, Messages and Content; reviewed remote MCP discovery and calls; encrypted local history and conversation branching; native project file tools; reviewed agent operations; phone text-document import; WebDAV browsing, reading, snapshots and reviewed file creation, revision-aware text updates, folder creation and network-to-project copy; shell syntax checking and execution in an isolated Android service; authenticated local API gateway (non-streaming).\n\nNot yet implemented: SMB, on-device model inference, clustering, complete built-in versioned MCP/ACP/A2A interoperability, image/audio/PDF extraction, structured provider tools, and bundled general-purpose compilers. This is a development checkpoint, not a completed R-rules release.","readonly")],vec![]),_=>harness::modal_for(st)};
+ "capabilities"=>modal("Implementation status",vec![field_ui("native_investigation","Built-in native investigation",investigation::NATIVE_CAPABILITIES,"readonly"),field_ui("status","Current capabilities","Server profiles; four text API formats, with incremental replies for /api/chat, chat completions, Messages and Content; reviewed remote MCP discovery and calls; encrypted local history and conversation branching; native project file tools; reviewed agent operations; phone PNG/JPEG image attachments and text-document import; WebDAV browsing, reading, snapshots and reviewed file creation, revision-aware text updates, folder creation and network-to-project copy; shell syntax checking and execution in an isolated Android service; authenticated local API gateway (non-streaming).\n\nNot yet implemented: SMB, on-device model inference, clustering, complete built-in versioned MCP/ACP/A2A interoperability, image/audio/PDF extraction, structured provider tools, and bundled general-purpose compilers. This is a development checkpoint, not a completed R-rules release.","readonly")],vec![]),_=>harness::modal_for(st)};
     if dialog=="profile" && !text(st,"profile_error").is_empty() {let mut fields=array(&pop,"fields");fields.insert(0,field_ui("profile_error","Profile could not be saved",&text(st,"profile_error"),"readonly"));put(&mut pop,"fields",Arr(fields));}
     if pop != Null && text(st,"form_dialog")==dialog {
         let mut definitions=array(&pop,"fields");
@@ -682,7 +669,7 @@ fn model_effect_at(st: &mut Json, index: usize) -> Result<Json> {
     put(st, "busy", Bool(true));
     let bytes=crate::generation::content_bytes(&messages)?;
     let reminder=crate::generation::integer(&p,"compaction_bytes",8*1024*1024)?.map(|n|bytes>=n).unwrap_or(false);
-    put(st,"context_reminder",if reminder{s(&format!("{bytes} UTF-8 context bytes reached the compaction reminder. Compact from Conversation actions."))}else{Null});
+    put(st,"context_reminder",if reminder{s(&format!("{bytes} text and encoded image bytes reached the compaction reminder. Compact from Conversation actions."))}else{Null});
     put(st, "notice", s(if reminder{"Waiting for model response… Compaction reminder reached."}else{"Waiting for model response…"}));
     tool_format::request_context(st,&p,&active);
     Ok(effect)
@@ -1106,6 +1093,14 @@ pub fn event(v: &Json) -> Result<Json> {
     }
     let inputs = get(v, "inputs");
     let action = field(v, "action")?;
+    if matches!(action,"document_result"|"image_result"|"document_cancel"|"document_failure") {
+        let expected=get(&st,"document_expected");
+        if text(expected,"ticket").is_empty() || text(expected,"ticket")!=text(inputs,"document_ticket") || text(expected,"chat")!=text(&st,"active") || get(expected,"agent")!=&harness::active_agent(&st) || get(expected,"profile")!=&profile(&st).unwrap_or(Null) || boolean(&st,"busy") {
+            let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));
+        }
+        put(&mut st,"document_expected",Null);
+    }
+    if matches!(action,"resume"|"cancel"|"send"|"new") || action.starts_with("history:"){put(&mut st,"document_expected",Null);}
     let operation_was_busy=boolean(&st,"busy");
     let web_callback=matches!(action,"network_result"|"failure") && text(inputs,"purpose")=="web_tool";
     if web_callback && !web_operation::expected(&st,inputs){let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));}
@@ -1315,7 +1310,10 @@ pub fn event(v: &Json) -> Result<Json> {
                 put(&mut st, "agent_running", Bool(false));
                 put(&mut st, "busy", Bool(false));
                 put(&mut st, "dialog", if ["server_monitor_settings","profile","editor","drive","remote_save_review","drive_editor","drive_update_editor","drive_folder","drive_copy","drive_reader","phone_editor","phone_update_editor","reader","phone_reader","search","script_check","script_run","resources","gateway","instructions"].contains(&restore.as_str()){s(&restore)}else{Null});
-                if chat(&st) == Null {new_chat(&mut st)?;}
+                if chat(&st) == Null {
+                    if let Some(existing)=array(&st,"chats").first() {let existing=existing.clone();put(&mut st,"active",s(&text(&existing,"id")));put(&mut st,"draft",s(&text(&existing,"draft")));}
+                    else if !boolean(&st,"history_empty_intentional") {new_chat(&mut st)?;}
+                }
                 if !boolean(&st,"phone_access_requested") {
                     put(&mut st,"phone_access_requested",Bool(true));
                     if !["limited","off"].contains(&text(&st,"phone_access_mode").as_str()) && !boolean(&st,"phone_access_granted") {
@@ -1394,8 +1392,8 @@ pub fn event(v: &Json) -> Result<Json> {
             }
             "send" => {
                 let draft = text(&st, "draft");
-                if draft.trim().is_empty() {
-                    return Err("Enter a message".into());
+                if draft.trim().is_empty() && array(&chat(&st),"draft_attachments").is_empty() {
+                    return Err("Enter a message or attach an image".into());
                 }
                 profile(&st)?;
                 if draft.len() > 1024 * 1024 {
@@ -1405,7 +1403,13 @@ pub fn event(v: &Json) -> Result<Json> {
                 harness::reset_task(&mut next);
                 tool_format::clear(&mut next);
                 put(&mut next,"dialog",Null);
+                let images=array(&chat(&next),"draft_attachments");
                 append(&mut next, "user", &draft)?;
+                let mut current=chat(&next);let mut messages=array(&current,"messages");
+                if let Some(message)=messages.last_mut(){put(message,"attachments",Arr(images));}
+                put(&mut current,"messages",Arr(messages));put(&mut current,"draft_attachments",Arr(vec![]));
+                if text(&current,"title").is_empty(){put(&mut current,"title",s("Image conversation"));}
+                replace_chat(&mut next,current);
                 put(&mut next, "draft", s(""));
                 put(&mut next, "steps", Num("0".into()));
                 effect = model_effect(&mut next)?;
@@ -1996,25 +2000,29 @@ pub fn event(v: &Json) -> Result<Json> {
                 put(&mut st, "busy", Bool(true));
                 put(&mut st, "agent_running", Bool(false));
             }
-            "phone_file" => effect = obj(vec![("kind", s("document"))]),
+            "phone_file" => {
+                if chat(&st)==Null {new_chat(&mut st)?;}
+                let ticket=now();let expected=obj(vec![("ticket",s(&ticket)),("chat",s(&text(&st,"active"))),("agent",harness::active_agent(&st)),("profile",profile(&st).unwrap_or(Null))]);
+                put(&mut st,"document_expected",expected);effect=obj(vec![("kind",s("document")),("document_ticket",s(&ticket))]);
+            },
+            "document_cancel" => {},
+            "document_failure" => {return Err(text(inputs,"error").chars().take(512).collect());},
+            "image_result" => {
+                let image=crate::attachments::image(inputs)?;let mut current=chat(&st);let mut images=array(&current,"draft_attachments");images.push(image);
+                crate::attachments::images(&obj(vec![("role",s("user")),("attachments",Arr(images.clone()))]))?;
+                put(&mut current,"draft_attachments",Arr(images));let mut candidate=st.clone();replace_chat(&mut candidate,current);put(&mut candidate,"page",s("chat"));
+                if super::mcp_schema::state_bytes(&candidate)>6*1024*1024-8192{return Err("History has insufficient space for this attachment; existing draft retained".into());}st=candidate;
+            },
+            "attachment_remove" => {
+                let mut current=chat(&st);let mut images=array(&current,"draft_attachments");let index=number(inputs,"index");
+                if index>=images.len(){return Err("Attachment no longer exists".into());}images.remove(index);put(&mut current,"draft_attachments",Arr(images));replace_chat(&mut st,current);
+            },
             "document_result" => {
-                let body = text(inputs, "content");
-                if body.len() > 1024 * 1024 {
-                    return Err("Document exceeds 1 MiB".into());
-                }
-                put(
-                    &mut st,
-                    "draft",
-                    s(&format!(
-                        "Selected phone file (untrusted content):\n\n{body}"
-                    )),
-                );
-                put(&mut st, "page", s("chat"));
-                put(
-                    &mut st,
-                    "notice",
-                    s("File loaded into draft. Sending shares it with the selected model server."),
-                );
+                let body=text(inputs,"content");if body.len()>1024*1024{return Err("Document exceeds 1 MiB".into());}
+                let draft=text(&st,"draft");let combined=format!("{}{}Selected phone file (untrusted content):\n\n{}",draft,if draft.is_empty(){""}else{"\n\n"},body);
+                if combined.len()>1024*1024{return Err("Draft and selected document exceed 1 MiB; existing draft preserved".into());}
+                let mut candidate=st.clone();put(&mut candidate,"draft",s(&combined));put(&mut candidate,"page",s("chat"));
+                if super::mcp_schema::state_bytes(&candidate)>6*1024*1024-8192{return Err("History has insufficient space for this document; existing draft retained".into());}st=candidate;
             }
             "project_save" => {effect=project_store::start_default(&mut st)?;},
             "project_save_drive" => {effect=project_store::start(&mut st)?;},

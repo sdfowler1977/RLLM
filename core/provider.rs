@@ -247,3 +247,45 @@ mod content_checks {
   assert!(content_endpoint("https://server.example/custom?alt=json",true).is_err());assert!(content_endpoint("https://server.example/custom?alt=sse&%61lt=sse",true).is_err());
  }
 }
+
+/// Add validated original image bytes to already-normalized provider messages.
+/// No capability is inferred from a model name; server rejection stays explicit.
+pub fn apply_attachments(body:&mut Json,source:&[Json],protocol:&str)->Result<()> {
+    let encoded=attachments::encoded_bytes(source)?;
+    if encoded==0{return Ok(());}
+    if !["chat","local","messages","content"].contains(&protocol){return Err("This API cannot transport image attachments".into());}
+    // Work transactionally so a malformed projection cannot partially replace text.
+    let mut next=body.clone();
+    let key=if protocol=="content"{"contents"}else{"messages"};
+    let fields=match &mut next{Obj(v)=>v,_=>return Err("Invalid provider body".into())};
+    let projected=match fields.get_mut(key){Some(Arr(v))=>v,_=>return Err("Missing provider messages".into())};
+    let expected=source.iter().filter(|m|protocol=="chat"||protocol=="local"||text(m,"role")!="system").count();
+    if projected.len()!=expected{return Err("Provider message projection does not match attachments".into());}
+    let mut index=0;
+    for message in source{
+        if text(message,"role")=="system"&&!["chat","local"].contains(&protocol){continue;}
+        let images=attachments::images(message)?;
+        let target=match &mut projected[index]{Obj(v)=>v,_=>return Err("Invalid provider message".into())};index+=1;
+        if images.is_empty(){continue;}
+        let original=field(message,"content")?;
+        match protocol{
+            "local"=>{target.insert("images".into(),Arr(images.iter().map(|v|s(text(v,"data"))).collect()));},
+            "chat"=>{
+                let mut parts=vec![obj(vec![("type",s("text")),("text",s(original))])];
+                for image in images{parts.push(obj(vec![("type",s("image_url")),("image_url",obj(vec![("url",s(&format!("data:{};base64,{}",text(&image,"mime"),text(&image,"data"))))]))]));}
+                target.insert("content".into(),Arr(parts));
+            },
+            "messages"=>{
+                let mut parts=Vec::new();for image in images{parts.push(obj(vec![("type",s("image")),("source",obj(vec![("type",s("base64")),("media_type",s(text(&image,"mime"))),("data",s(text(&image,"data")))]))]));}
+                if !original.is_empty(){parts.push(obj(vec![("type",s("text")),("text",s(original))]));}
+                target.insert("content".into(),Arr(parts));
+            },
+            "content"=>{
+                let mut parts=vec![obj(vec![("text",s(original))])];for image in images{parts.push(obj(vec![("inlineData",obj(vec![("mimeType",s(text(&image,"mime"))),("data",s(text(&image,"data")))]))]));}
+                target.insert("parts".into(),Arr(parts));
+            },_=>unreachable!()
+        }
+    }
+    if next.string().len()>4*1024*1024{return Err("Request including images exceeds 4 MiB".into());}
+    *body=next;Ok(())
+}

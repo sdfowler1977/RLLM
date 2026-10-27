@@ -6,9 +6,10 @@ pub(super) fn start(st:&mut Json,p:&Json)->Result<Json>{
     harness::allowed_tool(st,p)?;let agent=target(st,p)?;let mut stack=array(st,"delegation_stack");if stack.len()>=3||number(st,"steps")>=8{return Err("Delegation reached its depth or operation limit".into());}
     let model=text(&agent,"model");let connection=if model.is_empty()||model=="primary"{harness::route(st,"subagent")?}else{model.parse::<usize>().map_err(|_|"Invalid subagent model")?};
     if connection>=array(st,"profiles").len(){return Err("Subagent connection not found".into());}
+    let images=harness::parent_request_images(st)?;
     stack.push(obj(vec![("run",get(st,"task_run").clone()),("connection",get(st,"request_index").clone())]));
     let mut next=st.clone();put(&mut next,"delegation_stack",Arr(stack));put(&mut next,"steps",Num((number(st,"steps")+1).to_string()));
-    put(&mut next,"task_run",obj(vec![("mode",s("delegate")),("phase",s("delegate")),("task",s(&text(get(p,"args"),"task"))),("chat",s(&text(st,"active"))),("agent",agent),("connection",Num(connection.to_string())),("observations",Arr(vec![]))]));
+    put(&mut next,"task_run",obj(vec![("mode",s("delegate")),("phase",s("delegate")),("task",s(&text(get(p,"args"),"task"))),("attachments",Arr(images)),("chat",s(&text(st,"active"))),("agent",agent),("connection",Num(connection.to_string())),("observations",Arr(vec![]))]));
     put(&mut next,"pending",Null);put(&mut next,"dialog",Null);put(&mut next,"agent_pending",Bool(false));put(&mut next,"agent_running",Bool(false));let effect=model_effect_at(&mut next,connection)?;*st=next;Ok(effect)
 }
 pub(super) fn complete(st:&mut Json,reply:&str)->Result<Option<Json>>{

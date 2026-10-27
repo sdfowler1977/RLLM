@@ -29,11 +29,11 @@ pub fn validate(p:&Json,protocol:&str)->Result<()> {
  Ok(())
 }
 fn set(p:&mut Json,k:&str,v:Json){if let Obj(fields)=p{fields.insert(k.into(),v);}}
-pub fn content_bytes(messages:&[Json])->Result<usize>{messages.iter().try_fold(0usize,|n,m|n.checked_add(field(m,"content")?.len()).ok_or_else(||"Context size overflow".into()))}
+pub fn content_bytes(messages:&[Json])->Result<usize>{let images=attachments::encoded_bytes(messages)?;messages.iter().try_fold(images,|n,m|n.checked_add(field(m,"content")?.len()).ok_or_else(||"Context size overflow".into()))}
 pub fn apply(body:&mut Json,p:&Json,protocol:&str,messages:&[Json])->Result<()> {
  validate(p,protocol)?;
  let bytes=content_bytes(messages)?;
- if let Some(limit)=integer(p,"context_bytes",8*1024*1024)?{if bytes>limit{return Err(format!("Request has {bytes} UTF-8 content bytes, above this connection's {limit}-byte context budget. No messages were trimmed. Compact context explicitly or adjust this connection; the server's token capacity is unchanged."))}}
+ if let Some(limit)=integer(p,"context_bytes",8*1024*1024)?{if bytes>limit{return Err(format!("Request has {bytes} UTF-8 text plus encoded image bytes, above this connection's {limit}-byte context budget. No messages were trimmed. Compact context explicitly or adjust this connection; the server's token capacity is unchanged."))}}
  let output=integer(p,"output_tokens",i32::MAX as usize)?;
  let r=value(p,"reasoning")?;
  match protocol{

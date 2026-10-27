@@ -46,8 +46,8 @@ pub(super) fn modal_for(st:&Json)->Json {
     let mut fields=vec![interaction::choice("thinking","Thinking level",if mode.is_empty(){"default"}else{&mode},&options),field_ui("context_tokens",if protocol=="local"{"Context size (tokens; blank = server default)"}else{"Context budget (estimated tokens; blank = no app limit)"},&text(p,"context_tokens"),"text"),field_ui("output_tokens","Maximum output tokens (blank = default)",&text(p,"output_tokens"),"text")];
     if protocol=="chat"{fields.push(interaction::choice("output_field","Output parameter",if text(p,"output_field").is_empty(){""}else{p.get("output_field").unwrap().text().unwrap_or("")},&[("Choose supported field",""),("max_completion_tokens","max_completion_tokens"),("max_tokens (compatible servers)","max_tokens")]));}
     if ["messages","content"].contains(&protocol.as_str()){fields.push(field_ui("thinking_tokens","Thinking token budget (manual budget mode)",&text(p,"thinking_tokens"),"text"));}
-    fields.push(field_ui("context_bytes","Context budget (UTF-8 bytes; optional)",&text(p,"context_bytes"),"text"));
-    fields.push(field_ui("compaction_bytes","Compaction reminder (UTF-8 bytes; optional)",&text(p,"compaction_bytes"),"text"));
+    fields.push(field_ui("context_bytes","Context budget (text + encoded image bytes; optional)",&text(p,"context_bytes"),"text"));
+    fields.push(field_ui("compaction_bytes","Compaction reminder (text + encoded image bytes; optional)",&text(p,"compaction_bytes"),"text"));
     fields.push(field_ui("support","Provider support","Choose only settings supported by this model/server. Server default sends no thinking override. Estimated token budgets are approximate. Byte budgets count exact UTF-8 message content. Neither increases server capacity.","readonly"));
     fields.push(field_ui("model_metadata","Model-reported capabilities",&model_metadata::display(st),"readonly"));
     let mut buttons=vec![button("Apply to connection","generation_apply"),button("Reset overrides","profile_generation_reset")];
