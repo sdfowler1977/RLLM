@@ -52,6 +52,27 @@ pub fn normalized(p: &Json) -> Result<Json> {
     application::generation::validate(&out)?;
     Ok(out)
 }
+/// Derive the selected transport without changing the saved connection.
+/// Only the standard method suffix changes; custom proxy paths stay intact.
+pub fn content_endpoint(endpoint:&str, streaming:bool)->Result<String> {
+    let (path,query)=endpoint.split_once('?').unwrap_or((endpoint,""));
+    let path=if let Some(base)=path.strip_suffix(":generateContent"){format!("{base}:{}",if streaming{"streamGenerateContent"}else{"generateContent"})}
+        else if let Some(base)=path.strip_suffix(":streamGenerateContent"){format!("{base}:{}",if streaming{"streamGenerateContent"}else{"generateContent"})}else{path.to_string()};
+    let mut fields=Vec::new();let mut alt=false;
+    for item in query.split('&').filter(|v|!v.is_empty()) {
+        let (key,value)=item.split_once('=').unwrap_or((item,""));
+        let mut decoded=Vec::new();let bytes=key.as_bytes();let mut i=0;
+        while i<bytes.len(){if bytes[i]==b'%'&&i+2<bytes.len(){let hex=std::str::from_utf8(&bytes[i+1..i+3]).map_err(|_|"Invalid Content query")?;decoded.push(u8::from_str_radix(hex,16).map_err(|_|"Invalid Content query")?);i+=3;}else{decoded.push(bytes[i]);i+=1;}}
+        if decoded==b"alt" {
+            if alt {return Err("Duplicate Content alt query parameter".into());}alt=true;
+            if streaming && value!="sse" {return Err("Content streaming needs alt=sse; remove the conflicting alt parameter or turn off Stream replies".into());}
+            if !streaming && value=="sse" {continue;}
+        }
+        fields.push(item.to_string());
+    }
+    if streaming && !alt {fields.push("alt=sse".into());}
+    Ok(if fields.is_empty(){path}else{format!("{path}?{}",fields.join("&"))})
+}
 pub fn authorization(p: &Json) -> Result<Option<(String, String)>> {
     let key = text(p, "key");
     if key.is_empty() {
@@ -168,4 +189,17 @@ mod checks {
         let p = obj(vec![("key", s("secret")), ("auth_header", s("Host"))]);
         assert!(authorization(&p).is_err());
     }
+}
+
+#[cfg(test)]
+mod content_checks {
+ use super::*;
+ #[test]fn content_transport_preserves_configuration(){
+  let base="https://server.example/proxy/models/custom%2Fname:generateContent?key=private&route=chosen";
+  let target=content_endpoint(base,true).unwrap();assert_eq!(target,"https://server.example/proxy/models/custom%2Fname:streamGenerateContent?key=private&route=chosen&alt=sse");assert_eq!(content_endpoint(&target,false).unwrap(),base);
+  assert_eq!(content_endpoint("https://server.example/custom?route=x",true).unwrap(),"https://server.example/custom?route=x&alt=sse");
+  assert_eq!(content_endpoint("https://server.example/custom?route=x&alt=sse",false).unwrap(),"https://server.example/custom?route=x");
+  assert_eq!(content_endpoint("https://server.example/custom?alt=json",false).unwrap(),"https://server.example/custom?alt=json");
+  assert!(content_endpoint("https://server.example/custom?alt=json",true).is_err());assert!(content_endpoint("https://server.example/custom?alt=sse&%61lt=sse",true).is_err());
+ }
 }

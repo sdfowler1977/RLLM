@@ -382,20 +382,8 @@ fn response(v: &Json) -> Result<Json> {
             }
             parts.join("\n")
         }
-        "content" => {
-            let first = body
-                .get("candidates")?
-                .array()?
-                .first()
-                .ok_or("No response candidates; content may have been blocked")?;
-            let mut parts = Vec::new();
-            for p in first.get("content")?.get("parts")?.array()? {
-                if let Ok(t) = field(p, "text") {
-                    parts.push(t.to_string());
-                }
-            }
-            parts.join("\n")
-        }
+        "content" => stream::content_text(&body)?,
+
         _ => return Err("Unknown API format".into()),
     };
     if text.trim().is_empty() {

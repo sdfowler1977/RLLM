@@ -286,7 +286,7 @@ fn configuration_snapshot(st: &Json) -> Json {
         ("protocol", get(&p,"protocol").clone()),
         ("endpoint", s(&endpoint_summary(&text(&p,"endpoint")))),
         ("plain", Bool(boolean(&p,"plain"))),
-        ("stream", Bool(["local","chat"].contains(&text(&p,"protocol").as_str()) && get(&p,"stream")!=&Bool(false) && text(&p,"stream")!="false")),
+        ("stream", Bool(["local","chat","messages","content"].contains(&text(&p,"protocol").as_str()) && get(&p,"stream")!=&Bool(false) && text(&p,"stream")!="false")),
         ("auth_header", get(&p,"auth_header").clone()),
         ("credentials_omitted", Bool(true)),
     ]) };
@@ -516,7 +516,7 @@ fn ui(st: &Json) -> Json {
  "conversation_review"=>modal("Review conversation import",vec![field_ui("summary","Separate history entry",&format!("{} · {} messages\nExisting conversations will be preserved.",text(get(st,"conversation_candidate"),"title"),array(get(st,"conversation_candidate"),"messages").len()),"readonly")],vec![button("Import conversation","conversation_accept"),button("Cancel","conversation_reject")]),
  "generation"=>generation::modal_for(st),
  "appearance"|"chat_agents"|"chat_options"|"chat_delete_review"|"trash"|"trash_options"|"chat_purge_review"=>interaction::modal_for(st),
- "capabilities"=>modal("Implementation status",vec![field_ui("status","Current capabilities","Server profiles; four text API formats, with incremental replies for /api/chat and chat completions; encrypted local history and conversation branching; native project file tools; reviewed agent operations; phone text-document import; WebDAV browsing, reading, snapshots and reviewed file creation, revision-aware text updates, folder creation and network-to-project copy; shell syntax checking and execution in an isolated Android service; authenticated local API gateway (non-streaming).\n\nNot yet implemented: SMB, on-device model inference, clustering, MCP/ACP/A2A, image/audio/PDF extraction, streaming for messages/content APIs, and bundled general-purpose compilers. This is a development checkpoint, not a completed R-rules release.","readonly")],vec![]),_=>harness::modal_for(st)};
+ "capabilities"=>modal("Implementation status",vec![field_ui("status","Current capabilities","Server profiles; four text API formats, with incremental replies for /api/chat, chat completions, Messages and Content; reviewed remote MCP discovery and calls; encrypted local history and conversation branching; native project file tools; reviewed agent operations; phone text-document import; WebDAV browsing, reading, snapshots and reviewed file creation, revision-aware text updates, folder creation and network-to-project copy; shell syntax checking and execution in an isolated Android service; authenticated local API gateway (non-streaming).\n\nNot yet implemented: SMB, on-device model inference, clustering, complete built-in versioned MCP/ACP/A2A interoperability, image/audio/PDF extraction, structured provider tools, and bundled general-purpose compilers. This is a development checkpoint, not a completed R-rules release.","readonly")],vec![]),_=>harness::modal_for(st)};
     if dialog=="profile" && !text(st,"profile_error").is_empty() {let mut fields=array(&pop,"fields");fields.insert(0,field_ui("profile_error","Profile could not be saved",&text(st,"profile_error"),"readonly"));put(&mut pop,"fields",Arr(fields));}
     if pop != Null && text(st,"form_dialog")==dialog {
         let mut definitions=array(&pop,"fields");
@@ -636,8 +636,8 @@ fn model_effect_at(st: &mut Json, index: usize) -> Result<Json> {
         ("messages", Arr(messages.clone())),
     ]))?;
     generation::apply(&p,&mut body,&messages)?;
-    let streaming=["local","chat"].contains(&protocol.as_str()) && get(&p,"stream")!=&Bool(false) && text(&p,"stream")!="false";
-    if streaming {put(&mut body,"stream",Bool(true));}
+    let streaming=["local","chat","messages","content"].contains(&protocol.as_str()) && get(&p,"stream")!=&Bool(false) && text(&p,"stream")!="false";
+    if streaming && protocol!="content" {put(&mut body,"stream",Bool(true));}
     let body=body.string();
     let authentication = super::provider::authorization(&p)?;
     let mut headers = vec![("Content-Type", "application/json; charset=utf-8".into())];
@@ -647,7 +647,8 @@ fn model_effect_at(st: &mut Json, index: usize) -> Result<Json> {
     if protocol == "messages" {
         headers.push(("anthropic-version", "2023-06-01".into()))
     }
-    let endpoint = text(&p, "endpoint").replace("{model}", &network::encoded(&text(&p, "model")));
+    let configured = text(&p, "endpoint").replace("{model}", &network::encoded(&text(&p, "model")));
+    let endpoint = if protocol=="content" {super::provider::content_endpoint(&configured,streaming)?} else {configured};
     let mut effect = network::wire(&endpoint, boolean(&p, "plain"), "POST", &body, headers)?;
     put(&mut effect, "purpose", s("model"));
     let ticket=now();put(&mut effect,"model_ticket",s(&ticket));put(st,"model_expected",s(&ticket));
