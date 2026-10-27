@@ -54,6 +54,8 @@ public final class Activity extends android.app.Activity {
     private final Map<String,View> fields=new LinkedHashMap<>();
     private final ExecutorService workers=Executors.newFixedThreadPool(Math.max(2,Math.min(4,Runtime.getRuntime().availableProcessors())));
     private final Set<Socket> activeConnections=ConcurrentHashMap.newKeySet();
+    private final Set<Socket> cleanupConnections=ConcurrentHashMap.newKeySet();
+    private final ThreadPoolExecutor cleanupWorkers=new ThreadPoolExecutor(1,1,10,TimeUnit.SECONDS,new ArrayBlockingQueue<Runnable>(4));
     private final Set<android.os.CancellationSignal> documentSignals=ConcurrentHashMap.newKeySet();
     private final Set<android.os.ParcelFileDescriptor> documentFiles=ConcurrentHashMap.newKeySet();
     private final Set<android.os.CancellationSignal> exportSignals=ConcurrentHashMap.newKeySet();
@@ -78,6 +80,7 @@ public final class Activity extends android.app.Activity {
     private TransferStore transferStore;
     // One process-wide platform IO lane serializes export storage and destination writes across Activities.
     private static final ExecutorService documentJobs=Executors.newSingleThreadExecutor();
+    private static final ExecutorService appJobs=new ThreadPoolExecutor(0,1,30,TimeUnit.SECONDS,new SynchronousQueue<Runnable>());
     private static final Set<String> cancelledExports=ConcurrentHashMap.newKeySet();
     private byte[] pendingImport;
     private ServiceConnection executionConnection;
@@ -117,15 +120,62 @@ public final class Activity extends android.app.Activity {
         Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,key());
         FileOutputStream out=null;try{out=vault.startWrite();out.write(cipher.getIV());out.write(cipher.doFinal(plain));vault.finishWrite(out);}catch(Exception e){if(out!=null)vault.failWrite(out);throw e;}
     }
+    private boolean phoneAccessGranted(){
+        if(android.os.Build.VERSION.SDK_INT>=30)return android.os.Environment.isExternalStorageManager();
+        return checkSelfPermission("android.permission.READ_EXTERNAL_STORAGE")==android.content.pm.PackageManager.PERMISSION_GRANTED && checkSelfPermission("android.permission.WRITE_EXTERNAL_STORAGE")==android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+    private void requestPhoneAccess(){
+        if(android.os.Build.VERSION.SDK_INT>=30){
+            Intent intent=new Intent("android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION",Uri.parse("package:"+getPackageName()));
+            try{startActivityForResult(intent,48);}catch(android.content.ActivityNotFoundException unavailable){startActivityForResult(new Intent("android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION"),48);}
+        }else requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE","android.permission.WRITE_EXTERNAL_STORAGE"},48);
+    }
+    @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){super.onRequestPermissionsResult(code,permissions,grants);if(code==48)dispatch("phone_access_status");}
+    private Object phoneReadOrDocument(JSONObject command,int token)throws Exception {
+        if(!command.optString("phone_scope").equals("shared"))return phoneTool(command,token);
+        String tool=command.getString("tool");
+        if(!tool.equals("phone_read")&&!tool.equals("phone_list"))throw new IOException("Shared-storage operation is unsupported");
+        if(token!=generation||closed)throw new IOException("Cancelled");
+        if(!phoneAccessGranted())throw new IOException("Android broad file access is not granted; enable it or choose limited browsing");
+        JSONObject request=new JSONObject(command.toString()).put("op","tool").put("tool",tool.equals("phone_read")?"read":"list").put("root",android.os.Environment.getExternalStorageDirectory().getAbsolutePath());
+        Object result=Core.call(request);if(token!=generation||closed)throw new IOException("Cancelled");return result;
+    }
+    private void appObservationActive(int token)throws IOException{if(token!=generation||closed)throw new IOException("App observation cancelled");}
+    private static String appLabel(String value){
+        StringBuilder out=new StringBuilder();int bytes=0;for(int offset=0;offset<value.length();){int cp=value.codePointAt(offset);String piece=new String(Character.toChars(cp));int size=piece.getBytes(StandardCharsets.UTF_8).length;if(bytes+size>253){out.append("…");break;}out.append(piece);bytes+=size;offset+=Character.charCount(cp);}return out.toString();
+    }
+    private JSONObject appObservation(JSONObject command,int token)throws Exception{
+        appObservationActive(token);String operation=command.getString("operation"),selected=command.getString("package");android.content.pm.PackageManager pm=getPackageManager();
+        if(operation.equals("catalog")){
+            if(!selected.isEmpty())throw new IOException("Unexpected catalog package");
+            java.util.List<android.content.pm.ApplicationInfo> apps=pm.getInstalledApplications(0);if(apps.size()>1024)throw new IOException("App catalog exceeds1024 packages; no partial catalog accepted");JSONArray entries=new JSONArray();
+            for(android.content.pm.ApplicationInfo app:apps){appObservationActive(token);entries.put(new JSONObject().put("package",app.packageName).put("label",appLabel(String.valueOf(pm.getApplicationLabel(app)))).put("system",(app.flags&android.content.pm.ApplicationInfo.FLAG_SYSTEM)!=0));}
+            appObservationActive(token);return new JSONObject().put("entries",entries);
+        }
+        if(!operation.equals("details")||!selected.matches("[A-Za-z0-9_.]{1,255}"))throw new IOException("Invalid selected package");
+        android.content.pm.PackageInfo info=pm.getPackageInfo(selected,android.content.pm.PackageManager.GET_PERMISSIONS);appObservationActive(token);
+        if(!selected.equals(info.packageName)||info.applicationInfo==null)throw new IOException("Package identity unavailable");
+        String[] names=info.requestedPermissions;int[] flags=info.requestedPermissionsFlags;if(names!=null&&names.length>512)throw new IOException("Package exceeds512 requested permissions; no partial observation accepted");
+        JSONArray permissions=new JSONArray();if(names!=null)for(int index=0;index<names.length;index++){appObservationActive(token);Object granted=flags!=null&&flags.length==names.length?Boolean.valueOf((flags[index]&android.content.pm.PackageInfo.REQUESTED_PERMISSION_GRANTED)!=0):JSONObject.NULL;permissions.put(new JSONObject().put("name",names[index]).put("granted",granted));}
+        long code=android.os.Build.VERSION.SDK_INT>=28?info.getLongVersionCode():Integer.toUnsignedLong(info.versionCode);
+        return new JSONObject().put("package",info.packageName).put("version",info.versionName==null?"":info.versionName).put("version_code",Long.toString(code)).put("uid",info.applicationInfo.uid).put("system",(info.applicationInfo.flags&android.content.pm.ApplicationInfo.FLAG_SYSTEM)!=0).put("observed_ms",Long.toString(System.currentTimeMillis())).put("permissions",permissions);
+    }
     private JSONObject inputs(){JSONObject out=new JSONObject();try{if(draft!=null)out.put("draft",draft.getText().toString());for(Map.Entry<String,View> e:fields.entrySet()){View v=e.getValue();if(v instanceof android.widget.Spinner){Object item=((android.widget.Spinner)v).getSelectedItem();JSONArray choices=(JSONArray)v.getTag();int selected=((android.widget.Spinner)v).getSelectedItemPosition();if(selected>=0&&selected<choices.length())out.put(e.getKey(),choices.getJSONObject(selected).getString("value"));}else if(v instanceof CheckBox)out.put(e.getKey(),((CheckBox)v).isChecked());else if(v instanceof EditText)out.put(e.getKey(),((EditText)v).getText().toString());}}catch(JSONException ignored){throw new IllegalStateException(ignored);}return out;}
+    private volatile String mcpPauseOwner="";
     private void dispatch(String action){dispatch(action,new JSONObject());}
-    private void dispatch(String action,JSONObject extra){if(closed)return;
-        try{JSONObject in=inputs();android.app.ActivityManager.MemoryInfo memory=new android.app.ActivityManager.MemoryInfo();((android.app.ActivityManager)getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(memory);in.put("device",new JSONObject().put("memory_bytes",memory.totalMem).put("heap_bytes",Runtime.getRuntime().maxMemory()).put("cores",Runtime.getRuntime().availableProcessors()).put("abi",android.os.Build.SUPPORTED_ABIS[0]));in.put("gateway_status",Gateway.status);if(action.equals("gateway_edit")){byte[] entropy=new byte[32];new java.security.SecureRandom().nextBytes(entropy);in.put("generated_token",Base64.encodeToString(entropy,Base64.NO_WRAP));}if(action.equals("cancel")&&!rateTicket.isEmpty()&&rateTicket.equals(state.optString("model_expected")))in.put("elapsed_ms",android.os.SystemClock.elapsedRealtime()-rateStarted);Iterator<String> keys=extra.keys();while(keys.hasNext()){String k=keys.next();in.put(k,extra.get(k));}
+    private void dispatch(String action,JSONObject extra){if(closed)return;JSONObject plannedEffect=null;boolean stateCommitted=false,effectStarted=false;
+        try{JSONObject in=inputs();android.app.ActivityManager.MemoryInfo memory=new android.app.ActivityManager.MemoryInfo();((android.app.ActivityManager)getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(memory);in.put("device",new JSONObject().put("memory_bytes",memory.totalMem).put("heap_bytes",Runtime.getRuntime().maxMemory()).put("cores",Runtime.getRuntime().availableProcessors()).put("abi",android.os.Build.SUPPORTED_ABIS[0]));in.put("phone_access_granted",phoneAccessGranted());in.put("gateway_status",Gateway.status);if(action.equals("gateway_edit")){byte[] entropy=new byte[32];new java.security.SecureRandom().nextBytes(entropy);in.put("generated_token",Base64.encodeToString(entropy,Base64.NO_WRAP));}if(action.equals("cancel")&&!rateTicket.isEmpty()&&rateTicket.equals(state.optString("model_expected")))in.put("elapsed_ms",android.os.SystemClock.elapsedRealtime()-rateStarted);Iterator<String> keys=extra.keys();while(keys.hasNext()){String k=keys.next();in.put(k,extra.get(k));}
             JSONObject request=new JSONObject().put("op","event").put("action",action).put("state",state==null?JSONObject.NULL:state).put("inputs",in).put("root",root());
-            JSONObject result=(JSONObject)Core.call(request);JSONObject next=result.getJSONObject("state");
-            boolean progress=action.equals("model_progress")||action.equals("rate_tick");if(!progress)save(next);state=next;if(progress){if(action.equals("rate_tick"))renderRate(result.getJSONObject("ui"));else renderProgress(result.getJSONObject("ui"));}else render(result.getJSONObject("ui"));
-            JSONObject effect=result.optJSONObject("effect");if(effect!=null)effect(effect);
-        }catch(Throwable e){new AlertDialog.Builder(this).setTitle("Operation not completed").setMessage(safe(e)).setPositiveButton("Close",null).show();}
+            JSONObject result=(JSONObject)Core.call(request);JSONObject next=result.getJSONObject("state");plannedEffect=result.optJSONObject("effect");
+            boolean progress=action.equals("model_progress")||action.equals("rate_tick")||action.equals("rea_server_progress");if(!progress)save(next);state=next;stateCommitted=true;if(progress){if(action.equals("rate_tick"))renderRate(result.getJSONObject("ui"));else if(action.equals("rea_server_progress"))renderMcpProgress(result.getJSONObject("ui"));else renderProgress(result.getJSONObject("ui"));}else render(result.getJSONObject("ui"));
+            JSONObject effect=plannedEffect;if(effect!=null){effect(effect);effectStarted=true;}
+        }catch(Throwable e){if(!effectStarted&&plannedEffect!=null){boolean opening=abortMcpOpening(plannedEffect,stateCommitted);if(opening&&stateCommitted&&!closed)try{dispatch("failure",new JSONObject().put("purpose",plannedEffect.optString("purpose")).put("error",safe(e)));}catch(Exception ignored){}}new AlertDialog.Builder(this).setTitle("Operation not completed").setMessage(safe(e)).setPositiveButton("Close",null).show();}
+    }
+    private boolean abortMcpOpening(JSONObject effect,boolean committed){
+        boolean mcpEffect=effect.optString("kind").equals("network")&&effect.optString("purpose").startsWith("rea_");JSONArray aborted=effect.optJSONArray("mcp_abort_cleanup");effect.remove("mcp_abort_cleanup");if(!committed&&aborted!=null&&!closed)queueMcpCleanup(aborted,android.os.SystemClock.elapsedRealtime()+2000);
+        JSONArray attached=effect.optJSONArray("mcp_cleanup");effect.remove("mcp_cleanup");if(attached!=null&&!closed)queueMcpCleanup(attached,android.os.SystemClock.elapsedRealtime()+2000);
+        JSONObject context=effect.optJSONObject("mcp_control");if(context==null||(!context.has("admission_token")&&!context.has("resume_token")))return mcpEffect;
+        try{JSONArray cleanup=(JSONArray)Core.call(new JSONObject().put("op","stream_open_cleanup").put("context",context));if(!closed)queueMcpCleanup(cleanup,android.os.SystemClock.elapsedRealtime()+2000);}catch(Exception ignored){}return true;
     }
     private TextView label(String text,int size){TextView v=new TextView(this);v.setText(text);v.setTextSize(size*textScale);v.setTypeface(proseFont);v.setTextColor(ink);v.setPadding(dp(8),dp(3),dp(8),dp(3));return v;}
     private LinearLayout column(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.VERTICAL);return v;}
@@ -187,6 +237,9 @@ public final class Activity extends android.app.Activity {
         JSONObject monitor=ui.optJSONObject("monitor");JSONArray gauges=monitor==null?null:monitor.optJSONArray("gauges");
         if(rateValue!=null&&gauges!=null)for(int i=0;i<gauges.length();i++){JSONObject g=gauges.getJSONObject(i);if(!g.optString("id").equals("local_rate"))continue;rateValue.setText(g.optString("value"));rateCaption.setText(g.optString("caption"));if(rateDiagram!=null)rateDiagram.update(g.getJSONObject("visual"));}
     }
+    private void renderMcpProgress(JSONObject ui){
+        if(statusView!=null){String value=ui.optString("visible_status");statusView.setText(value);statusView.setContentDescription(value);statusView.setVisibility(value.isEmpty()?View.GONE:View.VISIBLE);}
+    }
     private void renderProgress(JSONObject ui)throws Exception{
         renderRate(ui);
         if(statusView!=null){statusView.setText(ui.optString("visible_status"));statusView.setContentDescription(ui.optString("visible_status"));statusView.setVisibility(ui.optString("visible_status").isEmpty()?View.GONE:View.VISIBLE);}
@@ -232,11 +285,11 @@ public final class Activity extends android.app.Activity {
         }
         String visibleStatus=ui.optString("visible_status");TextView status=summary(visibleStatus,11,2,visibleStatus);statusView=status;status.setTextColor(muted);status.setOnClickListener(v->dispatch("status"));status.setGravity(Gravity.CENTER_VERTICAL);status.setMinHeight(dp(48));status.setVisibility(visibleStatus.isEmpty()?View.GONE:View.VISIBLE);contentSurface.addView(status,new LinearLayout.LayoutParams(-1,-2));
         if(page.equals("chat")){
-            modelFooter=row();
+            modelFooter=row();modelFooter.setPadding(dp(12),0,dp(12),0);
             Button model=button(ui.optString("connection_label").isEmpty()?"Choose LLM ▾":ui.optString("connection_label")+" ▾",()->dispatch("chat_models"));
             Button agent=button(ui.optString("agent_name","General")+" ▾",()->dispatch("chat_agents"));
             rateBadge=button("— tok/s",()->dispatch("monitor:all"));
-            for(Button control:new Button[]{model,agent,rateBadge}){control.setMinWidth(0);control.setMinimumWidth(0);control.setPadding(dp(4),0,dp(4),0);control.setBackgroundColor(Color.TRANSPARENT);modelFooter.addView(control,new LinearLayout.LayoutParams(0,-1,1));}
+            for(Button control:new Button[]{model,agent,rateBadge}){control.setMinWidth(0);control.setMinimumWidth(0);control.setPadding(dp(8),0,dp(8),0);control.setBackgroundColor(Color.TRANSPARENT);modelFooter.addView(control,new LinearLayout.LayoutParams(0,-1,1));}
             model.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);agent.setGravity(Gravity.CENTER);
             for(Button control:new Button[]{model,agent}){control.setSingleLine(true);control.setEllipsize(android.text.TextUtils.TruncateAt.END);}
             rateBadge.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);rateBadge.setMaxLines(2);rateBadge.setTextColor(muted);
@@ -248,6 +301,7 @@ public final class Activity extends android.app.Activity {
             ImageButton menu=icon("addition","Conversation actions",()->dispatch("chat_actions"));composerMenu=menu;composerModel=ui.optString("connection_label");composerBusy=busy;menu.setEnabled(!busy);composer.addView(menu,new LinearLayout.LayoutParams(dp(48),dp(48)));
             draft=new EditText(this);draft.setTextColor(ink);draft.setHintTextColor(muted);draft.setTextSize(16*textScale);draft.setTypeface(proseFont);draft.setHint("Ask anything");draft.setContentDescription("Message or project instruction");draft.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);draft.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN);draft.setMinLines(1);draft.setMaxLines(viewportHeight>0&&viewportHeight<350?1:3);draft.setMinHeight(dp(48));draft.setBackgroundColor(Color.TRANSPARENT);draft.setPadding(dp(8),dp(10),dp(8),dp(10));draft.setText(ui.optString("draft"));composer.addView(draft,new LinearLayout.LayoutParams(0,-2,1));ImageButton submit=icon(busy?"cancellation":"arrow_up",busy?"Cancel":"Send",()->dispatch(busy?"cancel":"send"));submit.setBackground(framed(accent,10));submit.setImageTintList(android.content.res.ColorStateList.valueOf(surface));composer.addView(submit,new LinearLayout.LayoutParams(dp(48),dp(48)));LinearLayout.LayoutParams composerBounds=new LinearLayout.LayoutParams(-1,-2);composerBounds.setMargins(dp(8),0,dp(8),dp(8));contentSurface.addView(composer,composerBounds);
         }else if(busy)outer.addView(button("Cancel",()->dispatch("cancel")),new LinearLayout.LayoutParams(-1,dp(48)));
+        if(busy&&state.optBoolean("rea_resumable")&&state.optString("rea_expected").startsWith("rea_server:"))outer.addView(button("Pause server stream",()->dispatch("rea_pause")),new LinearLayout.LayoutParams(-1,dp(48)));
         if(page.equals("chat"))applyChatGeometry(geometry);
         outer.setOnApplyWindowInsetsListener((view,insets)->{if(android.os.Build.VERSION.SDK_INT>=30){Insets bars=insets.getInsets(WindowInsets.Type.systemBars()),ime=insets.getInsets(WindowInsets.Type.ime());insetLeft=bars.left;insetTop=bars.top;insetRight=bars.right;insetBottom=Math.max(bars.bottom,ime.bottom);}else{insetLeft=insets.getSystemWindowInsetLeft();insetTop=insets.getSystemWindowInsetTop();insetRight=insets.getSystemWindowInsetRight();insetBottom=insets.getSystemWindowInsetBottom();}view.setPadding(dp(8)+insetLeft,insetTop,dp(8)+insetRight,dp(8)+insetBottom);queueViewport();return insets;});
         setContentView(scene);if(android.os.Build.VERSION.SDK_INT>=30){WindowInsetsController controller=getWindow().getInsetsController();if(controller!=null)controller.setSystemBarsAppearance(dark?0:WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);}outer.requestApplyInsets();JSONObject modal=ui.optJSONObject("modal");if(modal!=null)modal(modal);else if(composerFocus&&draft!=null){draft.requestFocus();draft.setSelection(Math.min(selection,draft.length()));}rendering=false;
@@ -290,14 +344,14 @@ public final class Activity extends android.app.Activity {
         return panel;
     }
     private void modal(JSONObject model) throws Exception {
-        LinearLayout content=column();content.setBackgroundColor(surface);content.setPadding(dp(12),dp(8),dp(12),dp(8));JSONArray definitions=model.optJSONArray("fields");
+        LinearLayout content=column();content.setBackgroundColor(surface);content.setPadding(dp(16),dp(12),dp(16),dp(12));JSONArray definitions=model.optJSONArray("fields");
         if(definitions!=null)for(int i=0;i<definitions.length();i++){JSONObject f=definitions.getJSONObject(i);String name=f.getString("key"),kind=f.optString("kind"),value=f.optString("value");
             if(kind.equals("choice")){content.addView(label(f.optString("label"),12));android.widget.Spinner select=new android.widget.Spinner(this);JSONArray choices=f.getJSONArray("options");ArrayList<String> labels=new ArrayList<>();int selected=0;for(int j=0;j<choices.length();j++){JSONObject option=choices.getJSONObject(j);labels.add(option.getString("label"));if(option.getString("value").equals(value))selected=j;}android.widget.ArrayAdapter<String> adapter=new android.widget.ArrayAdapter<String>(this,android.R.layout.simple_spinner_item,labels){public View getView(int p,View v,android.view.ViewGroup g){TextView t=(TextView)super.getView(p,v,g);t.setTextColor(ink);t.setTextSize(14*textScale);t.setTypeface(proseFont);return t;}public View getDropDownView(int p,View v,android.view.ViewGroup g){TextView t=(TextView)super.getDropDownView(p,v,g);t.setTextColor(ink);t.setTypeface(proseFont);t.setTextSize(14*textScale);t.setBackgroundColor(surface);t.setMinHeight(dp(48));return t;}};adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);select.setAdapter(adapter);select.setSelection(selected);select.setTag(choices);select.setContentDescription(f.optString("label"));select.setMinimumHeight(dp(48));content.addView(select,new LinearLayout.LayoutParams(-1,-2));fields.put(name,select);}
-            else if(kind.equals("check")){CheckBox c=new CheckBox(this);c.setText(f.optString("label"));c.setTextColor(ink);c.setTypeface(proseFont);c.setTextSize(14*textScale);c.setChecked(value.equals("true"));content.addView(c);fields.put(name,c);}
+            else if(kind.equals("check")){CheckBox c=new CheckBox(this);c.setText(f.optString("label"));c.setTextColor(ink);c.setTypeface(proseFont);c.setTextSize(14*textScale);c.setChecked(value.equals("true"));c.setMinHeight(dp(48));c.setPadding(dp(8),dp(8),dp(8),dp(8));content.addView(c,new LinearLayout.LayoutParams(-1,-2));fields.put(name,c);}
             else{content.addView(label(f.optString("label"),12));if(kind.equals("readonly")){TextView t=label(value,13);t.setTextIsSelectable(true);t.setTypeface(proseFont);content.addView(t);}
                 else{EditText e=new EditText(this);e.setTextSize(15*textScale);e.setTypeface(proseFont);e.setTextColor(ink);e.setText(value);if(name.equals("endpoint"))e.setHint("http://server:8080/v1 or https://api.example/v1");e.setHintTextColor(muted);e.setBackgroundTintList(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_focused},new int[]{}},new int[]{accent,muted}));e.setSingleLine(!kind.equals("multiline"));if(kind.equals("secret")){e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);e.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);}else if(kind.equals("uri"))e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);else if(kind.equals("multiline")){e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);e.setMinLines(5);e.setGravity(Gravity.TOP);}content.addView(e,new LinearLayout.LayoutParams(-1,-2));fields.put(name,e);}}
         }
-        boolean profileForm=state!=null&&state.optString("dialog").equals("profile");JSONArray actions=model.optJSONArray("buttons");if(actions!=null)for(int i=0;i<actions.length();i++){JSONObject b=actions.getJSONObject(i);String event=b.getString("event");if(profileForm&&event.equals("profile_save"))continue;Button control=button(b.getString("label"),()->{if(event.equals("conversation_export"))export();else dispatch(event);});control.setEnabled(b.optBoolean("enabled",true));control.setAlpha(control.isEnabled()?1f:.45f);if(model.optString("presentation").equals("list")){control.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);control.setTextColor(ink);control.setPadding(dp(12),dp(8),dp(12),dp(8));control.setMinHeight(dp(48));control.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf((accent&0x00ffffff)|0x33000000),new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT),null));content.addView(control,new LinearLayout.LayoutParams(-1,-2));View line=new View(this);line.setBackgroundColor(border);content.addView(line,new LinearLayout.LayoutParams(-1,dp(1)));}else{content.addView(control);}}
+        boolean profileForm=state!=null&&state.optString("dialog").equals("profile");JSONArray actions=model.optJSONArray("buttons");if(actions!=null)for(int i=0;i<actions.length();i++){JSONObject b=actions.getJSONObject(i);String event=b.getString("event");if(profileForm&&event.equals("profile_save"))continue;Button control=button(b.getString("label"),()->{if(event.equals("conversation_export"))export();else dispatch(event);});control.setEnabled(b.optBoolean("enabled",true));control.setAlpha(control.isEnabled()?1f:.45f);if(model.optString("presentation").equals("list")){control.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);control.setTextColor(ink);control.setPadding(dp(12),dp(8),dp(12),dp(8));control.setMinHeight(dp(48));control.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf((accent&0x00ffffff)|0x33000000),new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT),null));content.addView(control,new LinearLayout.LayoutParams(-1,-2));View line=new View(this);line.setBackgroundColor(border);content.addView(line,new LinearLayout.LayoutParams(-1,dp(1)));}else{control.setPadding(dp(12),dp(8),dp(12),dp(8));LinearLayout.LayoutParams actionBounds=new LinearLayout.LayoutParams(-1,-2);actionBounds.setMargins(0,dp(4),0,dp(4));content.addView(control,actionBounds);}}
         ScrollView scroll=new ScrollView(this);scroll.addView(content);
         TextView title=label(model.optString("title"),20);title.setTypeface(proseFont,Typeface.BOLD);title.setBackgroundColor(surface);title.setPadding(dp(24),dp(20),dp(24),dp(12));
         AlertDialog.Builder builder=new AlertDialog.Builder(this).setCustomTitle(title).setView(scroll).setNegativeButton("Close",(d,w)->dispatch("close"));
@@ -313,6 +367,8 @@ public final class Activity extends android.app.Activity {
     }
     private void effect(JSONObject e) throws Exception {
         String kind=e.getString("kind");
+        JSONArray cleanup=e.optJSONArray("mcp_cleanup");e.remove("mcp_cleanup");e.remove("mcp_abort_cleanup");if(cleanup!=null)queueMcpCleanup(cleanup,android.os.SystemClock.elapsedRealtime()+2000);
+        if(kind.equals("mcp_cleanup"))return;
         if(kind.equals("project_clear")){documentJobs.execute(()->{try{transferStore.clear(key(),e.getString("ticket"));runOnUiThread(()->{if(!closed)try{dispatch("project_cleared",new JSONObject().put("ticket",e.getString("ticket")).put("purpose",e.getString("purpose")));}catch(Exception problem){Toast.makeText(this,safe(problem),Toast.LENGTH_LONG).show();}});}catch(Exception problem){runOnUiThread(()->{if(!closed)try{dispatch("failure",new JSONObject().put("purpose",e.optString("purpose")).put("error",safe(problem)));}catch(Exception ignored){}});}});return;}
         if(kind.equals("document_export")){stageExport(e,e.getString("content").getBytes(StandardCharsets.UTF_8),null);return;}
         if(kind.equals("export_picker")){openSavedExport(e.getString("ticket"));return;}
@@ -320,8 +376,14 @@ public final class Activity extends android.app.Activity {
         if(kind.equals("export_discard")){String ticket=e.getString("ticket");documentJobs.execute(()->{try{exportStore.clear(key(),ticket);cancelledExports.remove(ticket);exportEvent("export_discarded",ticket,null);}catch(Exception problem){exportEvent("export_failed",ticket,safe(problem));}});return;}
         if(kind.equals("gateway_start")){if(android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},45);startForegroundService(new Intent(this,Gateway.class).putExtra("config",e.getJSONObject("config").toString()));return;}
         if(kind.equals("gateway_stop")){stopService(new Intent(this,Gateway.class));return;}
-        if(kind.equals("cancel")){JSONObject pending=state.optJSONObject("export_pending");if(pending!=null)cancelledExports.add(pending.optString("ticket"));stopExecution();generation++;cancelDocuments();for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}Core.call(new JSONObject().put("op","cancel_tool"));return;}
+        if(kind.equals("mcp_pause")){mcpPauseOwner=e.getString("owner");for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}return;}
+        if(kind.equals("cancel")){mcpPauseOwner="";JSONObject pending=state.optJSONObject("export_pending");if(pending!=null)cancelledExports.add(pending.optString("ticket"));stopExecution();generation++;cancelDocuments();for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}Core.call(new JSONObject().put("op","cancel_tool"));return;}
         if(kind.equals("wallpaper_picker")){Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);startActivityForResult(intent,47);return;}
+        if(kind.equals("app_observation")){
+            final int token=generation;final JSONObject command=new JSONObject(e.toString());
+            try{appJobs.execute(()->{JSONObject result=new JSONObject();try{result.put("ticket",command.getString("ticket")).put("package",command.getString("package"));appObservationActive(token);result.put("data",appObservation(command,token));}catch(Exception problem){try{result.put("error",safe(problem));}catch(JSONException ignored){}}runOnUiThread(()->{if(token!=generation||closed)return;dispatch("apps_result",result);});});}catch(java.util.concurrent.RejectedExecutionException unavailable){dispatch("apps_result",new JSONObject().put("ticket",command.getString("ticket")).put("package",command.getString("package")).put("error","App observation worker is unavailable"));}return;
+        }
+        if(kind.equals("phone_access_request")){requestPhoneAccess();return;}
         if(kind.equals("document_tree")){Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);startActivityForResult(intent,43);return;}
         if(kind.equals("document_zip")){pendingImport=null;Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/zip").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,45);return;}
         if(kind.equals("conversation_document")){Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/json").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,46);return;}
@@ -330,7 +392,7 @@ public final class Activity extends android.app.Activity {
         if(kind.equals("network")&&e.optString("purpose").equals("project_file"))pendingImport=null;
         final int token=++generation;final long started=android.os.SystemClock.elapsedRealtime();
         if(kind.equals("network")&&e.optString("purpose").equals("model"))startRateClock(token,e.optString("model_ticket"),started);
-        workers.execute(()->{final boolean[] sending={false};final long[] metrics={0,-1,-1,-1};long snapshotHandle=0;boolean chunkedSnapshot=false;try{JSONObject work=e;String operation=kind;
+        workers.execute(()->{final boolean[] sending={false};final boolean[] streaming={false};final long[] metrics={0,-1,-1,-1};long snapshotHandle=0;boolean chunkedSnapshot=false;try{JSONObject work=e;String operation=kind;
             if(kind.equals("project_payload")){JSONObject stored=documentJobs.submit(()->transferStore.load(key())).get();if(stored==null||stored.has("cleared_ticket"))throw new IOException("Pending snapshot is missing or cleared");
                 chunkedSnapshot=stored.optInt("version")==2;
                 if(chunkedSnapshot)work=(JSONObject)Core.call(new JSONObject().put("op","project_chunks").put("action","open").put("record",e.getJSONObject("record")).put("stored",stored.getJSONObject("record")));
@@ -341,8 +403,8 @@ public final class Activity extends android.app.Activity {
             }else if(operation.equals("network")){String host=command.getString("host");int port=command.getInt("port");Socket raw=new Socket();activeConnections.add(raw);ScheduledFuture<?> timeout=deadlines.schedule(()->{try{raw.close();}catch(IOException ignored){}},120,TimeUnit.SECONDS);
                 try{raw.connect(new InetSocketAddress(host,port),15000);raw.setSoTimeout(120000);Socket connection=raw;
                     if(command.optBoolean("tls")){SSLSocket tls=(SSLSocket)((SSLSocketFactory)SSLSocketFactory.getDefault()).createSocket(raw,host,port,true);SSLParameters params=tls.getSSLParameters();params.setEndpointIdentificationAlgorithm("HTTPS");tls.setSSLParameters(params);tls.setSoTimeout(120000);tls.startHandshake();connection=tls;}
-                    try(Socket managed=connection){if(token!=generation)throw new IOException("Cancelled");sending[0]=true;byte[] requestBytes=command.has("wire_base64")?Base64.decode(command.getString("wire_base64"),Base64.NO_WRAP):command.getString("wire").getBytes(StandardCharsets.UTF_8);managed.getOutputStream().write(requestBytes);managed.getOutputStream().flush();metrics[3]=requestBytes.length;InputStream measured=measuredInput(managed.getInputStream(),started,metrics);byte[] bytes=command.optBoolean("stream")?readStream(measured,token,command.optInt("limit",1024*1024),command.optString("stream_protocol","local"),started,metrics,command.optString("model_ticket")):read(measured,Math.min(6*1024*1024,command.optInt("limit",1024*1024)));if(command.optString("purpose").equals("project_file")){JSONObject extracted=(JSONObject)Core.call(new JSONObject().put("op","network_binary").put("data",Base64.encodeToString(bytes,Base64.NO_WRAP)));byte[] archive=Base64.decode(extracted.getString("archive"),Base64.NO_WRAP);JSONObject preview=(JSONObject)Core.call(new JSONObject().put("op","archive_preview").put("archive",extracted.getString("archive")));runOnUiThread(()->{if(token!=generation||closed)return;pendingImport=archive;try{dispatch("archive_review",new JSONObject().put("names",preview.getJSONArray("names")).put("bytes",preview.getInt("bytes")));}catch(JSONException error){pendingImport=null;fatal(safe(error));}});return;}result.put("data",Base64.encodeToString(bytes,Base64.NO_WRAP));result.put("purpose",command.getString("purpose"));result.put("model_ticket",command.optString("model_ticket"));addMeasurements(result,started,metrics);}
-                }finally{timeout.cancel(false);try{raw.close();}catch(IOException ignored){}activeConnections.remove(raw);}callback="network_result";
+                    try(Socket managed=connection){if(token!=generation)throw new IOException("Cancelled");sending[0]=true;byte[] requestBytes=command.has("wire_base64")?Base64.decode(command.getString("wire_base64"),Base64.NO_WRAP):command.getString("wire").getBytes(StandardCharsets.UTF_8);managed.getOutputStream().write(requestBytes);managed.getOutputStream().flush();metrics[3]=requestBytes.length;InputStream measured=measuredInput(managed.getInputStream(),started,metrics);streaming[0]=command.optBoolean("stream");byte[] bytes=command.optBoolean("stream")?readStream(measured,token,command.optInt("limit",1024*1024),command.optString("stream_protocol","local"),started,metrics,command.optString("model_ticket"),command.optJSONObject("mcp_control")):read(measured,Math.min(6*1024*1024,command.optInt("limit",1024*1024)));if(command.optString("purpose").equals("project_file")){JSONObject extracted=(JSONObject)Core.call(new JSONObject().put("op","network_binary").put("data",Base64.encodeToString(bytes,Base64.NO_WRAP)));byte[] archive=Base64.decode(extracted.getString("archive"),Base64.NO_WRAP);JSONObject preview=(JSONObject)Core.call(new JSONObject().put("op","archive_preview").put("archive",extracted.getString("archive")));runOnUiThread(()->{if(token!=generation||closed)return;pendingImport=archive;try{dispatch("archive_review",new JSONObject().put("names",preview.getJSONArray("names")).put("bytes",preview.getInt("bytes")));}catch(JSONException error){pendingImport=null;fatal(safe(error));}});return;}result.put("data",Base64.encodeToString(bytes,Base64.NO_WRAP));result.put("purpose",command.getString("purpose"));result.put("model_ticket",command.optString("model_ticket"));addMeasurements(result,started,metrics);}
+                }finally{timeout.cancel(false);try{raw.close();}catch(IOException ignored){}activeConnections.remove(raw);if(!streaming[0]&&command.optJSONObject("mcp_control")!=null&&(token!=generation||command.getJSONObject("mcp_control").optBoolean("resumable")))try{JSONObject context=command.getJSONObject("mcp_control");JSONArray openingCleanup=(JSONArray)Core.call(new JSONObject().put("op",context.has("resume_token")||context.has("admission_token")?"stream_open_cleanup":"mcp_cleanup_plan").put("context",context));if(!closed)queueMcpCleanup(openingCleanup,Math.min(started+120000,android.os.SystemClock.elapsedRealtime()+2000));}catch(Exception ignored){}}callback="network_result";
             }else if(operation.equals("archive")){JSONObject request=new JSONObject().put("op","project_archive").put("root",root());JSONObject packageData=(JSONObject)Core.call(request);byte[] archive=Base64.decode(packageData.getString("archive"),Base64.NO_WRAP);
                 if(token!=generation||closed)return;stageExport(command,archive,packageData);return;
             }else if(operation.equals("artifact_file")){stageArtifact(command,token);return;
@@ -350,11 +412,19 @@ public final class Activity extends android.app.Activity {
             }else if(operation.equals("archive_import")){if(token!=generation)return;byte[] bytes=pendingImport;if(bytes==null)throw new IOException("Selected project archive is no longer available; select it again");JSONObject report=(JSONObject)Core.call(new JSONObject().put("op","archive_import").put("root",root()).put("archive",Base64.encodeToString(bytes,Base64.NO_WRAP)));pendingImport=null;result.put("files",report.getInt("files")).put("directories",report.optInt("directories"));callback="archive_done";
             }else if(operation.equals("project_phone")){result=projectPhone(command,token);if(chunkedSnapshot)snapshotHandle=0;result.put("purpose",command.getString("purpose"));callback="project_phone_result";
             }else if(operation.equals("phone_revision")){result=phoneRevision(command,token);result.put("phase",command.getString("phase")).put("ticket",command.getString("ticket"));callback="phone_revision_result";
-            }else if(operation.equals("tool")){JSONObject request=new JSONObject(command.toString()).put("op","tool").put("root",root());Object output=command.optString("tool").startsWith("phone_")?phoneTool(command,token):Core.call(request);if(output instanceof JSONObject && ((JSONObject)output).has("source")){JSONObject program=(JSONObject)output;runOnUiThread(()->{if(token==generation&&!closed)startExecution(program,token);});return;}result.put("output",output.toString());result.put("editor",command.optBoolean("editor"));result.put("editor_dialog",command.optString("editor_dialog"));callback="tool_result";}
+            }else if(operation.equals("tool")){JSONObject request=new JSONObject(command.toString()).put("op","tool").put("root",root());Object output=command.optString("tool").startsWith("phone_")?phoneReadOrDocument(command,token):Core.call(request);if(output instanceof JSONObject && ((JSONObject)output).has("source")){JSONObject program=(JSONObject)output;runOnUiThread(()->{if(token==generation&&!closed)startExecution(program,token);});return;}result.put("output",output.toString());result.put("editor",command.optBoolean("editor"));result.put("editor_dialog",command.optString("editor_dialog"));callback="tool_result";}
             else throw new IOException("Unknown platform operation");
             if(snapshotHandle!=0){JSONObject checked=new JSONObject().put("op","project_readback").put("handle",snapshotHandle);if(result.has("found"))checked.put("found",result.get("found"));if(result.has("data"))checked.put("data",result.get("data"));result=(JSONObject)Core.call(checked);snapshotHandle=0;}
-            final JSONObject delivered=result;runOnUiThread(()->{if(token==generation&&!closed)dispatch(callback,delivered);});
+            final JSONObject delivered=result;runOnUiThread(()->{if(token==generation&&!closed)dispatch(callback,delivered);else if(callback.equals("network_result"))mcpDiscardedSuccess(command,token);});
         }catch(Throwable error){runOnUiThread(()->{if(token==generation&&!closed){if(kind.equals("archive_import"))pendingImport=null;if(kind.equals("archive")){exportEvent("export_stage_failed",e.optString("ticket"),safe(error));return;}if(kind.equals("artifact_file")||kind.equals("archive_drive")){exportEvent("artifact_failed",e.optString("ticket"),safe(error));return;}try{dispatch("failure",addMeasurements(new JSONObject(),started,metrics).put("error",safe(error)).put("purpose",e.optString("purpose")).put("model_ticket",e.optString("model_ticket")).put("ticket",e.optString("ticket")).put("phase",e.optString("phase")).put("sent",sending[0]));}catch(JSONException ex){fatal(safe(ex));}}});}finally{if(snapshotHandle!=0)try{Core.call(new JSONObject().put("op",chunkedSnapshot?"project_chunks":"project_close").put("action","close").put("handle",snapshotHandle));}catch(Exception ignored){}}});
+    }
+    private void mcpDiscardedSuccess(JSONObject command,int token){
+        if(closed||token==generation||!command.optBoolean("stream")||!command.optString("stream_protocol").equals("mcp"))return;
+        JSONObject context=command.optJSONObject("mcp_control");if(context==null)return;
+        String request=context.optString("request");if(!request.equals("tools/list")&&!request.equals("tools/call"))return;
+        // readStream already consumed its finished handle. The discarded success owns
+        // only this old pinned session cleanup, never another result or original call.
+        try{queueMcpCleanup((JSONArray)Core.call(new JSONObject().put("op","mcp_cleanup_plan").put("context",context)),android.os.SystemClock.elapsedRealtime()+2000);}catch(Exception ignored){}
     }
     private void transferRecovery(JSONObject recovered)throws Exception {
         JSONObject stored=transferStore.load(key());if(stored==null)return;
@@ -427,25 +497,113 @@ public final class Activity extends android.app.Activity {
         long elapsed=android.os.SystemClock.elapsedRealtime()-started;
         runOnUiThread(()->{if(token==generation&&!closed)try{dispatch("model_progress",new JSONObject().put("stream_text",text).put("elapsed_ms",elapsed).put("model_ticket",ticket));}catch(JSONException error){fatal(safe(error));}});
     }
-    private byte[] readStream(InputStream input,int token,int limit,String protocol,long started,long[] metrics,String ticket)throws Exception{
-        long id=((Number)Core.call(new JSONObject().put("op","stream_open").put("protocol",protocol))).longValue();
-        StringBuilder text=new StringBuilder();int published=0,total=0;long previous=0;
+    private byte[] readStream(InputStream input,int token,int limit,String protocol,long started,long[] metrics,String ticket,JSONObject control)throws Exception{
+        JSONObject opening=new JSONObject().put("op","stream_open").put("protocol",protocol);if(control!=null)opening.put("mcp_control",control);
+        long id;try{id=((Number)Core.call(opening)).longValue();}catch(Exception problem){
+            if(control!=null)try{JSONArray cleanup=(JSONArray)Core.call(new JSONObject().put("op",control.has("resume_token")||control.has("admission_token")?"stream_open_cleanup":"mcp_cleanup_plan").put("context",control));if(!closed)queueMcpCleanup(cleanup,Math.min(started+120000,android.os.SystemClock.elapsedRealtime()+2000));}catch(Exception ignored){}
+            throw problem;
+        }
+        StringBuilder text=new StringBuilder();int published=0,total=0;long previous=0,serverPublished=0;JSONObject serverObservation=null;boolean serverDirty=false,finished=false,cleanupHandled=false,originalRead=false;
         try{
-            byte[] buffer=new byte[8192];int count;
-            while((count=input.read(buffer))!=-1){
+            byte[] buffer=new byte[8192];int count=-2;
+            while(true){
+                originalRead=true;count=input.read(buffer);originalRead=false;if(count==-1)break;
                 if(token!=generation||closed)throw new IOException("Cancelled");
                 total+=count;if(total>Math.min(2*1024*1024,limit))throw new IOException("Stream exceeds the current response memory budget");
                 JSONObject part=(JSONObject)Core.call(new JSONObject().put("op","stream_feed").put("id",id).put("data",Base64.encodeToString(Arrays.copyOf(buffer,count),Base64.NO_WRAP)));
                 text.append(part.optString("delta"));long now=android.os.SystemClock.elapsedRealtime();if(metrics[2]<0&&text.length()>0)metrics[2]=now-started;
-                if(part.has("error"))throw new IOException(part.getString("error"));
+                if(protocol.equals("mcp_server")&&part.optJSONObject("observation")!=null){serverObservation=part.getJSONObject("observation");serverDirty=true;if(now-serverPublished>=250){mcpServerProgress(token,serverObservation,control.getString("owner"));serverPublished=now;serverDirty=false;}}
+                if(part.has("error")){JSONArray cleanup=part.optJSONArray("cleanup");if(cleanup!=null&&!closed){queueMcpCleanup(cleanup,Math.min(started+120000,android.os.SystemClock.elapsedRealtime()+2000));cleanupHandled=true;}throw new IOException(part.getString("error"));}
+                boolean complete=part.optBoolean("complete");JSONArray controls=part.optJSONArray("controls");
+                if(controls!=null)for(int i=0;i<controls.length();i++){
+                    JSONObject response=controls.getJSONObject(i);JSONObject accepted=mcpControl(response,id,token,started);
+                    if(token!=generation||closed)throw new IOException("Cancelled during MCP control response");
+                    JSONObject ack=(JSONObject)Core.call(new JSONObject().put("op","stream_control_ack").put("id",id).put("ticket",response.get("ticket")).put("owner",response.getString("owner")).put("data",accepted.getString("data")).put("eof",accepted.getBoolean("eof")));
+                    complete=ack.optBoolean("complete");
+                }
                 if(text.length()!=published&&now-previous>=250){streamProgress(token,text.toString(),ticket,started);published=text.length();previous=now;}
-                if(part.optBoolean("complete"))break;
+                if(complete)break;
             }
-            JSONObject complete=(JSONObject)Core.call(new JSONObject().put("op","stream_finish").put("id",id));return Base64.decode(complete.getString("data"),Base64.NO_WRAP);
+            if(count==-1&&control!=null&&control.optBoolean("resumable")&&mcpPauseOwner.equals(control.optString("owner"))&&token==generation&&!closed){
+                try{JSONObject paused=(JSONObject)Core.call(new JSONObject().put("op","stream_suspend").put("id",id).put("owner",control.getString("owner")));finished=true;return Base64.decode(paused.getString("data"),Base64.NO_WRAP);}finally{mcpPauseOwner="";}
+            }
+            JSONObject complete=(JSONObject)Core.call(new JSONObject().put("op","stream_finish").put("id",id).put("eof",count==-1));finished=true;return Base64.decode(complete.getString("data"),Base64.NO_WRAP);
+        }catch(Exception problem){
+            if(originalRead&&control!=null&&control.optBoolean("resumable")&&mcpPauseOwner.equals(control.optString("owner"))&&token==generation&&!closed){
+                try{JSONObject paused=(JSONObject)Core.call(new JSONObject().put("op","stream_suspend").put("id",id).put("owner",control.getString("owner")));finished=true;return Base64.decode(paused.getString("data"),Base64.NO_WRAP);}catch(Exception unavailable){throw new IOException("Stream could not retain a resume cursor: "+safe(unavailable),problem);}finally{mcpPauseOwner="";}
+            }
+            throw problem;
         }finally{
+            if(serverDirty&&serverObservation!=null&&control!=null)mcpServerProgress(token,serverObservation,control.getString("owner"));
             if(text.length()!=published)streamProgress(token,text.toString(),ticket,started);
+            if(control!=null&&!closed&&!finished&&!cleanupHandled){long ending=Math.min(started+120000,android.os.SystemClock.elapsedRealtime()+2000);try{queueMcpCleanup((JSONArray)Core.call(new JSONObject().put("op","stream_abandon").put("id",id).put("owner",control.getString("owner")).put("cancel",token!=generation)),ending);}catch(Exception ignored){try{queueMcpCleanup((JSONArray)Core.call(new JSONObject().put("op","mcp_cleanup_plan").put("context",control)),ending);}catch(Exception ignoredAgain){}}}
             try{Core.call(new JSONObject().put("op","stream_close").put("id",id));}catch(Exception ignored){}
+            if(control!=null&&mcpPauseOwner.equals(control.optString("owner")))mcpPauseOwner="";
         }
+    }
+    private void mcpServerProgress(int token,JSONObject counts,String owner){
+        runOnUiThread(()->{if(token==generation&&!closed)try{dispatch("rea_server_progress",new JSONObject().put("purpose",owner).put("counts",counts));}catch(JSONException error){fatal(safe(error));}});
+    }
+    // Platform transport only: Rust owns the destination, message and one-use acknowledgment.
+    private JSONObject mcpControl(JSONObject command,long stream,int token,long started)throws Exception{
+        long remaining=120000-(android.os.SystemClock.elapsedRealtime()-started);
+        if(token!=generation||closed||remaining<=0)throw new IOException("MCP request cancelled or timed out");
+        String host=command.getString("host");int port=command.getInt("port");Socket raw=new Socket();activeConnections.add(raw);
+        ScheduledFuture<?> timeout=deadlines.schedule(()->{try{raw.close();}catch(IOException ignored){}},remaining,TimeUnit.MILLISECONDS);
+        try{
+            if(token!=generation||closed)throw new IOException("Cancelled before MCP control connection");
+            raw.connect(new InetSocketAddress(host,port),(int)Math.min(15000,remaining));raw.setSoTimeout((int)remaining);Socket connection=raw;
+            if(command.optBoolean("tls")){SSLSocket tls=(SSLSocket)((SSLSocketFactory)SSLSocketFactory.getDefault()).createSocket(raw,host,port,true);SSLParameters params=tls.getSSLParameters();params.setEndpointIdentificationAlgorithm("HTTPS");tls.setSSLParameters(params);tls.setSoTimeout((int)remaining);tls.startHandshake();connection=tls;}
+            try(Socket managed=connection){
+                if(token!=generation||closed||android.os.SystemClock.elapsedRealtime()-started>=120000)throw new IOException("Cancelled before MCP control write");
+                managed.getOutputStream().write(command.getString("wire").getBytes(StandardCharsets.UTF_8));managed.getOutputStream().flush();
+                ByteArrayOutputStream accepted=new ByteArrayOutputStream();byte[] buffer=new byte[1024];int count;InputStream input=managed.getInputStream();
+                while((count=input.read(buffer))!=-1){
+                    if(token!=generation||closed||android.os.SystemClock.elapsedRealtime()-started>=120000)throw new IOException("MCP control response cancelled or timed out");
+                    if(accepted.size()+count>16384)throw new IOException("MCP control acknowledgment exceeds 16 KiB");accepted.write(buffer,0,count);
+                    JSONObject framing=(JSONObject)Core.call(new JSONObject().put("op","stream_control_probe").put("id",stream).put("ticket",command.get("ticket")).put("owner",command.getString("owner")).put("data",Base64.encodeToString(accepted.toByteArray(),Base64.NO_WRAP)));
+                    if(framing.optBoolean("ready"))break;
+                }
+                byte[] result=accepted.toByteArray();
+                if(token!=generation||closed||android.os.SystemClock.elapsedRealtime()-started>=120000)throw new IOException("Cancelled during MCP control response");return new JSONObject().put("data",Base64.encodeToString(result,Base64.NO_WRAP)).put("eof",count==-1);
+            }
+        }finally{timeout.cancel(false);try{raw.close();}catch(IOException ignored){}activeConnections.remove(raw);}
+    }
+    // Best-effort teardown has no callback and cannot complete or fail a newer operation.
+    // The one worker, four queued plans, two requests/plan and original-or-2s deadline
+    // bound detached work. Destruction refuses queued jobs and closes every cleanup socket.
+    private void queueMcpCleanup(JSONArray plan,long ending){
+        if(closed||plan.length()==0||plan.length()>2)return;
+        try{cleanupWorkers.allowCoreThreadTimeOut(true);cleanupWorkers.execute(()->{
+            for(int i=0;i<plan.length();i++){
+                if(closed||Thread.currentThread().isInterrupted()||android.os.SystemClock.elapsedRealtime()>=ending)return;
+                try{mcpCleanup(plan.getJSONObject(i),ending);}catch(Exception ignored){}
+            }
+        });}catch(RejectedExecutionException ignored){}
+    }
+    private void mcpCleanup(JSONObject command,long ending)throws Exception{
+        long remaining=ending-android.os.SystemClock.elapsedRealtime();if(closed||remaining<=0)return;
+        byte[] wire=command.getString("wire").getBytes(StandardCharsets.UTF_8);if(wire.length>24576)throw new IOException("MCP cleanup request exceeds bound");
+        String host=command.getString("host");int port=command.getInt("port");Socket raw=new Socket();cleanupConnections.add(raw);
+        ScheduledFuture<?> timeout=null;
+        try{
+            timeout=deadlines.schedule(()->{try{raw.close();}catch(IOException ignored){}},remaining,TimeUnit.MILLISECONDS);
+            if(closed)throw new IOException("Activity closed before MCP cleanup");
+            raw.connect(new InetSocketAddress(host,port),(int)remaining);raw.setSoTimeout((int)remaining);Socket connection=raw;
+            if(command.optBoolean("tls")){SSLSocket tls=(SSLSocket)((SSLSocketFactory)SSLSocketFactory.getDefault()).createSocket(raw,host,port,true);SSLParameters params=tls.getSSLParameters();params.setEndpointIdentificationAlgorithm("HTTPS");tls.setSSLParameters(params);tls.setSoTimeout((int)remaining);tls.startHandshake();connection=tls;}
+            try(Socket managed=connection){
+                if(closed||android.os.SystemClock.elapsedRealtime()>=ending)throw new IOException("MCP cleanup expired before write");
+                managed.getOutputStream().write(wire);managed.getOutputStream().flush();
+                ByteArrayOutputStream response=new ByteArrayOutputStream();InputStream input=managed.getInputStream();byte[] buffer=new byte[1024];int count;
+                while((count=input.read(buffer))!=-1){
+                    if(closed||android.os.SystemClock.elapsedRealtime()>=ending)throw new IOException("MCP cleanup expired");
+                    if(response.size()+count>16384)throw new IOException("MCP cleanup acknowledgment exceeds bound");response.write(buffer,0,count);
+                    JSONObject framed=(JSONObject)Core.call(new JSONObject().put("op","mcp_cleanup_response").put("cleanup",command.getString("cleanup")).put("data",Base64.encodeToString(response.toByteArray(),Base64.NO_WRAP)).put("eof",false));
+                    if(framed.optBoolean("ready"))return;
+                }
+                Core.call(new JSONObject().put("op","mcp_cleanup_response").put("cleanup",command.getString("cleanup")).put("data",Base64.encodeToString(response.toByteArray(),Base64.NO_WRAP)).put("eof",true));
+            }
+        }finally{if(timeout!=null)timeout.cancel(false);try{raw.close();}catch(IOException ignored){}cleanupConnections.remove(raw);}
     }
     private void export(){dispatch("conversation_export");}
     private void exportEvent(String action,String ticket,String error){runOnUiThread(()->{if(closed)return;try{JSONObject in=new JSONObject().put("ticket",ticket);if(error!=null)in.put("error",error);dispatch(action,in);}catch(Exception problem){Toast.makeText(this,safe(problem),Toast.LENGTH_LONG).show();}});}
@@ -498,6 +656,7 @@ public final class Activity extends android.app.Activity {
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
+        if(request==48){dispatch("phone_access_status");return;}
         if(request==42||request==44){finishSavedExport(result,data);return;}
         if(result!=RESULT_OK||data==null||data.getData()==null){if(request==45){pendingImport=null;dispatch("archive_reject");}return;}
         Uri uri=data.getData();
@@ -687,7 +846,7 @@ public final class Activity extends android.app.Activity {
     private void preserveInputs(){if(closed||state==null)return;try{JSONObject result=(JSONObject)Core.call(new JSONObject().put("op","event").put("action","capture").put("state",state).put("inputs",inputs()).put("root",root()));JSONObject next=result.getJSONObject("state");save(next);state=next;}catch(Throwable problem){Toast.makeText(this,"Input could not be saved: "+safe(problem),Toast.LENGTH_LONG).show();}}
     @Override public void onBackPressed(){if(canNavigateBack)dispatch("back");else super.onBackPressed();}
     @Override protected void onPause(){ratePaused=true;if(rateTick!=null)rateHandler.removeCallbacks(rateTick);preserveInputs();super.onPause();}
-    @Override protected void onResume(){super.onResume();ratePaused=false;if(rateTick!=null){rateHandler.removeCallbacks(rateTick);rateHandler.post(rateTick);}}
+    @Override protected void onResume(){super.onResume();if(state!=null&&!closed)dispatch("phone_access_status");ratePaused=false;if(rateTick!=null){rateHandler.removeCallbacks(rateTick);rateHandler.post(rateTick);}}
     @Override public void onConfigurationChanged(android.content.res.Configuration configuration){super.onConfigurationChanged(configuration);viewportWidth=0;viewportHeight=0;queueViewport();}
-    @Override protected void onDestroy(){closed=true;rateHandler.removeCallbacksAndMessages(null);stopExecution();generation++;cancelDocuments();for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}try{Core.call(new JSONObject().put("op","cancel_tool"));}catch(Throwable ignored){}deadlines.shutdownNow();workers.shutdownNow();super.onDestroy();}
+    @Override protected void onDestroy(){closed=true;try{if(state!=null){Core.call(new JSONObject().put("op","stream_owner_cancel").put("owner",state.optString("rea_expected")));}}catch(Exception ignored){}try{if(state!=null&&state.has("rea_resume_token")&&!state.isNull("rea_resume_token"))Core.call(new JSONObject().put("op","stream_resume_close").put("token",state.get("rea_resume_token")));}catch(Exception ignored){}cleanupWorkers.shutdownNow();for(Socket socket:cleanupConnections)try{socket.close();}catch(IOException ignored){}rateHandler.removeCallbacksAndMessages(null);stopExecution();generation++;cancelDocuments();for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}try{Core.call(new JSONObject().put("op","cancel_tool"));}catch(Throwable ignored){}deadlines.shutdownNow();workers.shutdownNow();super.onDestroy();}
 }
