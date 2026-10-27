@@ -46,7 +46,7 @@ esac
 ndk_bin="$CLIENT_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 for item in 'aarch64-linux-android arm64-v8a' 'x86_64-linux-android x86_64'; do
  read -r target abi <<< "$item"
- "$CLIENT_RUST/bin/rustc" --edition=2021 --crate-name client --crate-type staticlib --target "$target" -C opt-level=2 -C panic=abort "$project_dir/core/lib.rs" -o "$out/lib-$abi.a"
+ "$CLIENT_RUST/bin/rustc" --edition=2021 --crate-name client --crate-type staticlib --target "$target" -C opt-level=2 -C codegen-units=1 -C panic=abort "$project_dir/core/lib.rs" -o "$out/lib-$abi.a"
  "$ndk_bin/${target}26-clang" -shared -fPIC -O2 "$project_dir/platform/jni/bridge.c" "$out/lib-$abi.a" -Wl,--exclude-libs,ALL -Wl,-z,max-page-size=16384 -Wl,-z,relro,-z,now -ldl -lm -llog -o "$out/stage/lib/$abi/libclient.so"
 done
 "$CLIENT_TOOLS/aapt2" compile --dir "$project_dir/res" -o "$out/resources.zip"

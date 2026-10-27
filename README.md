@@ -10,11 +10,11 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793128100/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793135100/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
 The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
-Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793128100`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793135100`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
 
 ## What you can do
 
@@ -33,10 +33,16 @@ Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version 
 
 Bare local/Tailscale IP addresses now default to HTTP. Explicit HTTP/HTTPS stays as entered; saved URLs are not silently changed. See the short [Tailscale setup and connection troubleshooting guide](docs/CONNECTIONS.md) for remote access, ports and common HTTP/HTTPS errors.
 
+## Tool feedback and web results
+
+Mixed prose and tool JSON now shows explicit format feedback, with raw-response inspection and one user-requested correction. A corrected bare-JSON proposal still requires approval. Blocked, rejected, cancelled and failed web operations retain distinct bounded outcomes; they are not silently described as successful fetches. See [tool feedback](docs/TOOL-FEEDBACK.md).
+
+`web_read` fetches static content. JavaScript rendering, browser screenshots, clicks and typing are not implemented by this fix.
+
 ## Phone access and app inspection
 
 - **Files and access** requests Android broad shared-storage access once, with selected-folder and off controls. Android must grant access; other apps' private files remain protected by Android.
-- **App inspection** reads a catalog only on request. Select an app, optionally exclude sensitive packages, then explicitly read version/UID and permission metadata. Disable inspection to clear current observations. Results are not automatically sent to an LLM. This is not live performance monitoring, private-data access or spyware detection.
+- **App inspection** reads a catalog only on request. Select an app, optionally exclude sensitive packages, then explicitly read version/UID and permission metadata. Disable inspection to clear current observations. Results are not automatically sent to an LLM. Selected-app usage is a separate off-by-default option on Android 15+, with explicit usage-access grant and bounded 24-hour/seven-day retained event counts. These counts are not elapsed runtime, CPU monitoring, private-data access or spyware detection.
 - Malformed leading tool-call markup now shows a clear format error with raw-response inspection. It never executes embedded tool JSON or automatically retries. Explaining the REA workflow requires no discovery call.
 - Footer and menu spacing improvements, bounded reviewed MCP lifecycle/identity/control handling and explicit local/Content model metadata reads are included.
 
@@ -67,7 +73,7 @@ See [Setup](docs/SETUP.md) for HTTP versus HTTPS, provider formats, storage, and
 
 ## Development status
 
-The Android app is an active test build. Current source defines 210 Rust checks; this release does not claim a full-suite run. Independent focused app-inspection, malformed-tool-response and interface checks passed. Independent reconstruction matched all 24 APK runtime payloads, including both ABIs, DEX and resources; stable signing and 16 KiB alignment passed. Archive-import repair independent review and current installed-device, accessibility, live-provider and full-project acceptance remain open. See [release notes](release/NOTES.md).
+The Android app is an active test build. Independent focused headless tests cover format correction, approval, real TCP web fetching, captured results and originating-model continuation. The signed package is checked against an independent rebuild of both ABIs, DEX and resources. Current installed-device, accessibility, live-provider and full-project acceptance remain open, as does the previously disclosed archive-import independent review. See [release notes](release/NOTES.md).
 
 No iOS build or voice/open-microphone feature is included. Full MCP/ACP/A2A, OAuth, broader storage and local inference/compiler work remain unfinished. Adopted lesson reuse is explicit and bounded; no automatic training or background learning is claimed.
 
