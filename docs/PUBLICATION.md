@@ -2,9 +2,9 @@
 
 The public repository is [sdfowler1977/RLLM](https://github.com/sdfowler1977/RLLM).
 
-The Android test build is published as [lab-1793145200](https://github.com/sdfowler1977/RLLM/releases/tag/lab-1793145200). [Download RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793145200/RLLM-Lab.apk).
+The Android test build is published as [lab-1793150000](https://github.com/sdfowler1977/RLLM/releases/tag/lab-1793150000). [Download RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793150000/RLLM-Lab.apk).
 
-The verified APK SHA-256 is `ad80323008f1a152dd155ec472428a4fafacaa4ee298f74245491bd8e8ee6e96`. The APK is 5,953,497 bytes.
+The verified APK SHA-256 is `c0ecd3a630bd3d32ab0a52c73e82350b033554e9cc51d88701bd8ca490d48411`. The APK is 6,109,145 bytes.
 
 ## Repository contents
 
@@ -12,7 +12,7 @@ The source, build files, required notices, documentation and fictional illustrat
 
 No project-wide reuse license has been selected. Required runtime and asset notices remain in `notices/`.
 
-This version adds original Rust local document analysis, byte comparison and RIFF/WAVE/WebAssembly envelope observations through ordinary and recursive tasks, preserving the previous format/web/usage controls. Rendered headless page capture remains unimplemented. Earlier releases are preserved. This remains a test build; see [release notes](../release/NOTES.md) for exact review boundaries.
+This version adds original Rust local document analysis, byte comparison and RIFF/WAVE/WebAssembly envelope observations through ordinary and recursive tasks, preserving the previous format/web/usage controls. Supported local static PNG capture is implemented; complete browser capture/sessions/interaction remain unfinished. Earlier releases are preserved. This remains a test build; see [release notes](../release/NOTES.md) for exact review boundaries.
 
 ## Future releases
 

@@ -1,3 +1,7 @@
+## Native local page capture
+
+Use ordinary requests or the existing File investigation form. See [Static capture](STATIC-CAPTURE.md) for actual inputs, output and scope.
+
 ## Current access and inspection controls
 
 See [Access and data controls](ACCESS-AND-DATA.md) for broad shared-storage, selected-folder and disabled modes; explicit selected-app metadata reads; exclusions; and model data destinations. App inspection does not access private app files or prove spying. Leading malformed tool-call markup is a scoped error, with raw history retained and no execution/replay. This section supersedes older folder-only browsing descriptions below.

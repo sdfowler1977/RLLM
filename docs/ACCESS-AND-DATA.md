@@ -1,3 +1,10 @@
+## Native local HTML capture
+
+The native `capture` operation reads the selected workspace HTML file and selected workspace TrueType font, or a compatible Android system font when the font field is blank. Font data is read through original Rust code; no external analysis/browser program is installed or launched. It creates a new PNG in the app workspace and verifies the bytes. It never overwrites an existing filename. Captured pixels can contain the selected document's visible data; the result identifies the output file and observed rendering scope. Existing operation review and agent tool choices apply. The PNG is not automatically uploaded or inserted as a model image; the textual operation result follows the current model route. Export the file explicitly through the existing project-file storage action. Interrupted new output can remain for inspection.
+
+The current renderer handles supported local HTML/CSS and unhinted TrueType glyphs only. It does not fetch external resources, run scripts, retain browser cookies or create a browser session. Complete web capture/interaction remains active work. Android default-font resolution has compiled bindings but still needs installed-device validation. No earlier permission or storage control is removed.
+
+
 ## Local model URL entry — HTTP default correction
 
 When no scheme is entered, model setup uses HTTP for private, loopback and link-local IPs, the 100.64.0.0/10 shared address range used by Tailscale, localhost/.localhost/.local names, and addresses entered with the Local API format. An explicitly entered http:// or https:// scheme wins. Public chat-provider hostnames still default to HTTPS. The saved URL shows the selected scheme; there is no automatic TLS-error fallback or request replay. Existing saved HTTPS URLs are not silently rewritten: edit an incorrectly saved local endpoint and enter http:// explicitly or re-enter its bare local IP.

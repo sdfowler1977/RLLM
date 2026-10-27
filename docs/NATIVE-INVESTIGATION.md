@@ -8,7 +8,7 @@ Ask ordinary questions about what you want to understand, build or debug. The mo
 
 For a tool proposal, the model's entire response must be bare JSON, for example `{"tool":"list","args":{"path":"."}}`. No prose, Markdown fences or XML wrappers may accompany the proposal. An empty list calls for an input file or target location. It is not evidence that the built-in engine is absent. To check behavior, create or provide a known JSON/Rust/text fixture, inspect it, and compare the returned observations to the actual fixture.
 
-Current compiled passes: JSON structure; CSV/TSV record shape; Unicode text; byte comparison; RIFF/WAVE; WebAssembly sections; Rust lexical declarations; ELF32/64 structure and linkage candidates; HTML source-order structure; CSS token structure. Static web reading returns page text, links and native HTML counts. The HTML/CSS machinery is a foundation for capture, not a completed browser renderer. Full upstream feature parity, deeper analysis, cascade/layout/painting, JavaScript and rendered screenshots remain implementation work, not capabilities to infer from the language used.
+Current compiled passes: JSON structure; CSV/TSV record shape; Unicode text; byte comparison; RIFF/WAVE; WebAssembly sections; Rust lexical declarations; ELF32/64 structure and linkage candidates; HTML source-order structure; CSS token structure. Static web reading returns page text, links and native HTML counts. Supported CSS parsing/cascade and normal-flow layout now feed an original TrueType rasterizer and actual local PNG capture. See [static capture](STATIC-CAPTURE.md). Full browser rendering, resource loading, sessions, JavaScript and universal-engine parity remain implementation work.
 
 # Native investigation
 

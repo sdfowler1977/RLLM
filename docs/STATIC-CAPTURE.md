@@ -1,0 +1,9 @@
+# Native static capture
+
+Use an ordinary request such as: “Capture page.html into preview.png at 800 by 600.” The HTML must already be in the workspace. The harness proposes its native capture operation; approve the displayed input and new output name. An explicitly configured agent must permit `capture`, just as it permits its other operations. This is built-in Rust functionality, not a remote REA connection or a separately invoked skill.
+
+For manual use, Agent settings → Skills → Investigation preferences → Inspect a project file opens File investigation. Enter the HTML path, a new output filename and optional dimensions. Leave the font blank for a supported Android system face, or enter a workspace TrueType font path. Choose Capture local HTML and review. The result identifies the exact saved PNG and rendering scope. Project → Save a project file to default storage exports that PNG through the existing destination controls.
+
+Defaults are 800 × 600 CSS pixels. The viewport is fixed and clips overflow. Input HTML is bounded to256KiB; capture dimensions to2048 per side and1Mi pixels; selected font input to16MiB. The engine uses original CSS/parser/cascade/layout/font/painting/PNG code. Backgrounds and supported text are actual pixels. The current supported CSS values include display none/block/inline, px dimensions/margins/padding/font-size/line-height, selected named and hexadecimal colors, inheritance and author importance/specificity/source order. Unsupported styles are counted, and unsupported layout behavior is reported in the operation result.
+
+No browser JavaScript, remote resources, complete CSS formatting, shaping/bidi/kerning/fallback or full-page screenshot semantics are implied. Approximate geometry from inspect/web_read is a separate observation and is explicitly labelled. The PNG is not automatically sent as a model image. These remaining capabilities are still part of the full build plan.
