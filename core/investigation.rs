@@ -15,6 +15,12 @@ pub(super) fn inspect(p: &Path) -> Result<String> {
     if meta.len()!=after.len()||meta.modified().ok()!=after.modified().ok(){return Err("File changed while being inspected; request a fresh observation".into());}
     let complete=data.len()<=4*1024*1024;if complete&&data.len() as u64!=after.len(){return Err("File length changed while being inspected".into());}data.truncate(4*1024*1024);
     let mut structure=super::exploration::analyze(&data,complete);
+    if p.extension().and_then(|v|v.to_str())==Some("rs") {
+        structure.push('\n');structure.push_str(&super::rust_source_observation::analyze(&data,complete));
+    }
+    if data.starts_with(b"\x7fELF") {
+        structure.push('\n');structure.push_str(&super::elf_observation::analyze(&data,complete,after.len()));
+    }
     if [b"RIFF".as_slice(),b"RIFX",b"RF64",b"\0asm"].iter().any(|magic|data.starts_with(magic)) {
         structure.push('\n');structure.push_str(&super::binary_observation::analyze(&data,complete,after.len()));
     }

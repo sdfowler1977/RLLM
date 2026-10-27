@@ -9,6 +9,8 @@ use super::*;
 #[path="exploration.rs"] mod exploration;
 #[path="comparison.rs"] mod comparison;
 #[path="binary_observation.rs"] mod binary_observation;
+#[path="rust_source_observation.rs"] mod rust_source_observation;
+#[path="elf_observation.rs"] mod elf_observation;
 #[path="web_operation.rs"] mod web_operation;
 #[path="monitor.rs"] mod monitor;
 #[path="throughput.rs"] mod throughput;
