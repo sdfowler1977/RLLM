@@ -1,10 +1,23 @@
 //! Bounded, non-executing file and web evidence tools.
 use super::*;
 pub(super) fn inspect(p: &Path) -> Result<String> {
-    let f=fs::File::open(p).map_err(|e|e.to_string())?;
+    let mut f=fs::File::open(p).map_err(|e|e.to_string())?;
     let meta=f.metadata().map_err(|e|e.to_string())?;
     if !meta.is_file(){return Err("Inspection requires a regular file".into());}
-    let mut data=vec![];f.take(4*1024*1024).read_to_end(&mut data).map_err(|e|e.to_string())?;
+    let mut data=Vec::new();let mut block=[0u8;65536];
+    while data.len()<4*1024*1024+1 {
+        if super::super::execution::cancelled(){return Err("Inspection cancelled".into());}
+        let remaining=(4*1024*1024+1-data.len()).min(block.len());
+        let n=f.read(&mut block[..remaining]).map_err(|e|e.to_string())?;
+        if n==0{break;}data.extend_from_slice(&block[..n]);
+    }
+    let after=f.metadata().map_err(|e|e.to_string())?;
+    if meta.len()!=after.len()||meta.modified().ok()!=after.modified().ok(){return Err("File changed while being inspected; request a fresh observation".into());}
+    let complete=data.len()<=4*1024*1024;if complete&&data.len() as u64!=after.len(){return Err("File length changed while being inspected".into());}data.truncate(4*1024*1024);
+    let mut structure=super::exploration::analyze(&data,complete);
+    if [b"RIFF".as_slice(),b"RIFX",b"RF64",b"\0asm"].iter().any(|magic|data.starts_with(magic)) {
+        structure.push('\n');structure.push_str(&super::binary_observation::analyze(&data,complete,after.len()));
+    }
     let format=if data.starts_with(b"\x7fELF"){"ELF"}else if data.starts_with(b"MZ"){"DOS/PE candidate"}else if data.starts_with(b"dex\n"){"DEX"}else if data.starts_with(b"PK\x03\x04"){"ZIP"}else if data.starts_with(b"\0asm"){"WebAssembly"}else if data.starts_with(b"\x89PNG\r\n\x1a\n"){"PNG"}else if data.starts_with(b"%PDF-"){"PDF"}else if std::str::from_utf8(&data).is_ok(){"UTF-8 text"}else{"Unknown binary"};
     let mut counts=[0usize;256];for b in &data{counts[*b as usize]+=1;}
     let entropy=counts.iter().filter(|&&n|n>0).map(|&n|{let p=n as f64/data.len() as f64;-p*p.log2()}).sum::<f64>();
@@ -14,7 +27,7 @@ pub(super) fn inspect(p: &Path) -> Result<String> {
         else if let Some(begin)=start.take(){if i-begin>=5{strings.push(format!("0x{begin:08x}: {}",String::from_utf8_lossy(&data[begin..i.min(begin+256)])));if strings.len()==160{break;}}}
     }
     let elf=if format=="ELF"&&data.len()>=20{let machine=if data[5]==1{u16::from_le_bytes([data[18],data[19]])}else{u16::from_be_bytes([data[18],data[19]])};format!("\nELF class byte: {}; endian byte: {}; machine: {machine}",data[4],data[5])}else{String::new()};
-    Ok(format!("Observed static inspection\nFile size: {} bytes\nSampled: {} bytes\nSignature: {format}{elf}\nSample Shannon entropy: {entropy:.4} bits/byte\nFirst bytes: {}\nASCII strings (up to 160; 256 bytes each):\n{}\nSignatures are hints, not proof of validity. No code was executed or decompiled.",meta.len(),data.len(),data.iter().take(32).map(|b|format!("{b:02x}")).collect::<Vec<_>>().join(" "),strings.join("\n")))
+    Ok(format!("Observed static inspection\nSource: {}\nFile size: {} bytes\nSampled: {} bytes\nSignature: {format}{elf}\nSample Shannon entropy: {entropy:.4} bits/byte\nFirst bytes: {}\nASCII strings (up to 160; 256 bytes each):\n{}\n\n{structure}\nSignatures are hints, not proof of validity. No code was executed or decompiled.",p.display(),meta.len(),data.len(),data.iter().take(32).map(|b|format!("{b:02x}")).collect::<Vec<_>>().join(" "),strings.join("\n")))
 }
 pub(super) fn validate_remote(v:&Json)->Result<bool>{
     let args=get(v,"args");match text(v,"tool").as_str(){
