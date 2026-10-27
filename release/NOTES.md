@@ -1,16 +1,11 @@
-# RLLM Lab — native static capture
+# RLLM Lab 1793152000 — PNG and linked stylesheet capture
 
-Test build `0.1-lab.1793150000`, package `com.local.client.lab`. Install over existing Lab without uninstalling or clearing data.
+Original Rust capture now loads relative workspace CSS and PNG images, applies source-order CSS and image dimensions, and paints actual decoded pixels. Ordinary, recursive and manual capture use the same code. Native inspect also decodes PNG structure/samples and reports transparency counts. Existing History and phone image attachments are preserved.
 
-- Original Rust CSS grammar, selectors and author cascade; source-spanned observations return through local inspection and static web reads.
-- Actual local HTML PNG capture using original TrueType outline decoding, hmtx/hhea metrics, supported composites, unhinted coverage painting and PNG encoding.
-- Native capture form and normal/recursive tool routing preserve operation review, exact result evidence and new-file-only output with full byte readback.
-- Existing History deletion/cards, PNG/JPEG attachments, provider routing, metadata, storage, MCP, native investigation and all prior features retained.
+PNG support covers legal color/depth families, five filters, Adam7, palette/tRNS and16-bit samples. Capture explicitly converts to8-bit nearest-neighbour output. Color transforms, APNG playback, remote resources, responsive sources, full browser layout/JavaScript/shaping and the complete original roadmap remain open. No Node/npm, upstream REA installation or required computer.
 
-[Capture guide](../docs/STATIC-CAPTURE.md). This static subset does not execute scripts or fetch external resources. Full browser interactions, shaping/bidi/kerning/fallback, complete CSS layout and all remaining original harness work stay active.
+Signed package com.local.client.lab, version0.1-lab.1793152000, existing Lab certificate. Install over Lab without uninstalling or clearing data.
 
-Independent scoped checks cover actual C ABI capture/review/results/continuation, exact independently decoded PNG pixels, font metrics, malformed inputs, resource bounds and current History/image/web regressions. Package rebuild verification is recorded with delivery. Installed Android/system-font/visual/lifecycle, live-provider and full-project acceptance remain open; the unchanged archive review restriction remains as disclosed. No third-party analysis or browser program is installed.
+APK:6166489 bytes; SHA256174083c55c93fc16fec59452bf3f3506df1dcbe819ed4f43c68023af3465f719.
 
-APK 6109145 bytes; SHA256 `c0ecd3a630bd3d32ab0a52c73e82350b033554e9cc51d88701bd8ca490d48411`. Stable Lab certificate `a36bcaabf60626403ccffd32aaf442182efcd3cae82104f2e17c0cfc344749a2`.
-
-Public APK/source/checksums are saved to both GitHub and Google Drive. Private engineering checkpoints and signing material remain private. Previous releases are retained.
+Independent source checks:57 layout/raster checks,11 decoder groups with17 exact PNG fixtures and128 zlib oracle matrices; actual ordinary/recursive capture compares3200 output pixels with an independent oracle. Current related regressions pass. All24 APK runtime payloads match an independent Android rebuild;78 build inputs stayed unchanged. Stable signer,v2/v3,ZIP/ELF16KiB andCRC checks pass. Installed Android/system-font/visual/IME/TalkBack/lifecycle/live-provider/full-project acceptance remains open, as does the unchanged archive independent-review restriction. This is a disclosed test build, not a completed program.
