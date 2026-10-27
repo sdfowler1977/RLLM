@@ -80,3 +80,7 @@ The native Rust-source and ELF passes read only the already captured inspection 
 
 
 HTML structure and CSS token summaries are produced locally from captured bytes. They contain counts/status; the internal trees preserve source spans for future native rendering work. The parsers do not fetch referenced URLs, execute scripts or render pages. Existing extraction/file samples remain separate returned evidence.
+
+## Selected chat attachments
+
+The Android file picker reads only the file you select for attachment. PNG/JPEG image bytes are retained with the conversation draft in encrypted app state and sent to the selected provider only when you send or explicitly start a task using that draft. UTF-8 text files append to the draft. Switching chats, changing the agent/connection or restarting invalidates pending picker results. Removing an unsent image removes it from that draft; previously sent images remain in conversation history and provider requests until context is explicitly changed. The UI receives attachment metadata without a duplicate encoded payload.

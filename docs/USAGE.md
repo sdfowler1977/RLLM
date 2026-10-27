@@ -57,3 +57,7 @@ The task refinement workflow captures a baseline, proposes a candidate profile, 
 Workspace tools operate on project files; phone and remote-storage tools are separately configured and reviewed. Export a conversation/configuration through its corresponding action, or use configured supported storage. Keep original files when an operation reports a partial failure. Current project ZIP bounds are 500 entries, 1 MiB per file and 4 MiB of file data; larger individual-file transfers use a separate bounded transfer path.
 
 Project archive import is still a test-build feature with an outstanding independent repair review. Use a disposable workspace for that testing and keep important files backed up. Do not infer archive acceptance from the successful chat/analytics checks.
+
+## Phone attachments
+
+Use **+ → Attach image or text file** for PNG/JPEG screenshots or UTF-8 text. Images appear above the composer with a Remove button; text appends to your draft. Press Send to share with the selected model. See [History and attachments](HISTORY-AND-ATTACHMENTS.md) for exact supported formats and limits.
