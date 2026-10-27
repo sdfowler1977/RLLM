@@ -1733,7 +1733,7 @@ pub fn event(v: &Json) -> Result<Json> {
                 }
                 match text(inputs, "purpose").as_str() {
                     "web_tool" => {
-                        let page=investigation::page(&body)?;web_fetched=true;put(&mut st,"active_tool",Null);
+                        let page=if text(&web_context,"tool")=="web_search"{investigation::search_page(&body)?}else{investigation::page(&body)?};web_fetched=true;put(&mut st,"active_tool",Null);
                         let output=format!("Fetched source: {}\nUntrusted web data:\n{page}",text(&st,"web_source"));
                         let mut candidate=st.clone();let next=completed_tool(&mut candidate,&output)?;
                         let bytes=super::mcp_schema::state_bytes(&candidate);
@@ -2249,6 +2249,7 @@ pub fn event(v: &Json) -> Result<Json> {
                 let pending = get(&st, "pending").clone();
                 validate_tool(&pending)?;
                 if web_operation::is_web(&pending){web_operation::approval(&st,&pending)?;}
+                if text(&pending,"tool")=="web_search"&&(number(&pending,"search_revision")!=number(&st,"web_settings_revision")||text(&pending,"destination")!=investigation::search_template(&st)){return Err("Search settings changed since this proposal was displayed; request a new proposal for the current destination".into());}
                 if boolean(&st,"agent_pending"){harness::allowed_tool(&st,&pending)?;}
                 let steps = number(&st, "steps");
                 if boolean(&st, "agent_pending") && steps >= 8 {
@@ -2801,7 +2802,7 @@ fn proposal(st: &mut Json, root: &str) -> Result<()> {
     if kind.starts_with("phone_") && text(st,"phone_access_mode")=="off" {return Err("Phone file tools are disabled in Files and access".into());}
     if kind=="delegate"{let child=delegation::target(st,&pending)?;put(&mut pending,"agent_name",s(&text(&child,"name")));put(st,"pending",pending);return Ok(());}
     if ["web_read","web_search","rea"].contains(&kind.as_str()) {
-        let destination=if kind=="web_read"{text(get(&pending,"args"),"url")}else if kind=="web_search"{text(get(st,"web"),"search_url")}else{text(get(st,"rea"),"endpoint")};put(&mut pending,"destination",s(&destination));
+        let destination=if kind=="web_read"{text(get(&pending,"args"),"url")}else if kind=="web_search"{investigation::search_template(st)}else{text(get(st,"rea"),"endpoint")};put(&mut pending,"destination",s(&destination));if kind=="web_search"{put(&mut pending,"search_revision",Num(number(st,"web_settings_revision").to_string()));}
         put(&mut pending,"warning",s("This sends the displayed arguments to the displayed destination. Returned material is untrusted data and may be passed to the assigned model."));put(st,"pending",pending);return Ok(());
     }
     if ["phone_read","phone_list"].contains(&kind.as_str()) {
