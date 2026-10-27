@@ -1,10 +1,12 @@
 use super::*;
 #[path="harness.rs"] mod harness;
+#[path="tool_format.rs"] mod tool_format;
 #[path="app_observation.rs"] mod app_observation;
 #[path="interaction.rs"] mod interaction;
 #[path="generation_controls.rs"] pub(super) mod generation;
 #[path="delegation.rs"] mod delegation;
 #[path="investigation.rs"] mod investigation;
+#[path="web_operation.rs"] mod web_operation;
 #[path="monitor.rs"] mod monitor;
 #[path="throughput.rs"] mod throughput;
 #[path="request_metrics.rs"] mod request_metrics;
@@ -443,7 +445,7 @@ fn ui(st: &Json) -> Json {
                 number(get(st, "policy"), "workers")
             )),
         ),
-        ("messages", {let mut messages=array(&current,"messages");let partial=text(st,"stream_text");if !partial.is_empty(){messages.push(obj(vec![("role",s("assistant")),("content",s(&partial)),("model",s(&text(st,"request_model"))),("streaming",Bool(true))]));}for message in &mut messages {let model=text(message,"model");let speaker=if text(message,"role")=="user" {"You".to_string()}else{format!("{}{}",if model.is_empty(){"Assistant"}else{&model},if boolean(message,"interrupted"){" · Interrupted"}else if boolean(message,"streaming"){" · Responding"}else{""})};put(message,"speaker",s(&speaker));if text(message,"role")=="assistant" && (boolean(message,"tool_format_error")||unsupported_tool_markup(&text(message,"content"))){put(message,"content",s("The model returned unsupported tool-call markup. This markup does not execute a tool. Tap this message to inspect the raw response. Use Conversation actions → Regenerate reply in new branch to retry."));}}Arr(messages)}),
+        ("messages", {let mut messages=array(&current,"messages");let partial=text(st,"stream_text");if !partial.is_empty(){messages.push(obj(vec![("role",s("assistant")),("content",s(&partial)),("model",s(&text(st,"request_model"))),("streaming",Bool(true))]));}for message in &mut messages {let model=text(message,"model");let speaker=if boolean(message,"harness_outcome"){"RLLM · Tool status".to_string()}else if text(message,"role")=="user" {"You".to_string()}else{format!("{}{}",if model.is_empty(){"Assistant"}else{&model},if boolean(message,"interrupted"){" · Interrupted"}else if boolean(message,"streaming"){" · Responding"}else{""})};put(message,"speaker",s(&speaker));if text(message,"role")=="assistant" && (boolean(message,"tool_format_error")||unsupported_tool_markup(&text(message,"content"))){put(message,"content",s(&tool_format::display(message)));}}Arr(messages)}),
         ("telemetry", get(st, "telemetry").clone()),
         ("local_rate",throughput::ui(st)),
         ("palette", interaction::palette(st)),
@@ -479,7 +481,7 @@ fn ui(st: &Json) -> Json {
     let mut pop=match dialog.as_str(){
  "chat_actions"=>modal("Conversation actions",vec![],{
     let mut actions=vec![button("Main agent profile","chat_agents"),button("Agent task / compact context","task"),button("New conversation","new"),button("Import phone document","phone_file"),button("Save conversation to default storage","save_drive"),button("Export conversation","conversation_export"),button(if get(st,"pending")!=&Null {"Review proposed operation"}else{"Retry last request"},if get(st,"pending")!=&Null {"review"}else{"retry"})];
-    if array(&current,"messages").last().map(|m|text(m,"role")=="assistant").unwrap_or(false){actions.push(button("Regenerate reply in new branch","regenerate"));}actions
+    if array(&current,"messages").last().map(|m|text(m,"role")=="assistant").unwrap_or(false){actions.push(button("Regenerate reply in new branch","regenerate"));}if tool_format::available(st){actions.push(button("Request format correction","format_correction"));}actions
  }),
  "chat_models"=>model_picker(st),
  "navigation"=>menu("RLLM",vec![button("Chat","chat"),button("History","history"),button("Workspace","workspace"),button("App settings","config"),button("Agent settings","agent_settings")]),
@@ -636,6 +638,7 @@ fn model_effect_at(st: &mut Json, index: usize) -> Result<Json> {
     ])];
     messages.extend(array(&chat(st), "messages"));
     messages=harness::request_messages(st,messages)?;
+    tool_format::messages(st,&mut messages);
     let protocol = text(&p, "protocol");
     let active=if get(st,"task_run")==&Null{harness::active_agent(st)}else{get(get(st,"task_run"),"agent").clone()};put(st,"request_agent_name",s(&text(&active,"name")));
     let mut body = request(&obj(vec![
@@ -659,6 +662,7 @@ fn model_effect_at(st: &mut Json, index: usize) -> Result<Json> {
     let endpoint = if protocol=="content" {super::provider::content_endpoint(&configured,streaming)?} else {configured};
     let mut effect = network::wire(&endpoint, boolean(&p, "plain"), "POST", &body, headers)?;
     put(&mut effect, "purpose", s("model"));
+    put(st,"format_retry_request",Bool(boolean(st,"format_correction_prepare")));put(st,"format_correction_prepare",Null);put(st,"format_pending",Null);
     let ticket=now();put(&mut effect,"model_ticket",s(&ticket));put(st,"model_expected",s(&ticket));
     put(&mut effect,"stream",Bool(streaming));
     put(&mut effect,"stream_protocol",s(&protocol));
@@ -673,6 +677,7 @@ fn model_effect_at(st: &mut Json, index: usize) -> Result<Json> {
     let reminder=crate::generation::integer(&p,"compaction_bytes",8*1024*1024)?.map(|n|bytes>=n).unwrap_or(false);
     put(st,"context_reminder",if reminder{s(&format!("{bytes} UTF-8 context bytes reached the compaction reminder. Compact from Conversation actions."))}else{Null});
     put(st, "notice", s(if reminder{"Waiting for model response… Compaction reminder reached."}else{"Waiting for model response…"}));
+    tool_format::request_context(st,&p,&active);
     Ok(effect)
 }
 fn model_effect(st: &mut Json) -> Result<Json> {
@@ -1095,7 +1100,23 @@ pub fn event(v: &Json) -> Result<Json> {
     let inputs = get(v, "inputs");
     let action = field(v, "action")?;
     let operation_was_busy=boolean(&st,"busy");
+    let web_callback=matches!(action,"network_result"|"failure") && text(inputs,"purpose")=="web_tool";
+    if web_callback && !web_operation::expected(&st,inputs){let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));}
+    let mut web_feedback=web_callback || (matches!(action,"approve"|"reject")&&web_operation::is_web(get(&st,"pending"))) || (matches!(action,"cancel"|"resume")&&get(&st,"web_expected")!=&Null);
+    let web_context=if web_callback{get(&st,"web_expected").clone()}else{Null};
+    if web_callback{put(&mut st,"web_expected",Null);}
+    let mut web_fetched=false;
+    if matches!(action,"cancel"|"resume") && get(&st,"web_expected")!=&Null {
+        let context=get(&st,"web_expected").clone();put(&mut st,"web_expected",Null);
+        web_operation::record(&mut st,&context,"Interrupted","The web request was interrupted. It may have reached the server, but no completed result was adopted. Repeating it requires a new reviewed request.");
+    }
     if action=="apps_result" && !app_observation::expected(&st,inputs){let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));}
+    if action=="apps_result" && text(get(&st,"apps_expected"),"operation")=="usage" && boolean(inputs,"grant_error") {
+        app_observation::interrupt(&mut st);put(&mut st,"busy",Bool(false));let reason=text(inputs,"error").chars().take(512).map(|c|if c.is_control()||matches!(c,'\u{202a}'..='\u{202e}'|'\u{2066}'..='\u{2069}'){'\u{fffd}'}else{c}).collect::<String>();put(&mut st,"notice",s(&format!("Usage observation unavailable: {}. No new observation was adopted; retry requires an explicit read.",if reason.is_empty(){"Android usage access or unlocked user storage is unavailable"}else{&reason})));
+        let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));
+    }
+    let app_navigation_cancel=matches!(action,"close"|"back") && get(&st,"apps_expected")!=&Null;
+    if app_navigation_cancel {app_observation::interrupt(&mut st);put(&mut st,"busy",Bool(false));}
     if matches!(action,"cancel"|"resume"){app_observation::interrupt(&mut st);}
     let resume_interrupted_cleanup=if matches!(action,"cancel"|"resume"){harness::rea_resume_interrupt(&st)}else{Arr(vec![])};
     if action=="rea_server_progress"{harness::rea_progress(&mut st,inputs);let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));}
@@ -1105,7 +1126,7 @@ pub fn event(v: &Json) -> Result<Json> {
         let expected=text(&st,"model_expected");if expected.is_empty()||expected!=text(inputs,"model_ticket"){let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));}
         if !matches!(action,"model_progress"|"rate_tick"){put(&mut st,"model_expected",Null);}
     }
-    if matches!(action,"cancel"|"resume"){put(&mut st,"model_expected",Null);}
+    if matches!(action,"cancel"|"resume"){put(&mut st,"model_expected",Null);tool_format::clear(&mut st);}
     if matches!(action,"close"|"back"|"resume"){put(&mut st,"appearance_preview",Null);put(&mut st,"chat_target",Null);}
     let metadata_callback=matches!(action,"network_result"|"failure") && model_metadata::is_result(inputs);
     if metadata_callback && !model_metadata::expected(&st,inputs) {let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));}
@@ -1126,7 +1147,7 @@ pub fn event(v: &Json) -> Result<Json> {
     if get(inputs,"device")!=&Null {put(&mut st,"device",get(inputs,"device").clone());}
     if get(inputs,"gateway_status")!=&Null {put(&mut st,"gateway_status",s(&text(inputs,"gateway_status")));}
     let previous_dialog=text(&st,"dialog");
-    if metadata_callback || rea_callback || matches!(action,"apps_result"|"model_progress"|"rate_tick"|"resume"|"archive_built"|"artifact_built"|"artifact_failed"|"project_cleared"|"project_recovered") || (matches!(action,"network_result"|"project_phone_result"|"failure") && (remote_monitor::is_result(inputs)||project_store::is_result(inputs))) {
+    if metadata_callback || rea_callback || web_callback || matches!(action,"apps_result"|"model_progress"|"rate_tick"|"resume"|"archive_built"|"artifact_built"|"artifact_failed"|"project_cleared"|"project_recovered") || (matches!(action,"network_result"|"project_phone_result"|"failure") && (remote_monitor::is_result(inputs)||project_store::is_result(inputs))) {
         // Android includes the current draft/form with asynchronous callbacks.
         // Keep those edits, but never persist transport payloads as form data.
         let form=ui(&st);
@@ -1142,7 +1163,8 @@ pub fn event(v: &Json) -> Result<Json> {
     }else{capture(&mut st, inputs);}
     if matches!(action,"connect_llm"|"home_server"|"profile_new"|"profile_edit"|"profile_save"|"close"|"back") {put(&mut st,"profile_error",Null);}
     let metadata_cancel=model_metadata::reconcile(&mut st,action);
-    let mut effect = if metadata_cancel {obj(vec![("kind",s("cancel"))])}else{Null};
+    let mut effect = if metadata_cancel || app_navigation_cancel {obj(vec![("kind",s("cancel"))])}else{Null};
+    let mut format_error_received=false;
     let result = (|| -> Result<()> {
         if metadata_callback {effect=model_metadata::result(&mut st,action,inputs);return Ok(());}
         if action=="project_recovered"{project_store::recover(&mut st,inputs);return Ok(());}
@@ -1176,7 +1198,8 @@ pub fn event(v: &Json) -> Result<Json> {
                     | "chat" | "history" | "workspace" | "settings" | "config" | "navigation" | "diagnostics"
                     | "phone_access" | "phone_access_status" | "apps_view" | "apps_result" | "apps_disable"
                     | "server_monitor" | "chat_models" | "agent_settings" | "connections" | "services" | "observability"
-            ) && !action.starts_with("branch:")
+            ) && !(app_observation::controls(action) && get(&st,"apps_expected")!=&Null)
+            && !action.starts_with("branch:")
             && !action.starts_with("monitor:")
             && !action.starts_with("server_monitor_panel:")
         {
@@ -1187,7 +1210,7 @@ pub fn event(v: &Json) -> Result<Json> {
         if ["project_transfer","project_transfer_retry","project_transfer_verify","project_transfer_discard_review","project_transfer_discard"].contains(&action){effect=project_store::event(&mut st,action)?;return Ok(());}
         if interaction::handles(action){effect=interaction::event(&mut st,action,inputs)?;return Ok(());}
         if interaction::locked(&st) && matches!(action,"agent_save"|"agent_new"|"profile_save"|"routing_save"){return Err("Finish or cancel the current task or tool review first".into());}
-        if action=="apps_disable" && boolean(&st,"busy") && get(&st,"apps_expected")==&Null {return Err("Wait for the current operation or cancel it".into());}
+        if app_observation::controls(action) && boolean(&st,"busy") && get(&st,"apps_expected")==&Null {return Err("Wait for the current operation or cancel it".into());}
         if app_observation::handles(action){effect=app_observation::event(&mut st,action,inputs)?;return Ok(());}
         if harness::handles(action) { effect=harness::event_for(&mut st,action,inputs)?; return Ok(()); }
         match action {
@@ -1371,6 +1394,7 @@ pub fn event(v: &Json) -> Result<Json> {
                 }
                 let mut next=st.clone();
                 harness::reset_task(&mut next);
+                tool_format::clear(&mut next);
                 put(&mut next,"dialog",Null);
                 append(&mut next, "user", &draft)?;
                 put(&mut next, "draft", s(""));
@@ -1378,8 +1402,9 @@ pub fn event(v: &Json) -> Result<Json> {
                 effect = model_effect(&mut next)?;
                 st=next;
             }
+            "format_correction" => {effect=tool_format::correction(&mut st)?;},
             "retry" => {
-                effect = model_effect(&mut st)?;
+                tool_format::clear(&mut st);effect = model_effect(&mut st)?;
             }
             "regenerate" => {
                 let messages = array(&chat(&st), "messages");
@@ -1392,6 +1417,7 @@ pub fn event(v: &Json) -> Result<Json> {
                     .ok_or("No preceding user message to regenerate")?;
                 let mut next = st.clone();
                 branch_through(&mut next, index)?;
+                tool_format::clear(&mut next);
                 let request = model_effect(&mut next)?;
                 st = next;
                 effect = request;
@@ -1683,7 +1709,16 @@ pub fn event(v: &Json) -> Result<Json> {
                     effect=reply?;return Ok(());
                 }
                 match text(inputs, "purpose").as_str() {
-                    "web_tool" => {let page=investigation::page(&body)?;let output=format!("Fetched source: {}\nUntrusted web data:\n{page}",text(&st,"web_source"));effect=completed_tool(&mut st,&output)?;}
+                    "web_tool" => {
+                        let page=investigation::page(&body)?;web_fetched=true;put(&mut st,"active_tool",Null);
+                        let output=format!("Fetched source: {}\nUntrusted web data:\n{page}",text(&st,"web_source"));
+                        let mut candidate=st.clone();let next=completed_tool(&mut candidate,&output)?;
+                        let bytes=super::mcp_schema::state_bytes(&candidate);
+                        if bytes>6*1024*1024-8192{return Err("History has insufficient room for the fetched page and follow-up; existing messages and draft retained".into());}
+                        let policy=super::resources::policy(get(&candidate,"device"),get(&candidate,"resources"),bytes);
+                        if text(&next,"kind")=="network" && number(&policy,"response_bytes")<65536{return Err("Current memory budget cannot admit a model follow-up for this fetched page; existing messages and draft retained".into());}
+                        st=candidate;effect=next;
+                    }
                     "connection_test" => {
                         let p=profile(&st)?;let result=super::provider::probe_result(&p,&body)?;
                         put(&mut st,"notice",s(&result));put(&mut st,"dialog",s("status"));
@@ -1796,12 +1831,22 @@ pub fn event(v: &Json) -> Result<Json> {
                         );
                         put(&mut st, "telemetry", measured);
                         throughput::observe(&mut st,inputs,Some(&reply));
+                        if tool_format::proposal_phase(&st)&&tool_format::embedded(&reply){format_error_received=true;tool_format::record(&mut st,&reply,inputs)?;return Ok(());}
+                        put(&mut st,"format_pending",Null);put(&mut st,"format_retry_request",Bool(false));
                         if unsupported_tool_markup(&reply){
                             put(&mut st,"stream_text",Null);append(&mut st,"assistant",&reply)?;
                             let mut current=chat(&st);let mut messages=array(&current,"messages");if let Some(last)=messages.last_mut(){put(last,"tool_format_error",Bool(true));}
                             put(&mut current,"messages",Arr(messages));replace_chat(&mut st,current);
                             return Err("The model returned unsupported tool-call markup instead of an answer. Nothing was executed. Tap the message to inspect the raw response, or regenerate a reply in a new branch. Tool proposals must be bare JSON. Ask for ordinary text when no tool is needed.".into());
                         }
+                        if let Ok(proposed)=parse(reply.trim()) {if web_operation::is_web(&proposed) {
+                            if let Err(error)=harness::allowed_tool(&st,&proposed).and_then(|_|validate_tool(&proposed)) {
+                                web_feedback=true;
+                                put(&mut st,"stream_text",Null);append(&mut st,"assistant",&reply)?;
+                                let context=web_operation::context(&st,&proposed);let saved=web_operation::record(&mut st,&context,"Blocked before execution",&error);
+                                return Err(format!("Web proposal blocked before execution: {error}. {}",if saved{"The reason is saved in this conversation."}else{"History capacity prevented saving the diagnostic; existing messages are retained."}));
+                            }
+                        }}
                         harness::finish_attempt(&mut st,inputs,"success");
                         if let Some(next)=harness::model_reply(&mut st,&reply)? {effect=next;return Ok(());}
                         put(&mut st,"stream_text",Null);
@@ -1823,10 +1868,11 @@ pub fn event(v: &Json) -> Result<Json> {
                             "notice",
                             s(&format!("Reply from {reply_model} saved in encrypted phone history")),
                         );
-                        if let Ok(proposed) = parse(reply.trim()) {
+                        if let Ok(mut proposed) = parse(reply.trim()) {
                             if get(&proposed, "tool") != &Null {
                                 harness::allowed_tool(&st,&proposed)?;
                                 validate_tool(&proposed)?;
+                                if web_operation::is_web(&proposed){web_operation::own(&st,&mut proposed);}
                                 put(&mut st, "pending", proposed);
                                 put(&mut st, "agent_pending", Bool(true));
                                 put(&mut st, "dialog", s("approval"));
@@ -2163,6 +2209,7 @@ pub fn event(v: &Json) -> Result<Json> {
                 put(&mut st, "dialog", s("approval"));
             }
             "reject" => {
+                let rejected=get(&st,"pending").clone();if web_operation::is_web(&rejected){let context=web_operation::owner(&st,&rejected);web_operation::record(&mut st,&context,"Rejected before execution","The user rejected this proposed web operation. Nothing was sent to the website.");}
                 harness::reset_task(&mut st);put(&mut st,"agent_pending",Bool(false));
                 put(&mut st, "pending", Null);
                 put(&mut st, "dialog", Null);
@@ -2175,6 +2222,8 @@ pub fn event(v: &Json) -> Result<Json> {
             "approve" => {
                 let pending = get(&st, "pending").clone();
                 validate_tool(&pending)?;
+                if web_operation::is_web(&pending){web_operation::approval(&st,&pending)?;}
+                if boolean(&st,"agent_pending"){harness::allowed_tool(&st,&pending)?;}
                 let steps = number(&st, "steps");
                 if boolean(&st, "agent_pending") && steps >= 8 {
                     return Err("Agent turn reached its eight-operation limit. Send a new instruction to continue.".into());
@@ -2195,7 +2244,7 @@ pub fn event(v: &Json) -> Result<Json> {
                 if text(&effect, "tool").starts_with("drive_") {
                     effect = drive_tool_effect(&mut st, &effect)?;
                 }
-                if active_tool=="web_read" || active_tool=="web_search" {effect=investigation::web_effect(&mut st,&effect)?;}
+                if active_tool=="web_read" || active_tool=="web_search" {let proposal=effect.clone();effect=investigation::web_effect(&mut st,&proposal)?;web_operation::bind(&mut st,&mut effect,&proposal)?;}
                 if active_tool=="rea" {effect=harness::rea_tool_effect(&mut st,get(&effect,"args"))?;}
                 if active_tool=="phone_update" {
                     let revision=super::document::begin(get(&effect,"args"),&text(&st,"phone_uri"),&now(),&stamp())?;
@@ -2304,8 +2353,18 @@ pub fn event(v: &Json) -> Result<Json> {
         }
         Ok(())
     })();
-    if result.is_ok() && !matches!(action,"capture"|"viewport"|"model_progress"|"rate_tick"|"status"|"close"|"back"){put(&mut st,"notice_error",Bool(false));}
-    if let Err(e) = result {
+    if result.is_ok() && !format_error_received && !matches!(action,"capture"|"viewport"|"model_progress"|"rate_tick"|"status"|"close"|"back"){put(&mut st,"notice_error",Bool(false));}
+    if let Err(mut e) = result {
+        if web_feedback{e=web_operation::diagnostic(&e);}
+        if web_callback {
+            let saved=web_operation::record(&mut st,&web_context,if web_fetched{"Page fetched; follow-up failed"}else{"Failed; no completed result adopted"},&e);
+            put(&mut st,"active_tool",Null);
+            e=format!("Web operation {}: {e}. {}",if web_fetched{"follow-up failed"}else{"failed"},if saved{"The reason is saved in this conversation; retry requires a new reviewed request."}else{"History capacity prevented saving the diagnostic; existing messages are retained."});
+        }else if action=="approve" && web_operation::is_web(get(&st,"pending")) {
+            let context=web_operation::owner(&st,get(&st,"pending"));let saved=web_operation::record(&mut st,&context,"Blocked before execution",&e);
+            put(&mut st,"pending",Null);put(&mut st,"agent_pending",Bool(false));put(&mut st,"dialog",Null);harness::reset_task(&mut st);
+            e=format!("Web operation blocked before execution: {e}. {}",if saved{"The reason is saved in this conversation."}else{"History capacity prevented saving the diagnostic; existing messages are retained."});
+        }
         put(&mut st,"notice_error",Bool(true));
         if matches!(action,"archive_built"|"artifact_built"){put(&mut st,"busy",Bool(false));put(&mut st,"project_prepare",Null);}
         if action=="profile_save" {put(&mut st,"profile_error",s(&e));}
@@ -2366,6 +2425,10 @@ pub fn event(v: &Json) -> Result<Json> {
             put(&mut effect, "limit", Num(limit.to_string()));
         }
     }
+    if action=="approve" && get(&st,"web_expected")!=&Null && text(&effect,"purpose")!="web_tool" {
+        let context=get(&st,"web_expected").clone();put(&mut st,"web_expected",Null);put(&mut st,"active_tool",Null);put(&mut st,"busy",Bool(false));
+        let reason=text(&st,"notice");web_operation::record(&mut st,&context,"Blocked before network dispatch",&reason);harness::reset_task(&mut st);
+    }
     if text(&effect, "kind") == "gateway_start" {
         let mut config = get(&effect, "config").clone();
         put(&mut config, "limit", get(&policy, "response_bytes").clone());
@@ -2386,6 +2449,7 @@ pub fn event(v: &Json) -> Result<Json> {
     if let Arr(requests)=resume_interrupted_cleanup{if !requests.is_empty(){if effect==Null{effect=obj(vec![("kind",s("mcp_cleanup"))]);}let mut cleanup=effect.get("mcp_cleanup").and_then(Json::array).cloned().unwrap_or_default();cleanup.extend(requests);put(&mut effect,"mcp_cleanup",Arr(cleanup));}}
     harness::rea_dispatch(&mut st,&effect);
     if (rea_callback || action.starts_with("rea_")) && boolean(&st,"notice_error"){harness::rea_notice_fit(&mut st);}
+    if web_feedback {web_operation::notice_fit(&mut st);}
     let display = ui(&st);
     Ok(obj(vec![
         ("state", st),
@@ -2687,6 +2751,7 @@ fn phone_read_scope(st:&Json,effect:&mut Json)->Result<()> {
 fn proposal(st: &mut Json, root: &str) -> Result<()> {
     let mut pending = get(st, "pending").clone();
     let kind = text(&pending, "tool");
+    if web_operation::is_web(&pending) && get(&pending,"web_owner")==&Null {web_operation::own(st,&mut pending);put(st,"pending",pending.clone());}
     if kind.starts_with("phone_") && text(st,"phone_access_mode")=="off" {return Err("Phone file tools are disabled in Files and access".into());}
     if kind=="delegate"{let child=delegation::target(st,&pending)?;put(&mut pending,"agent_name",s(&text(&child,"name")));put(st,"pending",pending);return Ok(());}
     if ["web_read","web_search","rea"].contains(&kind.as_str()) {
