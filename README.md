@@ -10,11 +10,11 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793062000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793072000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
 The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
-Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793062000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793072000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
 
 ## What you can do
 
@@ -22,6 +22,8 @@ Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version 
 - Switch connections from the chat footer without starting a new thread. Use the pencil to edit the current connection.
 - Select a named main-agent profile; set separate default subagent and compaction connections.
 - Configure provider-aware thinking, output limits, and context budgets.
+- Stream visible text from local chat, chat-completions, Messages and Content connections, with per-connection opt-out and complete JSON fallback.
+- Explicitly refine an agent using up to four recent adopted lessons as bounded, untrusted examples, with opt-out and visible provenance.
 - Manage conversation history and Trash; customize fonts, text size, colors, and background.
 - Use reviewed workspace, web, storage, investigation, and delegation tools with profile-specific permissions.
 - Read a quiet live `≈tok/s` estimate on the chat screen and tap it to open analytics. App observations and server-reported data remain separate.
@@ -52,9 +54,9 @@ See [Setup](docs/SETUP.md) for HTTP versus HTTPS, provider formats, storage, and
 
 ## Development status
 
-The Android app is an active test build. Its 145 Rust checks and scoped throughput/UI review passed; the APK contains both supported native architectures and a verified signature. The archive-import repair's independent review and current physical-device visual/accessibility verification remain outstanding. See [release notes](release/NOTES.md) before testing project import.
+The Android app is an active test build. The current source defines 155 Rust checks; 138 non-archive checks passed with 17 filtered out. Separate Content streaming review and exact reconstruction of all 24 APK runtime payload members passed, including both supported native architectures, DEX and resources. Archive-import repair independent review, live-provider and current Android device/visual/accessibility acceptance remain outstanding. See [release notes](release/NOTES.md) before testing project import.
 
-iOS is not built or distributed yet. Voice conversation/open microphone is future optional work. The current refinement workflow is bounded and does not train model weights or automatically reuse saved lessons across tasks.
+iOS is not built or distributed yet. Voice conversation/open microphone is future optional work. The refinement workflow explicitly captures recent adopted lessons for proposal/composition when enabled. It remains bounded; no automatic background learning, weight training or multi-round parallel refinement is claimed.
 
 ## Source and notices
 
