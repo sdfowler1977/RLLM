@@ -10,11 +10,17 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793145200/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793150000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
 The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
-Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793145200`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793150000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+
+## Native static HTML capture
+
+The new original Rust renderer produces actual PNG files from supported local HTML/CSS and selected TrueType glyphs. Ask “Capture page.html into preview.png at 800 by 600.” It uses native stylesheet parsing, selectors, author cascade, font-driven layout, quadratic outline painting and PNG encoding. No Node/npm, external REA engine or required computer. See [capture guide](docs/STATIC-CAPTURE.md).
+
+This is a static subset. Full browser sessions, resource loading, JavaScript, richer layout/font shaping and the rest of the universal harness build remain in progress. Existing History, screenshot attachments and all prior capabilities are preserved.
 
 ## What you can do
 
