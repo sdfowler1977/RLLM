@@ -20,6 +20,7 @@ pub(super) struct Bounds {pub x:f64,pub y:f64,pub width:f64,pub height:f64}
 #[derive(Clone,Debug,PartialEq)]
 pub(super) enum Draw {
     Rect{node:usize,bounds:Bounds,color:[u8;4]},
+    Image{node:usize,bounds:Bounds},
     /// bounds.x is the pen origin; baseline is absolute Y. Bounds describe the
     /// advance box, not exact ink. Actual font ink also contributes to result bounds.
     Text{node:usize,bounds:Bounds,baseline:f64,text:String,font_size:f64,color:[u8;4]},
@@ -38,7 +39,7 @@ pub(super) struct LayoutResult {
 }
 impl LayoutResult {
     pub fn summary(&self)->String {
-        format!("Native normal-flow layout: {} boxes, {} display commands, viewport width {} px, observed content bounds ({}, {}) {} × {} px. Complete source: {}; truncated layout: {}; issues: {} recorded, {} omitted. Metric source: {}. No glyph rasterization occurs in this layout module. Lexical HTML tree only. No CSS margin collapsing, inline decoration or baseline alignment, float/flex/grid/table/positioned layout, replaced-image rendering, shaping, bidi, JavaScript, screenshot or full browser fidelity is established.",self.boxes.len(),self.commands.len(),self.viewport_width,self.bounds.x,self.bounds.y,self.bounds.width,self.bounds.height,self.source_complete,self.truncated,self.issues.len(),self.omitted_issues,self.metric_provenance)
+        format!("Native normal-flow layout: {} boxes, {} display commands, viewport width {} px, observed content bounds ({}, {}) {} × {} px. Complete source: {}; truncated layout: {}; issues: {} recorded, {} omitted. Metric source: {}. No glyph rasterization occurs in this layout module. Lexical HTML tree only. No CSS margin collapsing, inline decoration or baseline alignment, float/flex/grid/table/positioned layout, general replaced-media rendering, shaping, bidi, JavaScript, screenshot or full browser fidelity is established.",self.boxes.len(),self.commands.len(),self.viewport_width,self.bounds.x,self.bounds.y,self.bounds.width,self.bounds.height,self.source_complete,self.truncated,self.issues.len(),self.omitted_issues,self.metric_provenance)
     }
 }
 struct Flow {left:f64,right:f64,x:f64,y:f64,line_height:f64,has_text:bool,pending_space:bool}
@@ -51,7 +52,7 @@ impl Flow {
 const CHAR_CACHE:usize=4096;
 const GLYPH_CACHE:usize=1024;
 const OUTLINE_POINTS:usize=1_000_000;
-struct Engine<'a>{doc:&'a Document,styles:&'a [Style],metrics:TextMetrics,font:Option<&'a Face<'a>>,chars:BTreeMap<char,u16>,glyphs:BTreeMap<u16,GlyphMetric>,out:LayoutResult,text_used:usize}
+struct Engine<'a>{doc:&'a Document,styles:&'a [Style],metrics:TextMetrics,font:Option<&'a Face<'a>>,images:Option<&'a BTreeMap<usize,(u32,u32)>>,chars:BTreeMap<char,u16>,glyphs:BTreeMap<u16,GlyphMetric>,out:LayoutResult,text_used:usize}
 fn checked(bounds:Bounds)->Result<Bounds>{
     if [bounds.x,bounds.y,bounds.width,bounds.height,bounds.x+bounds.width,bounds.y+bounds.height].iter().any(|v|!v.is_finite()||v.abs()>COORD_LIMIT)||bounds.width<0.0||bounds.height<0.0{return Err("Layout geometry exceeds supported coordinate bounds".into());}Ok(bounds)
 }
@@ -101,7 +102,7 @@ impl Engine<'_>{
     }
     fn emit(&mut self,command:Draw)->Result<bool>{
         if self.out.commands.len()>=COMMAND_LIMIT{self.out.truncated=true;self.issue(0,"display-command-limit");return Ok(false);}
-        let b=match &command{Draw::Rect{bounds,..}|Draw::Text{bounds,..}=>*bounds};self.observe(b)?;self.out.commands.push(command);Ok(true)
+        let b=match &command{Draw::Rect{bounds,..}|Draw::Text{bounds,..}|Draw::Image{bounds,..}=>*bounds};self.observe(b)?;self.out.commands.push(command);Ok(true)
     }
     fn text_fragment(&mut self,node:usize,text:String,flow:&mut Flow,style:&Style)->Result<()> {
         if text.is_empty()||self.out.truncated{return Ok(());}
@@ -171,6 +172,24 @@ impl Engine<'_>{
         self.observe(bounds)?;self.out.boxes.push(BoxGeometry{node,bounds,content});
         flow.y=y+bounds.height+mb;flow.x=flow.left;checked(Bounds{x:flow.x,y:flow.y,width:0.0,height:0.0})?;Ok(())
     }
+    fn image(&mut self,node:usize,flow:&mut Flow,intrinsic:(u32,u32))->Result<()> {
+        let style=self.styles[node].clone();let (iw,ih)=(intrinsic.0 as f64,intrinsic.1 as f64);
+        let w=style.width;let h=style.height;
+        let (width,height)=match(w,h){(Some(w),Some(h))=>(w,h),(Some(w),None)=>(w,w*ih/iw),(None,Some(h))=>(h*iw/ih,h),(None,None)=>(iw,ih)};
+        let [mt,mr,mb,ml]=style.margin;let [pt,pr,pb,pl]=style.padding;
+        let outer_width=width+pl+pr;let outer_height=height+pt+pb;
+        if style.display==Display::Block{flow.flush();}else{
+            let space=if flow.has_text&&flow.pending_space{self.advance(node,' ',&style)?}else{0.};
+            if flow.has_text&&flow.x+space+ml+outer_width+mr>flow.right{flow.flush();}
+            if flow.has_text&&flow.pending_space{self.text_fragment(node," ".into(),flow,&style)?;}flow.pending_space=false;
+        }
+        let x=if style.display==Display::Block{flow.left+ml}else{flow.x+ml};let y=flow.y+mt;
+        let bounds=checked(Bounds{x,y,width:outer_width,height:outer_height})?;let content=checked(Bounds{x:x+pl,y:y+pt,width,height})?;
+        if style.background[3]!=0{self.emit(Draw::Rect{node,bounds,color:style.background})?;}
+        self.emit(Draw::Image{node,bounds:content})?;self.out.boxes.push(BoxGeometry{node,bounds,content});
+        if style.display==Display::Block{flow.y=y+outer_height+mb;flow.x=flow.left;}else{flow.x=x+outer_width+mr;flow.line_height=flow.line_height.max((mt+outer_height+mb).max(0.));flow.has_text=true;self.issue(node,"inline-image-top-aligned-baseline-alignment-unimplemented");}
+        checked(Bounds{x:flow.x,y:flow.y,width:0.,height:0.})?;Ok(())
+    }
     fn node(&mut self,node:usize,flow:&mut Flow,depth:usize)->Result<()> {
         if self.out.truncated{return Ok(());}if depth>DEPTH_LIMIT{return Err("Layout tree exceeds supported depth".into());}
         let style=self.styles[node].clone();if style.display==Display::None{return Ok(());}
@@ -183,6 +202,7 @@ impl Engine<'_>{
                 // These are not visual text containers in this foundation.
                 if matches!(name.as_str(),"script"|"style"|"head"|"title"|"template"|"meta"|"link"|"base"){return Ok(());}
                 if name=="br"{let had_text=flow.has_text;flow.flush();if !had_text{flow.y+=self.line_metrics(&style)?.0;}return Ok(());}
+                if name=="img"{if let Some(size)=self.images.and_then(|m|m.get(&node)).copied(){return self.image(node,flow,size);}}
                 if replaced(name)||name=="button"{self.issue(node,"replaced-media-or-control-surface-unimplemented");}
                 if replaced(name)&&style.display!=Display::Block{return Ok(());}
                 if style.display==Display::Block{return self.block(node,flow,depth);}
@@ -216,17 +236,23 @@ fn validate(doc:&Document,styles:&[Style],viewport:f64,metrics:TextMetrics)->Res
 /// Normal block flow with collapsible whitespace and scalar-based emergency
 /// wrapping. Styles use content-box sizes; margins are added, never collapsed.
 pub(super) fn layout(document:&Document,styles:&[Style],viewport_width:f64,metrics:TextMetrics)->Result<LayoutResult>{
-    run(document,styles,viewport_width,metrics,None)
+    run(document,styles,viewport_width,metrics,None,None)
 }
 /// Uses the caller-held face's unhinted hmtx advances and hhea line metrics.
 /// No kerning, shaping, font fallback, variation or glyph substitution occurs.
 pub(super) fn layout_with_font(document:&Document,styles:&[Style],viewport_width:f64,face:&Face<'_>)->Result<LayoutResult>{
     if !(16..=16384).contains(&face.units_per_em)||face.ascender<=face.descender{return Err("Unsupported font vertical metrics".into());}
-    run(document,styles,viewport_width,TextMetrics::default(),Some(face))
+    run(document,styles,viewport_width,TextMetrics::default(),Some(face),None)
 }
-fn run<'a>(document:&'a Document,styles:&'a [Style],viewport_width:f64,metrics:TextMetrics,font:Option<&'a Face<'a>>)->Result<LayoutResult>{
+pub(super) fn layout_with_images(document:&Document,styles:&[Style],viewport_width:f64,face:&Face<'_>,images:&BTreeMap<usize,(u32,u32)>)->Result<LayoutResult>{
+    if !(16..=16384).contains(&face.units_per_em)||face.ascender<=face.descender{return Err("Unsupported font vertical metrics".into());}
+    if images.len()>128{return Err("Layout image count exceeds 128".into());}
+    for (&node,&(w,h)) in images{if node>=document.nodes.len()||!matches!(&document.nodes[node].kind,Kind::Element{name,..} if name=="img")||w==0||h==0||w as u64*h as u64>4*1024*1024{return Err("Invalid intrinsic image binding".into());}}
+    run(document,styles,viewport_width,TextMetrics::default(),Some(face),Some(images))
+}
+fn run<'a>(document:&'a Document,styles:&'a [Style],viewport_width:f64,metrics:TextMetrics,font:Option<&'a Face<'a>>,images:Option<&'a BTreeMap<usize,(u32,u32)>>)->Result<LayoutResult>{
     validate(document,styles,viewport_width,metrics)?;
-    let mut engine=Engine{doc:document,styles,metrics,font,chars:BTreeMap::new(),glyphs:BTreeMap::new(),text_used:0,out:LayoutResult{commands:Vec::new(),boxes:Vec::new(),issues:Vec::new(),omitted_issues:0,truncated:false,approximate_metrics:font.is_none(),source_complete:document.source_complete&&!document.stopped_by_bound&&document.parsed_bytes==document.examined_bytes,viewport_width,content_width:viewport_width,content_height:0.0,bounds:Bounds{x:0.0,y:0.0,width:viewport_width,height:0.0},metric_provenance:if font.is_some(){"caller-held TrueType hmtx advances/hhea baselines; validated unhinted outlines; no kerning or shaping".into()}else{format!("approximate uniform scalar advance ratio {}; not measured fonts",metrics.advance_ratio)},validated_glyphs:0,expanded_outline_points:0}};
+    let mut engine=Engine{doc:document,styles,metrics,font,images,chars:BTreeMap::new(),glyphs:BTreeMap::new(),text_used:0,out:LayoutResult{commands:Vec::new(),boxes:Vec::new(),issues:Vec::new(),omitted_issues:0,truncated:false,approximate_metrics:font.is_none(),source_complete:document.source_complete&&!document.stopped_by_bound&&document.parsed_bytes==document.examined_bytes,viewport_width,content_width:viewport_width,content_height:0.0,bounds:Bounds{x:0.0,y:0.0,width:viewport_width,height:0.0},metric_provenance:if font.is_some(){"caller-held TrueType hmtx advances/hhea baselines; validated unhinted outlines; no kerning or shaping".into()}else{format!("approximate uniform scalar advance ratio {}; not measured fonts",metrics.advance_ratio)},validated_glyphs:0,expanded_outline_points:0}};
     if !engine.out.source_complete{engine.issue(0,"partial-source-layout-only");}
     if !document.issues.is_empty()||document.omitted_issues>0{engine.issue(0,"source-parser-issues-present");}
     let mut flow=Flow::new(0.0,viewport_width,0.0);engine.node(0,&mut flow,0)?;flow.flush();engine.observe(Bounds{x:0.0,y:flow.y,width:0.0,height:0.0})?;
@@ -271,7 +297,7 @@ fn run<'a>(document:&'a Document,styles:&'a [Style],viewport_width:f64,metrics:T
     #[test]fn deterministic_geometry_remains_finite_bounded_and_node_scoped(){
         for width in [1.0,5.0,20.0,125.0,8192.0]{for count in 0..40{
             let source=format!("<div>{}<span>日本</span><br>end</div>","word ".repeat(count));let(d,mut s)=setup(&source);s[1].padding=[1.0;4];let r=layout(&d,&s,width,TextMetrics::default()).unwrap();
-            for command in &r.commands{let(node,b)=match command{Draw::Rect{node,bounds,..}|Draw::Text{node,bounds,..}=>(*node,*bounds)};assert!(node<d.nodes.len());assert!(checked(b).is_ok());}
+            for command in &r.commands{let(node,b)=match command{Draw::Rect{node,bounds,..}|Draw::Text{node,bounds,..}|Draw::Image{node,bounds}=>(*node,*bounds)};assert!(node<d.nodes.len());assert!(checked(b).is_ok());}
             assert!(r.commands.len()<=COMMAND_LIMIT);assert!(r.approximate_metrics);assert!(!r.truncated);
         }}
     }
@@ -296,7 +322,7 @@ fn run<'a>(document:&'a Document,styles:&'a [Style],viewport_width:f64,metrics:T
         let bytes=super::super::font_outline::checks::fixture(true,None);let face=Face::parse(&bytes).unwrap();
         let source:String=(0x1000..0x1000+4097).filter_map(char::from_u32).collect();let(d,s)=setup(&format!("<div>{source}</div>"));assert!(layout_with_font(&d,&s,8192.0,&face).unwrap_err().contains("character-cache"));
         let(d,s)=setup("<div>A</div>");let out=layout(&d,&s,100.0,TextMetrics::default()).unwrap();
-        let mut engine=Engine{doc:&d,styles:&s,metrics:TextMetrics::default(),font:Some(&face),chars:BTreeMap::new(),glyphs:BTreeMap::new(),out,text_used:0};
+        let mut engine=Engine{doc:&d,styles:&s,metrics:TextMetrics::default(),font:Some(&face),images:None,chars:BTreeMap::new(),glyphs:BTreeMap::new(),out,text_used:0};
         engine.out.expanded_outline_points=OUTLINE_POINTS-2;
         assert!(engine.glyph_metric(2,'A').err().unwrap().contains("aggregate outline-point"));assert!(engine.glyphs.is_empty());
         engine.out.expanded_outline_points=0;for id in 100..100+GLYPH_CACHE as u16{engine.glyphs.insert(id,GlyphMetric{advance:0.0,ink:None});}

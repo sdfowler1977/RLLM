@@ -14,6 +14,25 @@ fn font_source(root:&Path,name:&str)->Result<(PathBuf,Vec<u8>)>{
  Err("No supported platform TrueType face was available; select a workspace TrueType font for this capture".into())
 }
 
+/// Resolve local document image URLs against the document directory. Network
+/// loading is a separate transport; no model-provider credentials are involved.
+fn image_source(root:&Path,input:&Path,target:&str,limit:usize)->Result<Vec<u8>>{
+ if target.len()>8192{return Err("Image source URL exceeds supported length".into());}
+ if let Some(data)=target.strip_prefix("data:image/png;base64,"){
+  if data.len()>limit.saturating_add(2)/3*4{return Err("Inline PNG exceeds remaining input budget".into());}
+  let bytes=network::unbase64(data)?;if bytes.len()>limit{return Err("Inline PNG exceeds remaining input budget".into());}return Ok(bytes);
+ }
+ let target=target.trim_matches(|c:char|c.is_ascii_whitespace());
+ if target.starts_with('/')||target.contains('\\')||target.split('/').next().unwrap_or("").contains(':'){return Err("This local capture does not yet fetch remote or absolute image URLs".into());}
+ let target=target.split(['?','#']).next().unwrap_or("");if target.is_empty(){return Err("Image source path is empty".into());}
+ let mut decoded=Vec::new();let mut at=0;let bytes=target.as_bytes();
+ while at<bytes.len(){if bytes[at]==b'%'{let hex=|b:u8|->Option<u8>{match b{b'0'..=b'9'=>Some(b-b'0'),b'a'..=b'f'=>Some(b-b'a'+10),b'A'..=b'F'=>Some(b-b'A'+10),_=>None}};let a=bytes.get(at+1).and_then(|b|hex(*b)).ok_or("Invalid URL percent escape")?;let b=bytes.get(at+2).and_then(|b|hex(*b)).ok_or("Invalid URL percent escape")?;let c=a*16+b;if matches!(c,0|b'/'|b'\\'){return Err("Image URL contains an unsupported encoded path separator".into());}decoded.push(c);at+=3;}else{decoded.push(bytes[at]);at+=1;}}
+ let decoded=String::from_utf8(decoded).map_err(|_|"Image path is not UTF-8")?;
+ let directory=input.parent().ok_or("HTML source has no directory")?.strip_prefix(root).map_err(|_|"HTML source is outside workspace")?;
+ let mut parts:Vec<String>=directory.components().map(|c|c.as_os_str().to_string_lossy().into_owned()).collect();
+ for part in decoded.split('/') {match part{""|"."=>{},".."=>{if parts.pop().is_none(){return Err("Image path leaves the selected workspace".into());}},_=>parts.push(part.into())}}
+ let resolved=path(root,&parts.join("/"))?;read_held(&resolved,limit)
+}
 pub(super) fn validate(args:&Json)->Result<()> {
  for key in ["font","output"]{if key=="font"&&(get(args,key)==&Null||text(args,key).trim().is_empty()){continue;}let value=get(args,key).text()?;if value.is_empty()||value.len()>1024||value.starts_with('/')||value.contains('\\')||value.contains('\0')||value.split('/').any(|p|p==".."||p.is_empty()){return Err(format!("Invalid capture {key} path"));}}
  let output=text(args,"output");if output.contains('/')||output=="."||!output.to_ascii_lowercase().ends_with(".png"){return Err("Capture output must be a new workspace-root PNG filename".into());}
@@ -24,7 +43,7 @@ pub(super) fn capture(root:&Path,input:&Path,args:&Json)->Result<String>{
  if output.exists(){return Err("Capture output already exists; choose a new PNG filename".into());}
  let html=read_held(input,262144)?;let (font_path,font)=font_source(root,&text(args,"font"))?;
  let dimension=|key:&str,default:u32|->u32{match get(args,key){Num(s)|Str(s)=>s.parse().unwrap_or(default),_=>default}};
- let result=page_capture::render(&html,&font,dimension("width",800),dimension("height",600),super::super::execution::cancelled)?;
+ let result=page_capture::render_with_loader(&html,&font,dimension("width",800),dimension("height",600),|target,limit|image_source(root,input,target,limit),super::super::execution::cancelled)?;
  if super::super::execution::cancelled(){return Err("Capture cancelled before output creation".into());}
  let mut file=fs::OpenOptions::new().read(true).write(true).create_new(true).custom_flags(0x20000).open(&output).map_err(|e|format!("Cannot create capture output: {e}"))?;
  for block in result.png.chunks(65536){if super::super::execution::cancelled(){return Err(format!("Capture cancelled; incomplete new file {name} may remain"));}file.write_all(block).map_err(|e|format!("Capture output incomplete ({name}): {e}"))?;}

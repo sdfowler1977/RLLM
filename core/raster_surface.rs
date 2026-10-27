@@ -16,6 +16,24 @@ impl Surface {
   self.charge((bottom-top).saturating_mul(right-left).saturating_mul(17))?;
   for py in top..bottom{for px in left..right{let mut coverage=0;for sy in 0..4{for sx in 0..4{let xx=px as f64+(sx as f64+0.5)/4.;let yy=py as f64+(sy as f64+0.5)/4.;if xx>=x&&xx<x+width&&yy>=y&&yy<y+height{coverage+=1;}}}self.blend(px,py,color,coverage);}}Ok(())
  }
+ /// Explicit nearest-neighbour image sampling with straight-alpha source-over.
+ /// Pixel centres select source samples; fractional edges use the same 4x4
+ /// coverage grid as rectangles. No color-profile conversion is implied.
+ pub fn image_rgba8(&mut self,source:&[u8],sw:u32,sh:u32,x:f64,y:f64,width:f64,height:f64)->Result<()> {
+  let count=(sw as usize).checked_mul(sh as usize).ok_or("Source image dimensions overflow")?;
+  if sw==0||sh==0||count>PIXELS||count.checked_mul(4)!=Some(source.len()){return Err("Invalid source RGBA image dimensions or byte count".into());}
+  if [x,y,width,height,x+width,y+height].iter().any(|n|!n.is_finite()||n.abs()>1_000_000.)||width<0.||height<0.{return Err("Invalid image destination geometry".into());}
+  if width==0.||height==0.{return Ok(());}
+  let left=x.floor().max(0.).min(self.width as f64) as usize;let right=(x+width).ceil().max(0.).min(self.width as f64) as usize;
+  let top=y.floor().max(0.).min(self.height as f64) as usize;let bottom=(y+height).ceil().max(0.).min(self.height as f64) as usize;
+  self.charge((bottom-top).saturating_mul(right-left).saturating_mul(22))?;
+  for py in top..bottom{for px in left..right{
+   let mut coverage=0;for sy in 0..4{for sx in 0..4{let xx=px as f64+(sx as f64+0.5)/4.;let yy=py as f64+(sy as f64+0.5)/4.;if xx>=x&&xx<x+width&&yy>=y&&yy<y+height{coverage+=1;}}}
+   let ix=(((px as f64+0.5-x)/width*sw as f64).floor().max(0.) as usize).min(sw as usize-1);
+   let iy=(((py as f64+0.5-y)/height*sh as f64).floor().max(0.) as usize).min(sh as usize-1);
+   let at=(iy*sw as usize+ix)*4;self.blend(px,py,source[at..at+4].try_into().unwrap(),coverage);
+  }}Ok(())
+ }
  /// Baseline transform: font +Y is up, surface +Y is down. Nonzero winding,
  /// 4x4 coverage samples; no TrueType instructions or platform hinting.
  pub fn outline(&mut self,contours:&[Vec<Point>],x:f64,baseline:f64,scale:f64,color:[u8;4])->Result<()> {

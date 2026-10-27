@@ -13,7 +13,7 @@ pub(super) struct Style {
 impl Default for Style {fn default()->Self{Self{display:Display::Inline,width:None,height:None,margin:[0.;4],padding:[0.;4],font_size:16.,line_height:19.2,color:[0,0,0,255],background:[0,0,0,0],normal_line_height:true}}}
 #[derive(Clone,Debug)]
 pub(super) struct Observation {pub styles:Vec<Style>,pub applied:usize,pub unsupported:usize,pub incomplete:bool,pub issues:Vec<String>}
-impl Observation {pub fn summary(&self)->String{format!("Native author CSS cascade: {} node styles, {} supported winning properties, {} unsupported rules/values; incomplete: {}. Lexical source-order tree; embedded and inline author styles only; no external CSS fetch, conditional rules, layers, browser DOM or font rasterization.",self.styles.len(),self.applied,self.unsupported,self.incomplete)}}
+impl Observation {pub fn summary(&self)->String{format!("Native author CSS cascade: {} node styles, {} supported winning properties, {} unsupported rules/values; incomplete: {}. Lexical source-order tree; embedded, inline and caller-bound stylesheet nodes; this cascade does not fetch CSS, conditional rules, layers, browser DOM or font rasterization.",self.styles.len(),self.applied,self.unsupported,self.incomplete)}}
 impl Observation {
  pub fn describe(&self,doc:&html::Document)->String {
   let mut result=self.summary();let mut shown=0;
@@ -58,17 +58,31 @@ fn set(s:&mut Style,i:usize,v:Value){match(i,v){(0,Value::Display(v))=>s.display
 fn declarations(map:&mut BTreeMap<usize,(Rank,Value)>,decls:&[ast::Declaration],base:Rank,order:&mut usize,unsupported:&mut usize){for d in decls{*order+=1;let rank=Rank{important:d.important,order:*order,..base};if let Some(items)=values(d){for(i,v)in items{if map.get(&i).map(|(r,_)|rank>=*r).unwrap_or(true){map.insert(i,(rank,v));}}}else{*unsupported+=1;}}}
 /// Inline styles and each embedded style element are parsed independently.
 /// Incomplete input produces observations but no provisional author declarations.
-pub(super) fn compute(doc:&html::Document)->Observation{
+pub(super) fn compute(doc:&html::Document)->Observation{compute_with_stylesheets(doc,&BTreeMap::new())}
+/// Caller-supplied complete stylesheet bytes are bound to exact link nodes.
+/// Node traversal preserves document order independent of load completion order.
+pub(super) fn compute_with_stylesheets(doc:&html::Document,external:&BTreeMap<usize,String>)->Observation{
  let mut out=Observation{styles:Vec::with_capacity(doc.nodes.len()),applied:0,unsupported:0,incomplete:!doc.source_complete||doc.stopped_by_bound,issues:Vec::new()};
  let mut rules=Vec::new();let mut stylesheet_bytes=0usize;
- for node in &doc.nodes {if let html::Kind::Element{name,attributes,..}=&node.kind {if name!="style"{continue;}if attributes.iter().any(|a|a.name=="media"&&a.value.as_deref().unwrap_or("").trim()!=""||a.name=="type"&&!a.value.as_deref().unwrap_or("").eq_ignore_ascii_case("text/css")){out.unsupported+=1;continue;}
- let mut source=String::new();for &id in &node.children{if let Some(html::Node{kind:html::Kind::Text{data,..},..})=doc.nodes.get(id){if stylesheet_bytes.saturating_add(data.len())>262144{out.incomplete=true;break;}stylesheet_bytes+=data.len();source.push_str(data);}}
+ for (node_id,node) in doc.nodes.iter().enumerate() {if let html::Kind::Element{name,attributes,..}=&node.kind {
+ if name!="style"&&name!="link"{continue;}
+ if attributes.iter().any(|a|a.name=="media"&&a.value.as_deref().unwrap_or("").trim()!=""||a.name=="type"&&!a.value.as_deref().unwrap_or("").eq_ignore_ascii_case("text/css")||a.name=="disabled"){out.unsupported+=1;continue;}
+ let mut source=String::new();
+ if name=="link"{
+  let rel=attributes.iter().find(|a|a.name=="rel").and_then(|a|a.value.as_deref()).unwrap_or("");
+  if !rel.split_ascii_whitespace().any(|r|r.eq_ignore_ascii_case("stylesheet")){continue;}
+  if rel.split_ascii_whitespace().any(|r|r.eq_ignore_ascii_case("alternate")){out.unsupported+=1;continue;}
+  if let Some(css)=external.get(&node_id){if stylesheet_bytes.saturating_add(css.len())>262144{out.incomplete=true;}else{stylesheet_bytes+=css.len();source.push_str(css);}}else{out.unsupported+=1;continue;}
+ }else{for &id in &node.children{if let Some(html::Node{kind:html::Kind::Text{data,..},..})=doc.nodes.get(id){if stylesheet_bytes.saturating_add(data.len())>262144{out.incomplete=true;break;}stylesheet_bytes+=data.len();source.push_str(data);}}}
  if out.incomplete{continue;}let sheet=ast::parse(&super::css_syntax::tokenize(source.as_bytes(),true));
  if sheet.stopped_by_bound||!sheet.source_complete{out.incomplete=true;continue;}
  for rule in sheet.rules{if rule.supported{match css_selectors::parse(&rule.prelude){Ok(selector)=>rules.push((selector,rule.declarations)),Err(_)=>out.unsupported+=1}}else{out.unsupported+=1;}}
  }}
  let mut work=0usize;
  for (id,node) in doc.nodes.iter().enumerate(){let defaults=initial(node);let parent=node.parent.and_then(|p|out.styles.get(p));let mut style=defaults.clone();if let Some(p)=parent{style.font_size=p.font_size;style.line_height=p.line_height;style.normal_line_height=p.normal_line_height;style.color=p.color;}
+ // HTML image dimensions are presentation hints below all author CSS,
+ // including an explicit winning auto/initial/unset value.
+ if !out.incomplete{if let html::Kind::Element{name,attributes,..}=&node.kind{if name=="img"{for (key,index) in [("width",1),("height",2)]{if let Some(value)=attributes.iter().find(|a|a.name==key).and_then(|a|a.value.as_deref()){let value=value.trim();if !value.is_empty()&&value.bytes().all(|b|b.is_ascii_digit()){if let Ok(n)=value.parse::<u32>(){if n<=100000{set(&mut style,index,Value::Length(Some(f64::from(n))));}}}}}}}}
  let mut winners=BTreeMap::new();let mut order=0usize;
  if !out.incomplete&&matches!(node.kind,html::Kind::Element{..}) {for (selector,decls)in &rules {match selector.matches_with_budget(doc,id,&mut work){Ok(Some(specificity))=>declarations(&mut winners,decls,Rank{important:false,inline:false,specificity,order:0},&mut order,&mut out.unsupported),Ok(None)=>{order+=decls.len();},Err(e)=>{out.incomplete=true;if out.issues.len()<32{out.issues.push(e.code.to_string());}break;}}}
  if let html::Kind::Element{attributes,..}=&node.kind{if let Some(value)=attributes.iter().find(|a|a.name=="style").and_then(|a|a.value.as_ref()){let (decls,sheet)=ast::inline(&super::css_syntax::tokenize(value.as_bytes(),true));if !sheet.stopped_by_bound&&sheet.source_complete{declarations(&mut winners,&decls,Rank{important:false,inline:true,specificity:[0;3],order:0},&mut order,&mut out.unsupported);}else{out.incomplete=true;}}}}
