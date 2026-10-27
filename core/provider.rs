@@ -2,6 +2,27 @@ use super::*;
 fn text<'a>(p: &'a Json, k: &str) -> &'a str {
     p.get(k).and_then(Json::text).unwrap_or("")
 }
+// Scheme inference is confined to model setup; explicit schemes always win.
+fn local_address(input: &str) -> bool {
+    let authority = input.split(['/', '?']).next().unwrap_or("");
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        match rest.split_once(']') { Some((host, _)) => host, None => return false }
+    } else { authority.split(':').next().unwrap_or("") };
+    if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost")
+        || host.to_ascii_lowercase().ends_with(".local") { return true; }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            let octets = ip.octets();
+            ip.is_private() || ip.is_loopback() || ip.is_link_local()
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+        }
+        Ok(std::net::IpAddr::V6(ip)) => {
+            let first = ip.segments()[0];
+            ip.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
+        }
+        Err(_) => false,
+    }
+}
 pub fn normalized(p: &Json) -> Result<Json> {
     let protocol = text(p, "protocol");
     if !["chat", "local", "messages", "content"].contains(&protocol) {
@@ -14,12 +35,15 @@ pub fn normalized(p: &Json) -> Result<Json> {
     if text(p, "key").len() > 8192 || text(p, "name").len() > 128 {
         return Err("Profile field exceeds its size limit".into());
     }
-    let plain = text(p,"endpoint").trim().starts_with("http://") || p.get("plain") == Ok(&Bool(true));
     let input = text(p, "endpoint").trim();
     if input.is_empty() || input.len() > 2048 {
         return Err("Enter a server address of at most 2048 bytes".into());
     }
-    let mut endpoint = if input.contains("://") {
+    let explicit = input.contains("://");
+    let plain = if explicit { input.starts_with("http://") } else {
+        protocol == "local" || local_address(input) || p.get("plain") == Ok(&Bool(true))
+    };
+    let mut endpoint = if explicit {
         input.to_string()
     } else {
         format!("{}://{}", if plain { "http" } else { "https" }, input)
@@ -174,6 +198,26 @@ mod checks {
         let n = normalized(&p).unwrap();
         assert_eq!(text(&n, "endpoint"), "http://192.168.1.9:11434/api/chat");
         assert_eq!(text(&n, "name"), "");
+    }
+    #[test]
+    fn local_scheme_inference_preserves_explicit_transport() {
+        for endpoint in ["100.100.20.30:8080/v1", "100.64.0.1:8080/v1", "100.127.255.254:8080/v1", "192.168.1.9:8080/v1", "10.0.0.2:8080/v1", "172.16.0.2:8080/v1", "127.0.0.1:8080/v1", "localhost:8080/v1", "server.local:8080/v1", "[fd7a:115c:a1e0::1]:8080/v1", "[::1]:8080/v1"] {
+            let n=normalized(&obj(vec![("protocol",s("chat")),("endpoint",s(endpoint)),("plain",Bool(false)),("model",s("m"))])).unwrap();
+            assert_eq!(text(&n,"endpoint"),format!("http://{endpoint}/chat/completions"));
+            assert_eq!(n.get("plain"),Ok(&Bool(true)));
+            assert!(!network::url(text(&n,"endpoint"),true).unwrap().tls);
+        }
+        for endpoint in ["api.example/v1", "100.63.255.255:8080/v1", "100.128.0.1:8080/v1", "172.32.0.1:8080/v1", "server.local.evil/v1"] {
+            let n=normalized(&obj(vec![("protocol",s("chat")),("endpoint",s(endpoint)),("model",s("m"))])).unwrap();
+            assert!(text(&n,"endpoint").starts_with("https://"));
+        }
+        for endpoint in ["https://100.100.20.30:8080/v1/chat/completions?route=x", "http://api.example/custom?route=x"] {
+            let n=normalized(&obj(vec![("protocol",s("local")),("endpoint",s(endpoint)),("plain",Bool(true)),("model",s("m"))])).unwrap();
+            assert_eq!(text(&n,"endpoint"),endpoint);
+            assert_eq!(n.get("plain"),Ok(&Bool(endpoint.starts_with("http://"))));
+        }
+        let n=normalized(&obj(vec![("protocol",s("local")),("endpoint",s("my-model-host:11434")),("model",s("m"))])).unwrap();
+        assert_eq!(text(&n,"endpoint"),"http://my-model-host:11434/api/chat");
     }
     #[test]
     fn custom_authentication() {
