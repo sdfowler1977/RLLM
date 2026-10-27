@@ -10,11 +10,11 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793072000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793127500/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
 The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
-Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793072000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793127500`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
 
 ## What you can do
 
@@ -28,6 +28,15 @@ Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version 
 - Use reviewed workspace, web, storage, investigation, and delegation tools with profile-specific permissions.
 - Read a quiet live `≈tok/s` estimate on the chat screen and tap it to open analytics. App observations and server-reported data remain separate.
 - Save supported work to a granted phone folder or a configured WebDAV destination, including a reachable network drive.
+
+## Phone access and app inspection
+
+- **Files and access** requests Android broad shared-storage access once, with selected-folder and off controls. Android must grant access; other apps' private files remain protected by Android.
+- **App inspection** reads a catalog only on request. Select an app, optionally exclude sensitive packages, then explicitly read version/UID and permission metadata. Disable inspection to clear current observations. Results are not automatically sent to an LLM. This is not live performance monitoring, private-data access or spyware detection.
+- Malformed leading tool-call markup now shows a clear format error with raw-response inspection. It never executes embedded tool JSON or automatically retries. Explaining the REA workflow requires no discovery call.
+- Footer and menu spacing improvements, bounded reviewed MCP lifecycle/identity/control handling and explicit local/Content model metadata reads are included.
+
+Read [Access and data controls](docs/ACCESS-AND-DATA.md) before granting access. These capabilities are intentional features with controls; unintended disclosure remains a bug. A compromised model runtime or remote endpoint can mishandle data. Data sent to a configured provider does not stay inside this app.
 
 ## Start in a few minutes
 
@@ -54,9 +63,9 @@ See [Setup](docs/SETUP.md) for HTTP versus HTTPS, provider formats, storage, and
 
 ## Development status
 
-The Android app is an active test build. The current source defines 155 Rust checks; 138 non-archive checks passed with 17 filtered out. Separate Content streaming review and exact reconstruction of all 24 APK runtime payload members passed, including both supported native architectures, DEX and resources. Archive-import repair independent review, live-provider and current Android device/visual/accessibility acceptance remain outstanding. See [release notes](release/NOTES.md) before testing project import.
+The Android app is an active test build. Current source defines 209 Rust checks; this release does not claim a full-suite run. Independent focused app-inspection, malformed-tool-response and interface checks passed. Independent reconstruction matched all 24 APK runtime payloads, including both ABIs, DEX and resources; stable signing and 16 KiB alignment passed. Archive-import repair independent review and current installed-device, accessibility, live-provider and full-project acceptance remain open. See [release notes](release/NOTES.md).
 
-iOS is not built or distributed yet. Voice conversation/open microphone is future optional work. The refinement workflow explicitly captures recent adopted lessons for proposal/composition when enabled. It remains bounded; no automatic background learning, weight training or multi-round parallel refinement is claimed.
+No iOS build or voice/open-microphone feature is included. Full MCP/ACP/A2A, OAuth, broader storage and local inference/compiler work remain unfinished. Adopted lesson reuse is explicit and bounded; no automatic training or background learning is claimed.
 
 ## Source and notices
 
