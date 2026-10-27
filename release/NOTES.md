@@ -1,28 +1,26 @@
-# RLLM Lab — tool feedback and web outcomes
+# RLLM Lab — native Rust investigation
 
-Disclosed test build 0.1-lab.1793135100, package com.local.client.lab; Android 8.0+, ARM64 and x86-64. Install over existing Lab without uninstalling or clearing data. Previous releases remain available.
+Test build `0.1-lab.1793140000`, package `com.local.client.lab`. Install over existing Lab without uninstalling or clearing data. Earlier releases remain available.
 
-## Changes
+## Implemented
 
-- Strict feedback for recognized tool JSON embedded in model prose. Raw reply inspection and one explicit Request format correction action; corrected proposals still require approval. Quoted/fenced examples and ordinary configuration data remain text.
-- Durable bounded web rejection/cancellation/failure outcomes, approval-time permission/agent checks and exact callback tickets. Actual page results return to the originating model; no side-effect replay. Startup failures are recorded with the captured ticket.
-- Selected-app usage controls: separate off-by-default enable, explicit Android usage-access grant, Android15+ exact-package query, retained lifecycle counts for24hours/seven days, exclusions and cancellation. No all-app fallback, elapsed runtime/CPU/spying verdict or automatic model sharing.
-- Existing local HTTP/HTTPS inference, Tailscale guide, phone controls, selected-app metadata, provider streaming, profiles/history/Trash, appearance, reviewed delegation, adopted lessons, analytics and storage remain.
+- Repaired the advertised `inspect` operation being rejected by model-tool validation before reaching its Rust handler.
+- Original local Rust JSON structure, delimited-record, Unicode text and heading observations, connected to ordinary questions and recursive tasks.
+- Original local byte comparison with observed differing offsets and explicit full-file versus prefix coverage.
+- Original RIFF/WAVE chunk/format observations and WebAssembly v1 section/custom-name envelopes. No external REA program, Node/npm or computer-hosted analysis server is required for these engines.
+- Inherent investigation guidance throughout ordinary and recursive work. Existing custom guidance controls now clearly edit additional preferences. Optional remote MCP is advertised only when configured and permitted; it is not the native implementation.
+- Published format feedback and latest web-proposal capacity fixes are merged; existing app usage, profiles, storage, analytics and provider behavior are retained.
 
-## What remains open
-
-web_read is static extraction. Rendered webpage capture, browser screenshots/click/type/scroll and human verification handoff are not implemented by this release. Current installed Android/Samsung, visual/IME/TalkBack/lifecycle/Keystore, live providers/MCP/NAS and full-project acceptance remain open. The unchanged archive-import repair remains independently unaccepted after an earlier automatic review rejection; these scoped checks do not replace it. This is a test build, not production approval.
-
-Full MCP/OAuth/newer transports/built-in MCP/ACP/A2A, matching streaming ZIP export/import, SMB/Google authorization, local compiler/inference and broader resource/accessibility work remain. No iOS/voice, automatic training or background learning claim.
+See [native investigation](https://github.com/sdfowler1977/RLLM/blob/main/docs/NATIVE-INVESTIGATION.md) and the [complete retained scope](https://github.com/sdfowler1977/RLLM/blob/main/docs/INVESTIGATION-SCOPE.md). These functional pieces do not reduce the universal investigation requirement. Full reconstruction/runtime analysis, native rendered browser capture and the remaining domains are still open.
 
 ## Validation
 
-Five independent format groups, nine reproduced connected groups including real TCP, eight web-outcome groups, four prior markup groups and one focused Rust detector check. Android Java startup/success-ticket plumbing reproduced through actual extracted methods and Core/JNI with host compatibility bindings. Independent package comparison covers both native/JNI ABIs, DEX and21resources (24runtime entries), CRC, stable signer and ZIP/ELF16KiB alignment. No full-suite or installed-device claim.
+Independent public C ABI checks cover document structure, byte comparison, binary envelopes, ordinary and recursive actual-result continuation, malformed/sample/bounds cases, plus format and web regressions. Focused Rust checks also passed. Independent reconstruction matched all 24 APK runtime entries (both native/JNI ABIs, DEX and 21 resources). Stable Lab signer, ZIP integrity and ZIP/ELF alignment were checked. No installed-device or full-project acceptance is claimed. The unchanged archive-import repair retains its previously recorded independent-review limitation.
 
-## Artifact identity
+## Download identity
 
-RLLM-Lab.apk: 5789657bytes; version code1793135100.
-SHA-256: `178d03ed9aa337d46e2ca6fc672b5930d9138154b7bc9fa06625547abdd19f58`
-Signer SHA-256: `a36bcaabf60626403ccffd32aaf442182efcd3cae82104f2e17c0cfc344749a2`.
+`RLLM-Lab.apk`: 5822425 bytes; version code `1793140000`.
+SHA-256: `73557310e2a68ce14b99ead26722d0fe9eb0af82c10f77949270cfdbd3ddd8c7`.
+Stable Lab certificate: `a36bcaabf60626403ccffd32aaf442182efcd3cae82104f2e17c0cfc344749a2`.
 
-Public source and test APK releases are preserved on GitHub; duplicate routine Google Drive copies of these public deliverables are no longer required. Credentials, signing material, private checkpoints and personal screenshots are excluded. Existing notices are retained; no project-wide license grant is invented.
+Matching public source and checksums are attached. GitHub remains the primary destination for public code/APKs; no duplicate routine Drive upload of these public deliverables. Private configuration, checkpoints and signing material are excluded.
