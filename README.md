@@ -10,11 +10,11 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793143400/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793145200/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
 The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
-Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793143400`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793145200`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
 
 ## What you can do
 
@@ -84,3 +84,9 @@ The application core is Rust, with Android Java bindings and a small JNI bridge.
 ## Native investigation
 
 Original Rust document structure, local byte comparison, RIFF/WAVE format observations and WebAssembly section observations now connect to ordinary and recursive task result paths. No separate REA program or required remote analysis server. See [native investigation](docs/NATIVE-INVESTIGATION.md) and the [full retained scope](docs/INVESTIGATION-SCOPE.md). Rendered browser capture and the full universal engine remain in development.
+
+## History and phone attachments
+
+History now shows readable conversation cards with previews and direct Delete controls. Deleting the last conversation leaves an empty History, including after restart. Deleted conversations can be restored from Trash.
+
+Use **+ → Attach image or text file** to select a PNG/JPEG screenshot or UTF-8 text document. Images appear above the composer with a Remove control and are sent as image parts to the selected provider. Text files append to your draft. See [attachment and History guide](docs/HISTORY-AND-ATTACHMENTS.md).
