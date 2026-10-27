@@ -22,3 +22,7 @@ RLLM now defaults a bare local/Tailscale IP to HTTP and preserves an explicitly 
 | Model not found | Use the exact model ID served by that endpoint. |
 
 If a proxy needs query parameters, enter the **complete API method path** before `?`; automatic base-path completion with queries is not supported. Nothing retries a failed request over a different scheme automatically.
+
+## Web search without an API key
+
+Web access → leave **Custom search URL** blank to use DuckDuckGo HTML through the native Rust HTTP path. No search key or secondary model is needed. Normal questions and recursive tasks use the same path. Optional custom services still accept a URL containing `{query}` and separate credentials; those credentials never go to built-in search or ordinary page reads. A returned verification page is a failed retrieval, not search evidence.
