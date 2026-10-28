@@ -10,11 +10,19 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793157000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793159000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
 The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
-Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793157000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793159000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+
+## Provider-hosted web search
+
+MiniMax connections can explicitly enable hosted search using the Messages API and their existing key. In the connection editor choose **Messages**, enter `https://api.minimax.io/anthropic/v1/messages`, and choose **MiniMax Messages hosted search**. The active agent must allow `web_search`. See [connection setup](docs/CONNECTIONS.md).
+
+The provider performs searches during generation. RLLM retains raw results and citations, keeps thinking out of the visible answer, and offers **Continue hosted search** when the provider pauses. Local web tools are not automatic fallbacks. This mode waits for complete responses; ordinary streaming and key-free search remain available with hosted search off.
+
+The same update accepts empty stream completion trailers, retains valid partial text when a trailing frame fails, and stops attaching generic LAN/firewall advice to requests already sent. Repeated model text is preserved rather than silently deduplicated.
 
 ## Chat scrolling and reasoning display
 
