@@ -238,6 +238,18 @@ public final class Activity extends android.app.Activity {
         ImageButton next=icon("arrow_right","Next",()->showPage(main,labels,events,page,start+pageSize,pageSize,lines,busy));
         next.setEnabled(start+pageSize<labels.size());pager.addView(next,new LinearLayout.LayoutParams(dp(48),dp(48)));main.addView(pager);
     }
+    private void showRows(LinearLayout main,JSONArray entries,JSONObject policy,String page,boolean busy)throws JSONException {
+        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(false);scroll.setClipToPadding(false);
+        LinearLayout content=column();int horizontal=Math.max(0,Math.min(24,policy.optInt("horizontal_padding",12))),vertical=Math.max(0,Math.min(12,policy.optInt("vertical_padding",4))),gap=Math.max(0,Math.min(8,policy.optInt("gap",2))),minimum=Math.max(48,Math.min(96,policy.optInt("minimum_height",48)));
+        content.setPadding(dp(4),dp(4),dp(4),dp(4));scroll.addView(content,new ScrollView.LayoutParams(-1,-2));
+        if(entries!=null)for(int i=0;i<entries.length();i++){
+            JSONObject entry=entries.getJSONObject(i);String event=entry.getString("event"),title=entry.getString("label");
+            Button control=button(title,()->dispatch(event));control.setTextSize(14*textScale);control.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);control.setSingleLine(false);control.setEllipsize(null);control.setMinHeight(dp(minimum));control.setMinimumHeight(dp(minimum));control.setPadding(dp(horizontal),dp(vertical),dp(horizontal),dp(vertical));control.setContentDescription(title);control.setEnabled(!busy||Arrays.asList("configuration","configuration_export","export_review").contains(event));control.setAlpha(control.isEnabled()?1f:.45f);
+            LinearLayout.LayoutParams bounds=new LinearLayout.LayoutParams(-1,-2);bounds.bottomMargin=dp(gap);content.addView(control,bounds);
+        }
+        main.addView(scroll,new LinearLayout.LayoutParams(-1,-1));int saved=pageOffsets.containsKey(page)?pageOffsets.get(page):0;
+        scroll.post(()->scroll.scrollTo(0,saved));scroll.setOnScrollChangeListener((view,x,y,oldX,oldY)->pageOffsets.put(page,y));
+    }
     private ImageButton icon(String resource,String description,Runnable action){
         ImageButton button=new ImageButton(this);button.setFilterTouchesWhenObscured(true);button.setContentDescription(description);button.setTooltipText(description);button.setImageResource(getResources().getIdentifier(resource,"drawable",getPackageName()));button.setImageTintList(android.content.res.ColorStateList.valueOf(accent));button.setBackground(panel(Color.TRANSPARENT,24));button.setScaleType(ImageView.ScaleType.CENTER_INSIDE);button.setPadding(dp(12),dp(12),dp(12),dp(12));button.setMinimumWidth(dp(48));button.setMinimumHeight(dp(48));button.setOnClickListener(v->action.run());return button;
     }
@@ -374,6 +386,8 @@ public final class Activity extends android.app.Activity {
             scroll.addView(rows);main.addView(scroll,new LinearLayout.LayoutParams(-1,-1));
         }else if(page.equals("diagnostics")){
             monitor(main,ui.getJSONObject("monitor"),palette);
+        }else if(ui.optJSONObject("rows_layout")!=null&&ui.getJSONObject("rows_layout").optString("kind").equals("list")){
+            showRows(main,ui.optJSONArray("rows"),ui.getJSONObject("rows_layout"),page,busy);
         }else{
             ArrayList<String> labels=new ArrayList<>(),events=new ArrayList<>();JSONArray rows=ui.optJSONArray("rows");if(rows!=null)for(int i=0;i<rows.length();i++){JSONObject item=rows.getJSONObject(i);labels.add(item.getString("label"));events.add(item.getString("event"));}
             showPage(main,labels,events,page,pageOffsets.containsKey(page)?pageOffsets.get(page):0,geometry.getInt("rows"),Math.max(1,geometry.getInt("preview_lines")),busy);
