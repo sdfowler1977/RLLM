@@ -10,11 +10,17 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793167000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793173000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
 The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
-Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793167000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793173000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+
+## Workspace and investigation
+
+Workspace actions now use compact, wrapped rows instead of stretching into equal-height bands. **Search the web** opens a query form that works without an LLM; approved results are displayed locally. Model-requested search still returns evidence to its originating model.
+
+Page reading follows ordinary GET redirects to the final page with bounded hops and fresh response identities. Local investigation now reads supported GGUF/safetensors model metadata and DEX class/member declarations through the same ordinary and recursive inspection paths. These original Rust readers do not require an external engine. See [investigation](docs/NATIVE-INVESTIGATION.md) and [web search](docs/WEB-SEARCH.md).
 
 ## Provider-hosted web search
 
