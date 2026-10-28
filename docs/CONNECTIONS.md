@@ -20,9 +20,26 @@ RLLM now defaults a bare local/Tailscale IP to HTTP and preserves an explicitly 
 | 404 | Wrong API format or URL path. A 404 does not prove the API key is valid. |
 | 401/403 | Server authentication/authorization or access policy. |
 | Model not found | Use the exact model ID served by that endpoint. |
+| Choice data followed its completion | Response-stream format error: the app received a choice after its completion marker. Empty completion/usage trailers are supported; new answer data after completion is still refused. This message does not establish a Wi-Fi or firewall problem. |
 
 If a proxy needs query parameters, enter the **complete API method path** before `?`; automatic base-path completion with queries is not supported. Nothing retries a failed request over a different scheme automatically.
+
+Connection advice is shown for failures before sending or receiving data. Once a request has been sent, the app reports the actual failure without appending a generic LAN/firewall diagnosis. TLS failures retain scheme and certificate guidance.
 
 ## Web search without an API key
 
 Web access → leave **Custom search URL** blank to use DuckDuckGo HTML through the native Rust HTTP path. No search key or secondary model is needed. Normal questions and recursive tasks use the same path. Optional custom services still accept a URL containing `{query}` and separate credentials; those credentials never go to built-in search or ordinary page reads. A returned verification page is a failed retrieval, not search evidence.
+
+## MiniMax provider-hosted search
+
+MiniMax's hosted search is a separate API capability. A chat model connection at `/v1/chat/completions` does not enable it merely because the same account can search in MMX.
+
+In the connection editor, select **Messages** as the API format, enter `https://api.minimax.io/anthropic/v1/messages`, keep your exact model ID and existing MiniMax key, and select **MiniMax Messages hosted search** under **Provider-hosted web search**. Save the connection. The active agent must have `web_search` enabled. The app does not silently rewrite saved endpoints or move credentials to another origin.
+
+With this option enabled, MiniMax performs searches during generation through the declared server tool. RLLM does not substitute its local `web_search` or `web_read`. Hosted-search requests wait for a complete response; other connections keep their streaming setting. Other phone/workspace operations still use their existing review flow. Provider access and charges depend on your account.
+
+If the provider pauses the turn, use **Continue hosted search**. This sends the captured request plus the complete returned assistant blocks to the same connection, with a fresh request ticket. It does not replay a phone operation. Stop cancels continuation and retains received history. Conversation actions → **Inspect hosted search responses** exposes saved raw results and citations; raw thinking and signatures stay out of the normal answer display.
+
+The provider adapter uses original Rust code and the existing Android transport. No SDK, Node package or external computer is installed. Free phone-side search remains available with hosted search off. Current implementation and test-build identity are recorded separately from live-provider/device validation.
+
+Official interface reference: [MiniMax Server Tools](https://platform.minimax.io/docs/guides/server-tools).

@@ -1,3 +1,13 @@
+## Provider-hosted search — current development source
+
+The connection's explicit provider-hosted search option allows the selected provider to perform web searches during model generation. This is separate from the phone's reviewed `web_search` and `web_read` operations. It uses the selected connection's existing credential and Messages endpoint; provider account access and billing apply. No additional search key, SDK, Node program or external computer is installed. The free phone-side search path remains available when hosted search is off.
+
+With hosted search enabled and permitted for the active agent, the request declares the provider's server search tool. Local web search/read are not an automatic fallback. Other phone/workspace operations retain their existing review. Disable hosted search in the connection or remove the agent's web_search permission to stop declaring it; pausing remote model requests also applies. Changing a saved endpoint does not migrate another connection or send its private protocol state there.
+
+Provider-returned search results, citations, thinking and signatures are untrusted protocol data. Raw blocks are kept in the existing encrypted application state and projected back only to their matching connection context; thinking is excluded from the visible answer. Returned URLs are not automatically fetched by the phone. A paused provider turn requires an explicit continuation using the captured request and complete returned blocks, with current ownership and resource checks. Cancellation stops continuation and retains already saved observations. This transport waits for complete JSON responses rather than streaming hosted-search output.
+
+---
+
 ## Native local HTML capture
 
 The native `capture` operation reads the selected workspace HTML file and selected workspace TrueType font, or a compatible Android system font when the font field is blank. Font data is read through original Rust code; no external analysis/browser program is installed or launched. It creates a new PNG in the app workspace and verifies the bytes. It never overwrites an existing filename. Captured pixels can contain the selected document's visible data; the result identifies the output file and observed rendering scope. Existing operation review and agent tool choices apply. The PNG is not automatically uploaded or inserted as a model image; the textual operation result follows the current model route. Export the file explicitly through the existing project-file storage action. Interrupted new output can remain for inspection.

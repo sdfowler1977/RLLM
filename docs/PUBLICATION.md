@@ -2,9 +2,9 @@
 
 The public repository is [sdfowler1977/RLLM](https://github.com/sdfowler1977/RLLM).
 
-The Android test build is published as [lab-1793157000](https://github.com/sdfowler1977/RLLM/releases/tag/lab-1793157000). [Download RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793157000/RLLM-Lab.apk).
+The Android test build is published as [lab-1793159000](https://github.com/sdfowler1977/RLLM/releases/tag/lab-1793159000). [Download RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793159000/RLLM-Lab.apk).
 
-The verified APK SHA-256 is `c0ecd3a630bd3d32ab0a52c73e82350b033554e9cc51d88701bd8ca490d48411`. The APK is 6,109,145 bytes.
+The APK SHA-256 is `67cfc900cf9a464e2a01317182fe63e0894673b5b5d69614bde309823e757171`. The APK is 6,223,833 bytes.
 
 ## Repository contents
 
@@ -12,7 +12,7 @@ The source, build files, required notices, documentation and fictional illustrat
 
 No project-wide reuse license has been selected. Required runtime and asset notices remain in `notices/`.
 
-This version adds original Rust local document analysis, byte comparison and RIFF/WAVE/WebAssembly envelope observations through ordinary and recursive tasks, preserving the previous format/web/usage controls. Supported local static PNG capture is implemented; complete browser capture/sessions/interaction remain unfinished. Earlier releases are preserved. This remains a test build; see [release notes](../release/NOTES.md) for exact review boundaries.
+This version adds explicit provider-hosted Messages search and repairs stream completion/partial-response handling. Existing original Rust investigation, local PNG capture, chat reading, attachments and free search remain. Complete browser capture/sessions/interaction and the original full roadmap are unfinished. See [release notes](../release/NOTES.md) for exact review boundaries.
 
 ## Future releases
 
