@@ -1,3 +1,7 @@
+## Current stylesheet selection consistency — engineering source
+
+Local capture and the actual embedded/bound-link cascade now decline named stylesheet sets instead of applying all titled sheets. Named-set preference selection remains open. Unsupported non-UTF-8 charset hints are declined before external reads; actual external bytes still require valid UTF-8. Empty/default and UTF-8 hints remain supported. This is an explicit rendering subset, not browser encoding detection or charset transcoding. Inline style attributes are unaffected. Unconditional media uses only HTML ASCII whitespace trimming; stylesheet type remains empty/default or exact case-insensitive text/css. The isolated future remote planner follows these same eligibility decisions but is not a network capture implementation.
+
 ## Provider-hosted search — current development source
 
 The connection's explicit provider-hosted search option allows the selected provider to perform web searches during model generation. This is separate from the phone's reviewed `web_search` and `web_read` operations. It uses the selected connection's existing credential and Messages endpoint; provider account access and billing apply. No additional search key, SDK, Node program or external computer is installed. The free phone-side search path remains available when hosted search is off.
