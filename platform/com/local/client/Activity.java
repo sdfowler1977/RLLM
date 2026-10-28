@@ -254,6 +254,10 @@ public final class Activity extends android.app.Activity {
     private TextView summary(String text,int size,int lines,String description){TextView view=label(text,size);view.setPadding(dp(4),0,dp(4),0);view.setMaxLines(lines);view.setEllipsize(android.text.TextUtils.TruncateAt.END);view.setContentDescription(description);view.setTooltipText(description);return view;}
     private final Map<String,int[]> conversationScroll=new HashMap<>();
     private ListView conversationList;
+    private Button latestReply;
+    private boolean restoringConversation;
+    private long conversationScrollRevision;
+    private int conversationWidth,conversationHeight;
     private JSONArray displayedMessages;
     private TextView statusView;
     private View chatBanner;private TextView conversationHeading;private LinearLayout activeComposer,modelFooter;private ImageButton composerMenu;private String composerModel="";private boolean composerBusy;
@@ -261,7 +265,45 @@ public final class Activity extends android.app.Activity {
     private int card=0xFF142535,muted=0xFF9CB0BF,glass=0xC21B293A,border=0x809AB6BE;
     private android.graphics.drawable.GradientDrawable panel(int color,int radius){android.graphics.drawable.GradientDrawable d=new android.graphics.drawable.GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d;}
     private android.graphics.drawable.GradientDrawable framed(int color,int radius){android.graphics.drawable.GradientDrawable d=panel(color,radius);d.setStroke(Math.max(1,dp(1)),border);return d;}
-    private void rememberScroll(){if(conversationList!=null&&conversationList.getChildCount()>0){View first=conversationList.getChildAt(0),last=conversationList.getChildAt(conversationList.getChildCount()-1);boolean bottom=conversationList.getLastVisiblePosition()==conversationList.getCount()-1&&last.getBottom()<=conversationList.getHeight();conversationScroll.put(displayedConversation,new int[]{conversationList.getFirstVisiblePosition(),first.getTop(),bottom?1:0,conversationList.getCount()});}}
+    private boolean conversationAtBottom(ListView list){
+        if(list.getCount()==0)return true;
+        if(list.getChildCount()==0)return false;
+        View last=list.getChildAt(list.getChildCount()-1);
+        return list.getLastVisiblePosition()==list.getCount()-1&&last.getBottom()<=list.getHeight()-list.getListPaddingBottom()+dp(24);
+    }
+    private void rememberScroll(){
+        if(restoringConversation||conversationList==null||conversationList.getChildCount()==0)return;
+        if(conversationWidth>0&&(conversationWidth!=conversationList.getWidth()||conversationHeight!=conversationList.getHeight()))return;
+        View first=conversationList.getChildAt(0);
+        conversationScroll.put(displayedConversation,new int[]{conversationList.getFirstVisiblePosition(),first.getTop(),conversationAtBottom(conversationList)?1:0,conversationList.getCount()});
+    }
+    private void updateLatestReply(){
+        if(latestReply!=null&&conversationList!=null)latestReply.setVisibility(conversationAtBottom(conversationList)?View.GONE:View.VISIBLE);
+    }
+    private void afterConversationLayout(ListView list,Runnable action){
+        list.getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener(){public void onGlobalLayout(){if(list.getViewTreeObserver().isAlive())list.getViewTreeObserver().removeOnGlobalLayoutListener(this);action.run();}});
+        list.requestLayout();
+    }
+    private void restoreConversation(ListView list,int[] prior,boolean follow){
+        final long revision=++conversationScrollRevision;
+        final String conversation=displayedConversation;
+        restoringConversation=true;
+        conversationScroll.put(conversation,new int[]{prior==null?Math.max(0,list.getCount()-1):prior[0],prior==null?0:prior[1],follow?1:0,list.getCount()});
+        afterConversationLayout(list,()->{
+            if(closed||conversationList!=list||revision!=conversationScrollRevision||!conversation.equals(displayedConversation))return;
+            int count=list.getCount();
+            if(count>0){
+                if(follow){
+                    View last=list.getAdapter().getView(count-1,null,list);
+                    int width=Math.max(1,list.getWidth()-list.getPaddingLeft()-list.getPaddingRight());
+                    last.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED));
+                    int offset=list.getHeight()-list.getListPaddingTop()-list.getListPaddingBottom()-last.getMeasuredHeight();
+                    list.setSelectionFromTop(count-1,offset);
+                }else if(prior!=null){list.setSelectionFromTop(Math.min(prior[0],count-1),prior[1]-list.getListPaddingTop());}
+            }
+            afterConversationLayout(list,()->{if(!closed&&conversationList==list&&revision==conversationScrollRevision&&conversation.equals(displayedConversation)){conversationWidth=list.getWidth();conversationHeight=list.getHeight();restoringConversation=false;rememberScroll();updateLatestReply();}});
+        });
+    }
     private void renderRate(JSONObject ui)throws Exception{
         JSONObject rate=ui.optJSONObject("local_rate");
         if(rateBadge!=null&&rate!=null){rateBadge.setText(rate.optString("label","— tok/s"));rateBadge.setContentDescription(rate.optString("description"));rateBadge.setTooltipText(rate.optString("description"));}
@@ -279,10 +321,10 @@ public final class Activity extends android.app.Activity {
         while(displayedMessages.length()>0)displayedMessages.remove(displayedMessages.length()-1);
         for(int i=0;i<next.length();i++)displayedMessages.put(next.get(i));
         ((BaseAdapter)conversationList.getAdapter()).notifyDataSetChanged();
-        if(prior==null||prior[2]==1)conversationList.setSelection(Math.max(0,displayedMessages.length()-1));
+        restoreConversation(conversationList,prior,prior==null||prior[2]==1);
     }
     private void render(JSONObject ui) throws Exception {
-        boolean composerFocus=draft!=null&&draft.hasFocus();int selection=draft==null?0:Math.max(0,draft.getSelectionStart());rememberScroll();conversationList=null;displayedMessages=null;statusView=null;chatBanner=null;conversationHeading=null;activeComposer=null;modelFooter=null;composerMenu=null;rateBadge=null;rateValue=null;rateCaption=null;rateDiagram=null;
+        boolean composerFocus=draft!=null&&draft.hasFocus();int selection=draft==null?0:Math.max(0,draft.getSelectionStart());rememberScroll();conversationScrollRevision++;restoringConversation=false;conversationWidth=0;conversationHeight=0;conversationList=null;latestReply=null;displayedMessages=null;statusView=null;chatBanner=null;conversationHeading=null;activeComposer=null;modelFooter=null;composerMenu=null;rateBadge=null;rateValue=null;rateCaption=null;rateDiagram=null;
         rendering=true;if(dialog!=null){dialog.dismiss();dialog=null;}fields.clear();draft=null;
         JSONObject appearance=ui.optJSONObject("appearance");if(appearance==null)appearance=new JSONObject();textScale=Math.max(1f,Math.min(2f,appearance.optInt("scale",100)/100f));proseFont=Typeface.create(appearance.optString("font","sans-serif"),Typeface.NORMAL);
         canNavigateBack=ui.optBoolean("can_navigate_back");JSONObject geometry=layout(ui);String page=ui.optString("page");boolean busy=ui.optBoolean("busy"),dark=ui.optString("theme").equals("dark");
@@ -305,7 +347,14 @@ public final class Activity extends android.app.Activity {
         if(page.equals("chat")){
             JSONArray messages=ui.optJSONArray("messages");final JSONArray entries=messages==null?new JSONArray():messages;displayedMessages=entries;displayedConversation=ui.optString("conversation_id");
             if(entries.length()==0){ScrollView welcome=new ScrollView(this);welcome.setFillViewport(true);LinearLayout intro=column();intro.setGravity(Gravity.CENTER_VERTICAL);intro.setPadding(dp(16),dp(20),dp(16),dp(20));TextView brand=label("Start a conversation",22);brand.setGravity(Gravity.CENTER);brand.setTypeface(proseFont,Typeface.BOLD);intro.addView(brand);TextView help=label(ui.optBoolean("connected_profile")?ui.optString("connection_label"):"Connect any LLM with its URL, model name and optional API key. Your conversations and tools stay here.",15);help.setTextColor(muted);help.setGravity(Gravity.CENTER);intro.addView(help);if(!ui.optBoolean("connected_profile"))intro.addView(button("Connect to LLM",()->dispatch("profile_new")));if(!ui.optBoolean("connected_profile"))intro.addView(button("Workspace",()->dispatch("workspace")));welcome.addView(intro);main.addView(welcome,new LinearLayout.LayoutParams(-1,-1));}
-            else{ListView list=new ListView(this);conversationList=list;list.setDivider(null);list.setClipToPadding(false);list.setPadding(0,dp(12),0,dp(12));list.setAdapter(new BaseAdapter(){public int getCount(){return entries.length();}public Object getItem(int position){return entries.optJSONObject(position);}public long getItemId(int position){return position;}public View getView(int position,View recycled,android.view.ViewGroup parent){JSONObject message=entries.optJSONObject(position);LinearLayout box=column();box.setPadding(dp(12),dp(5),dp(12),dp(5));box.setMinimumHeight(dp(48));boolean user=message.optString("role").equals("user");box.setBackground(user?framed(card,12):panel(Color.TRANSPARENT,0));TextView role=label(message.optString("speaker",user?"You":"Assistant"),12);role.setTextColor(user?muted:accent);role.setTypeface(proseFont,Typeface.BOLD);role.setPadding(dp(8),0,dp(8),0);box.addView(role);TextView body=label(message.optString("content"),16);body.setLineSpacing(dp(3),1f);body.setPadding(dp(8),dp(2),dp(8),dp(2));if(!message.optBoolean("streaming"))box.setOnClickListener(v->dispatch("branch:"+position));box.setOnLongClickListener(v->{((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(android.content.ClipData.newPlainText("Message",message.optString("content")));Toast.makeText(Activity.this,"Message copied",Toast.LENGTH_SHORT).show();return true;});box.addView(body);JSONArray images=message.optJSONArray("attachments");if(images!=null)for(int imageIndex=0;imageIndex<images.length();imageIndex++){JSONObject item=images.optJSONObject(imageIndex);if(item!=null){TextView imageLabel=label("Image: "+item.optString("name")+" · "+item.optInt("width")+"×"+item.optInt("height"),13);imageLabel.setTextColor(muted);box.addView(imageLabel);}}return box;}});main.addView(list,new LinearLayout.LayoutParams(-1,-1));int[] prior=conversationScroll.get(displayedConversation);if(prior==null||prior[2]==1||(entries.length()>prior[3]&&entries.optJSONObject(entries.length()-1).optString("role").equals("user")))list.setSelection(entries.length()-1);else list.setSelectionFromTop(Math.min(prior[0],entries.length()-1),prior[1]);}
+            else{ListView list=new ListView(this);conversationList=list;list.setDivider(null);list.setClipToPadding(false);list.setPadding(0,dp(12),0,dp(12));list.setAdapter(new BaseAdapter(){public int getCount(){return entries.length();}public Object getItem(int position){return entries.optJSONObject(position);}public long getItemId(int position){return position;}public View getView(int position,View recycled,android.view.ViewGroup parent){JSONObject message=entries.optJSONObject(position);LinearLayout box=column();box.setPadding(dp(12),dp(5),dp(12),dp(5));box.setMinimumHeight(dp(48));boolean user=message.optString("role").equals("user");box.setBackground(user?framed(card,12):panel(Color.TRANSPARENT,0));TextView role=label(message.optString("speaker",user?"You":"Assistant"),12);role.setTextColor(user?muted:accent);role.setTypeface(proseFont,Typeface.BOLD);role.setPadding(dp(8),0,dp(8),0);box.addView(role);TextView body=label(message.optString("content"),16);body.setLineSpacing(dp(3),1f);body.setPadding(dp(8),dp(2),dp(8),dp(2));if(!message.optBoolean("streaming"))box.setOnClickListener(v->dispatch("branch:"+position));box.setOnLongClickListener(v->{((android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(android.content.ClipData.newPlainText("Message",message.optString("content")));Toast.makeText(Activity.this,"Message copied",Toast.LENGTH_SHORT).show();return true;});box.addView(body);JSONArray images=message.optJSONArray("attachments");if(images!=null)for(int imageIndex=0;imageIndex<images.length();imageIndex++){JSONObject item=images.optJSONObject(imageIndex);if(item!=null){TextView imageLabel=label("Image: "+item.optString("name")+" · "+item.optInt("width")+"×"+item.optInt("height"),13);imageLabel.setTextColor(muted);box.addView(imageLabel);}}return box;}});FrameLayout viewport=new FrameLayout(this);viewport.addView(list,new FrameLayout.LayoutParams(-1,-1));
+                latestReply=button("Latest ↓",()->restoreConversation(list,null,true));latestReply.setContentDescription("Scroll to latest reply");latestReply.setBackground(framed(card,12));latestReply.setVisibility(View.GONE);
+                FrameLayout.LayoutParams latestBounds=new FrameLayout.LayoutParams(-2,dp(48),Gravity.BOTTOM|Gravity.END);latestBounds.setMargins(dp(8),dp(8),dp(12),dp(8));viewport.addView(latestReply,latestBounds);main.addView(viewport,new LinearLayout.LayoutParams(-1,-1));
+                list.setTranscriptMode(AbsListView.TRANSCRIPT_MODE_DISABLED);
+                list.addOnLayoutChangeListener((view,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom)->{if(conversationList==list&&!restoringConversation&&oldRight>oldLeft&&oldBottom>oldTop&&(right-left!=oldRight-oldLeft||bottom-top!=oldBottom-oldTop)){int[] saved=conversationScroll.get(displayedConversation);restoreConversation(list,saved,saved==null||saved[2]==1);}});
+                list.setOnTouchListener((view,event)->{if(conversationList==list&&event.getActionMasked()==android.view.MotionEvent.ACTION_DOWN){conversationScrollRevision++;restoringConversation=false;conversationWidth=list.getWidth();conversationHeight=list.getHeight();rememberScroll();}return false;});
+                list.setOnScrollListener(new AbsListView.OnScrollListener(){public void onScrollStateChanged(AbsListView view,int scrollState){if(conversationList!=list)return;if(scrollState==SCROLL_STATE_TOUCH_SCROLL){conversationScrollRevision++;restoringConversation=false;}rememberScroll();updateLatestReply();}public void onScroll(AbsListView view,int first,int visible,int total){if(conversationList==list&&!restoringConversation){rememberScroll();updateLatestReply();}}});
+                int[] prior=conversationScroll.get(displayedConversation);restoreConversation(list,prior,prior==null||prior[2]==1||(entries.length()>prior[3]&&entries.optJSONObject(entries.length()-1).optString("role").equals("user")));}
         }else if(page.equals("history")){
             ScrollView scroll=new ScrollView(this);LinearLayout rows=column();rows.setPadding(dp(6),dp(6),dp(6),dp(6));JSONArray entries=ui.optJSONArray("rows");
             if(entries!=null)for(int i=0;i<entries.length();i++){
