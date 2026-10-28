@@ -97,3 +97,15 @@ The harness accepts reviewed tool proposals as bare JSON. A model response begin
 Investigation is part of ordinary and recursive tasks. The local Rust `inspect` operation reads the selected workspace file and reports observed bytes, document structure and supported format fields. File sampling and each analyzer state their coverage; a sampled prefix is not treated as the whole file. `compare` reads two selected workspace files and reports positional byte differences; matching incomplete prefixes do not establish full-file equality. Neither operation launches Node, REA, desktop analyzers or an external analysis server.
 
 The model can propose these internal operations as part of an ordinary question; the existing operation review and agent tool choices remain. Results return through the originating task/model route, so approved observations may be sent to that configured model provider. Additional investigation guidance preferences do not switch off the underlying native process. An optional configured remote MCP connection remains separate from local analysis. Full universal investigation and rendered webpage capture are still implementation work.
+
+## Page redirects and model-container observations
+
+The current development reader follows a website's normal HTTP GET redirects through at most five hops. Each destination receives a fresh credential-free request. The final URL identifies the returned page; loops, malformed destinations, HTTPS downgrades and incomplete responses fail only the current read. Cancellation and changes to the originating connection invalidate pending replies. Each hop uses the existing 120-second transport deadline. This does not add JavaScript or browser interaction.
+
+Local inspection recognizes GGUF and selected safetensors files, reads bounded headers/tensor descriptors, and reports declared architecture, shapes and supported byte ranges. It does not load a model or run inference. Unknown tensor encodings and incomplete metadata remain explicit observations. Results follow the existing originating model/recursive task route; file content is not automatically inspected or sent merely because it exists.
+
+## DEX declarations and direct search
+
+Selected DEX inspection reads bounded identifier tables, class/member declarations and supported code envelopes without loading or executing the file. Reports distinguish references from defined members and identify skipped payloads and prefix coverage. This is not APK extraction, instruction decompilation or runtime observation. It uses the same selected-file inspection and ordinary/recursive evidence paths.
+
+Workspace → Search the web exposes the harness search directly. After review, results are displayed locally without an LLM continuation. If a model connection exists, this explicit workflow still does not send the results to it. Normal model-requested searches continue through their original model route.

@@ -33,3 +33,11 @@ Original Rust code owns the search plan, request construction, bounded result pa
 Current implementation checks and the delivered APK identity are recorded in the release notes and private project checkpoint. Controlled host checks and live service probes are distinct from installed Android validation.
 
 References: [anonymous API](https://developer.mwmbl.org/), [service terms](https://developer.mwmbl.org/terms/), [result license](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+
+## Reading result pages
+
+A selected page can redirect to its canonical address. The current reader follows ordinary 301, 302, 303, 307 and 308 GET redirects through at most five hops and records the final page URL. It resolves relative locations, detects loops and sends fresh requests without carrying model or custom-search credentials. The existing per-request 120-second deadline applies to each hop. Cancellation and the originating conversation/model identity continue across the chain. This is page retrieval, not JavaScript execution or browser interaction.
+
+## Search without a model
+
+Open Workspace → Search the web, enter a focused query and choose Review search. The normal approval shows the query and source plan. Approved results appear locally in the output view without starting a model request, whether or not an LLM connection exists. Existing search-source configuration, review, cancellation and finite alternatives apply. This direct user action does not require an agent or its model-tool permission. The separate Workspace Search action still searches local files.
