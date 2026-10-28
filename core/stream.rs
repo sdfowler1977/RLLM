@@ -295,8 +295,17 @@ impl Transfer {
         if let Ok(error) = record.get("error") {return Err(format!("Server error: {}",error.string()));}
         for choice in record.get("choices")?.array()? {
             if choice.get("index")? != &Num("0".into()) {continue;}
-            if self.finish_reason.is_some() {return Err("Choice data followed its completion".into());}
             let delta = choice.get("delta")?;
+            if let Some(completed)=&self.finish_reason {
+                // Some compatible servers include an empty choice alongside
+                // final usage, or repeat the same terminal marker. These carry
+                // no new choice data. Never discard new text/structured fields,
+                // change the completion reason, or extend past [DONE].
+                let empty=matches!(delta,Obj(fields) if fields.iter().all(|(key,value)| value==&Null || (key=="content" && value==&Str(String::new()))));
+                if !empty{return Err("Choice data followed its completion".into());}
+                if let Ok(reason)=choice.get("finish_reason") {if reason!=&Null && reason.text()?!=completed{return Err("Choice completion reason changed after completion".into());}}
+                continue;
+            }
             if let Ok(content) = delta.get("content") {if content != &Null {self.append(content.text()?)?;}}
             if let Ok(reason) = choice.get("finish_reason") {if reason != &Null {self.finish_reason=Some(reason.text()?.to_string());}}
         }
@@ -759,7 +768,7 @@ pub fn operation(v: &Json) -> Result<Json> {
                 let cleanup=transfer.control.as_ref().and_then(|context|{super::mcp_lifecycle::plan(context,transfer.lifecycle_session().ok()?,false).ok()}).unwrap_or(Arr(vec![]));
                 return Ok(obj(vec![("delta",s("")),("complete",Bool(false)),("error",s(&error)),("cleanup",cleanup),("observation",transfer.server_observation())]));
             }
-            if transfer.messages||transfer.content {return Ok(obj(vec![("delta",s(&transfer.text[previous..])),("complete",Bool(false)),("error",s(&error))]));}
+            if transfer.chat||transfer.messages||transfer.content {return Ok(obj(vec![("delta",s(&transfer.text[previous..])),("complete",Bool(false)),("error",s(&error))]));}
             return Err(error);
         }
         let controls=std::mem::take(&mut transfer.controls);
@@ -789,6 +798,31 @@ mod checks {
     }
     #[test] fn sse_fragmentation_bom_line_endings_multiline_and_usage(){
         for chunked in [false,true] {let bytes=wire(&event_body(),chunked);for size in 1..=bytes.len(){let mut t=chat_transfer();for part in bytes.chunks(size){t.feed(part).unwrap();}assert_eq!(t.text,"café 中文");let body=t.finish().unwrap();assert_eq!(response(&obj(vec![("protocol",s("chat")),("body",s(&body))])).unwrap(),s("café 中文"));assert_eq!(parse(&body).unwrap().get("usage").unwrap().get("completion_tokens"),Ok(&Num("4".into())));}}
+    }
+    #[test] fn sse_empty_terminal_trailers_preserve_text_and_usage(){
+        for delta in ["{}",r#"{"content":null}"#,r#"{"content":""}"#] {
+            for reason in ["null",r#""stop""#] {
+                let trailer=format!("data: {{\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":{reason}}}],\"usage\":{{\"completion_tokens\":9}}}}\n\n");
+                let body=event_body().replace("data: [DONE]",&(trailer+"data: [DONE]"));
+                for chunked in [false,true] {let bytes=wire(&body,chunked);for size in [1,2,7,31,bytes.len()] {
+                    let mut t=chat_transfer();for part in bytes.chunks(size){t.feed(part).unwrap();}
+                    assert_eq!(t.text,"café 中文");let output=parse(&t.finish().unwrap()).unwrap();
+                    assert_eq!(output.get("usage").unwrap().get("completion_tokens"),Ok(&Num("9".into())));
+                }}
+            }
+        }
+    }
+    #[test] fn sse_terminal_trailers_cannot_change_choice_data(){
+        for choice in [r#"{"index":0,"delta":{"content":"new"}}"#,r#"{"index":0,"delta":{"role":"assistant"}}"#,r#"{"index":0,"delta":{"tool_calls":[]}}"#,r#"{"index":0,"delta":{"reasoning_content":"new"}}"#,r#"{"index":0,"delta":null}"#,r#"{"index":0,"delta":{},"finish_reason":"length"}"#] {
+            let trailer=format!("data: {{\"choices\":[{choice}]}}\n\n");
+            let body=event_body().replace("data: [DONE]",&(trailer+"data: [DONE]"));
+            let mut t=chat_transfer();assert!(t.feed(&wire(&body,false)).is_err());assert_eq!(t.text,"café 中文");
+        }
+        // Repeated ordinary pre-completion content is actual model output, not
+        // a trailer: never deduplicate it by textual similarity.
+        let body=event_body().replace("data: [DONE]", "data: [DONE]");
+        let content="data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"café 中文\"},\"finish_reason\":null}]}\n\n";
+        let mut t=chat_transfer();t.feed(&wire(&(content.to_string()+&body),false)).unwrap();assert_eq!(t.text,"café 中文café 中文");
     }
     #[test] fn sse_completion_requires_terminated_done_and_complete_choice(){
         for body in [event_body().replace("data: [DONE]\n\n",""),event_body().trim_end().to_string(),"data: [DONE]\n\n".into()] {let mut t=chat_transfer();let result=t.feed(&wire(&body,false));assert!(result.is_err()||t.finish().is_err());}

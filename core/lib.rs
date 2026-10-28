@@ -6,6 +6,7 @@ mod execution;
 mod gateway;
 mod network;
 mod provider;
+mod hosted_search;
 mod attachments;
 mod generation;
 mod resources;
@@ -357,6 +358,7 @@ fn request(v: &Json) -> Result<Json> {
     };
     let mut body = body_result?;
     provider::apply_attachments(&mut body, source, protocol)?;
+    hosted_search::wire(&mut body, source, protocol)?;
     let options = v.get("generation").unwrap_or(&Null);
     generation::apply(&mut body, options, protocol, source)?;
     Ok(body)

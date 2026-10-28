@@ -1,8 +1,8 @@
 //! Non-executing feedback for model responses that violate the proposal envelope.
 use super::*;
 
-pub(super) const FEEDBACK: &str = "Tool-shaped JSON was found inside text and was not registered as a proposal. Nothing in that text was executed. If you intended a tool request, return the entire response as one bare JSON object with tool and args, without commentary or fences. Otherwise answer in ordinary text and put illustrative JSON in a fenced or quoted example. A valid proposal still requires user approval. Do not claim a tool ran without an actual tool result.";
-const NOTICE: &str = "Tool-shaped JSON inside text was not registered as a proposal. Tap this message for the raw response. Conversation actions → Request format correction sends one explicit correction request; no tool runs without approval.";
+pub(super) const FEEDBACK: &str = "Tool-shaped JSON was found inside text and was not registered as a proposal. No local proposal was executed. If you intended a tool request, return the entire response as one bare JSON object with tool and args, without commentary or fences. Otherwise answer in ordinary text and put illustrative JSON in a fenced or quoted example. A valid proposal still requires user approval. Do not claim a tool ran without an actual tool result.";
+const NOTICE: &str = "Tool-shaped JSON inside text was not registered as a proposal. Tap this message for the raw response. Conversation actions → Request format correction sends one explicit correction request; a corrected local tool proposal still requires approval.";
 
 fn envelope(value: &Json) -> bool {
     matches!(value,Obj(o) if o.len()==2 && matches!(o.get("tool"),Some(Str(name)) if harness::known_tool(name)) && matches!(o.get("args"),Some(Obj(_))))
@@ -51,7 +51,7 @@ pub(super) fn embedded(reply:&str)->bool {
 }
 
 pub(super) fn display(message:&Json)->String {
-    if boolean(message,"embedded_tool_json") {"Tool-shaped JSON inside text was not registered as a proposal. Nothing in this reply was executed. Tap this message to inspect the raw response. Any corrected proposal still requires approval.".into()}else{"The model returned unsupported tool-call markup. This markup does not execute a tool. Tap this message to inspect the raw response. Use Conversation actions → Regenerate reply in new branch to retry.".into()}
+    if boolean(message,"embedded_tool_json") {"Tool-shaped JSON inside text was not registered as a proposal. No local proposal was executed. Tap this message to inspect the raw response. Any corrected proposal still requires approval.".into()}else{"The model returned unsupported tool-call markup. This markup does not execute a tool. Tap this message to inspect the raw response. Use Conversation actions → Regenerate reply in new branch to retry.".into()}
 }
 pub(super) fn request_context(st:&mut Json,profile:&Json,agent:&Json){
     put(st,"format_request_profile",profile.clone());put(st,"format_request_agent",agent.clone());
@@ -75,7 +75,7 @@ pub(super) fn record(st:&mut Json,reply:&str,inputs:&Json)->Result<()> {
     }
     if !captured || super::super::mcp_schema::state_bytes(&next)>6*1024*1024-8192 {
         put(st,"stream_text",Null);harness::finish_attempt(st,inputs,"error");clear(st);put(st,"busy",Bool(false));
-        put(st,"notice",s("Tool-shaped JSON inside text was not registered as a proposal. History capacity prevented capturing the raw reply or offering correction; existing messages and task are retained. Nothing in the reply executed."));put(st,"notice_error",Bool(true));return Ok(());
+        put(st,"notice",s("Tool-shaped JSON inside text was not registered as a proposal. History capacity prevented capturing the raw reply or offering correction; existing messages and task are retained. No local proposal was executed."));put(st,"notice_error",Bool(true));return Ok(());
     }
     *st=next;
     let context_available=get(st,"format_request_profile")!=&Null&&get(st,"format_request_agent")!=&Null;
@@ -83,7 +83,7 @@ pub(super) fn record(st:&mut Json,reply:&str,inputs:&Json)->Result<()> {
     put(st,"format_pending",p);put(st,"format_retry_request",Bool(false));put(st,"busy",Bool(false));
     if super::super::mcp_schema::state_bytes(st)>6*1024*1024-8192 {put(st,"format_pending",Null);}
     let unavailable=!retried&&get(st,"format_pending")==&Null;
-    put(st,"notice",s(if unavailable{"Tool-shaped JSON inside text was not registered as a proposal. The raw reply is retained, but the original correction context is unavailable within saved-state limits. Nothing in the reply executed."}else if retried{"The correction still contained tool-shaped JSON in text. No proposal was registered and nothing executed. The one correction attempt is exhausted; raw replies are retained."}else{NOTICE}));
+    put(st,"notice",s(if unavailable{"Tool-shaped JSON inside text was not registered as a proposal. The raw reply is retained, but the original correction context is unavailable within saved-state limits. No local proposal was executed."}else if retried{"The correction still contained tool-shaped JSON in text. No proposal was registered and no local proposal was executed. The one correction attempt is exhausted; raw replies are retained."}else{NOTICE}));
     put(st,"notice_error",Bool(true));Ok(())
 }
 pub(super) fn correction(st:&mut Json)->Result<Json>{

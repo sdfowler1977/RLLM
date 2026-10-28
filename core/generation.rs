@@ -29,7 +29,7 @@ pub fn validate(p:&Json,protocol:&str)->Result<()> {
  Ok(())
 }
 fn set(p:&mut Json,k:&str,v:Json){if let Obj(fields)=p{fields.insert(k.into(),v);}}
-pub fn content_bytes(messages:&[Json])->Result<usize>{let images=attachments::encoded_bytes(messages)?;messages.iter().try_fold(images,|n,m|n.checked_add(field(m,"content")?.len()).ok_or_else(||"Context size overflow".into()))}
+pub fn content_bytes(messages:&[Json])->Result<usize>{let images=attachments::encoded_bytes(messages)?;messages.iter().try_fold(images,|n,m|n.checked_add(hosted_search::content_bytes(m)?).ok_or_else(||"Context size overflow".into()))}
 pub fn apply(body:&mut Json,p:&Json,protocol:&str,messages:&[Json])->Result<()> {
  validate(p,protocol)?;
  let bytes=content_bytes(messages)?;

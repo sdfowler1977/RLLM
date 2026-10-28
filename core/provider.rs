@@ -72,7 +72,7 @@ pub fn normalized(p: &Json) -> Result<Json> {
         fields.insert("model".into(), s(model));
         fields.insert("name".into(),s(text(p,"name").trim()));
     }
-    authorization(&out)?;
+    hosted_search::validate(&out)?;authorization(&out)?;
     application::generation::validate(&out)?;
     Ok(out)
 }
