@@ -17,7 +17,7 @@ pub(super) fn rows(st:&Json)->Vec<Json> {
         let draft=compact(&text(&c,"draft"),120);
         let active=id==text(st,"active");let live_draft=if active{compact(&text(st,"draft"),120)}else{draft};
         let preview=if !live_draft.is_empty(){format!("Draft: {live_draft}")}else{
-            messages.iter().rev().find_map(|m|{let content=compact(&text(m,"content"),120);if content.is_empty(){None}else{Some(content)}}).unwrap_or_else(||"No messages yet".into())
+            messages.iter().rev().find_map(|m|{let raw=text(m,"content");let shown=if text(m,"role")=="assistant"{assistant_display(&raw,false)}else{raw};let content=compact(&shown,120);if content.is_empty(){None}else{Some(content)}}).unwrap_or_else(||"No messages yet".into())
         };
         let count=messages.len();let detail=format!("{}{} {}",if active{"Current · "}else{""},count,if count==1{"message"}else{"messages"});
         let mut row=button(&format!("{title} · {detail}"),&format!("history:{id}"));

@@ -1,6 +1,7 @@
 use super::*;
 #[path="harness.rs"] mod harness;
 #[path="tool_format.rs"] mod tool_format;
+#[path="reasoning_text.rs"] mod reasoning_text;
 #[path="app_observation.rs"] mod app_observation;
 #[path="interaction.rs"] mod interaction;
 #[path="history_view.rs"] mod history_view;
@@ -263,6 +264,13 @@ fn append(st: &mut Json, role: &str, content: &str) -> Result<()> {
     replace_chat(st, c);
     Ok(())
 }
+// Presentation only: raw history and proposal/harness inputs stay unchanged.
+fn assistant_display(raw:&str,streaming:bool)->String {
+    let projection=reasoning_text::project(raw,streaming);
+    if (projection.hidden||projection.pending)&&projection.text.trim().is_empty(){
+        if streaming{"Thinking…".into()}else{"No final answer returned".into()}
+    }else{projection.text.to_string()}
+}
 fn field_ui(key: &str, label: &str, value: &str, kind: &str) -> Json {
     obj(vec![
         ("key", s(key)),
@@ -448,7 +456,7 @@ fn ui(st: &Json) -> Json {
                 number(get(st, "policy"), "workers")
             )),
         ),
-        ("messages", {let mut messages=array(&current,"messages");let partial=text(st,"stream_text");if !partial.is_empty(){messages.push(obj(vec![("role",s("assistant")),("content",s(&partial)),("model",s(&text(st,"request_model"))),("streaming",Bool(true))]));}for message in &mut messages {if get(message,"attachments")!=&Null{let metadata=array(message,"attachments").iter().filter_map(|value|crate::attachments::metadata(value).ok()).collect();put(message,"attachments",Arr(metadata));}let model=text(message,"model");let speaker=if boolean(message,"harness_outcome"){"RLLM · Tool status".to_string()}else if text(message,"role")=="user" {"You".to_string()}else{format!("{}{}",if model.is_empty(){"Assistant"}else{&model},if boolean(message,"interrupted"){" · Interrupted"}else if boolean(message,"streaming"){" · Responding"}else{""})};put(message,"speaker",s(&speaker));if text(message,"role")=="assistant" && (boolean(message,"tool_format_error")||unsupported_tool_markup(&text(message,"content"))){put(message,"content",s(&tool_format::display(message)));}}Arr(messages)}),
+        ("messages", {let mut messages=array(&current,"messages");let partial=text(st,"stream_text");if !partial.is_empty(){messages.push(obj(vec![("role",s("assistant")),("content",s(&partial)),("model",s(&text(st,"request_model"))),("streaming",Bool(true))]));}for message in &mut messages {if get(message,"attachments")!=&Null{let metadata=array(message,"attachments").iter().filter_map(|value|crate::attachments::metadata(value).ok()).collect();put(message,"attachments",Arr(metadata));}let model=text(message,"model");let speaker=if boolean(message,"harness_outcome"){"RLLM · Tool status".to_string()}else if text(message,"role")=="user" {"You".to_string()}else{format!("{}{}",if model.is_empty(){"Assistant"}else{&model},if boolean(message,"interrupted"){" · Interrupted"}else if boolean(message,"streaming"){" · Responding"}else{""})};put(message,"speaker",s(&speaker));if text(message,"role")=="assistant" {if boolean(message,"tool_format_error")||unsupported_tool_markup(&text(message,"content")){put(message,"content",s(&tool_format::display(message)));}else{let content=assistant_display(&text(message,"content"),boolean(message,"streaming"));put(message,"content",s(&content));}}}Arr(messages)}),
         ("telemetry", get(st, "telemetry").clone()),
         ("local_rate",throughput::ui(st)),
         ("palette", interaction::palette(st)),
