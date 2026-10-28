@@ -19,6 +19,7 @@ impl Observation {
   let mut result=self.summary();let mut shown=0;
   if self.incomplete{return result;}
   for (id,node) in doc.nodes.iter().enumerate(){if let html::Kind::Element{name,..}=&node.kind{if shown==32{result.push_str("\nFurther node styles omitted from this observation.");break;}let s=&self.styles[id];result.push_str(&format!("\nNode {id} <{name}> source {}..{}: display {:?}; width {:?}, height {:?} CSS px; margin {:?}; padding {:?}; font-size {}, line-height {} CSS px{}; color {:?}; background {:?}",node.span.start,node.span.end,s.display,s.width,s.height,s.margin,s.padding,s.font_size,s.line_height,if s.normal_line_height{" (normal approximated at 1.2em)"}else{""},s.color,s.background));shown+=1;}}
+  for issue in &self.issues{result.push_str("\n");result.push_str(issue);}
   result
  }
 }
@@ -58,6 +59,22 @@ fn set(s:&mut Style,i:usize,v:Value){match(i,v){(0,Value::Display(v))=>s.display
 fn declarations(map:&mut BTreeMap<usize,(Rank,Value)>,decls:&[ast::Declaration],base:Rank,order:&mut usize,unsupported:&mut usize){for d in decls{*order+=1;let rank=Rank{important:d.important,order:*order,..base};if let Some(items)=values(d){for(i,v)in items{if map.get(&i).map(|(r,_)|rank>=*r).unwrap_or(true){map.insert(i,(rank,v));}}}else{*unsupported+=1;}}}
 /// Inline styles and each embedded style element are parsed independently.
 /// Incomplete input produces observations but no provisional author declarations.
+// Local capture and cascade agree on the explicitly supported unconditional
+// stylesheet attributes. Conditional media evaluation remains unsupported.
+pub(super) fn stylesheet_attribute_issue(attributes:&[html::Attribute])->Option<&'static str> {
+ for a in attributes {let v=a.value.as_deref().unwrap_or("");let issue=match a.name.as_str() {
+  "media"=>{let v=v.trim_matches(|c|matches!(c,' '| '\t'|'\r'|'\n'|'\x0c'));(!v.is_empty()&&!v.eq_ignore_ascii_case("all")).then_some("conditional stylesheet media is not implemented")},
+  "type"=>(!v.is_empty()&&!v.eq_ignore_ascii_case("text/css")).then_some("stylesheet type is not supported"),
+  "title"=>(!v.is_empty()).then_some("named stylesheet set selection is not implemented"),
+  "charset"=>{let v=v.trim_matches(|c|matches!(c,' '| '\t'|'\r'|'\n'|'\x0c'));(!v.is_empty()&&!v.eq_ignore_ascii_case("utf-8")).then_some("stylesheet charset hint is not supported; only UTF-8 bytes are decoded")},
+  "disabled"=>Some("disabled stylesheet is not selected"),
+  _=>None,
+ };if issue.is_some(){return issue;}}
+ None
+}
+pub(super) fn stylesheet_attributes_supported(attributes:&[html::Attribute])->bool {
+ stylesheet_attribute_issue(attributes).is_none()
+}
 pub(super) fn compute(doc:&html::Document)->Observation{compute_with_stylesheets(doc,&BTreeMap::new())}
 /// Caller-supplied complete stylesheet bytes are bound to exact link nodes.
 /// Node traversal preserves document order independent of load completion order.
@@ -66,7 +83,7 @@ pub(super) fn compute_with_stylesheets(doc:&html::Document,external:&BTreeMap<us
  let mut rules=Vec::new();let mut stylesheet_bytes=0usize;
  for (node_id,node) in doc.nodes.iter().enumerate() {if let html::Kind::Element{name,attributes,..}=&node.kind {
  if name!="style"&&name!="link"{continue;}
- if attributes.iter().any(|a|a.name=="media"&&a.value.as_deref().unwrap_or("").trim()!=""||a.name=="type"&&!a.value.as_deref().unwrap_or("").eq_ignore_ascii_case("text/css")||a.name=="disabled"){out.unsupported+=1;continue;}
+ if let Some(issue)=stylesheet_attribute_issue(attributes){out.unsupported+=1;if out.issues.len()<32{out.issues.push(format!("Node {node_id}: {issue}"));}continue;}
  let mut source=String::new();
  if name=="link"{
   let rel=attributes.iter().find(|a|a.name=="rel").and_then(|a|a.value.as_deref()).unwrap_or("");

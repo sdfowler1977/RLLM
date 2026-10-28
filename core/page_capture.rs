@@ -16,7 +16,9 @@ pub(super) fn render_with_loader(html:&[u8],font:&[u8],width:u32,height:u32,mut 
  for (id,node) in document.nodes.iter().enumerate(){if let html_document::Kind::Element{name,attributes,..}=&node.kind{if name!="link"{continue;}
   let attr=|key:&str|attributes.iter().find(|a|a.name==key).and_then(|a|a.value.as_deref());let rel=attr("rel").unwrap_or("");
   if !rel.split_ascii_whitespace().any(|v|v.eq_ignore_ascii_case("stylesheet")){continue;}
-  if has_base||attributes.iter().any(|a|a.name=="disabled")||rel.split_ascii_whitespace().any(|v|v.eq_ignore_ascii_case("alternate"))||attr("media").map(|v|!v.trim().is_empty()).unwrap_or(false)||attr("type").map(|v|!v.eq_ignore_ascii_case("text/css")).unwrap_or(false){resource_notes.push(format!("Node {id} stylesheet not loaded: base URL, disabled, alternate, media or type selection unsupported"));continue;}
+  if has_base{resource_notes.push(format!("Node {id} stylesheet not loaded: base URL selection is not implemented for local capture"));continue;}
+  if let Some(issue)=css_cascade::stylesheet_attribute_issue(attributes){resource_notes.push(format!("Node {id} stylesheet not loaded: {issue}"));continue;}
+  if rel.split_ascii_whitespace().any(|v|v.eq_ignore_ascii_case("alternate")){resource_notes.push(format!("Node {id} stylesheet not loaded: alternate stylesheet is not selected"));continue;}
   sheet_count+=1;if sheet_count>32{return Err("Capture stylesheet count exceeds 32".into());}if cancelled(){return Err("Capture cancelled while loading stylesheets".into());}
   let Some(target)=attr("href") else{resource_notes.push(format!("Node {id} stylesheet has no href"));continue;};
   let remaining=262144usize.saturating_sub(css_bytes);if remaining==0{return Err("Capture external stylesheet input exceeds 256 KiB".into());}
@@ -56,6 +58,7 @@ pub(super) fn render_with_loader(html:&[u8],font:&[u8],width:u32,height:u32,mut 
  let png=surface.png()?;
  let mut summary=format!("Native Rust static capture: {width}x{height} RGBA PNG, {} bytes; {glyphs} glyphs painted with selected TrueType hmtx metrics and unhinted quadratic outlines. Font: {} bytes, {} glyphs, {} units/em. Fixed viewport clips overflow. {}\n{}\nSelected font only; no shaping, kerning, bidi, fallback, font hinting, remote resource fetch, JavaScript or interactive browser session. Unsupported CSS/layout remains visible below; this is not a full-browser fidelity claim.",png.len(),font.len(),face.num_glyphs,face.units_per_em,styles.summary(),layout.summary());
  summary.push_str(&format!("\n{} relative stylesheets loaded ({} bytes); {} PNG images painted. Unsupported conditional or alternate stylesheets are not applied.",sheets.len(),css_bytes,images.len()));
+ for issue in &styles.issues{summary.push_str("\n");summary.push_str(issue);}
  for note in resource_notes.iter().take(128){summary.push_str("\n");summary.push_str(note);}
  for i in layout.issues.iter().take(24){summary.push_str(&format!("\nNode {}: {}",i.node,i.code));}
  Ok(Capture{png,summary})
