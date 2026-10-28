@@ -28,7 +28,7 @@ Connection advice is shown for failures before sending or receiving data. Once a
 
 ## Web search without an API key
 
-Web access → leave **Custom search URL** blank to use DuckDuckGo HTML through the native Rust HTTP path. No search key or secondary model is needed. Normal questions and recursive tasks use the same path. Optional custom services still accept a URL containing `{query}` and separate credentials; those credentials never go to built-in search or ordinary page reads. A returned verification page is a failed retrieval, not search evidence.
+Web search is performed by the harness for any supported local or remote model. In Web access, leave **Custom search URL** blank for the built-in Mwmbl anonymous API and DuckDuckGo fallback. No search key, secondary model or external computer is needed. Normal questions and recursive tasks share the same result path. Optional custom services keep their exact `{query}` URL and separate credentials, with no automatic switch to another destination. See [Harness web search](WEB-SEARCH.md) for result handling, focused queries and source limits.
 
 ## MiniMax provider-hosted search
 
