@@ -8,7 +8,7 @@ See [Access and data controls](ACCESS-AND-DATA.md) for broad shared-storage, sel
 
 ## 1. Install Android
 
-Download [RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793154100/RLLM-Lab.apk) from the GitHub pre-release. Open the APK on a compatible Android 8.0+ ARM64 or x86-64 device and follow Android's installation prompts. If Android asks, allow installation for the browser or file manager you used; this is not permission for RLLM to install other apps.
+Download [RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793157000/RLLM-Lab.apk) from the GitHub pre-release. Open the APK on a compatible Android 8.0+ ARM64 or x86-64 device and follow Android's installation prompts. If Android asks, allow installation for the browser or file manager you used; this is not permission for RLLM to install other apps.
 
 For an existing **RLLM Lab** installation, install the newer APK over it. Do not uninstall or clear storage to resolve an update error: that can remove local history. A signature mismatch means the APK was signed by a different key. Keep the original installation and check the artifact first. The publisher's Lab package is `com.local.client.lab`.
 
