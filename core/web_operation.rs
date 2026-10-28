@@ -12,20 +12,21 @@ fn identity(st:&Json)->Json{
 }
 pub(super) fn context(st:&Json,p:&Json)->Json{
  let agent=if get(st,"task_run")==&Null{harness::active_agent(st)}else{get(get(st,"task_run"),"agent").clone()};
- obj(vec![("tool",s(&text(p,"tool"))),("chat",s(&text(st,"active"))),("agent",s(&clean(&text(&agent,"name"),128))),("identity",identity(st))])
+ let mut context=obj(vec![("tool",s(&text(p,"tool"))),("chat",s(&text(st,"active"))),("agent",s(&clean(&text(&agent,"name"),128))),("identity",identity(st))]);if text(p,"tool")=="web_search"{put(&mut context,"search_owner_binding",search::binding(st));}context
 }
 pub(super) fn own(st:&Json,p:&mut Json){let owner=context(st,p);put(p,"web_owner",owner);}
 pub(super) fn owner(st:&Json,p:&Json)->Json{if get(p,"web_owner")!=&Null{get(p,"web_owner").clone()}else{context(st,p)}}
-pub(super) fn approval(st:&Json,p:&Json)->Result<()>{let owner=owner(st,p);if text(&owner,"chat")!=text(st,"active"){return Err("The web proposal belongs to another conversation; request it again in the intended conversation".into());}if get(&owner,"identity")==&Null||get(&owner,"identity")!=&identity(st){return Err("The proposing agent changed; request a new web proposal before approving".into());}Ok(())}
+pub(super) fn approval(st:&Json,p:&Json)->Result<()>{let owner=owner(st,p);if text(p,"tool")=="web_search"&&get(&owner,"search_owner_binding")!=&search::binding(st){return Err("The search connection or settings changed since the proposal; request a new proposal before approving".into());}if text(&owner,"chat")!=text(st,"active"){return Err("The web proposal belongs to another conversation; request it again in the intended conversation".into());}if get(&owner,"identity")==&Null||get(&owner,"identity")!=&identity(st){return Err("The proposing agent changed; request a new web proposal before approving".into());}Ok(())}
 pub(super) fn bind(st:&mut Json,e:&mut Json,p:&Json)->Result<()>{
  let n=SERIAL.try_update(Ordering::SeqCst,Ordering::SeqCst,|n|n.checked_add(1)).map_err(|_|"Web request ticket space exhausted")?;
  let ticket=format!("web-{n}");let mut expected=owner(st,p);put(&mut expected,"ticket",s(&ticket));
+ if get(e,"search_chain")!=&Null{put(&mut expected,"search_chain",get(e,"search_chain").clone());if let Obj(fields)=e{fields.remove("search_chain");}}
  let mut next=st.clone();put(&mut next,"web_expected",expected);
  if super::super::mcp_schema::state_bytes(&next)>6*1024*1024-8192{return Err("History has insufficient room for this web operation; existing data retained".into());}
  put(e,"web_ticket",s(&ticket));*st=next;Ok(())
 }
 pub(super) fn expected(st:&Json,i:&Json)->bool{
- let e=get(st,"web_expected");boolean(st,"busy")&&!text(e,"ticket").is_empty()&&text(e,"ticket")==text(i,"web_ticket")&&text(e,"chat")==text(st,"active")&&get(e,"identity")!=&Null&&get(e,"identity")==&identity(st)
+ let e=get(st,"web_expected");boolean(st,"busy")&&!text(e,"ticket").is_empty()&&text(e,"ticket")==text(i,"web_ticket")&&text(e,"chat")==text(st,"active")&&get(e,"identity")!=&Null&&get(e,"identity")==&identity(st)&&(text(e,"tool")!="web_search"||get(e,"search_owner_binding")==&search::binding(st))&&(get(e,"search_chain")==&Null||get(get(e,"search_chain"),"binding")==&search::binding(st))
 }
 /// Never overwrites existing messages to make room for a diagnostic.
 pub(super) fn record(st:&mut Json,context:&Json,status:&str,reason:&str)->bool{
@@ -43,4 +44,20 @@ pub(super) fn notice_fit(st:&mut Json){
  let marker=if room>=3{"…"}else{""};let mut used=0;let mut out=String::new();
  for c in value.chars(){let bytes=cost(c);if bytes>room.saturating_sub(marker.len()).saturating_sub(used){break;}out.push(c);used+=bytes;}
  out.push_str(marker);put(st,"notice",s(&out));
+}
+
+/// Advance only a captured built-in search. No same source retry, no web_read
+/// replay, no custom credential propagation, and no extra operation step.
+pub(super) fn alternative(st:&mut Json,context:&Json,reason:&str)->Result<Option<Json>>{
+ let chain=get(context,"search_chain");if chain==&Null{return Ok(None);}
+ if get(chain,"binding")!=&search::binding(st)||get(context,"identity")!=&identity(st){return Err("Search owner or configuration changed; no alternative was contacted".into());}
+ let next=match search::advance(chain,reason){Ok(next)=>next,Err(_)=>{
+  let empty=text(chain,"valid_empty");if !empty.is_empty(){let output=format!("{empty}\nRemaining attempt observations:\n{}\nFinal source outcome: {}",search::trail(chain),diagnostic(reason));let mut candidate=st.clone();put(&mut candidate,"active_tool",Null);put(&mut candidate,"busy",Bool(false));let effect=completed_search(&mut candidate,context,&output)?;let bytes=super::super::mcp_schema::state_bytes(&candidate);let policy=super::super::resources::policy(get(&candidate,"device"),get(&candidate,"resources"),bytes);if bytes>6*1024*1024-8192||(text(&effect,"kind")=="network"&&number(&policy,"response_bytes")<65536){return Err("Current history or memory budget cannot return the zero-result observation; existing conversation retained".into());}*st=candidate;return Ok(Some(effect));}
+  return Err(format!("All approved search sources were exhausted. {}\nFinal source: {}",search::trail(chain),diagnostic(reason)))} };
+ let mut candidate=st.clone();let mut effect=search::effect(&next)?;put(&mut effect,"search_chain",next);
+ let proposal=obj(vec![("tool",s("web_search")),("web_owner",context.clone())]);bind(&mut candidate,&mut effect,&proposal)?;
+ put(&mut candidate,"web_source",s(&text(&effect,"host")));put(&mut candidate,"active_tool",s("web_search"));put(&mut candidate,"busy",Bool(true));
+ let bytes=super::super::mcp_schema::state_bytes(&candidate);let policy=super::super::resources::policy(get(&candidate,"device"),get(&candidate,"resources"),bytes);
+ if bytes>6*1024*1024-8192||number(&policy,"response_bytes")<65536{return Err("Current memory budget cannot admit another search source; existing conversation retained".into());}
+ put(&mut candidate,"notice",s("The first search source was unavailable or unusable; contacting the approved independent alternative."));*st=candidate;Ok(Some(effect))
 }

@@ -60,17 +60,19 @@ pub(super) fn validate_remote(v:&Json)->Result<bool>{
 }
 /// Ordinary non-JavaScript search. Custom services remain optional; no model
 /// credential or dormant custom-search credential is sent to this default.
-pub(super) const DEFAULT_SEARCH_URL:&str="https://html.duckduckgo.com/html/?q={query}";
+pub(super) const DEFAULT_SEARCH_URL:&str="https://api.mwmbl.org/api/v2/search/?q={query}";
 pub(super) fn search_template(st:&Json)->String{let configured=text(get(st,"web"),"search_url");if configured.trim().is_empty(){DEFAULT_SEARCH_URL.into()}else{configured.trim().into()}}
 pub(super) fn web_effect(st:&mut Json,pending:&Json)->Result<Json>{
     validate_remote(pending)?;
+    if text(pending,"tool")=="web_search"&&search::known(st){let mut chain=search::begin(st,pending);let effect=match search::effect(&chain){Ok(e)=>e,Err(reason)=>{chain=search::advance(&chain,&reason)?;search::effect(&chain)?}};let mut effect=effect;put(st,"web_source",s(&text(&effect,"host")));put(&mut effect,"search_chain",chain);return Ok(effect);}
     let args=get(pending,"args");let mut headers=vec![("Accept","text/html, application/json, text/plain".into())];
-    let url=if text(pending,"tool")=="web_search"{let web=get(st,"web");let template=search_template(st);let custom=!text(web,"search_url").trim().is_empty()&&template!=DEFAULT_SEARCH_URL;if !template.contains("{query}"){return Err("Custom search URL must contain {query}".into());}let key=text(web,"key");if custom&&!key.is_empty(){let header=text(web,"header");let prefix=text(web,"prefix");headers.push((if header.is_empty(){"Authorization"}else{get(web,"header").text()?},if prefix.is_empty(){key}else{format!("{prefix} {key}")}));}template.replace("{query}",&network::encoded(&text(args,"query")))}else{text(args,"url")};
+    let url=if text(pending,"tool")=="web_search"{let web=get(st,"web");let template=search_template(st);let custom=!text(web,"search_url").trim().is_empty()&&template!="https://html.duckduckgo.com/html/?q={query}"&&template!=DEFAULT_SEARCH_URL;if !template.contains("{query}"){return Err("Custom search URL must contain {query}".into());}let key=text(web,"key");if custom&&!key.is_empty(){let header=text(web,"header");let prefix=text(web,"prefix");headers.push((if header.is_empty(){"Authorization"}else{get(web,"header").text()?},if prefix.is_empty(){key}else{format!("{prefix} {key}")}));}template.replace("{query}",&network::encoded(&text(args,"query")))}else{text(args,"url")};
     let mut effect=network::wire(&url,url.starts_with("http://"),"GET","",headers)?;put(&mut effect,"purpose",s("web_tool"));put(&mut effect,"limit",Num((2*1024*1024).to_string()));put(st,"web_source",s(&if text(pending,"tool")=="web_search"{endpoint_summary(&url)}else{url.clone()}));Ok(effect)
 }
 /// A search response can be a verification page even with HTTP200. Only
 /// page-level title/form signals count; quoted words in result text do not.
-pub(super) fn search_page(body:&str)->Result<String>{
+pub(super) fn search_page(body:&str)->Result<String>{search_challenge(body)?;page(body)}
+pub(super) fn search_challenge(body:&str)->Result<()>{
  if body.trim_start().starts_with('<'){
   let doc=super::html_document::parse(body.as_bytes(),true);
   let mut verification=false;
@@ -83,7 +85,7 @@ pub(super) fn search_page(body:&str)->Result<String>{
   }}
   if verification{return Err("Search source returned a verification page; no search results were accepted and no automatic retry was started".into());}
  }
- page(body)
+ Ok(())
 }
 // Static HTML extraction. Script/style bodies are never returned as page text.
 pub(super) fn page(body:&str)->Result<String>{
@@ -134,8 +136,8 @@ fn byte_limit(text:&str,max:usize)->String{let mut n=text.len().min(max);while !
     #[test]fn free_search_default_needs_no_url_or_credentials(){
         let mut st=obj(vec![("web",obj(vec![("key",s("dormant-custom-secret")),("header",s("X-Private"))])),("profiles",Arr(vec![obj(vec![("key",s("model-secret"))])]))]);
         let request=obj(vec![("tool",s("web_search")),("args",obj(vec![("query",s("Rust + café & 日本"))]))]);
-        assert_eq!(search_template(&st),DEFAULT_SEARCH_URL);let effect=web_effect(&mut st,&request).unwrap();assert_eq!(text(&effect,"host"),"html.duckduckgo.com");let wire=text(&effect,"wire");assert!(wire.starts_with("GET /html/?q=Rust%20%2B%20caf%C3%A9%20%26%20%E6%97%A5%E6%9C%AC HTTP/1.1"));assert!(!wire.contains("secret"));assert!(!wire.contains("Authorization"));assert!(!wire.contains("X-Private"));
-        put(&mut st,"web",obj(vec![("search_url",s(DEFAULT_SEARCH_URL)),("key",s("dormant-custom-secret"))]));assert!(!text(&web_effect(&mut st,&request).unwrap(),"wire").contains("secret"));
+        assert_eq!(search_template(&st),DEFAULT_SEARCH_URL);let effect=web_effect(&mut st,&request).unwrap();assert!(["api.mwmbl.org","html.duckduckgo.com"].contains(&text(&effect,"host").as_str()));let wire=text(&effect,"wire");assert!(wire.contains("q=Rust%20%2B%20caf%C3%A9%20%26%20%E6%97%A5%E6%9C%AC HTTP/1.1"));assert!(!wire.contains("secret"));assert!(!wire.contains("Authorization"));assert!(!wire.contains("X-Private"));
+        put(&mut st,"web",obj(vec![("search_url",s("https://html.duckduckgo.com/html/?q={query}")),("key",s("dormant-custom-secret"))]));assert!(!text(&web_effect(&mut st,&request).unwrap(),"wire").contains("secret"));
     }
     #[test]fn verification_pages_do_not_become_search_evidence(){
         assert!(search_page("<title>Verify you are human</title><p>Check</p>").is_err());assert!(search_page("<title>DuckDuckGo</title><form id='challenge-form' action='//duckduckgo.com/anomaly.js?q=x'></form>").is_err());
