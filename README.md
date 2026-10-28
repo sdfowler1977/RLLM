@@ -10,11 +10,11 @@ A compact Android harness for local and hosted language models. Keep a conversat
 
 ## Install
 
-[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793159000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
+[Download the current Android test APK](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793167000/RLLM-Lab.apk) · [Setup guide](docs/SETUP.md) · [User guide](docs/USAGE.md)
 
 The publication package also contains the actual APK at [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk). The signed APK is also published as a GitHub pre-release with its SHA-256 checksum.
 
-Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793159000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
+Requires Android 8.0 or later on ARM64 or x86-64. This is **RLLM Lab**, version `0.1-lab.1793167000`. An LLM runs on your configured server/provider; this APK does not bundle model weights.
 
 ## Provider-hosted web search
 
@@ -28,11 +28,11 @@ The same update accepts empty stream completion trailers, retains valid partial 
 
 Streaming and completed replies now preserve your reading position. The chat follows the actual bottom of a long reply only when you are following the latest content; **Latest ↓** returns there at any time. Explicit leading `<think>` blocks are hidden from chat and history previews without deleting raw history. See [chat display guide](docs/CHAT.md).
 
-## Key-free native web search
+## Harness web search for every model
 
-Web search defaults to DuckDuckGo HTML with no API key or custom endpoint setup. In Web access, leave **Custom search URL** blank. Normal chat and recursive investigation use the same original Rust HTTP path; a secondary model is optional. Existing custom services keep their separate credentials, which are never sent to built-in search or ordinary page reads.
+Web search is performed by RLLM for local Qwen, Messages/Anthropic and every other supported model route. Leave **Custom search URL** blank: the harness queries Mwmbl's anonymous API, with the existing DuckDuckGo source as a finite fallback. No additional key, paid search account, secondary LLM, Node program or external computer is required. Optional MiniMax hosted search remains separate.
 
-Search responses are returned as evidence through the existing request/result flow. Known verification pages are reported as unsuccessful retrievals, not accepted as results or automatically retried. Controlled app-level tests cover normal, recursive and secondary-agent routing; live source availability is not certified. No Node, Chromium or third-party engine was added.
+Results and valid empty observations return to the model that requested them, including assigned recursive agents. Use focused queries for separate questions; the app preserves the actual approved query. Source attribution, result limits and failed-source observations accompany results. Custom services retain their exact endpoint and isolated credentials. See [Harness web search](docs/WEB-SEARCH.md) for setup, source quotas and behavior.
 
 ## Native PNG and stylesheet capture
 
