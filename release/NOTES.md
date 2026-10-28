@@ -1,11 +1,11 @@
-# RLLM Lab 1793154100 — key-free native web search
+# RLLM Lab 1793157000 — chat reading and reply display
 
-Blank search settings now use DuckDuckGo HTML through original Rust HTTP code, without an API key, Node runtime or external browser. Normal chat, recursive tasks and optional secondary-agent workflows use the same request/result flow. Custom search services retain isolated credentials. Changing settings cannot redirect an already displayed proposal to another destination.
+Replies now retain the reader's position during streaming and view rebuilds. Following the latest content aligns the actual bottom of a long reply after layout. Latest ↓ returns to the end; touching/scrolling cancels pending automatic restoration. Resize and stale-callback cases retain scoped follow intent.
 
-Independent app-level checks cover nine search and settings-binding groups plus nine existing web-operation groups. Synthetic verification pages are rejected as results, while quoted/inert examples do not trigger that check. Live DuckDuckGo availability and installed Android behavior remain unverified. Previous native PNG/CSS capture, History deletion and phone attachments are preserved.
+Original Rust presentation hides explicit leading lowercase <think> blocks during streaming and in final chat/history previews. Raw output remains saved, quoted examples and user messages remain literal, and filtered text never enters tool proposal recognition. Structured provider reasoning remains excluded. Unmarked prose is not classified as thinking.
 
-Signed package com.local.client.lab, version0.1-lab.1793154100, existing Lab certificate. Install over Lab without uninstalling or clearing data.
+Independent source/C ABI tests cover reasoning boundaries, raw preservation, tool isolation and existing History, attachments, key-free search and format behavior. Extracted actual Java scroll methods pass host compatibility tests for tall replies, anchors, Latest, resize and queued callbacks. This is not installed Android visual/lifecycle acceptance. All24 runtime payloads match an independent Android rebuild;79 inputs remained unchanged. Stable signer, v2/v3, ZIP16KiB, both ELF alignments and CRC pass.
 
-APK SHA256: `14a432087fd9abf2e17802ca961938b943df53cbaafc3d76f83dd8d34c1326ae`.
+Install over existing Lab without uninstalling or clearing data. com.local.client.lab / 0.1-lab.1793157000. APK SHA256: 490375bfe883ef0dcb8a35ba6dbf20a0cc1c2db8b762c98404305038375f34f9.
 
-This is a disclosed test build. Full browser rendering/interactions, remote capture integration and the original universal harness roadmap remain open. The unchanged archive independent-review restriction and installed-device/full-project acceptance remain open. No third-party REA program was installed or copied.
+The complete original harness roadmap and native browser work remain active. The unchanged archive independent-review restriction remains disclosed; this is a test build, not full-project acceptance. Previous releases are retained.
