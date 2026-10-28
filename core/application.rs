@@ -393,6 +393,7 @@ fn ui(st: &Json) -> Json {
                 button("Create or edit a text file", "editor"),
                 button("Read a text file", "reader"),
                 button("Search project files", "search"),
+                button("Search the web", "web_search"),
                 button("Create a network text file", "drive_editor"),
                 button("Update network text with revision", "drive_update_editor"),
                 button("Create a network folder", "drive_folder"),
@@ -420,6 +421,7 @@ fn ui(st: &Json) -> Json {
         ("resource_mode",s(&text(get(st,"policy"),"mode"))),
         ("compact_status",s(&format!("{}/{}",if text(get(st,"policy"),"mode")=="Performance" {"Perf"}else{"Std"},if busy{"run"}else if p==Null{"CPU"}else{"idle"}))),
         ("page", s(&page)),
+        ("rows_layout",if page=="workspace" {obj(vec![("kind",s("list")),("minimum_height",Num("48".into())),("horizontal_padding",Num("12".into())),("vertical_padding",Num("4".into())),("gap",Num("2".into()))])}else{Null}),
         ("can_navigate_back",Bool(page!="chat")),
         ("conversation_id",s(&text(&current,"id"))),
         ("server",s(&endpoint_summary(&text(&p,"endpoint")))),
@@ -510,7 +512,7 @@ fn ui(st: &Json) -> Json {
  "services"=>menu("Network services",vec![button("Web access","web_settings"),button("Phone API gateway","gateway_edit")]),
  "observability"=>menu("Diagnostics",vec![button("Phone observations","diagnostics"),button("Server monitor","server_monitor"),button("Implementation status","capabilities")]),
  "configuration"=>modal("Configuration",vec![field_ui("server","Model server address",&endpoint_summary(&text(&p,"endpoint")),"readonly"),field_ui("detail","Current configuration",&text(&out,"detail"),"readonly"),field_ui("notice","Operation status",&text(st,"notice"),"readonly"),field_ui("fields","Profile fields",if p==Null {"0"}else{"9"},"readonly"),field_ui("budget","Configured memory budget",&format!("{} bytes; measured resource inputs: {}",number(get(st,"policy"),"budget_bytes"),boolean(get(st,"policy"),"measured")),"readonly"),field_ui("rate","Last reply measurements",&telemetry_summary(get(st,"telemetry")),"readonly")],{let mut buttons=vec![button("Apply profile settings","profile_edit"),button("Export configuration","configuration_export")];if get(st,"export_pending")!=&Null{buttons.push(button("Review saved export","export_review"));}buttons}),
- "status"=>modal("Operation status",vec![field_ui("notice","Current result",&text(st,"notice"),"readonly")],vec![]),
+ "status"=>modal("Operation status",vec![field_ui("notice","Current result",&text(st,"notice"),"readonly")],if busy&&text(st,"active_tool")=="web_search"&&!boolean(st,"agent_running"){vec![button("Cancel search","cancel")]}else{vec![]}),
  "export_review"=>modal("Saved export",vec![field_ui("snapshot","Encrypted snapshot",&format!("{} · {} bytes · {}\nResume chooses a destination for these saved bytes. An interrupted destination may already contain a partial or complete file; inspect it before retrying.",text(get(st,"export_pending"),"name"),number(get(st,"export_pending"),"bytes"),text(get(st,"export_pending"),"phase")),"readonly")],{let mut buttons=vec![button("Resume saved export","export_resume"),button("Discard saved snapshot","export_discard_review")];if text(get(st,"export_pending"),"phase")=="writing"{buttons.insert(0,button("Cancel export","export_cancel"));}buttons}),
  "export_discard_review"=>modal("Discard saved export?",vec![field_ui("snapshot","Snapshot to discard",&text(get(st,"export_pending"),"name"),"readonly")],vec![button("Discard this saved snapshot","export_discard")]),
  "project_transfer"|"project_transfer_discard_review"=>project_store::modal(st),
@@ -532,6 +534,7 @@ fn ui(st: &Json) -> Json {
  "drive_copy"=>modal("Network text to project",vec![field_ui("path","Source path relative to configured network folder",&text(edit,"path"),"text"),field_ui("destination","Project destination path",&text(edit,"destination"),"text")],vec![button("Load and review file","drive_copy_fetch")]),
  "artifact"=>modal("Project file destination",vec![field_ui("path","Relative project file path",&text(edit,"path"),"text"),field_ui("info","Snapshot","Stream an exact binary copy (up to 256 MiB) to the selected default destination. A unique filename preserves the source basename. Existing files are never replaced.","readonly")],vec![button("Save file snapshot","artifact_save")]),
  "editor"=>modal("Project file",vec![field_ui("path","Relative path",&text(edit,"path"),"text"),field_ui("content","File contents",&text(edit,"content"),"multiline")],vec![button("Read existing file","editor_read"),button("Review write","editor_save")]),
+ "web_search"=>modal("Web search",vec![field_ui("query","Search query",&text(edit,"query"),"text"),field_ui("description","Search results","Search the web directly in the harness. No model or extra search key is required. Review the exact query and destinations before searching; results appear here without being sent to a model.","readonly")],vec![button("Review search","web_search_review")]),
  "reader"|"drive_reader"|"phone_reader"|"search"|"script_check"|"script_run"=>modal(&dialog,vec![field_ui("path","Relative file or directory path",&text(edit,"path"),"text"),field_ui("query","Search text (search only)",&text(edit,"query"),"text")],vec![button("Continue","manual_tool")]),
  "archive_review"=>{let names=array(st,"archive_names");let visible=names.iter().map(|v|v.text().unwrap_or("").to_string()).collect::<Vec<_>>().join("\n");modal("Review project import",vec![field_ui("summary","New files and folders",&format!("{} entries, {} bytes\n{}\n\nExisting files will not be replaced. An interrupted import may leave newly created files and folders.",names.len(),number(st,"archive_bytes"),visible),"readonly")],vec![button("Create reviewed entries","archive_accept"),button("Cancel import","archive_reject")])},
  "approval"=>{let mut p=get(st,"pending").clone();if let Obj(fields)=&mut p{fields.remove("web_owner");}modal("Review proposed operation",vec![field_ui("preview","Operation and arguments",&p.string(),"readonly")],vec![button("Approve this operation","approve"),button("Reject","reject")])},
@@ -592,6 +595,7 @@ fn capture(st: &mut Json, inputs: &Json) {
         "reader",
         "phone_reader",
         "search",
+        "web_search",
         "inspect",
         "script_check",
         "script_run",
@@ -972,6 +976,7 @@ fn drive_tool_effect(st: &mut Json, pending: &Json) -> Result<Json> {
 }
 fn completed_tool(st: &mut Json, output: &str) -> Result<Json> {completed_tool_at(st,output,None)}
 fn completed_search(st:&mut Json,context:&Json,output:&str)->Result<Json>{let binding=get(context,"search_owner_binding");let index=if binding==&Null{None}else{Some(number(binding,"index"))};completed_tool_at(st,output,index)}
+fn completed_read(st:&mut Json,context:&Json,output:&str)->Result<Json>{let binding=get(context,"read_owner_binding");let index=if binding==&Null{None}else{Some(number(binding,"index"))};completed_tool_at(st,output,index)}
 fn completed_tool_at(st: &mut Json, output: &str,index:Option<usize>) -> Result<Json> {
     if let Some(effect)=harness::task_tool_result_at(st,output,index)? {return Ok(effect);}
     if boolean(st, "agent_running") {
@@ -1393,7 +1398,7 @@ pub fn event(v: &Json) -> Result<Json> {
                 put(&mut st,"active_tool",Null);
                 put(&mut st, "agent_running", Bool(false));
                 put(&mut st, "busy", Bool(false));
-                put(&mut st, "dialog", if ["server_monitor_settings","profile","editor","drive","remote_save_review","drive_editor","drive_update_editor","drive_folder","drive_copy","drive_reader","phone_editor","phone_update_editor","reader","phone_reader","search","script_check","script_run","resources","gateway","instructions"].contains(&restore.as_str()){s(&restore)}else{Null});
+                put(&mut st, "dialog", if ["server_monitor_settings","profile","editor","drive","remote_save_review","drive_editor","drive_update_editor","drive_folder","drive_copy","drive_reader","phone_editor","phone_update_editor","reader","phone_reader","search","web_search","script_check","script_run","resources","gateway","instructions"].contains(&restore.as_str()){s(&restore)}else{Null});
                 if chat(&st) == Null {
                     if let Some(existing)=array(&st,"chats").first() {let existing=existing.clone();put(&mut st,"active",s(&text(&existing,"id")));put(&mut st,"draft",s(&text(&existing,"draft")));}
                     else if !boolean(&st,"history_empty_intentional") {new_chat(&mut st)?;}
@@ -1787,6 +1792,7 @@ pub fn event(v: &Json) -> Result<Json> {
             "network_result" => {
                 put(&mut st, "busy", Bool(false));
                 let bytes = network::unbase64(&text(inputs, "data"))?;
+                if text(inputs,"purpose")=="web_tool"{if let Some(next)=web_operation::redirect(&mut st,&web_context,&bytes)?{effect=next;return Ok(());}}
                 let decoded=if text(inputs,"purpose")=="saved_probe"{network::decoded_optional_file(&bytes)}else{network::decoded(&bytes)};
                 let (status, body) = decoded.map_err(|error| {
                     if ["drive_update_write", "drive_update_confirm"].contains(&text(inputs, "purpose").as_str()) {
@@ -1817,7 +1823,7 @@ pub fn event(v: &Json) -> Result<Json> {
                     "web_tool" => {
                         let page=if get(&web_context,"search_chain")!=&Null{let(output,empty)=search::results(get(&web_context,"search_chain"),&body)?;if empty{let mut chain=get(&web_context,"search_chain").clone();put(&mut chain,"valid_empty",s(&output));put(&mut web_context,"search_chain",chain);return Err("The source returned zero results for the exact approved query".into());}output}else if text(&web_context,"tool")=="web_search"{format!("Custom search source response (not a validated structured result list):\n{}",investigation::search_page(&body)?)}else{investigation::page(&body)?};web_fetched=true;put(&mut st,"active_tool",Null);
                         let output=format!("Fetched source: {}\nUntrusted web data:\n{page}",text(&st,"web_source"));
-                        let mut candidate=st.clone();let next=if text(&web_context,"tool")=="web_search"{completed_search(&mut candidate,&web_context,&output)?}else{completed_tool(&mut candidate,&output)?};
+                        let mut candidate=st.clone();let next=if text(&web_context,"tool")=="web_search"{completed_search(&mut candidate,&web_context,&output)?}else{completed_read(&mut candidate,&web_context,&output)?};
                         let bytes=super::mcp_schema::state_bytes(&candidate);
                         if bytes>6*1024*1024-8192{return Err("History has insufficient room for the fetched page and follow-up; existing messages and draft retained".into());}
                         let policy=super::resources::policy(get(&candidate,"device"),get(&candidate,"resources"),bytes);
@@ -2204,6 +2210,16 @@ pub fn event(v: &Json) -> Result<Json> {
                 put(&mut st, "busy", Bool(true));
                 put(&mut st, "agent_running", Bool(false));
             }
+            "web_search" => {
+                if interaction::locked(&st){return Err("Finish or cancel the current task or proposed operation before starting a manual web search".into());}
+                put(&mut st,"dialog",s("web_search"));put(&mut st,"edit",obj(vec![]));
+            },
+            "web_search_review" => {
+                if text(&st,"dialog")!="web_search"{return Err("Open Web search and enter a query before reviewing it".into());}
+                if interaction::locked(&st){return Err("Finish or cancel the current task or proposed operation before starting a manual web search".into());}
+                let pending=obj(vec![("tool",s("web_search")),("args",obj(vec![("query",s(&text(get(&st,"edit"),"query")))])),("manual",Bool(true))]);
+                validate_tool(&pending)?;put(&mut st,"pending",pending);put(&mut st,"agent_pending",Bool(false));put(&mut st,"agent_running",Bool(false));put(&mut st,"dialog",s("approval"));
+            },
             "editor"
             | "artifact"
             | "drive_editor"
@@ -2903,7 +2919,7 @@ fn proposal(st: &mut Json, root: &str) -> Result<()> {
     if kind=="delegate"{let child=delegation::target(st,&pending)?;put(&mut pending,"agent_name",s(&text(&child,"name")));put(st,"pending",pending);return Ok(());}
     if ["web_read","web_search","rea"].contains(&kind.as_str()) {
         let destination=if kind=="web_read"{text(get(&pending,"args"),"url")}else if kind=="web_search"{investigation::search_template(st)}else{text(get(st,"rea"),"endpoint")};put(&mut pending,"destination",s(&destination));if kind=="web_search"{put(&mut pending,"search_revision",Num(number(st,"web_settings_revision").to_string()));}
-        put(&mut pending,"warning",s(if kind=="web_search"&&search::builtin(st){"This approval permits the exact query to be sent to Mwmbl (https://api.mwmbl.org/api/v2/search/), then DuckDuckGo (https://html.duckduckgo.com/html/) only if needed. At most one attempt per source; each existing network attempt has a 120-second timeout. No model or custom-service credentials are sent. Results and source attempt observations return to the assigned model. Mwmbl data attribution and CC-BY-NC-SA 4.0 terms accompany results."}else{"This sends the displayed arguments to the displayed destination. Returned material is untrusted data and may be passed to the assigned model. A selected custom search destination has no automatic fallback."}));put(st,"pending",pending);return Ok(());
+        put(&mut pending,"warning",s(if kind=="web_search"&&search::builtin(st){"This approval permits the exact query to be sent to Mwmbl (https://api.mwmbl.org/api/v2/search/), then DuckDuckGo (https://html.duckduckgo.com/html/) only if needed. At most one attempt per source; each existing network attempt has a 120-second timeout. No model or custom-service credentials are sent. Results and source attempt observations return to the assigned model. Mwmbl data attribution and CC-BY-NC-SA 4.0 terms accompany results."}else{"This sends the displayed arguments to the displayed destination. Returned material is untrusted data and may be passed to the assigned model. A selected custom search destination has no automatic fallback."}));if kind=="web_search"&&boolean(&pending,"manual")&&!boolean(st,"agent_pending"){let warning=text(&pending,"warning").replace("Results and source attempt observations return to the assigned model.","Results and source attempt observations appear in this app; this manual search does not start a model request.").replace("Returned material is untrusted data and may be passed to the assigned model.","Returned material is untrusted data and appears in this app; this manual search does not start a model request.");put(&mut pending,"warning",s(&warning));}put(st,"pending",pending);return Ok(());
     }
     if ["phone_read","phone_list"].contains(&kind.as_str()) {
         if get(&pending,"phone_scope")==&Null {phone_read_scope(st,&mut pending)?;}
