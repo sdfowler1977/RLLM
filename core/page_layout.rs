@@ -39,7 +39,7 @@ pub(super) struct LayoutResult {
 }
 impl LayoutResult {
     pub fn summary(&self)->String {
-        format!("Native normal-flow layout: {} boxes, {} display commands, viewport width {} px, observed content bounds ({}, {}) {} × {} px. Complete source: {}; truncated layout: {}; issues: {} recorded, {} omitted. Metric source: {}. No glyph rasterization occurs in this layout module. Lexical HTML tree only. No CSS margin collapsing, inline decoration or baseline alignment, float/flex/grid/table/positioned layout, general replaced-media rendering, shaping, bidi, JavaScript, screenshot or full browser fidelity is established.",self.boxes.len(),self.commands.len(),self.viewport_width,self.bounds.x,self.bounds.y,self.bounds.width,self.bounds.height,self.source_complete,self.truncated,self.issues.len(),self.omitted_issues,self.metric_provenance)
+        format!("Native normal-flow layout: {} boxes, {} display commands, viewport width {} px, observed content bounds ({}, {}) {} × {} px. Complete source: {}; truncated layout: {}; issues: {} recorded, {} omitted. Metric source: {}. No glyph rasterization occurs in this layout module. Lexical HTML tree only. No CSS margin collapsing, inline decoration or baseline alignment, float/flex/grid/table/positioned layout, general replaced-media rendering, shaping, bidi, script execution by this layout stage, screenshot or full browser fidelity is established.",self.boxes.len(),self.commands.len(),self.viewport_width,self.bounds.x,self.bounds.y,self.bounds.width,self.bounds.height,self.source_complete,self.truncated,self.issues.len(),self.omitted_issues,self.metric_provenance)
     }
 }
 struct Flow {left:f64,right:f64,x:f64,y:f64,line_height:f64,has_text:bool,pending_space:bool}

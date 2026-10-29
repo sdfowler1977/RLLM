@@ -63,14 +63,30 @@ pub(super) struct Document {
     pub parsed_bytes: usize,
     pub source_complete: bool,
     pub stopped_by_bound: bool,
+    allocation_limit: usize,
+    allocation_used: usize,
+    allocation_stopped: bool,
+}
+// Conservative per-owned-item envelopes cover vector minimum/geometric growth,
+// temporary realloc overlap and allocation metadata without a separate byte scan.
+pub(super) fn node_bytes(kind:&Kind)->usize{
+ let payload=match kind{Kind::Element{name,..}=>name.capacity(),Kind::Text{data,..}|Kind::Comment{data}=>data.capacity(),Kind::Doctype{declaration}=>declaration.capacity(),_=>0};
+ 4*std::mem::size_of::<Node>()+128+payload
 }
 impl Document {
+    fn admit(&mut self,bytes:usize)->bool{
+        if self.allocation_stopped{return false;}
+        if let Some(total)=self.allocation_used.checked_add(bytes).filter(|n|*n<=self.allocation_limit){self.allocation_used=total;true}else{self.allocation_stopped=true;self.stopped_by_bound=true;false}
+    }
+    pub(super) fn allocation_bytes(&self)->usize{self.allocation_used}
+    pub(super) fn allocation_refused(&self)->bool{self.allocation_stopped}
     fn issue(&mut self, offset: usize, code: &'static str) {
-        if self.issues.len() < ISSUES { self.issues.push(Issue { offset, code }); }
+        if self.issues.len() < ISSUES { if !self.admit(4*std::mem::size_of::<Issue>()+64){self.omitted_issues+=1;return;} self.issues.push(Issue { offset, code }); }
         else { self.omitted_issues += 1; }
     }
     fn add(&mut self, parent: usize, kind: Kind, span: Range<usize>) -> Option<usize> {
         if self.nodes.len() >= NODES { self.issue(span.start, "node-limit"); self.stopped_by_bound = true; return None; }
+        if !self.admit(node_bytes(&kind)){return None;}
         let index = self.nodes.len();
         self.nodes.push(Node {kind,parent:Some(parent),children:Vec::new(),span,closing_span:None});
         self.nodes[parent].children.push(index); Some(index)
@@ -82,7 +98,7 @@ impl Document {
             Kind::Element{..}=>elements+=1,
             Kind::Text{mode,..}=>{texts+=1;if *mode==TextMode::Script{scripts+=1;}if *mode==TextMode::Style{styles+=1;}},_=>{}
         }}
-        format!("Native HTML source-order tree: {} supplied bytes; {} examined; {} parsed; source complete: {}; stopped by bound: {}. {} elements, {} text nodes, {} script-data nodes, {} style-data nodes, {} declared resources. {} recorded issues; {} further issues omitted. UTF-8 only; numeric references and amp/lt/gt/quot/apos/nbsp with semicolons decoded. This is a lexical nesting tree, not the HTML insertion-mode DOM. No scripts executed, URLs fetched, styles evaluated, layout produced or screenshots captured.",self.supplied_bytes,self.examined_bytes,self.parsed_bytes,self.source_complete,self.stopped_by_bound,elements,texts,scripts,styles,self.resources.len(),self.issues.len(),self.omitted_issues)
+        format!("Native HTML source-order tree: {} supplied bytes; {} examined; {} parsed; source complete: {}; stopped by bound: {}. {} elements, {} text nodes, {} script-data nodes, {} style-data nodes, {} declared resources. {} recorded issues; {} further issues omitted. UTF-8 only; numeric references and amp/lt/gt/quot/apos/nbsp with semicolons decoded. This is a lexical nesting tree, not the HTML insertion-mode DOM. This source-tree parsing stage executes no scripts, fetches no URLs, evaluates no styles and produces no layout or screenshots; preceding program stages, if selected, are described separately.",self.supplied_bytes,self.examined_bytes,self.parsed_bytes,self.source_complete,self.stopped_by_bound,elements,texts,scripts,styles,self.resources.len(),self.issues.len(),self.omitted_issues)
     }
 }
 fn space(b:u8)->bool { matches!(b,b' '|b'\t'|b'\n'|b'\r'|12) }
@@ -120,25 +136,31 @@ fn metadata(doc:&mut Document,node:usize){
     let (kind,key)=match name.as_str(){"a"|"area"=>(ResourceKind::Link,"href"),"img"|"source"=>(ResourceKind::Image,"src"),"form"=>(ResourceKind::Form,"action"),"input"|"button"|"select"|"textarea"=>(ResourceKind::Control,"name"),"script"=>(ResourceKind::Script,"src"),"link"=>(if attributes.iter().any(|a|a.name=="rel"&&a.value.as_deref().map(|v|v.split_ascii_whitespace().any(|r|r.eq_ignore_ascii_case("stylesheet"))).unwrap_or(false)){ResourceKind::Stylesheet}else{ResourceKind::LinkElement},"href"),"base"=>(ResourceKind::Base,"href"),_=>return};
     // Declared relationship only; no link or stylesheet has been fetched.
     let attr=attributes.iter().find(|a|a.name==key);
-    doc.resources.push(Resource{node,kind,target:attr.and_then(|a|a.value.clone()),target_span:attr.and_then(|a|a.value_span.clone())});
+    let resource=Resource{node,kind,target:attr.and_then(|a|a.value.clone()),target_span:attr.and_then(|a|a.value_span.clone())};
+    if doc.admit(4*std::mem::size_of::<Resource>()+128+resource.target.as_ref().map(String::capacity).unwrap_or(0)){doc.resources.push(resource);}
 }
 
 /// Parse a bounded prefix into explicit source-order nesting. `complete` is the
 /// caller's observation, not proof of a fetched resource's authenticity.
-pub(super) fn parse(data:&[u8],complete:bool)->Document{
+pub(super) fn parse(data:&[u8],complete:bool)->Document{parse_with_room(data,complete,usize::MAX)}
+/// Bounds retained owned tree envelopes; callers reserve input and bounded
+/// decoding/construction scratch separately before invoking this parser.
+pub(super) fn parse_with_room(data:&[u8],complete:bool,room:usize)->Document{
     let mut count=data.len().min(INPUT);
     let utf=std::str::from_utf8(&data[..count]);
     let mut invalid=None;
     if let Err(error)=utf{count=error.valid_up_to();invalid=Some((count,error.error_len().is_none()));}
     let source=std::str::from_utf8(&data[..count]).unwrap();let bytes=source.as_bytes();
-    let mut doc=Document{nodes:vec![Node{kind:Kind::Document,parent:None,children:Vec::new(),span:0..count,closing_span:None}],resources:Vec::new(),issues:Vec::new(),omitted_issues:0,supplied_bytes:data.len(),examined_bytes:count,parsed_bytes:0,source_complete:complete&&count==data.len(),stopped_by_bound:data.len()>INPUT};
+    let mut doc=Document{nodes:Vec::new(),resources:Vec::new(),issues:Vec::new(),omitted_issues:0,supplied_bytes:data.len(),examined_bytes:count,parsed_bytes:0,source_complete:complete&&count==data.len(),stopped_by_bound:data.len()>INPUT,allocation_limit:room,allocation_used:0,allocation_stopped:false};
+    if !doc.admit(4*std::mem::size_of::<Node>()+128){return doc;}
+    doc.nodes.push(Node{kind:Kind::Document,parent:None,children:Vec::new(),span:0..count,closing_span:None});
     if data.len()>INPUT{doc.issue(count,"input-limit-prefix-only");}
     if let Some((offset,incomplete))=invalid{doc.issue(offset,if incomplete{"partial-utf8-codepoint"}else{"invalid-utf8-stopped"});}
     if !complete{doc.issue(count,"caller-supplied-prefix");}
     if let Some(n)=source.find('\0'){doc.issue(n,"nul-retained-preprocessing-unimplemented");}
     if let Some(n)=source.find('\r'){doc.issue(n,"cr-retained-preprocessing-unimplemented");}
     let mut stack=vec![0usize];let mut p=0;
-    while p<count {
+    while p<count&&!doc.allocation_stopped {
         let parent=*stack.last().unwrap();
         let raw=match &doc.nodes[parent].kind{Kind::Element{name,..}=>raw_mode(name).map(|mode|(name.clone(),mode)),_=>None};
         if let Some((name,mode))=raw{
@@ -213,7 +235,7 @@ pub(super) fn parse(data:&[u8],complete:bool)->Document{
                 value=Some(decode(&source[v..q],v,&mut doc));value_span=Some(v..q);if quote.is_some(){q+=1;}
             }
             if attributes.iter().any(|old:&Attribute|old.name==attr_name){doc.issue(a,"duplicate-attribute-first-retained");}
-            else{attributes.push(Attribute{name:attr_name,value,span:a..q,value_span});}
+            else{let bytes=4*std::mem::size_of::<Attribute>()+128+attr_name.capacity()+value.as_ref().map(String::capacity).unwrap_or(0);if !doc.admit(bytes){failed=true;break;}attributes.push(Attribute{name:attr_name,value,span:a..q,value_span});}
         }
         if failed{break;}if !finished{doc.issue(p,"start-tag-end-not-observed");break;}
         let is_void=void(&name);

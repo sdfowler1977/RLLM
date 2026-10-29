@@ -4,15 +4,18 @@ use std::fmt;
 const MAX_INPUT:usize=64*1024*1024;
 const MAX_OUTPUT:usize=128*1024*1024;
 const MAX_PARTS:usize=4096;
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub(super) enum ErrorKind{Input,OutputLimit,Resource}
 #[derive(Clone,Debug,PartialEq,Eq)]
-pub(super) struct InflateError {pub code:&'static str,pub offset:usize}
+pub(super) struct InflateError {pub code:&'static str,pub offset:usize,pub kind:ErrorKind}
 impl fmt::Display for InflateError{fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Result{write!(f,"{} at compressed byte {}",self.code,self.offset)}}
 impl std::error::Error for InflateError{}
 type Result<T>=std::result::Result<T,InflateError>;
-fn err(code:&'static str,offset:usize)->InflateError{InflateError{code,offset}}
+fn err(code:&'static str,offset:usize)->InflateError{InflateError{code,offset,kind:ErrorKind::Input}}
+fn output_err(offset:usize)->InflateError{InflateError{code:"inflate-output-exceeds-expected",offset,kind:ErrorKind::OutputLimit}}
+fn resource_err(code:&'static str,offset:usize)->InflateError{InflateError{code,offset,kind:ErrorKind::Resource}}
 struct Input<'a,'b>{parts:&'a [&'a [u8]],part:usize,within:usize,offset:usize,total:usize,byte:u8,bits:u8,work:&'b mut usize}
 impl Input<'_,'_>{
-    fn charge(&mut self,units:usize)->Result<()>{if *self.work<units{*self.work=0;return Err(err("inflate-work-limit",self.offset));}*self.work-=units;Ok(())}
+    fn charge(&mut self,units:usize)->Result<()>{if *self.work<units{*self.work=0;return Err(resource_err("inflate-work-limit",self.offset));}*self.work-=units;Ok(())}
     fn byte(&mut self)->Result<u8>{
         self.charge(1)?;
         while self.part<self.parts.len()&&self.within==self.parts[self.part].len(){self.part+=1;self.within=0;}
@@ -77,15 +80,17 @@ fn dynamic(input:&mut Input<'_,'_>)->Result<(Tree,Tree)>{
     }
     Ok((Tree::build(&lengths[..literals],TreeKind::Literals,input)?,Tree::build(&lengths[literals..],TreeKind::Distances,input)?))
 }
-struct Output{bytes:Vec<u8>,expected:usize,s1:u32,s2:u32}
+struct Output{bytes:Vec<u8>,expected:usize,growing:bool,s1:u32,s2:u32}
 impl Output{
     fn emit(&mut self,byte:u8,input:&mut Input<'_,'_>)->Result<()>{
-        if self.bytes.len()==self.expected{return Err(err("inflate-output-exceeds-expected",input.offset));}
-        input.charge(1)?;self.bytes.push(byte);self.s1+=u32::from(byte);if self.s1>=65521{self.s1-=65521;}self.s2+=self.s1;if self.s2>=65521{self.s2-=65521;}Ok(())
+        if self.bytes.len()==self.expected{return Err(output_err(input.offset));}
+        input.charge(1)?;
+        if self.growing&&self.bytes.len()==self.bytes.capacity(){let wanted=self.bytes.capacity().saturating_mul(2).max(64).min(self.expected);input.charge(self.bytes.len().saturating_add(wanted))?;self.bytes.try_reserve_exact(wanted-self.bytes.len()).map_err(|_|resource_err("inflate-output-allocation-failed",input.offset))?;}
+        self.bytes.push(byte);self.s1+=u32::from(byte);if self.s1>=65521{self.s1-=65521;}self.s2+=self.s1;if self.s2>=65521{self.s2-=65521;}Ok(())
     }
     fn copy(&mut self,distance:usize,count:usize,window:usize,input:&mut Input<'_,'_>)->Result<()>{
         if distance==0||distance>self.bytes.len()||distance>window{return Err(err("deflate-distance-outside-history-window",input.offset));}
-        if count>self.expected-self.bytes.len(){return Err(err("inflate-output-exceeds-expected",input.offset));}
+        if count>self.expected-self.bytes.len(){return Err(output_err(input.offset));}
         for _ in 0..count{let byte=self.bytes[self.bytes.len()-distance];self.emit(byte,input)?;}Ok(())
     }
 }
@@ -101,6 +106,22 @@ fn compressed(input:&mut Input<'_,'_>,out:&mut Output,window:usize,lit:&Tree,dis
             let distance=DIST_BASE[d]+input.bits(DIST_EXTRA[d])? as usize;out.copy(distance,length,window,input)?;
         },_=>return Err(err("reserved-length-symbol",input.offset)),}}
 }
+fn blocks(input:&mut Input<'_ ,'_>,out:&mut Output,window:usize)->Result<()>{
+    loop{input.charge(1)?;let final_block=input.bits(1)?!=0;let kind=input.bits(2)?;
+        match kind{
+            0=>{input.align();let length=input.little16()?;let inverse=input.little16()?;if length!=!inverse{return Err(err("stored-block-length-check-failed",input.offset));}
+                if usize::from(length)>out.expected-out.bytes.len(){return Err(output_err(input.offset));}
+                for _ in 0..length{let b=input.byte()?;out.emit(b,input)?;}
+            },
+            1=>{let(lit,dist)=fixed(input)?;compressed(input,out,window,&lit,&dist)?;},
+            2=>{let(lit,dist)=dynamic(input)?;compressed(input,out,window,&lit,&dist)?;},
+            _=>return Err(err("reserved-deflate-block-type",input.offset)),
+        }
+        if final_block{break;}
+    }
+    Ok(())
+}
+
 /// `parts` are consecutive pieces of one zlib stream, e.g. PNG IDAT payloads.
 /// No concatenated streams, preset dictionary or trailing bytes are accepted.
 pub(super) fn decode_zlib_exact(parts:&[&[u8]],expected_len:usize,work_limit:usize)->Result<Vec<u8>>{
@@ -112,7 +133,7 @@ pub(super) fn decode_zlib_exact(parts:&[&[u8]],expected_len:usize,work_limit:usi
 pub(super) fn decode_zlib_exact_with_budget(parts:&[&[u8]],expected_len:usize,remaining_work:&mut usize)->Result<Vec<u8>>{
     if parts.len()>MAX_PARTS{return Err(err("zlib-part-count-bound",0));}
     if expected_len>MAX_OUTPUT{return Err(err("zlib-output-memory-bound",0));}
-    if *remaining_work<parts.len(){*remaining_work=0;return Err(err("inflate-work-limit",0));}*remaining_work-=parts.len();
+    if *remaining_work<parts.len(){*remaining_work=0;return Err(resource_err("inflate-work-limit",0));}*remaining_work-=parts.len();
     let total=parts.iter().try_fold(0usize,|sum,p|sum.checked_add(p.len())).ok_or(err("zlib-input-size-overflow",0))?;
     if total>MAX_INPUT{return Err(err("zlib-input-memory-bound",0));}
     let mut input=Input{parts,part:0,within:0,offset:0,total,byte:0,bits:0,work:remaining_work};
@@ -120,22 +141,11 @@ pub(super) fn decode_zlib_exact_with_budget(parts:&[&[u8]],expected_len:usize,re
     if cmf&15!=8||cmf>>4>7{return Err(err("unsupported-zlib-method-or-window",0));}
     if (u16::from(cmf)*256+u16::from(flg))%31!=0{return Err(err("zlib-header-check-failed",0));}
     if flg&32!=0{return Err(err("zlib-preset-dictionary-not-supported",1));}
-    if *input.work<expected_len{return Err(err("inflate-work-insufficient-for-expected-output",input.offset));}
+    if *input.work<expected_len{return Err(resource_err("inflate-work-insufficient-for-expected-output",input.offset));}
     let window=1usize<<((cmf>>4)as usize+8);
-    let mut bytes=Vec::new();bytes.try_reserve_exact(expected_len).map_err(|_|err("zlib-output-allocation-failed",input.offset))?;
-    let mut out=Output{bytes,expected:expected_len,s1:1,s2:0};
-    loop{input.charge(1)?;let final_block=input.bits(1)?!=0;let kind=input.bits(2)?;
-        match kind{
-            0=>{input.align();let length=input.little16()?;let inverse=input.little16()?;if length!=!inverse{return Err(err("stored-block-length-check-failed",input.offset));}
-                if usize::from(length)>out.expected-out.bytes.len(){return Err(err("inflate-output-exceeds-expected",input.offset));}
-                for _ in 0..length{let b=input.byte()?;out.emit(b,&mut input)?;}
-            },
-            1=>{let(lit,dist)=fixed(&mut input)?;compressed(&mut input,&mut out,window,&lit,&dist)?;},
-            2=>{let(lit,dist)=dynamic(&mut input)?;compressed(&mut input,&mut out,window,&lit,&dist)?;},
-            _=>return Err(err("reserved-deflate-block-type",input.offset)),
-        }
-        if final_block{break;}
-    }
+    let mut bytes=Vec::new();bytes.try_reserve_exact(expected_len).map_err(|_|resource_err("zlib-output-allocation-failed",input.offset))?;
+    let mut out=Output{bytes,expected:expected_len,growing:false,s1:1,s2:0};
+    blocks(&mut input,&mut out,window)?;
     // The final DEFLATE byte may contain unused padding bits. RFC framing
     // discards these bits, but never any additional whole bytes or stream.
     input.align();let checksum=input.big32()?;
@@ -143,6 +153,15 @@ pub(super) fn decode_zlib_exact_with_budget(parts:&[&[u8]],expected_len:usize,re
     if input.offset!=input.total{return Err(err("zlib-trailing-data",input.offset));}
     if out.bytes.len()!=expected_len{return Err(err("inflate-output-shorter-than-expected",input.offset));}
     Ok(out.bytes)
+}
+
+/// One raw DEFLATE member, stopping exactly after its final padded byte.
+/// Lazy bounded growth avoids reserving the caller's entire ceiling for empty members.
+pub(super) fn decode_raw_bounded(bytes:&[u8],limit:usize,work:&mut usize)->Result<(Vec<u8>,usize)>{
+ if bytes.len()>MAX_INPUT||limit>MAX_OUTPUT{return Err(err("raw-deflate-memory-bound",0));}
+ let parts=[bytes];let mut input=Input{parts:&parts,part:0,within:0,offset:0,total:bytes.len(),byte:0,bits:0,work};
+ let mut out=Output{bytes:Vec::new(),expected:limit,growing:true,s1:1,s2:0};
+ blocks(&mut input,&mut out,32768)?;input.align();Ok((out.bytes,input.offset))
 }
 
 #[cfg(test)]mod checks{

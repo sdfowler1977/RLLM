@@ -98,6 +98,7 @@ pub fn incoming(v: &Json) -> Result<Json> {
         )]));
     }
     if method == "GET" && path == "/v1/models" {
+        let global=super::application::gateway_policy_current(config)?;if let Err(reason)=super::application::gateway_policy_check(&global,"observation",&obj(vec![])){return Ok(error(400,&reason));}
         let mut models = BTreeMap::new();
         for p in profiles {
             let id = text(p, "model");
@@ -145,7 +146,9 @@ pub fn incoming(v: &Json) -> Result<Json> {
         None => return Ok(error(404, "Model is not configured in a server profile")),
     };
     let protocol = field(profile, "protocol")?;
-    let messages = body.get("messages")?.clone();
+    let endpoint=text(profile,"endpoint").replace("{model}",&network::encoded(model));
+    let global=super::application::gateway_policy_current(config)?;if let Err(reason)=super::application::gateway_policy_check(&global,"model",&obj(vec![("endpoint",s(&endpoint))])){return Ok(error(400,&reason));}
+    let messages=Arr(super::application::gateway_policy_messages(&global,body.get("messages")?.array()?.clone()));
     let request = request(&obj(vec![
         ("protocol", s(protocol)),
         ("model", s(model)),
@@ -160,7 +163,6 @@ pub fn incoming(v: &Json) -> Result<Json> {
     if protocol == "messages" {
         headers.push(("anthropic-version", "2023-06-01".into()))
     }
-    let endpoint = text(profile, "endpoint").replace("{model}", &network::encoded(model));
     let upstream = network::wire(
         &endpoint,
         value(profile, "plain") == &Bool(true),

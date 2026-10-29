@@ -17,7 +17,7 @@ pub(super) fn location(raw:&[u8])->Result<Option<String>>{
  let mut location=None;for line in lines{let(k,v)=line.split_once(':').ok_or("Invalid response header")?;if k.eq_ignore_ascii_case("location"){if location.is_some(){return Err("Duplicate redirect Location".into());}location=Some(v.trim().to_string());}}
  // Reuse the authoritative framing decoder with only status made successful.
  // Arbitrary redirect body bytes are discarded, never interpreted as a page.
- let mut framed=tail.to_vec();let code_at=first.find(' ').unwrap()+1;framed[code_at..code_at+3].copy_from_slice(b"200");network::decoded_bytes(&framed)?;
+ let mut framed=tail.to_vec();let code_at=first.find(' ').unwrap()+1;framed[code_at..code_at+3].copy_from_slice(b"200");network::decoded_coded_bytes(&framed)?;
  return location.map(Some).ok_or_else(||"Redirect response has no Location".into());
  }Err("Too many informational HTTP responses".into())
 }
