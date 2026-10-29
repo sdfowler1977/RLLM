@@ -426,6 +426,9 @@ fn operation(input: &str) -> Result<Json> {
         }
         "gateway_size" => gateway::size(&v),
         "gateway_incoming" => gateway::incoming(&v),
+        "local_tool_start" => application::local_tool_start(&v),
+        "local_tool_cancel" => application::local_tool_cancel(&v),
+        "harness_policy_commit" => application::harness_policy_commit(&v),
         "gateway_outgoing" => gateway::outgoing(&v),
         "gateway_failure" => gateway::failure(&v),
         "cancel_tool" => {
@@ -434,6 +437,8 @@ fn operation(input: &str) -> Result<Json> {
         }
         "event" => application::event(&v),
         "tool" => application::tool(&v),
+        "capture_document" => application::capture_document(&v),
+        "capture_document_cancel" => application::capture_document_cancel(&v),
         "request" => request(&v),
         "response" => response(&v),
         "validate" => {

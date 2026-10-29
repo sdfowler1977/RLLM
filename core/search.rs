@@ -5,10 +5,10 @@ const SOURCES:[(&str,&str);2]=[("Mwmbl","https://api.mwmbl.org/api/v2/search/?q=
 pub(super) fn builtin(st:&Json)->bool{let configured=text(get(st,"web"),"search_url");configured.trim().is_empty()}
 pub(super) fn binding(st:&Json)->Json{
  let role=if get(st,"task_run")==&Null{"primary"}else{"subagent"};let route=harness::route(st,role).unwrap_or(number(st,"request_index"));let index=if text(st,"request_model").is_empty(){route}else{number(st,"request_index")};
- obj(vec![("route",Num(route.to_string())),("route_profile",array(st,"profiles").get(route).cloned().unwrap_or(Null)),("index",Num(index.to_string())),("profile",array(st,"profiles").get(index).cloned().unwrap_or(Null)),("instructions",get(st,"instructions").clone()),("web",get(st,"web").clone()),("revision",get(st,"web_settings_revision").clone()),("mode",get(st,"capability_mode").clone())])
+ let mut value=obj(vec![("route",Num(route.to_string())),("route_profile",array(st,"profiles").get(route).cloned().unwrap_or(Null)),("index",Num(index.to_string())),("profile",array(st,"profiles").get(index).cloned().unwrap_or(Null)),("instructions",get(st,"instructions").clone()),("web",get(st,"web").clone()),("revision",get(st,"web_settings_revision").clone()),("mode",get(st,"capability_mode").clone())]);if !builtin(st)&&known(st){put(&mut value,"source_plan",s("selected-built-in-then-alternative-v1"));}value
 }
 pub(super) fn known(st:&Json)->bool{builtin(st)||SOURCES.iter().any(|(_,url)|*url==text(get(st,"web"),"search_url").trim())}
-pub(super) fn begin(st:&Json,p:&Json)->Json{let index=if text(get(st,"web"),"search_url").trim()==SOURCES[1].1{1}else{0};obj(vec![("last",Num(if builtin(st){1}else{index}.to_string())),("query",get(get(p,"args"),"query").clone()),("index",Num(index.to_string())),("attempts",Arr(vec![])),("binding",binding(st))])}
+pub(super) fn begin(st:&Json,p:&Json)->Json{let index=if text(get(st,"web"),"search_url").trim()==SOURCES[1].1{1}else{0};obj(vec![("last",Num("1".into())),("remaining",Arr(vec![Num((1-index).to_string())])),("query",get(get(p,"args"),"query").clone()),("index",Num(index.to_string())),("attempts",Arr(vec![])),("binding",binding(st))])}
 fn source(chain:&Json)->Result<(&'static str,&'static str)>{SOURCES.get(number(chain,"index")).copied().ok_or_else(||"Search alternatives exhausted".into())}
 pub(super) fn effect(chain:&Json)->Result<Json>{
  let(_,template)=source(chain)?;
@@ -17,9 +17,9 @@ pub(super) fn effect(chain:&Json)->Result<Json>{
  put(&mut e,"purpose",s("web_tool"));put(&mut e,"limit",Num((256*1024+16384).to_string()));Ok(e)
 }
 pub(super) fn advance(chain:&Json,reason:&str)->Result<Json>{
- if number(chain,"index")>=number(chain,"last"){return Err("Search alternatives exhausted".into());}
+ let remaining=get(chain,"remaining");let next_index=if remaining!=&Null{let values=remaining.array()?;if values.len()!=1{return Err("Search alternatives exhausted".into());}match &values[0]{Num(v)=>v.parse::<usize>().map_err(|_|"Invalid search source identity")?,_=>return Err("Invalid search source identity".into())}}else{if number(chain,"index")>=number(chain,"last"){return Err("Search alternatives exhausted".into());}number(chain,"index")+1};if next_index>=SOURCES.len()||next_index==number(chain,"index"){return Err("Invalid search alternative identity".into());}
  let(name,_)=source(chain)?;let mut next=chain.clone();let mut attempts=array(chain,"attempts");if attempts.len()>=SOURCES.len(){return Err("Search attempt bound reached".into());}
- attempts.push(obj(vec![("source",s(name)),("outcome",s(&web_operation::diagnostic(reason)))]));put(&mut next,"attempts",Arr(attempts));put(&mut next,"index",Num((number(chain,"index")+1).to_string()));source(&next)?;Ok(next)
+ attempts.push(obj(vec![("source",s(name)),("outcome",s(&web_operation::diagnostic(reason)))]));put(&mut next,"attempts",Arr(attempts));put(&mut next,"index",Num(next_index.to_string()));if remaining!=&Null{put(&mut next,"remaining",Arr(vec![]));}source(&next)?;Ok(next)
 }
 pub(super) fn trail(chain:&Json)->String{array(chain,"attempts").iter().map(|v|format!("{}: {}",text(v,"source"),text(v,"outcome"))).collect::<Vec<_>>().join("\n")}
 fn clean(v:&str,n:usize)->String{v.chars().take(n).map(|c|if c.is_control(){' '}else{c}).collect()}
@@ -85,5 +85,7 @@ pub(super) fn results(chain:&Json,body:&str)->Result<(String,bool)>{
   for bad in ["<nav><a href='https://example.test'>Link</a></nav>","<title>Verify you are human</title>","<template><div class='result'><a class='result__a' href='https://example.test'>Fake</a></div></template>","<div class='result'><a class='result__a' href='javascript:x'>Bad</a></div>"]{assert!(results(&chain(1),bad).is_err());}
   assert!(percent("%é").is_none());assert!(percent("%FF").is_none());
  }
+
+ #[test]fn saved_builtin_has_alternative_in_both_orders(){for (i,(_,url))in SOURCES.iter().enumerate(){let st=obj(vec![("web",obj(vec![("search_url",s(url)),("key",s("dormant-secret"))]))]);let c=begin(&st,&obj(vec![("args",obj(vec![("query",s("Query"))]))]));assert_eq!(number(&c,"index"),i);let next=advance(&c,"source unavailable").unwrap();assert_eq!(number(&next,"index"),1-i);assert_eq!(text(&next,"query"),"Query");assert!(advance(&next,"unavailable").is_err());assert_eq!(array(&next,"attempts").len(),1);}}
  #[test]fn finite_same_query_alternatives(){let c=chain(0);let next=advance(&c,"HTTP 403").unwrap();assert_eq!(text(&next,"query"),"Query");assert_eq!(number(&next,"index"),1);assert!(trail(&next).contains("HTTP 403"));assert!(advance(&next,"blocked").is_err());}
 }

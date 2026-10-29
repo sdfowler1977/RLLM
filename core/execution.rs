@@ -3,10 +3,16 @@ use std::{
     io::{Read, Write},
     os::unix::{io::AsRawFd, process::CommandExt},
     process::{Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 static CANCEL: AtomicBool = AtomicBool::new(false);
+// A new worker may reset the legacy flag; it cannot revive an older owner.
+static CANCEL_GENERATION: AtomicU64 = AtomicU64::new(0);
+pub fn cancellation_token() -> u64 { CANCEL_GENERATION.load(Ordering::SeqCst) }
+pub fn token_cancelled(token:u64) -> bool {
+    token==u64::MAX || CANCEL_GENERATION.load(Ordering::SeqCst)!=token || cancelled()
+}
 unsafe extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
     fn fcntl(fd: i32, cmd: i32, ...) -> i32;
@@ -26,6 +32,7 @@ pub fn cancelled() -> bool {
     CANCEL.load(Ordering::SeqCst)
 }
 pub fn cancel() {
+    let _=CANCEL_GENERATION.fetch_update(Ordering::SeqCst,Ordering::SeqCst,|n|Some(n.saturating_add(1)));
     CANCEL.store(true, Ordering::SeqCst);
 }
 fn drain(input: &mut impl Read, out: &mut Vec<u8>) -> Result<()> {
@@ -131,5 +138,15 @@ mod checks {
         drain(&mut input, &mut output).unwrap();
         assert_eq!(input.calls, 32);
         assert_eq!(output.len(), 65536);
+    }
+}
+
+#[cfg(test)] mod cancellation_ownership_checks {
+    use super::*;
+    #[test] fn reset_preserves_old_operation_cancellation() {
+        reset();let old=cancellation_token();assert!(!token_cancelled(old));
+        cancel();assert!(token_cancelled(old));reset();assert!(token_cancelled(old));
+        let current=cancellation_token();assert_ne!(old,current);assert!(!token_cancelled(current));
+        assert!(token_cancelled(u64::MAX));
     }
 }

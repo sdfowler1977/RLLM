@@ -165,9 +165,9 @@ pub fn wire(
     ]))
 }
 pub fn decoded_bytes(bytes: &[u8]) -> Result<(u16, Vec<u8>)> {
-    decoded_bytes_with_interim(bytes, 0, false)
+    decoded_bytes_with_interim(bytes, 0, false, false)
 }
-fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allow_missing: bool) -> Result<(u16, Vec<u8>)> {
+fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allow_missing: bool, coded:bool) -> Result<(u16, Vec<u8>)> {
     if bytes.len() > 8 * 1024 * 1024 {
         return Err("Response exceeds 8 MiB".into());
     }
@@ -194,7 +194,7 @@ fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allow_missing: bo
         if interim_count >= 4 {
             return Err("Too many informational HTTP responses".into());
         }
-        return decoded_bytes_with_interim(&bytes[end + 4..], interim_count + 1, allow_missing);
+        return decoded_bytes_with_interim(&bytes[end + 4..], interim_count + 1, allow_missing, coded);
     }
     let mut chunked = false;
     let mut length = None;
@@ -221,7 +221,7 @@ fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allow_missing: bo
                 }
             }
             "content-encoding" => {
-                if !v.trim().eq_ignore_ascii_case("identity") {
+                if !coded && !v.trim().eq_ignore_ascii_case("identity") {
                     return Err("Compressed response not supported by this transport".into());
                 }
             }
@@ -303,7 +303,7 @@ pub fn decoded(bytes: &[u8]) -> Result<(u16, String)> {
 /// A recoverable create may inspect a framed 404 before a conditional PUT.
 /// Redirects, auth failures, malformed framing and all other errors stay errors.
 pub fn decoded_optional_file(bytes:&[u8])->Result<(u16,String)>{
-    let (code,data)=decoded_bytes_with_interim(bytes,0,true)?;
+    let (code,data)=decoded_bytes_with_interim(bytes,0,true,false)?;
     Ok((code,String::from_utf8(data).map_err(|_|"File or response is not UTF-8 text")?))
 }
 pub fn strong_etag(bytes: &[u8]) -> Result<String> {
@@ -473,4 +473,8 @@ mod binary_response_checks {
     }
 }
 
-pub fn decoded_optional_bytes(bytes:&[u8])->Result<(u16,Vec<u8>)>{decoded_bytes_with_interim(bytes,0,true)}
+pub fn decoded_optional_bytes(bytes:&[u8])->Result<(u16,Vec<u8>)>{decoded_bytes_with_interim(bytes,0,true,false)}
+
+/// Explicit page/resource transport only. Default transport remains identity.
+pub fn decoded_coded_bytes(bytes:&[u8])->Result<(u16,Vec<u8>)>{decoded_bytes_with_interim(bytes,0,false,true)}
+pub fn page_wire(address:&str,plain:bool,headers:Vec<(&str,String)>)->Result<Json>{let mut effect=wire(address,plain,"GET","",headers)?;let w=effect.get("wire")?.text()?.replacen("Accept-Encoding: identity\r\n","Accept-Encoding: gzip, identity\r\n",1);if let Obj(ref mut fields)=effect{fields.insert("wire".into(),s(&w));}Ok(effect)}
