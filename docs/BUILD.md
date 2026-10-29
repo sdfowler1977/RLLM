@@ -49,20 +49,13 @@ unset CLIENT_KEY_PASSWORD
 
 The default `main` variant uses `com.local.client`, separately from the distributed `com.local.client.lab`. Your signing key is not the publisher's key. A differently signed APK cannot update the publisher's installed Lab app. Do not change, publish, or request the publisher's private key to make an update work.
 
-For authorized maintainers using the existing Lab signing identity, set `CLIENT_VARIANT=lab` and an increasing integer `CLIENT_VERSION_CODE` before running the same script. Preserve the established signing identity. The provided Lab build has version code `1793159000`; subsequent Lab updates must increase it.
+For authorized maintainers using the existing Lab signing identity, set `CLIENT_VARIANT=lab` and an increasing integer `CLIENT_VERSION_CODE` before running the same script. Preserve the established signing identity. The provided Lab build has version code `1793286141`; subsequent Lab updates must increase it.
 
-## Core checks
+## Validation scope
 
-On a supported Linux host, from the repository root:
+This publication preserves the exact 115 reviewed packaging inputs. The independent recorded build matched all 24 runtime payloads for both ABIs, DEX, resources and notices. See [release notes](../release/NOTES.md). Publication itself does not claim a fresh rebuild or installed-device acceptance.
 
-```bash
-mkdir -p output/checks
-rustc --edition=2021 --test core/lib.rs -o output/checks/core-checks
-output/checks/core-checks --skip archive --skip network_project_zip_routes_to_review_without_text_decoding \
-  --skip binary_network_zip_reaches_import_preview
-```
-
-The publication copy preserves product source and inline checks. Current source defines 210 checks; only focused checks were rerun for this release. See [release notes](../release/NOTES.md) for exact validation scope. All 24 runtime payloads were independently rebuilt and matched the supplied APK. Archive behavior and installed-device acceptance remain unverified.
+Do not run a broad test suite as an archive-review retry. The existing archive/compression and separate HTML byte-prescan review restrictions remain unresolved; focused work must preserve those boundaries. Product runtime does not depend on engineering reports or test artifacts.
 
 ## Verify the supplied APK
 
@@ -74,7 +67,7 @@ sha256sum release/RLLM-Lab.apk
 Expected SHA-256:
 
 ```text
-1c085b506ff0d74f53a5febe773be35972dae2f639645ce629f685a4e8dba4e2
+bdfc6161cc1b3a4eb48837e379337d291898eccb5982f6144526b7d276094d3d
 ```
 
 Expected signer certificate SHA-256:
