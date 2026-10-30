@@ -8,7 +8,7 @@ fn clean(value:&str,max:usize)->String{value.chars().take(max).map(|c|if c.is_co
 pub(super) fn diagnostic(value:&str)->String{clean(value,512)}
 fn identity(st:&Json)->Json{
  let run=get(st,"task_run");let agent=if run==&Null{harness::active_agent(st)}else{get(run,"agent").clone()};
- let value=obj(vec![("index",Num(interaction::agent_index(st).to_string())),("agent",agent),("mode",get(run,"mode").clone()),("phase",get(run,"phase").clone()),("task",get(run,"task").clone()),("chat",get(run,"chat").clone()),("connection",get(run,"connection").clone()),("depth",Num(array(st,"delegation_stack").len().to_string()))]);
+ let value=obj(vec![("root",get(st,"approval_root").clone()),("root_identity",get(st,"approval_root_identity").clone()),("index",Num(interaction::agent_index(st).to_string())),("agent",agent),("mode",get(run,"mode").clone()),("phase",get(run,"phase").clone()),("task",get(run,"task").clone()),("chat",get(run,"chat").clone()),("connection",get(run,"connection").clone()),("depth",Num(array(st,"delegation_stack").len().to_string()))]);
  if value.string().len()>65536{Null}else{value}
 }
 pub(super) fn context(st:&Json,p:&Json)->Json{
@@ -16,19 +16,24 @@ pub(super) fn context(st:&Json,p:&Json)->Json{
  let mut context=obj(vec![("tool",s(&text(p,"tool"))),("args",get(p,"args").clone()),("model_origin",Bool(boolean(st,"agent_running")||get(st,"task_run")!=&Null)),("chat",s(&text(st,"active"))),("agent",s(&clean(&text(&agent,"name"),128))),("identity",identity(st))]);if text(p,"tool")=="web_search"{put(&mut context,"search_owner_binding",search::binding(st));}if text(p,"tool")=="web_read"{put(&mut context,"read_owner_binding",search::binding(st));if get(get(p,"args"),"capture")!=&Null{put(&mut context,"capture",get(get(p,"args"),"capture").clone());}}context
 }
 pub(super) fn own(st:&Json,p:&mut Json){let owner=context(st,p);put(p,"web_owner",owner);}
+/// Model provenance comes from the actual model reply route, before approval
+/// changes agent_pending/agent_running. Proposal JSON cannot choose this flag.
+pub(super) fn own_model(st:&Json,p:&mut Json){let mut owner=context(st,p);put(&mut owner,"model_origin",Bool(true));put(p,"web_owner",owner);}
 pub(super) fn owner(st:&Json,p:&Json)->Json{if get(p,"web_owner")!=&Null{get(p,"web_owner").clone()}else{context(st,p)}}
 pub(super) fn approval(st:&Json,p:&Json)->Result<()>{let owner=owner(st,p);if get(&owner,"args")!=&Null&&get(&owner,"args")!=get(p,"args"){return Err("The web proposal arguments changed since they were captured; request a new proposal".into());}if text(p,"tool")=="web_read"&&get(&owner,"capture")!=get(get(p,"args"),"capture"){return Err("Page capture settings changed since the proposal; request it again".into());}if text(p,"tool")=="web_read"&&get(&owner,"read_owner_binding")!=&search::binding(st){return Err("The page-reading connection or settings changed since the proposal; request a new proposal before approving".into());}if text(p,"tool")=="web_search"&&get(&owner,"search_owner_binding")!=&search::binding(st){return Err("The search connection or settings changed since the proposal; request a new proposal before approving".into());}if text(&owner,"chat")!=text(st,"active"){return Err("The web proposal belongs to another conversation; request it again in the intended conversation".into());}if get(&owner,"identity")==&Null||get(&owner,"identity")!=&identity(st){return Err("The proposing agent changed; request a new web proposal before approving".into());}Ok(())}
 pub(super) fn bind(st:&mut Json,e:&mut Json,p:&Json)->Result<()>{
  let n=SERIAL.try_update(Ordering::SeqCst,Ordering::SeqCst,|n|n.checked_add(1)).map_err(|_|"Web request ticket space exhausted")?;
  let ticket=format!("web-{n}");let mut expected=owner(st,p);let parent=text(&expected,"ticket");put(&mut expected,"ticket",s(&ticket));
  if text(&expected,"tool")=="web_read"{let session=if text(&expected,"deadline_session").is_empty(){ticket.clone()}else{text(&expected,"deadline_session")};put(e,"web_session",s(&session));put(e,"web_parent_ticket",s(&parent));put(&mut expected,"deadline_session",s(&session));let chain=if get(&expected,"redirect_chain")!=&Null{get(&expected,"redirect_chain").clone()}else{redirect::initial(&text(st,"web_source"))?};put(&mut expected,"redirect_chain",chain);}
+ let source=if text(&expected,"tool")=="web_read"{text(get(&expected,"redirect_chain"),"current")}else if get(e,"search_chain")!=&Null{text(e,"host")}else{text(st,"web_source")};
+ if source.is_empty(){return Err("Missing captured web source".into());}put(&mut expected,"source",s(&source));
  if get(e,"search_chain")!=&Null{put(&mut expected,"search_chain",get(e,"search_chain").clone());if let Obj(fields)=e{fields.remove("search_chain");}}
- page_program::bind_web(&mut expected)?;let mut next=st.clone();put(&mut next,"web_expected",expected.clone());
+ page_program::bind_web(&mut expected)?;let mut next=st.clone();put(&mut next,"web_expected",expected.clone());put(&mut next,"web_source",s(&source));
  if super::super::mcp_schema::state_bytes(&next)>6*1024*1024-8192{page_program::finish_web(&expected);return Err("History has insufficient room for this web operation; existing data retained".into());}
  put(e,"web_ticket",s(&ticket));*st=next;Ok(())
 }
 pub(super) fn expected(st:&Json,i:&Json)->bool{
- let e=get(st,"web_expected");page_program::valid_web_binding(e)&&boolean(st,"busy")&&!text(e,"ticket").is_empty()&&text(e,"ticket")==text(i,"web_ticket")&&text(e,"chat")==text(st,"active")&&get(e,"identity")!=&Null&&get(e,"identity")==&identity(st)&&(text(e,"tool")!="web_search"||get(e,"search_owner_binding")==&search::binding(st))&&(text(e,"tool")!="web_read"||get(e,"read_owner_binding")==&search::binding(st))&&(get(e,"search_chain")==&Null||get(get(e,"search_chain"),"binding")==&search::binding(st))
+ let e=get(st,"web_expected");page_program::valid_web_binding(e)&&current_owner(st,e)&&boolean(st,"busy")&&!text(e,"ticket").is_empty()&&text(e,"ticket")==text(i,"web_ticket")&&text(e,"chat")==text(st,"active")&&get(e,"identity")!=&Null&&get(e,"identity")==&identity(st)&&(text(e,"tool")!="web_search"||get(e,"search_owner_binding")==&search::binding(st))&&(text(e,"tool")!="web_read"||get(e,"read_owner_binding")==&search::binding(st))&&(get(e,"search_chain")==&Null||get(get(e,"search_chain"),"binding")==&search::binding(st))
 }
 /// Never overwrites existing messages to make room for a diagnostic.
 pub(super) fn record(st:&mut Json,context:&Json,status:&str,reason:&str)->bool{
@@ -84,6 +89,7 @@ pub(super) fn page_error(error:String)->String{
 
 /// Captured web ownership is rechecked before a failed response may reach its model.
 pub(super) fn current_owner(st:&Json,context:&Json)->bool{
+ !text(context,"source").is_empty()&&text(context,"source")==text(st,"web_source")&&
  text(context,"chat")==text(st,"active")&&get(context,"identity")!=&Null&&get(context,"identity")==&identity(st)&&
  (if text(context,"tool")=="web_search"{get(context,"search_owner_binding")==&search::binding(st)}else if text(context,"tool")=="web_read"{get(context,"read_owner_binding")==&search::binding(st)}else{false})
 }

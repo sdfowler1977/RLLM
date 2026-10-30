@@ -1273,9 +1273,12 @@ fn event_inner(v: &Json) -> Result<Json> {
     let web_callback=matches!(action,"network_result"|"tool_result"|"failure") && text(inputs,"purpose")=="web_tool";
     let capture_phase=text(get(&st,"web_expected"),"phase")=="capture";
     if web_callback&&((action=="network_result"&&capture_phase)||(action=="tool_result"&&!capture_phase)){let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));}
-    if web_callback && !web_operation::expected(&st,inputs){let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));}
+    if web_callback && !web_operation::expected(&st,inputs){let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));}
     let mut web_feedback=web_callback || (matches!(action,"approve"|"reject")&&web_operation::is_web(get(&st,"pending"))) || (matches!(action,"cancel"|"resume")&&get(&st,"web_expected")!=&Null);
     let mut web_context=if web_callback{get(&st,"web_expected").clone()}else{Null};
+    // Expired callbacks retain only their authenticated timeout cleanup.
+    // Their late UI/device snapshot must not overwrite current user state.
+    let expired_web_callback=web_callback&&page_program::web_expired(&web_context).unwrap_or(true);
     if web_callback{if capture_phase{capture_job::cancel(&text(&web_context,"capture_token"));}put(&mut st,"web_expected",Null);}
     let mut web_fetched=false;
     let mut web_failure_kind:Option<&str>=None;
@@ -1321,10 +1324,11 @@ fn event_inner(v: &Json) -> Result<Json> {
         put(&mut st,"rea_expected",Null);
     }
     if matches!(action,"cancel"|"resume"){harness::rea_clear(&mut st);}
+    let previous_dialog=text(&st,"dialog");
+    if !expired_web_callback {
     if get(inputs,"phone_access_granted")!=&Null {put(&mut st,"phone_access_granted",Bool(boolean(inputs,"phone_access_granted")));}
     if get(inputs,"device")!=&Null {put(&mut st,"device",get(inputs,"device").clone());}
     if get(inputs,"gateway_status")!=&Null {put(&mut st,"gateway_status",s(&text(inputs,"gateway_status")));}
-    let previous_dialog=text(&st,"dialog");
     if metadata_callback || rea_callback || web_callback || matches!(action,"apps_result"|"model_progress"|"rate_tick"|"resume"|"archive_built"|"artifact_built"|"artifact_failed"|"project_cleared"|"project_recovered") || (matches!(action,"network_result"|"project_phone_result"|"failure") && (remote_monitor::is_result(inputs)||project_store::is_result(inputs))) {
         // Android includes the current draft/form with asynchronous callbacks.
         // Keep those edits, but never persist transport payloads as form data.
@@ -1339,6 +1343,7 @@ fn event_inner(v: &Json) -> Result<Json> {
         }
         capture(&mut st,&captured);
     }else{capture(&mut st, inputs);}
+    }
     if matches!(action,"connect_llm"|"home_server"|"profile_new"|"profile_edit"|"profile_save"|"close"|"back") {put(&mut st,"profile_error",Null);}
     let metadata_cancel=model_metadata::reconcile(&mut st,action);
     let mut effect = if metadata_cancel || app_navigation_cancel {obj(vec![("kind",s("cancel"))])}else{Null};
@@ -1384,7 +1389,12 @@ fn event_inner(v: &Json) -> Result<Json> {
             return Err("Wait for the current operation or cancel it".into());
         }
         if previous_dialog=="chat_actions" && action!="chat_actions" {put(&mut st,"dialog",Null);}
-        if web_callback{web_operation::admission(&st,&web_context)?;}
+        if web_callback{web_operation::admission(&st,&web_context)?;
+            if action!="failure"&&page_program::web_expired(&web_context)?{
+                if !capture_phase&&text(&web_context,"phase")!="resources"{web_failure_kind=Some("transport");}
+                return Err("The approved web attempt timed out; late response bytes were not adopted".into());
+            }
+        }
         if harness_rules::handles(action){effect=harness_rules::event(&mut st,action,inputs)?;return Ok(());}
         if approval_rules::handles(action){approval_rules::event(&mut st,action,inputs)?;return Ok(());}
         if remote_monitor::handles(action) {effect=remote_monitor::event(&mut st,action,inputs)?;return Ok(());}
@@ -1924,7 +1934,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 }
                 match text(inputs, "purpose").as_str() {
                     "web_tool" => {
-                        let page=if get(&web_context,"search_chain")!=&Null{let(output,empty)=search::results(get(&web_context,"search_chain"),&body).map_err(|e|{web_failure_kind=Some("search_response");e})?;if empty{let mut chain=get(&web_context,"search_chain").clone();put(&mut chain,"valid_empty",s(&output));put(&mut web_context,"search_chain",chain);web_failure_kind=Some("empty_search");return Err("The source returned zero results for the exact approved query".into());}output}else if text(&web_context,"tool")=="web_search"{format!("Custom search source response (not a validated structured result list):\n{}",investigation::search_page(&body).map_err(|e|{web_failure_kind=Some("search_response");e})?)}else{body.clone()};web_fetched=true;put(&mut st,"active_tool",Null);
+                        let page=if get(&web_context,"search_chain")!=&Null{let(output,empty)=search::results(get(&web_context,"search_chain"),&body).map_err(|e|{web_failure_kind=Some("search_response");e})?;if empty{page_program::set_web_empty_search(&mut web_context,&output)?;web_failure_kind=Some("empty_search");return Err("The source returned zero results for the exact approved query".into());}output}else if text(&web_context,"tool")=="web_search"{format!("Custom search source response (not a validated structured result list):\n{}",investigation::search_page(&body).map_err(|e|{web_failure_kind=Some("search_response");e})?)}else{body.clone()};web_fetched=true;put(&mut st,"active_tool",Null);
                         let output=format!("Fetched source: {}\nUntrusted web data:\n{page}",text(&st,"web_source"));
                         let mut candidate=st.clone();let next=if text(&web_context,"tool")=="web_search"{completed_search(&mut candidate,&web_context,&output)?}else{completed_read(&mut candidate,&web_context,&output)?};
                         let bytes=super::mcp_schema::state_bytes(&candidate);
@@ -2099,7 +2109,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                             if get(&proposed, "tool") != &Null {
                                 harness::allowed_tool(&st,&proposed)?;
                                 validate_tool(&proposed)?;
-                                if web_operation::is_web(&proposed){web_operation::own(&st,&mut proposed);}
+                                if web_operation::is_web(&proposed){web_operation::own_model(&st,&mut proposed);}
                                 claim_records::own(&st,&mut proposed)?;experiment_records::own(&st,&mut proposed)?;
                                 put(&mut st, "pending", proposed);
                                 put(&mut st, "agent_pending", Bool(true));

@@ -290,10 +290,13 @@ pub(super) fn run(html:&[u8],room:usize,cancelled:&impl Fn()->bool,remaining:Dur
 /// never from a development report or an unrelated local-tool cancellation.
 use std::sync::{Arc,Mutex,OnceLock,atomic::{AtomicBool,AtomicU64,Ordering}};
 pub(super) type WebCancellation=Arc<AtomicBool>;
-struct WebOwner{token:u64,full:String,stable:String,ticket:String,cancelled:WebCancellation,deadline:Instant}
+struct WebOwner{token:u64,full:String,stable:String,ticket:String,program:bool,cancelled:WebCancellation,deadline:Instant}
 static WEB_SERIAL:AtomicU64=AtomicU64::new(1);
 fn web_owners()->&'static Mutex<Vec<WebOwner>>{static OWNERS:OnceLock<Mutex<Vec<WebOwner>>>=OnceLock::new();OWNERS.get_or_init(||Mutex::new(Vec::new()))}
-fn prune_owners(owners:&mut Vec<WebOwner>){let now=Instant::now();owners.retain(|owner|{let live=!owner.cancelled.load(Ordering::SeqCst)&&now<owner.deadline;if !live{owner.cancelled.store(true,Ordering::SeqCst);}live});}
+// Keep bounded expired identity until its terminal callback or cancellation.
+// Discarding it at the deadline would turn a genuine transport timeout into an
+// unauthenticated no-op and strand the current request in its busy state.
+fn prune_owners(owners:&mut Vec<WebOwner>){owners.retain(|owner|!owner.cancelled.load(Ordering::SeqCst));}
 fn owner_digest(owner:&Json,stable:bool)->Result<String>{
  fn bytes(d:&mut super::incremental_digest::Digest,v:&[u8],work:&mut usize)->Result<()>{*work=work.checked_sub(v.len().saturating_add(8)).ok_or("Web ownership work bound exceeded")?;d.update(&(v.len()as u64).to_le_bytes())?;d.update(v)}
  fn walk(d:&mut super::incremental_digest::Digest,v:&Json,depth:usize,work:&mut usize)->Result<()>{if depth>128{return Err("Web ownership nesting bound exceeded".into());}*work=work.checked_sub(1).ok_or("Web ownership work bound exceeded")?;match v{
@@ -302,23 +305,32 @@ fn owner_digest(owner:&Json,stable:bool)->Result<String>{
   Obj(values)=>{d.update(&[5])?;d.update(&(values.len()as u64).to_le_bytes())?;for(k,v)in values{bytes(d,k.as_bytes(),work)?;walk(d,v,depth+1,work)?;}Ok(())}
  }}
  let Obj(fields)=owner else{return Err("Missing captured web ownership object".into());};let mut digest=super::incremental_digest::Digest::new();let mut work=24*1024*1024usize;
- for(k,v)in fields{if stable&&["ticket","phase","capture_token","redirect_chain","search_chain","program_summary"].contains(&k.as_str()){continue;}bytes(&mut digest,k.as_bytes(),&mut work)?;walk(&mut digest,v,0,&mut work)?;}
+ for(k,v)in fields{if stable&&["ticket","phase","capture_token","redirect_chain","search_chain","program_summary","source","program_deadline_ms"].contains(&k.as_str()){continue;}bytes(&mut digest,k.as_bytes(),&mut work)?;walk(&mut digest,v,0,&mut work)?;}
  Ok(digest.finish())
 }
 fn owner_token(owner:&Json)->Result<u64>{match get(owner,"program_token"){Num(v)=>v.parse::<u64>().map_err(|_|"Invalid page program token".into()),_=>Err("Missing page program token".into())}}
 pub(super) fn clock_ms()->u64{static START:OnceLock<Instant>=OnceLock::new();START.get_or_init(Instant::now).elapsed().as_millis().min(u64::MAX as u128)as u64}
 pub(super) fn bind_web(owner:&mut Json)->Result<()>{
- let selected=enabled(get(owner,"args"))?;if !selected&&get(owner,"program_token")==&Null{return Ok(());}
+ let selected=enabled(get(owner,"args"))?;
  let mut owners=web_owners().lock().map_err(|_|"Page program ownership unavailable")?;prune_owners(&mut owners);
  if get(owner,"program_token")!=&Null{
   let token=owner_token(owner)?;let stable=owner_digest(owner,true)?;let entry=owners.iter_mut().find(|v|v.token==token).ok_or("Page program owner expired or was cancelled")?;
-  if !selected||entry.stable!=stable{return Err("Captured page program ownership changed".into());}entry.full=owner_digest(owner,false)?;entry.ticket=text(owner,"ticket");return Ok(());
+  if entry.program!=selected||entry.stable!=stable{return Err("Captured web operation ownership changed".into());}
+  // Each approved search source has its own transport timeout. Only a trusted
+  // next-source dispatch gets a fresh attempt deadline; page redirects and
+  // capture/resource phases retain the original page-operation deadline.
+  if text(owner,"tool")=="web_search"&&text(owner,"ticket")!=entry.ticket{
+   let deadline=Instant::now().checked_add(Duration::from_secs(120)).ok_or("Search attempt deadline overflow")?;let stamp=clock_ms().checked_add(120000).ok_or("Search attempt clock exhausted")?;
+   put(owner,"program_deadline_ms",Num(stamp.to_string()));entry.deadline=deadline;
+  }
+  entry.full=owner_digest(owner,false)?;entry.ticket=text(owner,"ticket");return Ok(());
  }
- if owners.len()>=4{return Err("Four page program owners are already pending".into());}
+ if selected&&owners.iter().filter(|entry|entry.program).count()>=4{return Err("Four page program owners are already pending".into());}
+ if !selected&&owners.iter().filter(|entry|!entry.program).count()>=64{return Err("64 web read/search owners are already pending; finish or cancel one before another request".into());}
  let token=WEB_SERIAL.fetch_update(Ordering::SeqCst,Ordering::SeqCst,|v|v.checked_add(1)).map_err(|_|"Page program token space exhausted")?;
  let deadline=Instant::now().checked_add(Duration::from_secs(120)).ok_or("Page program deadline overflow")?;let stamp=clock_ms().checked_add(120000).ok_or("Page program clock exhausted")?;
  put(owner,"program_token",Num(token.to_string()));put(owner,"program_deadline_ms",Num(stamp.to_string()));
- let full=owner_digest(owner,false)?;let stable=owner_digest(owner,true)?;let ticket=text(owner,"ticket");owners.push(WebOwner{token,full,stable,ticket,cancelled:Arc::new(AtomicBool::new(false)),deadline});Ok(())
+ let full=owner_digest(owner,false)?;let stable=owner_digest(owner,true)?;let ticket=text(owner,"ticket");owners.push(WebOwner{token,full,stable,ticket,program:selected,cancelled:Arc::new(AtomicBool::new(false)),deadline});Ok(())
 }
 /// Adopt only the summary produced by the already admitted inline stage,
 /// before the same owner moves into resource or rendering callbacks.
@@ -327,10 +339,24 @@ pub(super) fn set_web_summary(owner:&mut Json,summary:&str)->Result<()>{
  let entry=owners.iter_mut().find(|v|v.token==token&&v.full==previous).ok_or("Page program owner changed before capture staging")?;
  put(owner,"program_summary",s(summary));entry.full=owner_digest(owner,false)?;Ok(())
 }
+/// Adopt a parsed empty-result observation only while its original request is
+/// still authenticated. Search fallback changes the captured context, so its
+/// full binding must advance with the observation before terminal adoption.
+pub(super) fn set_web_empty_search(owner:&mut Json,output:&str)->Result<()>{
+ let token=owner_token(owner)?;let previous=owner_digest(owner,false)?;let mut owners=web_owners().lock().map_err(|_|"Web operation ownership unavailable")?;prune_owners(&mut owners);
+ let entry=owners.iter_mut().find(|v|v.token==token&&v.full==previous).ok_or("Web operation owner changed before empty-result staging")?;
+ if text(owner,"tool")!="web_search"||get(owner,"search_chain")==&Null{return Err("Empty-result staging requires a captured search".into());}
+ let mut next=owner.clone();let mut chain=get(&next,"search_chain").clone();put(&mut chain,"valid_empty",s(output));put(&mut next,"search_chain",chain);
+ let full=owner_digest(&next,false)?;*owner=next;entry.full=full;Ok(())
+}
 pub(super) fn valid_web_binding(owner:&Json)->bool{
  let Ok(mut owners)=web_owners().lock()else{return false;};prune_owners(&mut owners);let ticket=text(owner,"ticket");
  if let Some(entry)=owners.iter().find(|v|v.ticket==ticket){return owner_digest(owner,false).is_ok_and(|v|v==entry.full);}
- get(owner,"program_token")==&Null&&matches!(enabled(get(owner,"args")),Ok(false))
+ false
+}
+pub(super) fn web_expired(owner:&Json)->Result<bool>{
+ let token=owner_token(owner)?;let full=owner_digest(owner,false)?;let owners=web_owners().lock().map_err(|_|"Web operation ownership unavailable")?;
+ let entry=owners.iter().find(|v|v.token==token&&v.full==full&&!v.cancelled.load(Ordering::SeqCst)).ok_or("Web operation owner changed or was cancelled")?;Ok(Instant::now()>=entry.deadline)
 }
 pub(super) fn web_limits(owner:&Json)->PResult<(WebCancellation,Duration)>{
  let token=owner_token(owner).map_err(resource)?;let full=owner_digest(owner,false).map_err(resource)?;let mut owners=web_owners().lock().map_err(|_|resource("Page program ownership unavailable"))?;prune_owners(&mut owners);

@@ -74,11 +74,24 @@ fn symbols(reader:&Reader<'_>,header:&Header,index:u64,s:Section,out:&mut String
  if count>SYMBOL_LIMIT{out.push_str("Remaining symbol records were not classified under the symbol work bound.\n");}found
 }
 fn mapped(loads:&[Load],address:u64,size:u64)->Result<u64,&'static str>{
+ let end=address.checked_add(size).ok_or("virtual string-table extent overflow")?;
  let mut match_offset=None;
  for load in loads{if address<load.address{continue;}let delta=address-load.address;if delta>load.file_size||size>load.file_size-delta{continue;}let offset=load.offset.checked_add(delta).ok_or("load mapping overflow")?;if match_offset.map(|old|old!=offset).unwrap_or(false){return Err("ambiguous overlapping load mappings");}match_offset=Some(offset);}
- match_offset.ok_or("virtual string-table extent has no observed file-backed LOAD mapping")
+ let offset=match_offset.ok_or("virtual string-table extent has no observed file-backed LOAD mapping")?;
+ // Every intersecting LOAD can contradict part of the selected mapping,
+ // including one that does not contain the complete string-table extent.
+ for load in loads{
+  let memory_end=load.address.checked_add(load.memory_size).ok_or("load memory extent overflow")?;
+  let start=address.max(load.address);let stop=end.min(memory_end);if start>=stop{continue;}
+  let file_end=load.address.checked_add(load.file_size).ok_or("load file-address extent overflow")?;
+  if stop>file_end{return Err("ambiguous overlapping load mappings include a zero-fill tail");}
+  let actual=load.offset.checked_add(start-load.address).ok_or("load mapping overflow")?;
+  let expected=offset.checked_add(start-address).ok_or("load mapping overflow")?;
+  if actual!=expected{return Err("ambiguous overlapping load mappings");}
+ }
+ Ok(offset)
 }
-fn dynamic(reader:&Reader<'_>,header:&Header,entry:Dynamic,loads:&[Load],out:&mut String)->usize{
+fn dynamic(reader:&Reader<'_>,header:&Header,entry:Dynamic,loads:&[Load],loads_complete:bool,out:&mut String)->usize{
  let stride=if header.wide{16u64}else{8};
  if entry.size%stride!=0||reader.extent(entry.offset,entry.size).is_err()||reader.slice(entry.offset,entry.size).is_none(){out.push_str("Dynamic table is incomplete, out of file bounds, or not an integral entry count; named dependencies withheld.\n");return 0;}
  let count=entry.size/stride;let mut string_address=None;let mut string_size=None;let mut ambiguous=false;let mut names=Vec::new();let mut terminated=false;let mut observed=0;let mut names_omitted=0;
@@ -89,10 +102,10 @@ fn dynamic(reader:&Reader<'_>,header:&Header,entry:Dynamic,loads:&[Load],out:&mu
  let strings=if let Some(index)=entry.string_section{
   if let (Some(address),Some(size))=(string_address,string_size){
    let target=section(reader,header,index as u64);
-   if target.map(|s|s.size!=size).unwrap_or(true)||(!loads.is_empty()&&mapped(loads,address,size).ok().zip(target).map(|(offset,s)|offset!=s.offset).unwrap_or(true)){out.push_str("Dynamic linked string table conflicts with address/size metadata; named observations withheld.\n");return 0;}
+   if target.map(|s|s.size!=size).unwrap_or(true)||(header.phnum!=0&&(!loads_complete||mapped(loads,address,size).ok().zip(target).map(|(offset,s)|offset!=s.offset).unwrap_or(true))){out.push_str("Dynamic linked string table conflicts with address/size metadata; named observations withheld.\n");return 0;}
   }
   match string_section(reader,header,index){Ok(v)=>v,Err(reason)=>{let _=writeln!(out,"Dynamic linked string table unavailable: {reason}.");return 0;}}}
- else{let(address,size)=match(string_address,string_size){(Some(a),Some(s))=>(a,s),_=>{out.push_str("Dynamic string-table address/size not both observed; dependency names unresolved.\n");return 0;}};let offset=match mapped(loads,address,size){Ok(v)=>v,Err(reason)=>{let _=writeln!(out,"Dynamic string table: {reason}; names unresolved.");return 0;}};match string_table(reader,Section{name:0,kind:3,flags:0,address,offset,size,link:0,info:0,align:1,entry:0}){Ok(v)=>v,Err(reason)=>{let _=writeln!(out,"Dynamic string table: {reason}; names unresolved.");return 0;}}};
+ else{if !loads_complete{out.push_str("Program LOAD inventory is incomplete or invalid; virtual string-table mapping and dependency names unresolved.\n");return 0;}let(address,size)=match(string_address,string_size){(Some(a),Some(s))=>(a,s),_=>{out.push_str("Dynamic string-table address/size not both observed; dependency names unresolved.\n");return 0;}};let offset=match mapped(loads,address,size){Ok(v)=>v,Err(reason)=>{let _=writeln!(out,"Dynamic string table: {reason}; names unresolved.");return 0;}};match string_table(reader,Section{name:0,kind:3,flags:0,address,offset,size,link:0,info:0,align:1,entry:0}){Ok(v)=>v,Err(reason)=>{let _=writeln!(out,"Dynamic string table: {reason}; names unresolved.");return 0;}}};
  let mut found=0;
  for(tag,offset)in names{let label=match tag{1=>"DT_NEEDED dependency candidate",14=>"DT_SONAME declaration",15=>"DT_RPATH declaration (not used)",_=>"DT_RUNPATH declaration (not used)"};match named(strings,offset){Ok(name)=>{let _=writeln!(out,"{label}: \"{name}\". No dependency was located, fetched or loaded.");found+=1;},Err(reason)=>{let _=writeln!(out,"{label}: name unavailable ({reason}).");}}}
  found
@@ -114,15 +127,15 @@ fn contents(reader:&Reader<'_>,wide:bool,out:&mut String){
  }
  let ph_valid=table_extent(reader,header.phoff,header.phsize,header.phnum,phminimum,"Program table",out);
  let sh_valid=table_extent(reader,header.shoff,header.shsize,header.shnum,shminimum,"Section table",out);
- let mut loads=Vec::new();let mut dynamics:Vec<Dynamic>=Vec::new();let mut ph_observed=0;
+ let mut loads=Vec::new();let mut dynamics:Vec<Dynamic>=Vec::new();let mut ph_observed=0;let mut loads_complete=ph_valid;
  if ph_valid{for i in 0..header.phnum.min(TABLE_LIMIT){
   let at=match header.phsize.checked_mul(i).and_then(|v|header.phoff.checked_add(v)){Some(v)=>v,None=>break};if reader.slice(at,header.phsize).is_none(){let _=writeln!(out,"Program header {i} is not fully available in the examined prefix; later headers unexamined.");break;}
   let ptype=reader.u32(at).unwrap();let(offset,address,file_size,memory_size,flags,align)=if wide{(reader.u64(at+8).unwrap(),reader.u64(at+16).unwrap(),reader.u64(at+32).unwrap(),reader.u64(at+40).unwrap(),reader.u32(at+4).unwrap(),reader.u64(at+48).unwrap())}else{(reader.u32(at+4).unwrap() as u64,reader.u32(at+8).unwrap() as u64,reader.u32(at+16).unwrap() as u64,reader.u32(at+20).unwrap() as u64,reader.u32(at+24).unwrap(),reader.u32(at+28).unwrap() as u64)};ph_observed+=1;
   let _=writeln!(out,"Program {i}: type {ptype} ({}); file offset {offset}; file size {file_size}; virtual address 0x{address:x}; memory size {memory_size}; flags 0x{flags:x}; alignment {align}.",program_type(ptype));
-  let end=match reader.extent(offset,file_size){Ok(v)=>v,Err(reason)=>{let _=writeln!(out,"Program {i}: {reason}; mapping/candidates withheld.");continue;}};
-  let memory_end=match address_end(address,memory_size,wide){Some(v)=>v,None=>{let _=writeln!(out,"Program {i}: virtual-address extent overflow; mapping withheld.");continue;}};
+  let end=match reader.extent(offset,file_size){Ok(v)=>v,Err(reason)=>{let _=writeln!(out,"Program {i}: {reason}; mapping/candidates withheld.");if ptype==1{loads_complete=false;}continue;}};
+  let memory_end=match address_end(address,memory_size,wide){Some(v)=>v,None=>{let _=writeln!(out,"Program {i}: virtual-address extent overflow; mapping withheld.");if ptype==1{loads_complete=false;}continue;}};
   if ptype==1{
-   if file_size>memory_size||!pow2_or_small(align)||(align>1&&offset%align!=address%align){let _=writeln!(out,"LOAD {i}: inconsistent file/memory sizes or alignment/congruence; mapping withheld.");continue;}
+   if file_size>memory_size||!pow2_or_small(align)||(align>1&&offset%align!=address%align){let _=writeln!(out,"LOAD {i}: inconsistent file/memory sizes or alignment/congruence; mapping withheld.");loads_complete=false;continue;}
    let file_address_end=address+file_size;
    let _=writeln!(out,"Declared LOAD mapping: file [{offset},{end}) -> virtual [0x{address:x},0x{file_address_end:x}); declared zero-fill tail {} bytes to 0x{memory_end:x}. This is an ELF address mapping, not an actual process address or loaded-memory observation.",memory_size-file_size);
    loads.push(Load{offset,address,file_size,memory_size});
@@ -147,7 +160,7 @@ fn contents(reader:&Reader<'_>,wide:bool,out:&mut String){
   }
  }}
  if header.phnum>TABLE_LIMIT||header.shnum>TABLE_LIMIT{out.push_str("Some declared table headers were omitted under the 64-header bound; unseen mappings, symbols and relationships remain unknown.\n");}
- let mut dynamic_names=0;for d in dynamics{dynamic_names+=dynamic(reader,&header,d,&loads,out);}
+ loads_complete&=ph_observed==header.phnum;let mut dynamic_names=0;for d in dynamics{dynamic_names+=dynamic(reader,&header,d,&loads,loads_complete,out);}
  let _=writeln!(out,"Observed {ph_observed} program headers and {sh_observed} section headers; classified {symbol_candidates} named symbol candidates and {dynamic_names} dynamic-name declarations. Symbol section-index extensions and executable semantics are not resolved.");
  let observed_memory=loads.iter().fold(0u64,|n,l|n.saturating_add(l.memory_size));let _=writeln!(out,"Observed LOAD memory-size fields sum to {observed_memory} bytes before overlap reconciliation; this is not memory usage, allocation, or a unique-address total.");
 }
