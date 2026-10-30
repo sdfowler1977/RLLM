@@ -8,9 +8,9 @@ Illustration only; not an installed-device screenshot or measured runtime state.
 
 ## Install
 
-[Current test release](https://github.com/sdfowler1977/RLLM/releases/tag/RLLM__Web-Integration-Delivery__2026-10-30__03-57-44Z) · [Setup](docs/SETUP.md) · [Build](docs/BUILD.md)
+[Current test release](https://github.com/sdfowler1977/RLLM/releases/tag/RLLM__Web-Evidence-Delivery__2026-10-30__10-54-49Z) · [Setup](docs/SETUP.md) · [Build](docs/BUILD.md)
 
-Version **0.1-lab.1793332908**, Android 8.0+ on ARM64 or x86-64. Install `RLLM-Lab.apk` over existing Lab without uninstalling or clearing data. The APK is also included at [release/RLLM-Lab.apk](release/RLLM-Lab.apk). Model weights are not bundled. This is a new signed APK containing the current web ownership, deadline and expired-callback repairs and the preserved investigation reader updates.
+Version **0.1-lab.1793357549**, Android 8.0+ on ARM64 or x86-64. Install `RLLM-Lab.apk` over existing Lab without uninstalling or clearing data. The APK is also included at [release/RLLM-Lab.apk](release/RLLM-Lab.apk). Model weights are not bundled. This new signed APK adds typed retained web evidence, source-linked hypotheses, reviewed repeat web experiments and exact representation/specification export.
 
 ## Internet and investigation
 
@@ -22,10 +22,10 @@ Supported remote HTML/CSS/PNG capture produces actual pixels with explicit resou
 
 ## Current scope
 
-REA and the wider program remain **in progress**. Web results reach their original model/manual request; typed retained web evidence and its hypothesis/experiment integration remain open. Full universal exploration/process coverage, decompilation, semantic reconstruction, browser/language/runtime/inference, protocol/provider/storage/resource/recursive work and installed Android acceptance remain open. See [current status](docs/STATUS.md) and [exact release evidence](release/NOTES.md). Prior feature guides are retained and may describe earlier subsets; these current scope/evidence pages govern publication claims.
+REA and the wider program remain **in progress**. Web results reach their original model/manual request and the shared typed evidence, hypothesis, experiment and representation/specification workflows. Full universal exploration/process coverage, decompilation, semantic reconstruction, browser/language/runtime/inference, protocol/provider/storage/resource/recursive work and installed Android acceptance remain open. See [current status](docs/STATUS.md) and [exact release evidence](release/NOTES.md). Prior feature guides are retained and may describe earlier subsets; these current scope/evidence pages govern publication claims.
 
 Connections, agents and independent subagent/compaction routes, permissions and Once/Session/Always approvals, user rules, history/Trash, attachments, chat reading position, selected-app inspection/usage and analytics remain. Read [access and data controls](docs/ACCESS-AND-DATA.md) and [setup](docs/SETUP.md).
 
 ## Source and notices
 
-The public source contains all 115 inputs used for the reviewed APK, required runtime/asset notices, prior public documentation and fictional illustrations. Private credentials/settings, engineering history, personal images, signing material and toolchains are excluded. No project-wide reuse license is added. [Asset provenance](docs/ASSETS.md). Public source/APKs/checksums are preserved in both requested destinations.
+The public source contains all 116 inputs used for the reviewed APK, required runtime/asset notices, prior public documentation and fictional illustrations. Private credentials/settings, engineering history, personal images, signing material and toolchains are excluded. No project-wide reuse license is added. [Asset provenance](docs/ASSETS.md). Public source/APKs/checksums are preserved in both requested destinations.
