@@ -305,7 +305,7 @@ fn owner_digest(owner:&Json,stable:bool)->Result<String>{
   Obj(values)=>{d.update(&[5])?;d.update(&(values.len()as u64).to_le_bytes())?;for(k,v)in values{bytes(d,k.as_bytes(),work)?;walk(d,v,depth+1,work)?;}Ok(())}
  }}
  let Obj(fields)=owner else{return Err("Missing captured web ownership object".into());};let mut digest=super::incremental_digest::Digest::new();let mut work=24*1024*1024usize;
- for(k,v)in fields{if stable&&["ticket","phase","capture_token","redirect_chain","search_chain","program_summary","source","program_deadline_ms"].contains(&k.as_str()){continue;}bytes(&mut digest,k.as_bytes(),&mut work)?;walk(&mut digest,v,0,&mut work)?;}
+ for(k,v)in fields{if stable&&["ticket","phase","capture_token","redirect_chain","search_chain","program_summary","source","program_deadline_ms","web_result_rows"].contains(&k.as_str()){continue;}bytes(&mut digest,k.as_bytes(),&mut work)?;walk(&mut digest,v,0,&mut work)?;}
  Ok(digest.finish())
 }
 fn owner_token(owner:&Json)->Result<u64>{match get(owner,"program_token"){Num(v)=>v.parse::<u64>().map_err(|_|"Invalid page program token".into()),_=>Err("Missing page program token".into())}}
@@ -346,8 +346,14 @@ pub(super) fn set_web_empty_search(owner:&mut Json,output:&str)->Result<()>{
  let token=owner_token(owner)?;let previous=owner_digest(owner,false)?;let mut owners=web_owners().lock().map_err(|_|"Web operation ownership unavailable")?;prune_owners(&mut owners);
  let entry=owners.iter_mut().find(|v|v.token==token&&v.full==previous).ok_or("Web operation owner changed before empty-result staging")?;
  if text(owner,"tool")!="web_search"||get(owner,"search_chain")==&Null{return Err("Empty-result staging requires a captured search".into());}
- let mut next=owner.clone();let mut chain=get(&next,"search_chain").clone();put(&mut chain,"valid_empty",s(output));put(&mut next,"search_chain",chain);
+ let mut next=owner.clone();let mut chain=get(&next,"search_chain").clone();put(&mut chain,"valid_empty",s(output));put(&mut chain,"valid_empty_source",get(owner,"source").clone());put(&mut next,"search_chain",chain);
  let full=owner_digest(&next,false)?;*owner=next;entry.full=full;Ok(())
+}
+pub(super) fn set_web_search_data(owner:&mut Json,rows:Json)->Result<()>{
+ let token=owner_token(owner)?;let previous=owner_digest(owner,false)?;let mut owners=web_owners().lock().map_err(|_|"Web operation ownership unavailable")?;prune_owners(&mut owners);
+ let entry=owners.iter_mut().find(|v|v.token==token&&v.full==previous).ok_or("Web operation owner changed before result staging")?;
+ if text(owner,"tool")!="web_search"||!matches!(&rows,Arr(a)if a.len()<=10){return Err("Typed search staging requires parsed bounded search results".into());}
+ let mut next=owner.clone();put(&mut next,"web_result_rows",rows);let full=owner_digest(&next,false)?;*owner=next;entry.full=full;Ok(())
 }
 pub(super) fn valid_web_binding(owner:&Json)->bool{
  let Ok(mut owners)=web_owners().lock()else{return false;};prune_owners(&mut owners);let ticket=text(owner,"ticket");
