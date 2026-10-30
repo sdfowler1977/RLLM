@@ -77,3 +77,6 @@ a36bcaabf60626403ccffd32aaf442182efcd3cae82104f2e17c0cfc344749a2
 ```
 
 The public package excludes SDKs, caches, signing credentials and private development logs. A source build needs those toolchains installed separately. No secrets are required to compile an unsigned package.
+
+
+Current packaging maps source-root file paths to the stable `RLLM` prefix in Rust compiler output. Separate build directories can therefore reproduce the native runtime payloads. Use the same pinned tool versions, variant and version code. Signing keys remain outside the source.
