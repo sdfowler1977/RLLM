@@ -31,19 +31,20 @@ pub enum Origin {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind { File, Directory, Symlink, Other }
+pub enum Kind { File, Directory, Symlink, Other, WebResponse, WebSearch, SearchResult, PageCapture, PngArtifact }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Criterion {
     Kind { source: Citation, expected: Kind },
     Size { source: Citation, expected: u64 },
     CompleteCaptureDigestEqual { left: Citation, right: Citation },
+    RepresentationDigestEqual { left: Citation, right: Citation },
 }
 impl Criterion {
     pub fn sources(&self) -> Vec<&Citation> {
         match self {
             Self::Kind { source, .. } | Self::Size { source, .. } => vec![source],
-            Self::CompleteCaptureDigestEqual { left, right } => vec![left, right],
+            Self::CompleteCaptureDigestEqual { left, right } | Self::RepresentationDigestEqual { left, right } => vec![left, right],
         }
     }
 }
@@ -167,7 +168,10 @@ pub struct Fact {
     pub size: Option<u64>,
     pub changed_during_observation: bool,
     pub sample: Option<Sample>,
+    pub representation: Option<Representation>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Representation { pub length:u64, pub sha256:[u8;32], pub method:String }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sample {
     pub offset: u64,
@@ -198,10 +202,17 @@ pub fn evaluate(criterion: &Criterion, mut lookup: impl FnMut(&Citation) -> Opti
         },
         Criterion::Size { source, expected } => match lookup(source) {
             Some(f) if !f.changed_during_observation => match f.size {
-                Some(size) => (if size == *expected { Verdict::Supported } else { Verdict::Contradicted }, "Compared the retained metadata byte length"),
+                Some(size) => (if size == *expected { Verdict::Supported } else { Verdict::Contradicted }, if f.representation.is_some(){"Compared the retained representation byte length"}else{"Compared the retained metadata byte length"}),
                 None => (Verdict::Unresolved, "The retained byte length is unknown"),
             },
             _ => (Verdict::Unresolved, "Observation is unavailable or changed during acquisition"),
+        },
+        Criterion::RepresentationDigestEqual { left, right } => match (lookup(left),lookup(right)) {
+            (Some(a),Some(b)) if !a.changed_during_observation&&!b.changed_during_observation => match (a.representation,b.representation) {
+                (Some(a),Some(b)) if a.method==b.method => (if a.length==b.length&&a.sha256==b.sha256{Verdict::Supported}else{Verdict::Contradicted},"Compared length and SHA-256 of the same representation method; this does not prove remote content or semantic equivalence"),
+                _ => (Verdict::Unresolved,"Two complete representations of the same method are required"),
+            },
+            _ => (Verdict::Unresolved,"A cited representation is unavailable under current access"),
         },
         Criterion::CompleteCaptureDigestEqual { left, right } => match (lookup(left), lookup(right)) {
             (Some(a), Some(b)) => match (complete_sample(&a), complete_sample(&b)) {
@@ -226,7 +237,7 @@ mod tests {
     use super::*;
     fn citation(id: &str) -> Citation { Citation { record: id.into(), snapshot: Some(0), node: Some(0) } }
     fn draft() -> Draft { Draft { previous: None, question: "What format is the selected item?".into(), hypothesis: "It is a regular file.".into(), citations: vec![citation("one")], criterion: Some(Criterion::Kind { source: citation("one"), expected: Kind::File }) } }
-    fn fact() -> Fact { Fact { kind: Some(Kind::File), size: Some(4), changed_during_observation: false, sample: Some(Sample { offset: 0, length: 4, complete_file: true, sha256: [7; 32] }) } }
+    fn fact() -> Fact { Fact { kind: Some(Kind::File), size: Some(4), changed_during_observation: false, representation:None, sample: Some(Sample { offset: 0, length: 4, complete_file: true, sha256: [7; 32] }) } }
     #[test]
     fn revisions_keep_origin_and_prior_text() {
         let mut claims = Claims::default();

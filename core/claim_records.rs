@@ -10,13 +10,14 @@ fn citation(v:&Json)->Result<claims::Citation>{
  let c=claims::Citation{record,snapshot:index(get(v,"snapshot"))?,node:index(get(v,"node"))?};c.validate()?;Ok(c)
 }
 fn citation_json(c:&claims::Citation)->Json{obj(vec![("record",s(&c.record)),("snapshot",c.snapshot.map(|n|Num(n.to_string())).unwrap_or(Null)),("node",c.node.map(|n|Num(n.to_string())).unwrap_or(Null))])}
-fn kind(v:&str)->Result<claims::Kind>{match v{"File"=>Ok(claims::Kind::File),"Directory"=>Ok(claims::Kind::Directory),"Symlink"=>Ok(claims::Kind::Symlink),"Other"=>Ok(claims::Kind::Other),_=>Err("Unknown observed kind".into())}}
+fn kind(v:&str)->Result<claims::Kind>{match v{"File"=>Ok(claims::Kind::File),"Directory"=>Ok(claims::Kind::Directory),"Symlink"=>Ok(claims::Kind::Symlink),"Other"=>Ok(claims::Kind::Other),"WebResponse"=>Ok(claims::Kind::WebResponse),"WebSearch"=>Ok(claims::Kind::WebSearch),"SearchResult"=>Ok(claims::Kind::SearchResult),"PageCapture"=>Ok(claims::Kind::PageCapture),"PngArtifact"=>Ok(claims::Kind::PngArtifact),_=>Err("Unknown observed kind".into())}}
 fn criterion(v:&Json)->Result<Option<claims::Criterion>>{
  if v==&Null{return Ok(None);}
  Ok(Some(match text(v,"type").as_str(){
  "kind"=>claims::Criterion::Kind{source:citation(get(v,"source"))?,expected:kind(&text(v,"expected"))?},
  "size"=>claims::Criterion::Size{source:citation(get(v,"source"))?,expected:match get(v,"expected"){Num(n)=>n.parse().map_err(|_|"Expected byte length must be an unsigned integer")?,_=>return Err("Expected byte length must be an unsigned integer".into())}},
  "complete_capture_digest_equal"=>claims::Criterion::CompleteCaptureDigestEqual{left:citation(get(v,"left"))?,right:citation(get(v,"right"))?},
+ "representation_digest_equal"=>claims::Criterion::RepresentationDigestEqual{left:citation(get(v,"left"))?,right:citation(get(v,"right"))?},
  _=>return Err("Unsupported claim criterion; saved claim remains unchanged".into()),
  }))
 }
@@ -24,6 +25,7 @@ fn criterion_json(c:&Option<claims::Criterion>)->Json{match c{
  None=>Null,
  Some(claims::Criterion::Kind{source,expected})=>obj(vec![("type",s("kind")),("source",citation_json(source)),("expected",s(&format!("{expected:?}")))]),
  Some(claims::Criterion::Size{source,expected})=>obj(vec![("type",s("size")),("source",citation_json(source)),("expected",Num(expected.to_string()))]),
+ Some(claims::Criterion::RepresentationDigestEqual{left,right})=>obj(vec![("type",s("representation_digest_equal")),("left",citation_json(left)),("right",citation_json(right))]),
  Some(claims::Criterion::CompleteCaptureDigestEqual{left,right})=>obj(vec![("type",s("complete_capture_digest_equal")),("left",citation_json(left)),("right",citation_json(right))]),
 }}
 fn origin_json(o:&claims::Origin)->Json{match o{claims::Origin::User=>obj(vec![("type",s("user"))]),claims::Origin::Model{agent,connection}=>obj(vec![("type",s("model")),("agent",s(agent)),("connection",s(connection))])}}
@@ -48,14 +50,15 @@ fn evidence(st:&Json,c:&claims::Citation,model:bool)->Result<Json>{
 fn fact(st:&Json,c:&claims::Citation,model:bool)->Option<claims::Fact>{
  let v=evidence(st,c,model).ok()?;let nodes=array(&v,"nodes");if nodes.len()!=1{return None;}
  let n=&nodes[0];let identity=get(n,"identity");
- let size=if let Num(v)=get(identity,"size"){v.parse::<u64>().ok()}else{None};
+ let representation=(||{let rep=get(n,"representation");let Num(length)=get(rep,"bytes")else{return None;};if get(rep,"complete")!=&Bool(true){return None;}let hash=text(rep,"sha256");if hash.len()!=64{return None;}let mut sha256=[0u8;32];for(i,pair)in hash.as_bytes().chunks_exact(2).enumerate(){sha256[i]=u8::from_str_radix(std::str::from_utf8(pair).ok()?,16).ok()?;}Some(claims::Representation{length:length.parse().ok()?,sha256,method:text(rep,"method")})})();
+ let size=if let Some(rep)=&representation{Some(rep.length)}else if let Num(v)=get(identity,"size"){v.parse::<u64>().ok()}else{None};
  let p=get(n,"sample");let sample=(||{
   let Num(offset)=get(p,"offset")else{return None;};let Num(length)=get(p,"length")else{return None;};
   let Bool(complete_file)=get(p,"complete_file")else{return None;};let hash=text(p,"sha256");if hash.len()!=64{return None;}
   let mut sha256=[0u8;32];for (i,pair)in hash.as_bytes().chunks_exact(2).enumerate(){let s=std::str::from_utf8(pair).ok()?;sha256[i]=u8::from_str_radix(s,16).ok()?;}
   Some(claims::Sample{offset:offset.parse().ok()?,length:length.parse().ok()?,complete_file:*complete_file,sha256})
  })();
- Some(claims::Fact{kind:kind(&text(n,"kind")).ok(),size,changed_during_observation:text(n,"coverage")=="Changed"||text(&v,"coverage")=="Changed",sample})
+ Some(claims::Fact{kind:kind(&text(n,"kind")).ok(),size,changed_during_observation:text(n,"coverage")=="Changed"||text(&v,"coverage")=="Changed",sample,representation})
 }
 
 /// Origin is supplied by an authenticated caller, never decoded from args.
@@ -130,7 +133,7 @@ pub(super) fn own(st:&Json,proposal:&mut Json)->Result<()>{
 
 pub(super) fn handles(action:&str)->bool{["investigation_claims","claims_next","claims_previous","claim_new","claim_save","claim_from_node","claim_delete","claim_delete_confirm","claims_manage","claims_manage_next","claims_manage_previous"].contains(&action)||action.starts_with("claim_view:")||action.starts_with("claim_revision:")||action.starts_with("claim_manage:")}
 fn criterion_fields(edit:&mut Json,citations:&Json,criterion:&Json){
- let first=match text(criterion,"type").as_str(){"kind"|"size"=>get(criterion,"source").clone(),"complete_capture_digest_equal"=>get(criterion,"left").clone(),_=>if let Arr(items)=citations{items.first().cloned().unwrap_or(Null)}else{Null}};
+ let first=match text(criterion,"type").as_str(){"kind"|"size"=>get(criterion,"source").clone(),"complete_capture_digest_equal"|"representation_digest_equal"=>get(criterion,"left").clone(),_=>if let Arr(items)=citations{items.first().cloned().unwrap_or(Null)}else{Null}};
  for (field,key)in[("source_record","record"),("source_snapshot","snapshot"),("source_node","node")]{let value=get(&first,key);put(edit,field,s(&if let Str(v)=value{v.clone()}else if value==&Null{String::new()}else{value.string()}));}
  put(edit,"criterion_method",s(&if criterion==&Null{"none".into()}else{text(criterion,"type")}));
  let expected=get(criterion,"expected");put(edit,"expected",s(&if let Str(v)=expected{v.clone()}else if expected==&Null{String::new()}else{expected.string()}));
@@ -145,7 +148,7 @@ fn edited_criterion(st:&Json)->Result<(Json,Json)>{
  let criterion=match method.as_str(){
  "kind"=>{kind(&text(e,"expected"))?;obj(vec![("type",s("kind")),("source",source),("expected",get(e,"expected").clone())])},
  "size"=>{let n=text(e,"expected").parse::<u64>().map_err(|_|"Expected byte length must be an unsigned integer")?;obj(vec![("type",s("size")),("source",source),("expected",Num(n.to_string()))])},
- "complete_capture_digest_equal"=>{let right=reference(e,"other")?;if right!=source{list.push(right.clone());}obj(vec![("type",s("complete_capture_digest_equal")),("left",source),("right",right)])},
+ "complete_capture_digest_equal"|"representation_digest_equal"=>{let right=reference(e,"other")?;if right!=source{list.push(right.clone());}obj(vec![("type",s(&method)),("left",source),("right",right)])},
  _=>return Err("Choose a supported criterion".into()),
  };if let Arr(old)=citations{for c in old{if !list.contains(&c){list.push(c);}}}Ok((Arr(list),criterion))
 }
@@ -190,7 +193,7 @@ pub(super) fn dialog(st:&Json)->Json{
  match text(st,"dialog").as_str(){
  "claims_management"=>{let mut buttons=vec![];let summary=match store(st){Ok(records)=>{let offset=number(st,"claims_management_offset");for r in records.revisions().iter().skip(offset).take(12){buttons.push(button(&format!("Revision {}",r.id),&format!("claim_manage:{}",r.id)));}if offset>0{buttons.push(button("Previous revisions","claims_manage_previous"));}if offset+12<records.revisions().len(){buttons.push(button("Next revisions","claims_manage_next"));}format!("{} retained revisions across workspaces. IDs only; no question, hypothesis or source contents are shown. Select an exact leaf revision for confirmed deletion.",records.revisions().len())},Err(e)=>e};buttons.push(button("Back to hypotheses","investigation_claims"));modal("Hypothesis storage",vec![field_ui("status","Retained revisions",&summary,"readonly")],buttons)},
  "claim_delete"=>modal("Delete this hypothesis revision?",vec![field_ui("id","Exact revision ID",&get(st,"claim_id").string(),"readonly"),field_ui("effect","Effect","Permanently delete only this hypothesis revision. Saved observations, source files, other revisions and conversation history remain. Earlier exports or backups are unchanged.","readonly")],vec![button("Delete this revision","claim_delete_confirm"),button("Keep revision","investigation_claims")]),
- "claim_editor"=>{let e=get(st,"edit");let mut fields=vec![field_ui("question","Question",&text(e,"question"),"multiline"),field_ui("hypothesis","Hypothesis",&text(e,"hypothesis"),"multiline"),interaction::choice("criterion_method","Historical criterion",&text(e,"criterion_method"),&[("None — untested hypothesis","none"),("Observed kind","kind"),("Observed byte length","size"),("Complete capture digests match","complete_capture_digest_equal")])];for(k,label)in[("source_record","Source record ID"),("source_snapshot","Source snapshot (starts at 0)"),("source_node","Source node ID"),("expected","Expected kind (File/Directory/Symlink/Other) or byte length"),("other_record","Comparison record ID (digest comparison)"),("other_snapshot","Comparison snapshot"),("other_node","Comparison node ID")]{fields.push(field_ui(k,label,&text(e,k),"text"));}fields.push(field_ui("authority","Meaning","A criterion checks the selected historical data only. It does not prove the prose hypothesis or become a rule. Saving creates a new revision; previous revisions remain.","readonly"));modal("Investigation hypothesis",fields,vec![button("Save hypothesis revision","claim_save"),button("Back to hypotheses","investigation_claims")])},
+ "claim_editor"=>{let e=get(st,"edit");let mut fields=vec![field_ui("question","Question",&text(e,"question"),"multiline"),field_ui("hypothesis","Hypothesis",&text(e,"hypothesis"),"multiline"),interaction::choice("criterion_method","Historical criterion",&text(e,"criterion_method"),&[("None — untested hypothesis","none"),("Observed kind","kind"),("Observed byte length","size"),("Complete file capture digests match","complete_capture_digest_equal"),("Retained representation digests match","representation_digest_equal")])];for(k,label)in[("source_record","Source record ID"),("source_snapshot","Source snapshot (starts at 0)"),("source_node","Source node ID"),("expected","Expected observed kind or representation/file byte length"),("other_record","Comparison record ID (digest comparison)"),("other_snapshot","Comparison snapshot"),("other_node","Comparison node ID")]{fields.push(field_ui(k,label,&text(e,k),"text"));}fields.push(field_ui("authority","Meaning","A criterion checks the selected historical data only. It does not prove the prose hypothesis or become a rule. Saving creates a new revision; previous revisions remain.","readonly"));modal("Investigation hypothesis",fields,vec![button("Save hypothesis revision","claim_save"),button("Back to hypotheses","investigation_claims")])},
  "claim_view"=>{
   let id=match get(st,"claim_id"){Num(n)=>n.parse().ok(),_=>None};
   match id.ok_or_else(||"Claim unavailable".to_string()).and_then(|id|query(st,Some(id),false)){

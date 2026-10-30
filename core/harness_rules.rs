@@ -36,23 +36,23 @@ pub(super) fn decision(st:&Json,t:&str,a:&Json)->(String,Json){
 pub(super) fn check(st:&Json,t:&str,a:&Json,model_origin:bool)->Result<()>{
  version(st,false)?;
  if model_origin&&text(&active(st),"role")=="nonwrite"&&!readonly(t,a)&&t!="model"{return Err("This subagent has a user-configured non-writing role; this operation is not read-only".into());}
- if ["inspect","compare"].contains(&t)&&text(a,"content")=="complete_digest"{for k in if t=="compare"{vec!["path","other"]}else{vec!["path"]}{check(st,"read",&obj(vec![("path",get(a,k).clone())]),model_origin)?;}} if t=="reconstruct"{check(st,"read",&obj(vec![("path",get(a,"path").clone())]),model_origin)?;check(st,"write",&obj(vec![("path",get(a,"output").clone())]),model_origin)?;}let(d,r)=decision(st,t,a);if d=="deny"{return Err(format!("Harness rule {} denies {t}: {}",text(&r,"id"),text(&r,"text")));}if t=="web_read"&&get(a,"capture")!=&Null{check(st,"capture",get(a,"capture"),model_origin)?;}Ok(())
+ if ["inspect","compare"].contains(&t)&&text(a,"content")=="complete_digest"{for k in if t=="compare"{vec!["path","other"]}else{vec!["path"]}{check(st,"read",&obj(vec![("path",get(a,k).clone())]),model_origin)?;}} if t=="reconstruct"{let source=reconstruction::web_authority(st,a,model_origin)?;if source!=Null{check(st,&text(&source,"tool"),get(&source,"args"),model_origin)?;}else{check(st,"read",&obj(vec![("path",get(a,"path").clone())]),model_origin)?;}check(st,"write",&obj(vec![("path",get(a,"output").clone())]),model_origin)?;}let(d,r)=decision(st,t,a);if d=="deny"{return Err(format!("Harness rule {} denies {t}: {}",text(&r,"id"),text(&r,"text")));}if t=="web_read"&&get(a,"capture")!=&Null{check(st,"capture",get(a,"capture"),model_origin)?;}Ok(())
 }
 pub(super) fn standing(st:&Json,p:&Json)->bool{let(d,_)=decision(st,&text(p,"tool"),get(p,"args"));d=="allow"&&!review_required(st,p)}
-pub(super) fn review_required(st:&Json,p:&Json)->bool{let(d,_)=decision(st,&text(p,"tool"),get(p,"args"));d=="ask"||d=="deny"||(["inspect","compare"].contains(&text(p,"tool").as_str())&&text(get(p,"args"),"content")=="complete_digest"&&["path","other"].iter().take(if text(p,"tool")=="compare"{2}else{1}).any(|k|{let d=decision(st,"read",&obj(vec![("path",get(get(p,"args"),k).clone())])).0;d=="ask"||d=="deny"}))||(text(p,"tool")=="reconstruct"&&[("read","path"),("write","output")].iter().any(|(t,k)|{let d=decision(st,t,&obj(vec![("path",get(get(p,"args"),k).clone())])).0;d=="ask"||d=="deny"}))||(text(p,"tool")=="experiments"&&get(p,"experiment_operation")!=&Null&&review_required(st,get(p,"experiment_operation")))}
+pub(super) fn review_required(st:&Json,p:&Json)->bool{let(d,_)=decision(st,&text(p,"tool"),get(p,"args"));d=="ask"||d=="deny"||(["inspect","compare"].contains(&text(p,"tool").as_str())&&text(get(p,"args"),"content")=="complete_digest"&&["path","other"].iter().take(if text(p,"tool")=="compare"{2}else{1}).any(|k|{let d=decision(st,"read",&obj(vec![("path",get(get(p,"args"),k).clone())])).0;d=="ask"||d=="deny"}))||(text(p,"tool")=="reconstruct"&&reconstruction::review_target(st,p)!=Null)||(text(p,"tool")=="experiments"&&get(p,"experiment_operation")!=&Null&&review_required(st,get(p,"experiment_operation")))}
 pub(super) fn binding(st:&Json)->Json{s(&digest(&obj(vec![("policy",policy(st)),("project",get(st,"harness_project").clone())])))}
 // A worker may legitimately change AGENTS.md; callback ownership binds the user policy, not the resulting observed project bytes.
 pub(super) fn policy_binding(st:&Json)->Json{s(&digest(&policy(st)))}
 /// Binding of only user rules that may affect selected observation sources.
 /// Include descendants because a folder report may contain their names/bytes.
 pub(super) fn observation_binding(st:&Json,tool:&str,args:&Json)->Json{
- let sources=[text(args,"path"),text(args,"other")];
+ let web=matches!(tool,"web_read"|"web_search");let sources=if web{[text(args,"url"),String::new()]}else{[text(args,"path"),text(args,"other")]};
  let mut projected=obj(vec![("schema",Num("1".into()))]);
  for key in ["rules","decisions"]{
   let rows=rows(st,key).into_iter().filter(|r|{
    if !enabled(r){return false;}let relevant=match text(r,"scope").as_str(){
-    "network"|"model"|"write"=>false,
-    "tool"=>[tool,"list","read"].contains(&text(r,"tool").as_str()),_=>true};
+    "network"=>web,"model"|"write"=>false,
+    "tool"=>if web{[tool,"capture"].contains(&text(r,"tool").as_str())}else{[tool,"list","read"].contains(&text(r,"tool").as_str())},_=>true};
    if !relevant{return false;}let target=text(r,"target");
    target.is_empty()||sources.iter().take(if tool=="compare"{2}else{1}).any(|p|target_match(&target,p)||target_match(p,&target))
   }).map(|r|obj(["id","text","scope","tool","target","decision"].iter().filter(|k|get(&r,k)!=&Null).map(|k|(*k,get(&r,k).clone())).collect())).collect();

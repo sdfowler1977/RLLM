@@ -27,6 +27,7 @@ fn decode_path(v:&Json)->Option<Vec<u8>>{
 fn texts(v:&Json,count:usize,bytes:usize)->bool{matches!(v,Arr(a)if a.len()<=count&&a.iter().all(|v|matches!(v,Str(s)if s.len()<=bytes)))}
 pub(super) fn valid_identity(v:&Json)->bool{if v==&Null{return true;}["dev","ino","size"].iter().all(|k|matches!(get(v,k),Num(n) if n.parse::<u64>().is_ok()))&&["modified_seconds","changed_seconds"].iter().all(|k|matches!(get(v,k),Num(n) if n.parse::<i64>().is_ok()))&&["modified_nanos","changed_nanos"].iter().all(|k|matches!(get(v,k),Num(n) if n.parse::<u32>().ok().is_some_and(|n|n<1_000_000_000)))}
 pub(super) fn validate(g:&Json)->Result<()>{
+ if text(g,"kind")=="web"{return web_evidence::validate(g);}
  if text(g,"kind")=="complete_file"{return file_evidence::validate_graph(g);}
  let fail=||"Malformed or unsupported typed observation; textual record remains available".to_string();
  if get(g,"schema")!=&Num("1".into())||text(g,"kind")!="directory"||!coverage(get(g,"coverage"))||get(g,"workspace_identity")==&Null||!valid_identity(get(g,"workspace_identity"))||super::super::mcp_schema::state_bytes(g)>CAP||!texts(get(g,"notes"),64,512){return Err(fail());}
@@ -60,7 +61,7 @@ pub(super) fn validate_record(graphs:&Json,record:&Json)->Result<()>{
  let fail=||"Malformed typed observation provenance; textual record remains available".to_string();
  let Arr(items)=graphs else{return Err(fail());};let expected=if text(record,"tool")=="compare"{2}else{1};if items.len()!=expected{return Err(fail());}
  for (i,g)in items.iter().enumerate(){
-  validate(g)?;if text(g,"kind")=="complete_file"&&text(get(record,"args"),"content")!="complete_digest"{return Err(fail());}let identity=get(g,"workspace_identity");let namespace=format!("{}:{}",get(identity,"dev").string(),get(identity,"ino").string());if namespace!=text(record,"workspace_identity"){return Err(fail());}
+  validate(g)?;if text(g,"kind")=="web"{web_evidence::validate_record(g,record)?;continue;}if text(g,"kind")=="complete_file"&&text(get(record,"args"),"content")!="complete_digest"{return Err(fail());}let identity=get(g,"workspace_identity");let namespace=format!("{}:{}",get(identity,"dev").string(),get(identity,"ino").string());if namespace!=text(record,"workspace_identity"){return Err(fail());}
   let source=text(get(record,"args"),if i==0{"path"}else{"other"});let mut normalized=std::path::PathBuf::new();for component in std::path::Path::new(&source).components(){match component{std::path::Component::Normal(part)=>normalized.push(part),std::path::Component::CurDir=>{},_=>return Err(fail())}}
   use std::os::unix::ffi::OsStrExt;if decode_path(get(g,"selected_hex")).as_deref()!=Some(normalized.as_os_str().as_bytes()){return Err(fail());}
  }Ok(())
@@ -84,7 +85,7 @@ pub(super) fn query(graphs:&Json,args:&Json)->Result<Json>{
  let selected=integer(get(args,"node"));let path=text(args,"path_hex");let offset=integer(get(args,"offset")).unwrap_or(0);
  let indices:Vec<usize>=if let Some(n)=selected{if n>=nodes.len(){return Err("Node is unavailable".into());}vec![n]}else if get(args,"path_hex")!=&Null{nodes.iter().enumerate().filter(|(_,n)|text(n,"path_hex")==path).map(|(i,_)|i).collect()}else if let Some(p)=parent{array(g,"edges").iter().filter(|e|integer(get(e,"parent"))==Some(p)).filter_map(|e|integer(get(e,"child"))).collect()}else{(0..nodes.len()).collect()};
  let chosen:Vec<usize>=indices.iter().skip(offset).take(12).copied().collect();
- let mut out=obj(vec![("snapshot",Num(side.to_string())),("snapshot_count",Num(items.len().to_string())),("coverage",get(g,"coverage").clone()),("selected_hex",get(g,"selected_hex").clone()),("matching",Num(indices.len().to_string())),("offset",Num(offset.to_string())),("next_offset",if offset.saturating_add(12)<indices.len(){Num((offset+12).to_string())}else{Null}),("nodes",Arr(chosen.iter().map(|i|nodes[*i].clone()).collect())),("edges",Arr(array(g,"edges").into_iter().filter(|e|integer(get(e,"child")).is_some_and(|c|chosen.contains(&c))).collect()))]);put(&mut out,"historical",Bool(true));Ok(out)
+ let mut out=obj(vec![("kind",get(g,"kind").clone()),("source",get(g,"source").clone()),("snapshot",Num(side.to_string())),("snapshot_count",Num(items.len().to_string())),("coverage",get(g,"coverage").clone()),("selected_hex",get(g,"selected_hex").clone()),("matching",Num(indices.len().to_string())),("offset",Num(offset.to_string())),("next_offset",if offset.saturating_add(12)<indices.len(){Num((offset+12).to_string())}else{Null}),("nodes",Arr(chosen.iter().map(|i|nodes[*i].clone()).collect())),("edges",Arr(array(g,"edges").into_iter().filter(|e|integer(get(e,"child")).is_some_and(|c|chosen.contains(&c))).collect()))]);put(&mut out,"historical",Bool(true));Ok(out)
 }
 
 #[cfg(test)] mod graph_tests{

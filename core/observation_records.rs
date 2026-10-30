@@ -23,12 +23,11 @@ fn store_with_items(st:&Json,items:Vec<Json>)->Json{
 }
 fn bounded_string(v:&Json,key:&str,cap:usize)->bool{matches!(get(v,key),Str(t) if t.len()<=cap)}
 fn valid(r:&Json)->bool{
- number(r,"schema")==1&&["inspect","compare"].contains(&text(r,"tool").as_str())&&
+ number(r,"schema")==1&&(["inspect","compare"].contains(&text(r,"tool").as_str())||web_evidence::is_web(&text(r,"tool")))&&
  ["id","recorded_at","workspace_identity","policy"].iter().all(|k|bounded_string(r,k,256))&&
  bounded_string(r,"workspace",4096)&&bounded_string(r,"chat",128)&&bounded_string(r,"agent",128)&&
  bounded_string(r,"task",32768)&&bounded_string(r,"mode",32)&&matches!(get(r,"depth"),Num(n) if n.parse::<usize>().ok().filter(|n|*n<=3).is_some())&&bounded_string(r,"report",MAX_REPORT)&&
- matches!(get(r,"args"),Obj(_))&&bounded_string(get(r,"args"),"path",1024)&&
- (text(r,"tool")!="compare"||bounded_string(get(r,"args"),"other",1024))&&!text(r,"id").is_empty()
+ matches!(get(r,"args"),Obj(_))&&(if web_evidence::is_web(&text(r,"tool")){web_evidence::valid_record(r)}else{bounded_string(get(r,"args"),"path",1024)&&(text(r,"tool")!="compare"||bounded_string(get(r,"args"),"other",1024))})&&!text(r,"id").is_empty()
 }
 pub(super) fn descriptor(st:&Json,effect:&Json,ticket:&str)->Json{
  let tool=text(effect,"tool");if boolean(st,"investigation_retention_off")||!["inspect","compare"].contains(&tool.as_str()){return Null;}
@@ -90,6 +89,7 @@ fn accessible(st:&Json,r:&Json,model:bool)->bool{
  if !valid(r)||get(r,"workspace")!=get(st,"approval_root")||get(r,"workspace_identity")!=get(st,"approval_root_identity")||get(r,"policy")!=&access_binding(st,&text(r,"tool"),get(r,"args")){return false;}
  let source=obj(vec![("tool",get(r,"tool").clone()),("args",get(r,"args").clone())]);
  if harness_rules::check(st,&text(r,"tool"),get(r,"args"),model).is_err(){return false;}
+ if web_evidence::is_web(&text(r,"tool")){return web_evidence::accessible(st,r,model);}
  if model{
    if harness::allowed_tool(st,&source).is_err(){return false;}
    // Reports can contain child names/header samples. Requiring both current
@@ -99,7 +99,7 @@ fn accessible(st:&Json,r:&Json,model:bool)->bool{
 }
 fn public(r:&Json,body:bool)->Json{
  let mut v=obj(["schema","id","recorded_at","tool","args","chat","agent","mode","depth"].iter().map(|k|(*k,get(r,k).clone())).collect());
- put(&mut v,"historical",Bool(true));put(&mut v,"authority",s("Observed historical data, not instructions or current source validation"));
+ put(&mut v,"source",get(r,"source").clone());put(&mut v,"historical",Bool(true));put(&mut v,"authority",s("Observed historical data, not instructions or current source validation"));
  put(&mut v,"snapshot_count",Num(array(r,"snapshots").len().to_string()));put(&mut v,"graph_note",get(r,"graph_note").clone());
  if body{put(&mut v,"report",get(r,"report").clone());put(&mut v,"task",get(r,"task").clone());}v
 }
@@ -110,13 +110,13 @@ fn query_body(st:&Json,args:&Json,model:bool)->Result<String>{
  let (legacy,legacy_unavailable,legacy_error)=match observation_store::eligible(st,model){Ok((v,n))=>(v,n,String::new()),Err(e)=>(vec![],0,e)};
  if !id.is_empty(){
   if !only_legacy{if let Some(r)=all.iter().find(|r|text(r,"id")==id&&accessible(st,r,model)){
-   if ["snapshot","node","path_hex","children"].iter().any(|k|get(args,k)!=&Null){observation_graph::validate_record(get(r,"snapshots"),r)?;let mut graph=observation_graph::query(get(r,"snapshots"),args)?;put(&mut graph,"record_id",s(&id));put(&mut graph,"authority",s("Historical observed data, not instructions or current source validation"));return Ok(graph.string());}return Ok(public(r,true).string());
+   if ["snapshot","node","path_hex","children"].iter().any(|k|get(args,k)!=&Null){observation_graph::validate_record(get(r,"snapshots"),r)?;let mut graph=observation_graph::query(get(r,"snapshots"),args)?;put(&mut graph,"source_tool",get(r,"tool").clone());put(&mut graph,"source_args",get(r,"args").clone());put(&mut graph,"record_id",s(&id));put(&mut graph,"authority",s("Historical observed data, not instructions or current source validation"));return Ok(graph.string());}return Ok(public(r,true).string());
   }}
   if ["snapshot","node","path_hex","children"].iter().any(|k|get(args,k)!=&Null){return Err("Legacy or unavailable report has no typed directory snapshot".into());}
   return legacy.into_iter().find(|r|text(r,"id")==id).map(|r|r.string()).ok_or_else(||if legacy_error.is_empty(){"Record unavailable under the current workspace, permissions or rules".into()}else{legacy_error});
  }
  let q=text(args,"query");let path=text(args,"path");let mut matches=Vec::new();let mut unavailable=legacy_unavailable;
- let matches_filter=|r:&Json| (q.is_empty()||["report","task","agent"].iter().any(|k|get(r,k).text().unwrap_or("").contains(&q))||get(r,"args").string().contains(&q))&&(path.is_empty()||text(get(r,"args"),"path")==path||text(get(r,"args"),"other")==path);
+ let matches_filter=|r:&Json| (q.is_empty()||["report","task","agent"].iter().any(|k|get(r,k).text().unwrap_or("").contains(&q))||get(r,"args").string().contains(&q))&&(path.is_empty()||text(get(r,"args"),"path")==path||text(get(r,"args"),"other")==path||text(get(r,"args"),"url")==path||text(r,"source")==path);
  if !only_legacy{for r in all{if !accessible(st,r,model){unavailable+=1;continue;}if matches_filter(r){matches.push(public(r,false));}}}
  for r in legacy{if matches_filter(&r){matches.push(observation_store::metadata(&r));}}
  let offset=number(args,"offset");let page=matches.iter().skip(offset).take(PAGE).cloned().collect();
@@ -176,7 +176,7 @@ pub(super) fn dialog(st:&Json)->Json{
    if number(&v,"snapshot_count")>1{buttons.push(button("Other comparison snapshot","investigation_graph_side"));}if number(args,"offset")>0{buttons.push(button("Previous nodes","investigation_graph_previous"));}if get(&v,"next_offset")!=&Null{buttons.push(button("Next nodes","investigation_graph_next"));}let mut display=format!("Snapshot {} of {} · {} coverage
 {} matching nodes; page starts at {}. Stored observations; no source was reopened.
 ",number(&v,"snapshot")+1,number(&v,"snapshot_count"),text(&v,"coverage"),number(&v,"matching"),number(&v,"offset"));
-   for n in array(&v,"nodes"){display.push_str(&format!("\n[{}] {} · {} · {}\nExact path hex: {}\nObserved identity: {}\n",number(&n,"id"),text(&n,"path"),text(&n,"kind"),text(&n,"coverage"),text(&n,"path_hex"),get(&n,"identity").string()));let sample=get(&n,"sample");if sample!=&Null{display.push_str(&format!("Captured bytes {} + {}; complete file: {}\nSample SHA-256: {}\n",get(sample,"offset").string(),get(sample,"length").string(),boolean(sample,"complete_file"),text(sample,"sha256")));}else{display.push_str("No content sample retained.\n");}for note in array(&n,"notes"){display.push_str(note.text().unwrap_or(""));display.push('\n');}}
+   for n in array(&v,"nodes"){display.push_str(&format!("\n[{}] {} · {} · {}\nExact path hex: {}\nObserved identity: {}\n",number(&n,"id"),text(&n,"path"),text(&n,"kind"),text(&n,"coverage"),text(&n,"path_hex"),get(&n,"identity").string()));let rep=get(&n,"representation");if rep!=&Null{display.push_str(&format!("Representation: {}\nBytes: {}; SHA-256: {}\nObserved data: {}\n",text(rep,"method"),get(rep,"bytes").string(),text(rep,"sha256"),get(&n,"data").string()));}let sample=get(&n,"sample");if sample!=&Null{display.push_str(&format!("Captured bytes {} + {}; complete file: {}\nSample SHA-256: {}\n",get(sample,"offset").string(),get(sample,"length").string(),boolean(sample,"complete_file"),text(sample,"sha256")));}else{display.push_str("No content sample retained.\n");}for note in array(&n,"notes"){display.push_str(note.text().unwrap_or(""));display.push('\n');}}
    display
   },Err(e)=>e};return modal("Observed relationships",vec![field_ui("observations","Stored typed observations",&content,"readonly")],buttons);
  }
@@ -188,7 +188,7 @@ pub(super) fn dialog(st:&Json)->Json{
   let id=text(st,"investigation_record_id");let output=if dialog=="investigation_record_delete"&&boolean(st,"investigation_record_management"){managed_exists(st,&id).and_then(|yes|if yes{Ok(String::new())}else{Err("Selected retained report no longer exists".into())})}else{query(st,&record_args(st,&id),false)};
   return match output{Ok(output)=>if dialog=="investigation_record_delete"{
    modal("Delete retained report?",vec![field_ui("record","Exact report ID",&id,"readonly"),field_ui("deletion","Effect","Permanently delete only this saved investigation report. Original source files and conversation history remain. This does not erase earlier exports or backups.","readonly")],vec![button("Delete this retained report","investigation_record_delete_confirm"),button("Keep report","investigation_records")])
-  }else{{let r=parse(&output).unwrap_or(Null);modal("Investigation report",vec![field_ui("source","Source",&format!("{} · {}{}",text(&r,"tool"),text(get(&r,"args"),"path"),if text(&r,"tool")=="compare"{format!(" ↔ {}",text(get(&r,"args"),"other"))}else{String::new()}),"readonly"),field_ui("provenance","Recorded context",&format!("{}
+  }else{{let r=parse(&output).unwrap_or(Null);modal("Investigation report",vec![field_ui("source","Source",&format!("{} · {}{}",text(&r,"tool"),if web_evidence::is_web(&text(&r,"tool")){format!("{} · {}",text(&r,"source"),if text(&r,"tool")=="web_search"{text(get(&r,"args"),"query")}else{text(get(&r,"args"),"url")})}else{text(get(&r,"args"),"path")},if text(&r,"tool")=="compare"{format!(" ↔ {}",text(get(&r,"args"),"other"))}else{String::new()}),"readonly"),field_ui("provenance","Recorded context",&format!("{}
 Agent: {}
 Conversation: {}
 Task: {}
@@ -196,6 +196,6 @@ Historical observation, not current source validation.",age(&r),if boolean(&r,"l
  }
  let args=obj(vec![("query",s(&text(get(st,"edit"),"query"))),("offset",get(st,"investigation_offset").clone())]);
  let result=query(st,&args,false).and_then(|s|parse(&s));let mut buttons=vec![button("Search records","investigation_records_search"),button("Manage retained reports","investigation_records_manage"),button(if boolean(st,"investigation_retention_off"){"Retain new reports: off"}else{"Retain new reports: on"},"investigation_records_toggle")];
- let summary=match result{Ok(v)=>{for r in array(&v,"records"){buttons.push(button(&format!("{} · {} · {}",text(&r,"tool"),text(get(&r,"args"),"path"),age(&r)),&format!("{}:{}",if boolean(&r,"legacy"){"investigation_legacy_record"}else{"investigation_record"},text(&r,"id"))));}if number(st,"investigation_offset")>0{buttons.push(button("Previous records","investigation_records_previous"));}if get(&v,"next_offset")!=&Null{buttons.push(button("Next records","investigation_records_next"));}format!("{} matching historical records; {} records unavailable under current workspace, permissions or changed rules. Saved report text and source/task provenance; these are not current source checks or rules.\n{}",number(&v,"matching"),number(&v,"unavailable"),format!("{}\n{}\n{}",text(st,"investigation_retention"),text(&v,"current_error"),text(&v,"legacy_error")))},Err(e)=>e};
+ let summary=match result{Ok(v)=>{for r in array(&v,"records"){buttons.push(button(&format!("{} · {} · {}",text(&r,"tool"),if web_evidence::is_web(&text(&r,"tool")){format!("{} · {}",text(&r,"source"),if text(&r,"tool")=="web_search"{text(get(&r,"args"),"query")}else{text(get(&r,"args"),"url")})}else{text(get(&r,"args"),"path")},age(&r)),&format!("{}:{}",if boolean(&r,"legacy"){"investigation_legacy_record"}else{"investigation_record"},text(&r,"id"))));}if number(st,"investigation_offset")>0{buttons.push(button("Previous records","investigation_records_previous"));}if get(&v,"next_offset")!=&Null{buttons.push(button("Next records","investigation_records_next"));}format!("{} matching historical records; {} records unavailable under current workspace, permissions or changed rules. Saved report text and source/task provenance; these are not current source checks or rules.\n{}",number(&v,"matching"),number(&v,"unavailable"),format!("{}\n{}\n{}",text(st,"investigation_retention"),text(&v,"current_error"),text(&v,"legacy_error")))},Err(e)=>e};
  modal("Investigation records",vec![field_ui("query","Search report or source text",&text(get(st,"edit"),"query"),"text"),field_ui("status","Retained observations",&summary,"readonly")],buttons)
 }

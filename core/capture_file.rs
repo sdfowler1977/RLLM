@@ -70,12 +70,14 @@ pub(super) fn save_bytes(root:&Path,name:&str,bytes:&[u8],cancelled:&impl Fn()->
 }
 
 pub(super) fn remote(root:&Path,html:&[u8],args:&Json,source:&str,budget:usize,cancelled:impl Fn()->bool)->Result<String>{
- remote_inputs(root,html,args,source,budget,0,None,|_,_,_,_|Err("External resources were not fetched for this remote HTML capture; no workspace resource path was read".into()),cancelled)
+ remote_observed(root,html,args,source,budget,cancelled).map(|v|v.0)
 }
 pub(super) fn remote_resources(root:&Path,html:&[u8],args:&Json,source:&str,budget:usize,reserved:usize,summary:&str,loader:impl FnMut(usize,page_capture::ResourceKind,&str,usize)->Result<Vec<u8>>,cancelled:impl Fn()->bool)->Result<String>{
- remote_inputs(root,html,args,source,budget,reserved,Some(summary),loader,cancelled)
+ remote_resources_observed(root,html,args,source,budget,reserved,summary,loader,cancelled).map(|v|v.0)
 }
-fn remote_inputs(root:&Path,html:&[u8],args:&Json,source:&str,budget:usize,reserved:usize,resource_summary:Option<&str>,mut loader:impl FnMut(usize,page_capture::ResourceKind,&str,usize)->Result<Vec<u8>>,cancelled:impl Fn()->bool)->Result<String>{
+pub(super) fn remote_observed(root:&Path,html:&[u8],args:&Json,source:&str,budget:usize,cancelled:impl Fn()->bool)->Result<(String,Json)>{remote_inputs(root,html,args,source,budget,0,None,|_,_,_,_|Err("External resource was not approved".into()),cancelled)}
+pub(super) fn remote_resources_observed(root:&Path,html:&[u8],args:&Json,source:&str,budget:usize,reserved:usize,summary:&str,loader:impl FnMut(usize,page_capture::ResourceKind,&str,usize)->Result<Vec<u8>>,cancelled:impl Fn()->bool)->Result<(String,Json)>{remote_inputs(root,html,args,source,budget,reserved,Some(summary),loader,cancelled)}
+fn remote_inputs(root:&Path,html:&[u8],args:&Json,source:&str,budget:usize,reserved:usize,resource_summary:Option<&str>,mut loader:impl FnMut(usize,page_capture::ResourceKind,&str,usize)->Result<Vec<u8>>,cancelled:impl Fn()->bool)->Result<(String,Json)>{
  validate(args)?;if html.len()>262144{return Err("Remote HTML capture exceeds 256 KiB".into());}
  let name=text(args,"output");if root.join(&name).exists(){return Err("Capture output already exists; choose a new PNG filename".into());}
  if cancelled(){return Err("Remote capture cancelled before font loading".into());}
@@ -90,7 +92,8 @@ fn remote_inputs(root:&Path,html:&[u8],args:&Json,source:&str,budget:usize,reser
  let result=if resource_summary.is_some(){page_capture::render_resources(html,&font,dimension("width",800),dimension("height",600),&mut load,&cancelled)}else{page_capture::render_with_loader(html,&font,dimension("width",800),dimension("height",600),|target,limit|load(usize::MAX,page_capture::ResourceKind::Png,target,limit),&cancelled)}?;
  let offset=save(root,&name,&result,&cancelled)?;
  let resources=resource_summary.unwrap_or("External CSS/PNG resources were not fetched; inline styles/data PNG only.");
- Ok(format!("{}\nRemote HTML source: {source} ({} UTF-8 bytes). Font source: {}. {resources}\nSaved new workspace PNG: {name}; all {offset} bytes read back exactly. Existing files were not replaced.",result.summary,html.len(),font_path.display()))
+ let artifact=obj(vec![("path",s(&name)),("bytes",Num(result.png.len().to_string())),("sha256",s(&harness_rules::sha256(&result.png))),("width",Num(u32::from_be_bytes(result.png[16..20].try_into().unwrap()).to_string())),("height",Num(u32::from_be_bytes(result.png[20..24].try_into().unwrap()).to_string()))]);
+ Ok((format!("{}\nRemote HTML source: {source} ({} UTF-8 bytes). Font source: {}. {resources}\nSaved new workspace PNG: {name}; all {offset} bytes read back exactly. Existing files were not replaced.",result.summary,html.len(),font_path.display()),artifact))
 }
 
 pub(super) fn minimum_bytes(html:&str,args:&Json)->Result<usize>{minimum_bytes_for_len(html.len(),args)}

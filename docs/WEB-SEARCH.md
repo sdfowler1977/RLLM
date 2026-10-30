@@ -1,3 +1,9 @@
+## Current web investigation — Lab 1793357549
+
+Web reads/searches now retain typed historical observations with exact source/request context and durable IDs. Search result children are bounded to ten. Kind/length/representation-digest criteria evaluate exact observed facts; reviewed repeat web experiments evaluate only their own new retained evidence. Native and model workflows share representation/specification export. Capture artifact facts require the actual worker receipt. Retention off/full/malformed never blocks the real web result. Web evidence is partial remote coverage, not complete local-file evidence or inferred program behavior. Full REA and installed-device acceptance remain open. See [release evidence](../release/NOTES.md).
+
+Earlier guidance follows.
+
 # Harness web search
 
 Web search belongs to RLLM, not to the connected model provider. Use it with a local model, an OpenAI-compatible service, Messages/Anthropic, Content, or another supported connection. The model proposes a query, RLLM performs the approved HTTP request, and the returned evidence goes back to that same conversation and model route. Recursive tasks and assigned subagents use the same implementation. A secondary model is optional.
