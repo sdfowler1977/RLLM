@@ -1,3 +1,9 @@
+## Current web investigation — Lab 1793357549
+
+Web reads/searches now retain typed historical observations with exact source/request context and durable IDs. Search result children are bounded to ten. Kind/length/representation-digest criteria evaluate exact observed facts; reviewed repeat web experiments evaluate only their own new retained evidence. Native and model workflows share representation/specification export. Capture artifact facts require the actual worker receipt. Retention off/full/malformed never blocks the real web result. Web evidence is partial remote coverage, not complete local-file evidence or inferred program behavior. Full REA and installed-device acceptance remain open. See [release evidence](../release/NOTES.md).
+
+Earlier guidance follows.
+
 # Finding and using native investigation
 
 The native engines are Rust modules linked into the app's `libclient.so`, loaded by the existing Android/JNI binding. There is no separate REA executable, binary path, native process to launch, or native `discover` handshake. `rea` is the optional remote MCP operation; it does not invoke the built-in engines. An empty workspace means no input files are present, not that the APK lacks its native code.
