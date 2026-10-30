@@ -14,7 +14,7 @@ pub(super) enum Operator {Present,Equal,Word,Dash,Prefix,Suffix,Substring}
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub(super) struct Attribute {pub name:String,pub operator:Operator,pub value:String,pub insensitive:bool}
 #[derive(Clone,Debug,PartialEq,Eq)]
-pub(super) enum Simple {Type(String),Universal,Id(String),Class(String),Attribute(Attribute),Root,FirstChild,LastChild,OnlyChild,Empty}
+pub(super) enum Simple {Type(String),Universal,Id(String),Class(String),Attribute(Attribute),Root,FirstChild,LastChild,OnlyChild,FirstOfType,LastOfType,OnlyOfType,Empty}
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub(super) enum Combinator {Descendant,Child,Adjacent,Sibling}
 #[derive(Clone,Debug,PartialEq,Eq)]
@@ -42,7 +42,7 @@ fn compound(v:&[&Component],p:&mut usize)->Result<Compound>{
   ComponentKind::Token(Kind::Hash{value,id:true})=>{*p+=1;Simple::Id(value.clone())},
   ComponentKind::Token(Kind::Delim('.'))=>{*p+=1;let name=v.get(*p).and_then(|c|ident(c)).ok_or_else(||error(v.get(*p).copied(),"class-ident-required"))?;*p+=1;Simple::Class(name.to_string())},
   ComponentKind::Block('[',values)=>{if !c.closed{return Err(error(Some(c),"unclosed-attribute-selector"));}*p+=1;Simple::Attribute(attribute(values)?)},
-  ComponentKind::Token(Kind::Colon)=>{*p+=1;let name=v.get(*p).and_then(|c|ident(c)).ok_or_else(||error(v.get(*p).copied(),"functional-or-pseudo-element-selector-unsupported"))?;*p+=1;match name.to_ascii_lowercase().as_str(){"root"=>Simple::Root,"first-child"=>Simple::FirstChild,"last-child"=>Simple::LastChild,"only-child"=>Simple::OnlyChild,"empty"=>Simple::Empty,_=>return Err(error(Some(c),"pseudo-class-unsupported"))}},
+  ComponentKind::Token(Kind::Colon)=>{*p+=1;let name=v.get(*p).and_then(|c|ident(c)).ok_or_else(||error(v.get(*p).copied(),"functional-or-pseudo-element-selector-unsupported"))?;*p+=1;match name.to_ascii_lowercase().as_str(){"root"=>Simple::Root,"first-child"=>Simple::FirstChild,"last-child"=>Simple::LastChild,"only-child"=>Simple::OnlyChild,"first-of-type"=>Simple::FirstOfType,"last-of-type"=>Simple::LastOfType,"only-of-type"=>Simple::OnlyOfType,"empty"=>Simple::Empty,_=>return Err(error(Some(c),"pseudo-class-unsupported"))}},
   ComponentKind::Token(Kind::Comma)|ComponentKind::Token(Kind::Delim('>'|'+'|'~'))=>break,
   _=>return Err(error(Some(c),"selector-syntax-unsupported"))
  };simples.push(simple);if simples.len()>PARTS{return Err(error(Some(c),"compound-bound"));}}
@@ -70,6 +70,15 @@ pub(super) fn parse(values:&[Component])->Result<SelectorList>{
 fn element(doc:&Document,node:usize)->bool{matches!(doc.nodes.get(node).map(|n|&n.kind),Some(Html::Element{..}))}
 fn parent(doc:&Document,node:usize)->Option<usize>{doc.nodes.get(node)?.parent.filter(|p|element(doc,*p))}
 fn siblings(doc:&Document,node:usize)->Vec<usize>{doc.nodes.get(node).and_then(|n|n.parent).and_then(|p|doc.nodes.get(p)).map(|p|p.children.iter().copied().filter(|n|element(doc,*n)).collect()).unwrap_or_default()}
+// The lexical HTML tree stores normalized element names. Text/comments and
+// descendants are not siblings of this type. Scan borrowed nodes without a
+// temporary sibling vector; the caller charges all inspected names first.
+fn type_position(doc:&Document,node:usize,name:&str)->(bool,bool){
+ let children=doc.nodes.get(node).and_then(|n|n.parent).and_then(|p|doc.nodes.get(p)).map(|p|p.children.as_slice()).unwrap_or(&[]);
+ let mut first=None;let mut last=None;
+ for &i in children{if matches!(doc.nodes.get(i).map(|n|&n.kind),Some(Html::Element{name:other,..}) if other==name){if first.is_none(){first=Some(i);}last=Some(i);}}
+ (first==Some(node),last==Some(node))
+}
 fn ascii_space(c:char)->bool{matches!(c,' '| '\t'|'\r'|'\n'|'\u{c}')}
 fn attr_matches(actual:&str,test:&Attribute)->bool{
  let (a,v)=if test.insensitive{(actual.to_ascii_lowercase(),test.value.to_ascii_lowercase())}else{(actual.to_string(),test.value.clone())};
@@ -81,12 +90,16 @@ fn compound_matches(c:&Compound,doc:&Document,node:usize,work:&mut usize)->Resul
  for s in &c.simples{
   let family=n.parent.and_then(|p|doc.nodes.get(p)).map(|p|p.children.len()).unwrap_or(0);
   let selector_cost=match s{Simple::Type(v)|Simple::Id(v)|Simple::Class(v)=>v.len(),Simple::Attribute(a)=>a.name.len()+a.value.len(),_=>0};
-  let cost=1+selector_cost+attributes.iter().map(|a|a.name.len()+a.value.as_ref().map(String::len).unwrap_or(0)).sum::<usize>()+match s{Simple::FirstChild|Simple::LastChild|Simple::OnlyChild=>family,Simple::Empty=>n.children.iter().filter_map(|i|doc.nodes.get(*i)).map(|n|if let Html::Text{data,..}=&n.kind{data.len()+1}else{1}).sum(),_=>0};
+  let cost=1+selector_cost+attributes.iter().map(|a|a.name.len()+a.value.as_ref().map(String::len).unwrap_or(0)).sum::<usize>()+match s{Simple::FirstChild|Simple::LastChild|Simple::OnlyChild=>family,
+   Simple::FirstOfType|Simple::LastOfType|Simple::OnlyOfType=>family+ n.parent.and_then(|p|doc.nodes.get(p)).map(|p|p.children.iter().filter_map(|i|doc.nodes.get(*i)).map(|n|if let Html::Element{name:other,..}=&n.kind{name.len().min(other.len())+1}else{0}).sum::<usize>()).unwrap_or(0),Simple::Empty=>n.children.iter().filter_map(|i|doc.nodes.get(*i)).map(|n|if let Html::Text{data,..}=&n.kind{data.len()+1}else{1}).sum(),_=>0};
   *work=work.saturating_add(cost);if *work>WORK{return Err(SelectorError{offset:n.span.start,code:"selector-match-work-bound"});}
   let matched=match s{
   Simple::Type(t)=>name.eq_ignore_ascii_case(t),Simple::Universal=>true,Simple::Id(id)=>attr("id")==Some(id.as_str()),Simple::Class(class)=>attr("class").map(|v|v.split(ascii_space).any(|w|w==class)).unwrap_or(false),Simple::Attribute(a)=>attr(&a.name).map(|v|attr_matches(v,a)).unwrap_or(false),
   Simple::Root=>n.parent.and_then(|p|doc.nodes.get(p)).map(|p|matches!(p.kind,Html::Document)).unwrap_or(false),
   Simple::FirstChild=>siblings(doc,node).first()==Some(&node),Simple::LastChild=>siblings(doc,node).last()==Some(&node),Simple::OnlyChild=>siblings(doc,node)==vec![node],
+  Simple::FirstOfType=>type_position(doc,node,name).0,
+  Simple::LastOfType=>type_position(doc,node,name).1,
+  Simple::OnlyOfType=>type_position(doc,node,name)==(true,true),
   Simple::Empty=>n.children.iter().all(|i|match doc.nodes.get(*i).map(|n|&n.kind){Some(Html::Text{data,..})=>data.chars().all(ascii_space),Some(Html::Element{..})=>false,Some(_)=>true,None=>false})
  };if !matched{return Ok(false);}}Ok(true)
 }

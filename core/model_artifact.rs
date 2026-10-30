@@ -8,7 +8,7 @@ const OUTPUT: usize = 16384;
 fn label(v: &str) -> String { let mut t=String::new(); for c in v.chars().take(160) { for e in c.escape_debug() { t.push(e); } } if v.chars().count()>160 {t.push_str("…");} format!("\"{t}\"") }
 fn integer(v:&Json)->Result<u64>{if let Num(n)=v {if !n.is_empty()&&n.bytes().all(|b|b.is_ascii_digit()){return n.parse::<u64>().map_err(|_|"Integer exceeds 64 bits".into());}}Err("Expected unsigned integer".into())}
 fn field<'a>(v:&'a Json,k:&str)->Result<&'a Json>{v.get(k)}
-fn bits(dtype:&str)->Option<u64>{Some(match dtype {"BOOL"|"U8"|"I8"|"F8_E5M2"|"F8_E4M3"|"F8_E8M0"=>8,"I16"|"U16"|"F16"|"BF16"=>16,"I32"|"U32"|"F32"=>32,"I64"|"U64"|"F64"=>64,_=>return None})}
+fn bits(dtype:&str)->Option<u64>{Some(match dtype {"F4"=>4,"F6_E2M3"|"F6_E3M2"=>6,"BOOL"|"U8"|"I8"|"F8_E5M2"|"F8_E4M3"|"F8_E8M0"|"F8_E4M3FNUZ"|"F8_E5M2FNUZ"=>8,"I16"|"U16"|"F16"|"BF16"=>16,"I32"|"U32"|"F32"=>32,"I64"|"U64"|"F64"|"C64"=>64,_=>return None})}
 fn safetensors(data:&[u8],size:u64)->Result<String>{
  let h=u64::from_le_bytes(data.get(..8).ok_or("Incomplete eight-byte header length")?.try_into().unwrap());
  if h==0||h>HEADER as u64{return Err(format!("Header length {h} exceeds supported 1 MiB bound or is empty"));}
@@ -26,7 +26,9 @@ fn safetensors(data:&[u8],size:u64)->Result<String>{
   let shape=if let Arr(a)=field(v,"shape")?{a}else{return Err("Tensor shape must be an array".into())};if shape.len()>32{return Err("Tensor rank exceeds 32 bound".into());}
   let dims=shape.iter().map(integer).collect::<Result<Vec<_>>>()?;
   let count=if dims.contains(&0){0}else{dims.iter().try_fold(1u64,|n,d|n.checked_mul(*d).ok_or("Tensor shape product overflow"))?};
-  let length=count.checked_mul(width).ok_or("Tensor size overflow")?/8;elements=elements.checked_add(count).ok_or("Aggregate element count overflow")?;
+  let storage_bits=u128::from(count)*u128::from(width);
+  if storage_bits%8!=0{return Err("Tensor packed extent does not end at a whole-byte boundary".into());}
+  let length=u64::try_from(storage_bits/8).map_err(|_|"Tensor size overflow")?;elements=elements.checked_add(count).ok_or("Aggregate element count overflow")?;
   let offsets=if let Arr(a)=field(v,"data_offsets")?{a}else{return Err("Tensor offsets must be an array".into())};if offsets.len()!=2{return Err("Tensor offsets require two integers".into());}
   let begin=integer(&offsets[0])?;let end=integer(&offsets[1])?;if end<begin||end-begin!=length{return Err("Tensor extent does not match dtype and shape".into());}
   let absolute=start.checked_add(end).ok_or("Tensor absolute range overflow")?;if absolute>size{return Err("Tensor extent exceeds actual file length".into());}

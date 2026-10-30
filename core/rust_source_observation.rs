@@ -10,13 +10,14 @@ const OUTPUT_LIMIT:usize=8191;
 #[derive(Clone,Copy,PartialEq,Debug)]enum Kind{Ident,RawIdent,Lifetime,Literal,Punct}
 #[derive(Clone,Copy)]struct Token{start:usize,end:usize,line:usize,column:usize,kind:Kind}
 struct Lexer<'a>{text:&'a str,at:usize,line:usize,line_start:usize,tokens:Vec<Token>,issue:Option<String>,whole:bool,stack:Vec<u8>,comments:usize,literals:usize}
+fn whitespace(c:char)->bool{matches!(c,'\u{0009}'..='\u{000d}'|'\u{0020}'|'\u{0085}'|'\u{200e}'|'\u{200f}'|'\u{2028}'|'\u{2029}')}
 fn ident_start(c:char)->bool{c=='_'||c.is_alphabetic()}
 fn ident_continue(c:char)->bool{ident_start(c)||c.is_alphanumeric()}
 fn clipped(text:&str,limit:usize)->&str{let mut end=text.len().min(limit);while !text.is_char_boundary(end){end-=1;}&text[..end]}
 fn safe(text:&str,limit:usize)->String{let mut out=String::new();for c in text.chars(){let part=if c.is_control()||matches!(c,'\u{202a}'..='\u{202e}'|'\u{2066}'..='\u{2069}') {format!("\\u{{{:x}}}",c as u32)}else{c.to_string()};if out.len()+part.len()>limit{out.push_str("…");break;}out.push_str(&part);}out}
 impl<'a> Lexer<'a>{
  fn new(text:&'a str,whole:bool)->Self{Self{text,at:0,line:1,line_start:0,tokens:Vec::new(),issue:None,whole,stack:Vec::new(),comments:0,literals:0}}
- fn advance(&mut self,end:usize){let b=self.text.as_bytes();while self.at<end{if b[self.at]==b'\r'{self.line+=1;self.line_start=self.at+1;}else if b[self.at]==b'\n'{if self.at==0||b[self.at-1]!=b'\r'{self.line+=1;}self.line_start=self.at+1;}self.at+=1;}}
+ fn advance(&mut self,end:usize){let b=self.text.as_bytes();while self.at<end{if b[self.at]==b'\n'{self.line+=1;self.line_start=self.at+1;}self.at+=1;}}
  fn stop(&mut self,reason:&str){self.issue=Some(format!("{reason} at byte {} (line {}, UTF-8 byte column {}). {}",self.at,self.line,self.at-self.line_start+1,if self.whole{"This is an observation of the complete supplied input, not a compiler diagnostic."}else{"Only a prefix was supplied/examined; unseen bytes may complete the token."}));}
  fn emit(&mut self,end:usize,kind:Kind)->bool{if self.tokens.len()==TOKEN_LIMIT{self.stop("Token work bound reached; remainder not lexed");return false;}self.tokens.push(Token{start:self.at,end,line:self.line,column:self.at-self.line_start+1,kind});self.advance(end);true}
  fn identifier_end(&self,start:usize)->usize{let mut end=start;for c in self.text[start..].chars(){if !ident_continue(c){break;}end+=c.len_utf8();}end}
@@ -50,14 +51,50 @@ impl<'a> Lexer<'a>{
   if !byte&&ident_start(c){let end=self.identifier_end(start);if b.get(end)==Some(&b'\''){self.stop("Multiple characters in a character-shaped token");return None;}if end==b.len()&&!self.whole{self.stop("Apostrophe identifier reaches the sample boundary; lifetime/character classification withheld");return None;}return Some((end,Kind::Lifetime));}
   self.stop("Invalid or incomplete character/apostrophe token");None
  }
+ // Resolve the first #! using bounded token lookahead, without consuming source.
+ fn shebang(&self)->Result<bool,&'static str>{
+  let b=self.text.as_bytes();let mut p=2;
+  loop{
+   while p<b.len(){let c=self.text[p..].chars().next().unwrap();if !whitespace(c){break;}p+=c.len_utf8();}
+   if p==b.len(){return if self.whole{Ok(true)}else{Err("Shebang/inner-attribute lookahead reaches the sample boundary; classification withheld")};}
+   if b[p]==b'['{return Ok(false);}
+   if !self.whole&&b[p]==b'/'{
+    let left=b.len()-p;
+    if left==1||(left==3&&matches!(&b[p..],b"///"|b"/**")){return Err("Shebang lookahead comment marker ends at the sample boundary; classification withheld");}
+   }
+   if b.get(p..p+2)==Some(b"//"){
+    let doc=b.get(p+2)==Some(&b'!')||(b.get(p+2)==Some(&b'/')&&b.get(p+3)!=Some(&b'/'));
+    if doc{return Ok(true);}
+    p=self.text[p..].find('\n').map(|n|p+n+1).unwrap_or(b.len());continue;
+   }
+   if b.get(p..p+2)==Some(b"/*"){
+    let doc=b.get(p+2)==Some(&b'!')||(b.get(p+2)==Some(&b'*')&&!matches!(b.get(p+3),Some(b'*'|b'/')));
+    if doc{return Ok(true);}
+    p+=2;let mut depth=1;
+    while p<b.len()&&depth>0{
+     if b.get(p..p+2)==Some(b"/*"){depth+=1;if depth>COMMENT_DEPTH{return Err("Shebang lookahead block-comment depth bound reached; classification withheld");}p+=2;}
+     else if b.get(p..p+2)==Some(b"*/"){depth-=1;p+=2;}
+     else{p+=1;}
+    }
+    if depth!=0{return if self.whole{Ok(true)}else{Err("Shebang lookahead has an incomplete block comment at the sample boundary; classification withheld")};}
+    continue;
+   }
+   return Ok(true);
+  }
+ }
  fn run(&mut self){
   let b=self.text.as_bytes();
   while self.at<b.len(){
    let at=self.at;let c=self.text[at..].chars().next().unwrap();
-   if c.is_whitespace(){self.advance(at+c.len_utf8());continue;}
+   if whitespace(c){self.advance(at+c.len_utf8());continue;}
    // A script-style first-line shebang is non-source text, unlike #![attributes].
-   if at==0&&self.text.starts_with("#!")&&!self.text.starts_with("#!["){let end=self.text.find(['\n','\r']).unwrap_or(b.len());self.comments+=1;self.advance(end);continue;}
-   if b.get(at..at+2)==Some(b"//"){let end=self.text[at..].find(['\n','\r']).map(|p|at+p).unwrap_or(b.len());self.comments+=1;self.advance(end);continue;}
+   if at==0&&self.text.starts_with("#!"){
+    match self.shebang(){
+     Ok(true)=>{let end=self.text.find('\n').unwrap_or(b.len());self.comments+=1;self.advance(end);continue;},
+     Ok(false)=>{},Err(reason)=>{self.stop(reason);return;}
+    }
+   }
+   if b.get(at..at+2)==Some(b"//"){let end=self.text[at..].find('\n').map(|p|at+p).unwrap_or(b.len());self.comments+=1;self.advance(end);continue;}
    if b.get(at..at+2)==Some(b"/*"){
     let mut p=at+2;let mut depth=1;self.comments+=1;
     while p<b.len()&&depth>0{if b.get(p..p+2)==Some(b"/*"){depth+=1;if depth>COMMENT_DEPTH{self.stop("Nested block-comment depth bound reached; remainder excluded");return;}p+=2;}else if b.get(p..p+2)==Some(b"*/"){depth-=1;p+=2;}else{p+=1;}}
@@ -103,7 +140,7 @@ pub(super) fn analyze(data:&[u8],complete:bool)->String{
  };
  let whole=complete&&examined==data.len();let text=text.strip_prefix('\u{feff}').unwrap_or(text);
  let mut lexer=Lexer::new(text,whole);lexer.run();
- let mut out=format!("Rust lexical source observations\nSupplied {} bytes; examined {examined} bytes (byte cap {INPUT_LIMIT}). Scope: {}. Locations are one-based lines and UTF-8 byte columns in the examined text (initial UTF-8 BOM excluded).\n",data.len(),if whole{"complete supplied input"}else{"prefix only; unexamined source unknown"});
+ let mut out=format!("Rust lexical source observations\nSupplied {} bytes; examined {examined} bytes (byte cap {INPUT_LIMIT}). Scope: {}. Locations are one-based lines and UTF-8 byte columns in the examined text (initial UTF-8 BOM excluded; LF advances the line, CRLF is one break, lone CR is whitespace).\n",data.len(),if whole{"complete supplied input"}else{"prefix only; unexamined source unknown"});
  if partial_utf8{out.push_str("A split UTF-8 scalar at the sample boundary was excluded.\n");}
  let _=writeln!(out,"Lexed {} tokens; skipped {} comments and {} literals. Bounds: {TOKEN_LIMIT} tokens, {COMMENT_DEPTH} nested block comments, {DELIMITER_DEPTH} nested delimiters.",lexer.tokens.len(),lexer.comments,lexer.literals);
  if let Some(issue)=&lexer.issue{let _=writeln!(out,"Lexical limitation: {issue}");}
