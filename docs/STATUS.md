@@ -1,16 +1,7 @@
-# Current test-build scope
+# Current implementation
 
-Version 0.1-lab.1793357549 remains in progress. This is not a completed baseline.
+Model operation catalogs now follow Workspace source-access switches and the assigned non-writing role in all four provider formats. Configured connections remain saved; re-enabled sources regain their permitted operations. Retired document and app-inspection callbacks preserve the exact prior state before project refresh. The intrinsic command process, reviewed internet search and captured child-to-parent return use the existing shared core. Diagnostics retain their exact 1–128 run averaging range and compact gauge layout.
 
-| Area | Present | Remaining |
-| --- | --- | --- |
-| Investigation / REA | Shared Rust inspect/compare, retained evidence, hypotheses, observational experiments, file/representation/specification reconstruction, typed web/search/capture evidence and reviewed repeat web experiments, and supported source/data/media/binary observations | Universal format/process coverage, deep decompilation, broader experiments and semantic reconstruction |
-| Internet engine | Provider-independent search/read, redirects/deadlines, text decoding, supported local/remote HTML/CSS/PNG capture and selected inline programs | Full language/prototype/closure/browser/events/navigation/session behavior, page-URL scripts, broader layout/shaping/encodings/codecs and installed Android validation |
-| Compiler/runtime/inference | Bounded page-language compiler/evaluator and model-artifact inspection | Complete product-owned compiler/runtime/model inference and connected execution |
-| Providers/protocols | Existing provider adapters, negotiated legacy MCP client, scoped identities/cancellation | Provider OAuth, structured native tools/multimodal, full capability/version negotiation, MCP transports/progress/resume/server, ACP/A2A |
-| Storage | Current workspace/phone, WebDAV and bounded transfer paths | SMB, app Google authorization/default routing, paired streaming ZIP within unchanged limits and live storage acceptance |
-| Resources/recursion | Current ownership/cancellation, settings, delegation, explicit refinement/adoption and lesson reuse | Broader isolation/pools, multicore/accelerator/unified-memory/cluster scheduling and diagnostics |
-| Android | Existing native forms, history/Trash, attachments, selected-app metadata/usage reads | Installed-device grants/retention, visuals/spacing/scroll/reasoning, accessibility, lifecycle/IME/Keystore, live provider/NAS |
-| Acceptance | Scoped source and reproducible package evidence | Restricted archive acceptance, current device and complete original-project acceptance |
+The app includes four provider text formats, incremental replies, user agent/skill settings, file inspection/comparison, typed source observations, web search/page capture, reviewed reconstruction/experiments, WebDAV storage, encrypted history and local MCP/A2A access.
 
-REA is integrated through shared ordinary, recursive and manual workflows, but full universal capability coverage is unfinished. Optional configured remote REA tools are separate from the built-in engine. iOS and optional voice are outside the current completion scope.
+Validation: 1230 current connected owner checks, 3 retained prior compatibility outcomes and 194 selected Rust cases. Exact filters, scoped outcomes and comparison references are recorded in verification/RESULTS.json. Development toolchain restoration, checks, package inspection and readback scripts accompany this source in tools/.

@@ -1,3 +1,7 @@
+## Question process
+
+The current complete source contains135 build inputs/96 Rust modules. `core/inquiry.rs` is owned by the existing engine; application dispatch, the existing hypotheses operation and task/provider lifecycle use it directly. All four existing provider formats share process guidance and owned tool completions. Without a model, use Investigation → Question and design process. No added runtime dependency. See [process guide](QUESTION-PROCESS.md), [current scope](STATUS.md) and [release notes](../release/NOTES.md). Earlier instructions below remain preserved; latest release facts govern this version.
+
 ## Native local page capture
 
 Use ordinary requests or the existing File investigation form. See [Static capture](STATIC-CAPTURE.md) for actual inputs, output and scope.
@@ -65,3 +69,9 @@ Project archive import is still a test-build feature with an outstanding indepen
 ## Phone attachments
 
 Use **+ → Attach image or text file** for PNG/JPEG screenshots or UTF-8 text. Images appear above the composer with a Remove button; text appends to your draft. Press Send to share with the selected model. See [History and attachments](HISTORY-AND-ATTACHMENTS.md) for exact supported formats and limits.
+
+## Agent tasks and child delegation
+
+**Run agent task** starts a standalone task with the selected agent profile and configured task model route under Agent settings → Default models → Default task and child model. Its result is saved in the current conversation; it does not suspend a parent model request. The existing refinement and compaction controls remain separate.
+
+For a child that returns to a parent request, enable the child profile on the parent and permit delegate. The parent proposes a delegate operation for review. Actual child results or failures return once to the captured parent connection; ordinary model prose claiming a spawn does not create a child.

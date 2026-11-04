@@ -1,116 +1,70 @@
-For a private server away from home, see [Tailscale setup and connection troubleshooting](CONNECTIONS.md). Tailscale or another secure VPN/tunnel can provide access; it is not required for public hosted APIs or already reachable LAN servers.
+# Setup
 
-## Current access and inspection controls
+## Workspace and storage
 
-See [Access and data controls](ACCESS-AND-DATA.md) for broad shared-storage, selected-folder and disabled modes; explicit selected-app metadata reads; exclusions; and model data destinations. App inspection does not access private app files or prove spying. Leading malformed tool-call markup is a scoped error, with raw history retained and no execution/replay. This section supersedes older folder-only browsing descriptions below.
+Open **Workspace → Projects → New workspace**, enter a name and choose **Create workspace**. Each workspace has its own app-owned project directory. **Switch workspace** returns to a saved location; **Original workspace** retains the files from earlier releases. **Project files** opens browsing, text editing, reading and search. **Project snapshots** contains import, export and saves.
 
-# Set up RLLM
+**Workspace → Storage** is for browsing: **Phone locations**, **Network locations** and **Google Drive**. **Workspace → Setup** is for phone folders/scope, network connection settings, Google Drive accounts, MCP connections, access permissions and default saves.
 
-## 1. Install Android
+Configure a source once, then use its access toggle to allow or suspend app operations while retaining its setup. **Access permissions** groups phone, network, Google Drive and MCP switches. Phone setup also chooses Android's broad storage grant or a selected-folder browsing scope. **Default saves** independently chooses the phone/network destination and reply autosave.
 
-Download [RLLM-Lab.apk](https://github.com/sdfowler1977/RLLM/releases/download/lab-1793173000/RLLM-Lab.apk) from the GitHub pre-release. Open the APK on a compatible Android 8.0+ ARM64 or x86-64 device and follow Android's installation prompts. If Android asks, allow installation for the browser or file manager you used; this is not permission for RLLM to install other apps.
+For Google Drive, open **Setup → Google Drive account → Sign in / add Google account**. Android manages the account sign-in. Then open **Storage → Google Drive → Browse Google Drive files**, choose Google Drive in Android's Locations and select a file. Use **Open selected file** for its Android viewer, **Read selected text** for a local UTF-8 preview, or **Copy text to workspace** to open the existing reviewed editor. **Remove Google Drive file grants** releases the app's saved document grants for that provider. These actions use the device's installed document provider and account controls.
 
-For an existing **RLLM Lab** installation, install the newer APK over it. Do not uninstall or clear storage to resolve an update error: that can remove local history. A signature mismatch means the APK was signed by a different key. Keep the original installation and check the artifact first. The publisher's Lab package is `com.local.client.lab`.
+## Model connections
 
-The application needs access to your selected model endpoint. A server on another device must listen on a reachable interface, allow the port through its firewall, and be reachable through your LAN/VPN. The phone's `localhost` refers to the phone itself.
+Open the connection editor with the pencil control. Enter the server address, API format and exact model ID. Enter the provider key when the server uses one. Use the server's documented scheme, host, port and API path.
 
-## 2. Add a connection
-
-![Illustrative connection and routing forms with fictional configuration](images/setup-preview.png)
-
-*Generated setup illustration, not a captured device screen. Follow the text instructions and actual form labels; do not treat the illustrated values as working credentials.*
-
-Tap **Connect to LLM** on first launch. Later, the top pencil opens the current connection editor directly. Additional connections are available through **App settings → LLM connections**, or the chat connection picker’s add option.
-
-| Field | What to enter |
+| Format | Typical request path |
 | --- | --- |
-| Connection name | A friendly label such as `Studio` or `Research`. If populated, this is displayed instead of the wire model ID. |
-| API URL | The exact address, including `http://` or `https://`, port if needed, and API path. |
-| Model name | The provider's exact model ID. Type it manually; `RLLM` is the app's name, not a default model. |
-| API key | Your provider's key, if required. Leave empty for a server that does not require one. |
-| API type | The request format the server actually accepts. |
+| Chat completions | `/v1/chat/completions` |
+| Local chat | `/api/chat` |
+| Messages | `/v1/messages` |
+| Content | `/v1beta/models/MODEL:generateContent` |
 
-Example local configuration, using a reserved documentation address rather than anyone’s real server:
+Choose the provider format that matches the configured server. HTTPS uses certificate and hostname verification. Explicit HTTP supports trusted LAN/VPN listeners. Thinking, output-token and context settings follow the selected model's documented parameters. Save the profile and select it for the chat.
 
-```text
-Connection name: Studio
-API URL:         http://192.0.2.10:8080/v1
-Model name:      your-model-id
-API key:         leave blank if your server needs no key
-API type:        OpenAI-compatible chat
-```
+## Agents and children
 
-**Replace the example address and model ID.** `192.0.2.10` is documentation-only and is not an accessible demo service.
+Open Agent settings → Agent profiles. Create the child profile, select its model override, instructions and permitted tools. Edit the parent profile, enable the specific Callable subagent and permit `delegate`. Select the parent agent in the chat footer.
 
-Example hosted configuration:
+A reviewed delegation starts the selected child connection. The task view shows the running child. Returned results and interruptions continue through the captured parent connection. User rules and Once/Session/Always approvals govern reviewed tool operations.
 
-```text
-Connection name: Research
-API URL:         https://api.example.com/v1
-Model name:      provider-model-id
-API key:         enter your own key in the app
-API type:        OpenAI-compatible chat
-```
+## Web access
 
-`api.example.com` is illustrative. Use the endpoint and API format documented by your chosen provider; an API key alone does not make a provider compatible with a particular format.
+Open App settings → Network services → Web access. A blank Custom search URL selects the built-in search sources. Manual Web search works directly through the harness. Models can propose permitted `web_search` and `web_read` calls, whose returned evidence continues the requesting task.
 
-### Choose the correct API format
+## Network storage
 
-| API type in RLLM | Typical resolved request path | Authentication default |
-| --- | --- | --- |
-| OpenAI-compatible chat | `/v1/chat/completions` | `Authorization: Bearer …` |
-| Ollama chat | `/api/chat` | Bearer key if supplied |
-| Anthropic messages | `/v1/messages` | `x-api-key` |
-| Google content | `/v1beta/models/{model}:generateContent` | `x-goog-api-key` |
+For WebDAV, enter the complete folder URL, username and password. New files are reported saved only after a readback matches the requested UTF-8 bytes. An interrupted or mismatched readback stays unconfirmed; no write is automatically repeated. Folder listings accept XML comments and CDATA property text while refusing document-type/entity declarations. Use the service's actual folder path and port. Review a listing, select a file and use the available read/copy/create/update/folder operations.
 
-For OpenAI chat, a URL ending in `/v1` is expanded to `/v1/chat/completions`. The older `/v1/completions` text endpoint is a different API. A custom full path is preserved. Advanced options expose streaming and custom authentication header/prefix controls; change these only when the service requires them. All four text API formats now support streaming. Turn off **Stream replies** for a server that requires complete JSON. Messages keeps its required output-token setting. Content standard method URLs switch between `:streamGenerateContent?alt=sse` and `:generateContent` only for the request; the saved connection remains intact. Custom paths and unrelated query fields remain, while conflicting/duplicate `alt` settings are refused before sending.
+For a VPN IP route whose certificate names a DNS host, enter that exact host in Certificate DNS hostname. Enter the hostname itself, for example `storage.example.net`. The TCP connection uses the URL address; TLS identity, SNI and HTTP Host use the selected DNS name with ordinary chain and hostname verification. WebDAV listings may use either the configured route or this explicit certificate name; accepted entries keep requests on the original route.
 
-Use the actual scheme supported by the server. A plain HTTP listener cannot accept HTTPS merely because an `s` is added to its URL. Explicit `http://` is supported for a trusted LAN/VPN; hosted connections should use the provider's documented HTTPS endpoint.
+## Question and design process
 
-Save and send a short test message. The configured model receives the conversation through the selected connection. Switching providers can therefore send the retained conversation to the new provider.
+Open Investigation → Question and design process. Start a question, edit its plan, record evidence, add findings/design notes, assess individual questions or requirements and review finite checks. Select Use for manual observations to associate subsequent operations with the question. Export uses the reviewed workspace-file operation.
 
-## 3. Set model roles and agent profiles
+Ordinary, recursive, delegated and refinement tasks share this process. Plan changes retain assessment history and give the revised items their own review state.
 
-Open **Agent settings → Default models**. Choose a primary chat connection, a default subagent connection, and a default compaction connection, then **Save routing**. The latter two can inherit the primary route or use separate saved connections.
+## History and Trash
 
-Explicit subagent/compaction routes take precedence for those roles. An inherited primary route follows the conversation's explicit connection choice, then a selected agent's model override, then the selected connection. A different connection uses its own endpoint, key, model, and generation settings.
+Use history controls to branch, restore or move conversations to Trash. Open Trash, choose Empty Trash, review the displayed conversations and confirm the exact snapshot. Keep returns to the current Trash view. Individual restore and purge controls remain available.
 
-In **Agent settings → Agent profiles**, name a profile, enter its instructions, choose its model override, select skills and callable subagents, and specify permitted tools. Select a main agent from the centered footer control, initially **General**. Profiles and tool permissions cannot be changed in the middle of an active task or pending tool review.
+## MCP servers and build tools
 
-## 4. Thinking and context
+1. Open **Workspace → Tools and servers → Server connection**, or **Workspace → Setup → MCP server connection**.
+2. Enter the server's full URL, port and MCP path, for example `http://server:port/mcp`, and its bearer token when required. Set **Allow this server connection** and **Allow the selected agent to use MCP tools** as desired.
+3. Choose **Save and discover tools**. The app negotiates with that server and opens **Available server tools** with the returned names.
+4. Select a tool, inspect its description/schema, enter its JSON arguments and choose **Review call → Run this call**. The returned result appears in the app. Server stream controls are grouped separately under **Server streams**.
 
-Open the pencil, then **Thinking and context**. Leave settings at server defaults unless the exact model/API supports the selected parameters. Set an output-token limit independently from the context budget. A context budget is an application limit; it does not increase the model server's capacity. Estimated-token and exact UTF-8 byte budgets are distinct. The compaction reminder does not automatically discard conversation history or perform compaction.
+For a build server such as Dazzle, choose its advertised workspace/project creation or opening tool first, then its build tool with the parameters and paths from that server's schema/results. App workspaces hold local phone project files; server workspace parameters refer to the build server's locations.
 
-Apply the generation settings to the connection and save the connection. If a server rejects a reasoning parameter, return to **Server default** and confirm which parameter the provider supports.
+To let the primary model use those tools, enable **Allow the selected agent to use MCP tools** in the connection form, or open **Tools and servers → Agent tool access** and enable `mcp` for the selected agent. Ask the model to discover and use the configured server. The existing reviewed command flow carries the actual tool names, arguments and results. **Setup → Access permissions → MCP server access** controls the connection independently of retained setup and per-agent tool choices.
 
-## 5. Storage
+## Connection checks
 
-Open **App settings → Storage**. The current built-in choices are a WebDAV folder or a phone folder granted through Android's file picker.
+Check the scheme, host, port, path, provider format, exact model ID and key against the server configuration. For HTTPS storage, check the certificate's DNS name and trust chain. For child orchestration, check the child profile's model override and the parent's callable-child/tool selections.
+# Installing this RLLM release
 
-For WebDAV, enter the complete folder URL, username and password. Use HTTPS where supported. A network drive reached through a VPN still needs a WebDAV service and the correct folder path; a VPN address by itself is not an SMB or WebDAV service. Direct SMB and a built-in Google OAuth Drive connection are not completed in this build.
+The launcher name is **RLLM** and the package remains `com.local.client.lab`. Builds signed with the current certificate update one another normally; do not uninstall a build already using that current signer. The user authorized a replacement signing identity. Android rejects an update signed with a different key. Export any needed conversations and configuration using the existing app before removing that installation, then install this signed APK. Uninstalling removes app-private data and its encryption key; do not rely on restoring encrypted app-private files afterward. Exported conversation/configuration files can be imported using the existing controls. No installation or removal is performed automatically.
 
-For phone storage, choose **Grant or change phone folder**, select the destination in Android's picker, and explicitly enable it as the default. Enable autosave if you want each completed reply saved to the selected supported destination. Check that a test reply appears there. The app uses destination readback for its supported verified transfers.
-
-Conversation/configuration exports can also use Android's document picker. Google Drive appears there only if the installed Drive provider exposes a suitable destination; this is Android document-provider access, not built-in Google account authorization. Local encrypted app state remains on the phone even when reply autosave uses remote storage.
-
-## 6. Web access and investigation
-
-A local LLM does not need its own browser connection. The harness can perform permitted, reviewed web operations. In **App settings → Network services → Web access**, leave **Custom search URL** blank for built-in Mwmbl search with DuckDuckGo as the finite alternative. No API key is required. This works with every supported model route; provider-hosted search is optional. See [Harness web search](WEB-SEARCH.md). An optional custom service can use a URL containing `{query}` and its own separate key/header; those credentials never go to built-in search. Permit `web_read` and/or `web_search` in the relevant agent profile. The current tools fetch/search content; they are not a full Playwright browser session and do not automatically interact with arbitrary JavaScript sites.
-
-Investigation is inherent in ordinary and recursive requests. Ask your question normally; the model can use the harness's original Rust file/document inspection and comparison operations and receive their actual findings. No separate skill invocation or remote REA server is needed for these native engines. **Investigation preferences** edits optional additional guidance. A configured remote MCP connection remains a separate optional capability. See [native investigation](NATIVE-INVESTIGATION.md) for implemented readers and the full retained scope.
-
-## Troubleshooting
-
-| Symptom | Check |
-| --- | --- |
-| TLS/handshake failure | Verify HTTP versus HTTPS and the certificate. Do not disable certificate validation as a workaround. |
-| HTTP 404 | Confirm API type and path. A 404 alone does not prove that a key is valid; some services mask authorization failures. |
-| HTTP 401/403 | Check the key, header format, account permission and requested model access. |
-| No connection/timeout | Check VPN/LAN reachability, host binding, firewall and port. |
-| Model rejected | Enter the exact supported model ID and review optional generation settings. |
-| Stream fails but ordinary reply works | Try disabling streaming in Advanced options to isolate server streaming compatibility. |
-| No live rate | Wait for received text. Nonstreaming replies show a completed estimate only after the response arrives. |
-| Cannot find chats | Use History in navigation or the top history control. Deleted chats are in Trash until permanently removed. |
-| APK will not update | Check package, architecture, version and signing identity. Preserve the installed app and data. |
-
-See [test-build notes](../release/NOTES.md) for current archive-import review and device-verification status.
+Keep the current signing identity for subsequent releases so they can update this build normally. Its certificate SHA256 is ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5.

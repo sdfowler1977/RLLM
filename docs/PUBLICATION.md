@@ -1,7 +1,7 @@
-# Publication
+# Current files
 
-Current disclosed test release: [RLLM__Engine-Delivery__2026-10-29__16-54-26Z](https://github.com/sdfowler1977/RLLM/releases/tag/RLLM__Engine-Delivery__2026-10-29__16-54-26Z).
+Each build delivery contains a signed RLLM APK, matching complete current source/resources/docs with exactly one copy of that APK, and checksums. Signing credentials remain in separately protected private custody.
 
-Version `0.1-lab.1793286141`. Install `RLLM-Lab.apk` over existing Lab without uninstalling, clearing data or replacing its signing identity. The matching public source and checksums accompany the APK on both GitHub and the authorized Drive destination.
+The user authorized the retained replacement signing identity while preserving the RLLM name and com.local.client.lab package. Android requires removal of an installation with the former signer before accepting this APK. Export needed history/configuration first; later releases reuse the current key.
 
-Private engineering source/history, credentials and signing material remain excluded. Required notices are retained. No project-wide reuse license is granted. See [release notes](../release/NOTES.md) and [current status](STATUS.md) for exact scope and unfinished acceptance.
+Source catalogs and validation results describe bytes and behavior. They are not runtime conditions for executing the app. Controlled checks and compilation do not establish live device/model/NAS acceptance or whole-project closure.

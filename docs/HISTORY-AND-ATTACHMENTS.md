@@ -6,7 +6,7 @@ In Chat, tap **+ → Attach image or text file**. Choose a PNG/JPEG image or UTF
 
 The app sends actual image bytes using each provider's image request format: Chat image_url data URI, Messages base64 image source, Content inlineData, and local chat images. Your configured model must support images. Unsupported model responses remain visible; the app does not silently convert an image into filename-only text.
 
-PNG/JPEG files are limited to 2 MiB each and 2 MiB total across up to four images in the outgoing context. Text documents and composed text retain the 1 MiB limit. Request, memory and encrypted-history limits remain unchanged; refusal preserves the existing draft. PDF/Office document extraction and other image formats are not implemented by this change.
+PNG/JPEG files are limited to 2 MiB each and 2 MiB total across up to four images in the outgoing context. Text documents and composed text retain the 1 MiB limit. Request, memory and encrypted-history limits remain unchanged; refusal preserves the existing draft.
 
 Unsent images belong to the exact conversation. Navigation, replacement picker requests, cancellation, restart, busy work, changed agent or changed connection prevent a stale picker result from being adopted. Images survive saved drafts, chat switching, Trash restoration and accepted sends. Image bytes remain in encrypted state; the UI receives filename/dimensions, not duplicated base64 payloads.
 
