@@ -1,3 +1,19 @@
+# Optional voice and media upgrade audit
+
+This section describes the current signed candidate. The older audit below retains its original baseline scope and counts; it is not fresh execution for this upgrade.
+
+The current source passes 34 of35 connected groups and194 selected Rust cases. The binary-flow group records94 current checks before stopping at3 unavailable revision-two compatibility comparisons. Its historical reader fingerprint was not weakened. Fresh complete serial Rust sweeps of this source and the exact preserved baseline each report454pass/14fail across468cases, with identical failing fixture names. Raw current/baseline logs and the comparison are retained in verification/. These failures are not relabeled as passes or whole-project closure.
+
+Nine fresh live public HTTPS search checks passed through intrinsic investigation, child review, evidence retention and captured parent return. Model replies were controlled fixtures; this does not certify live model inference or installed Android networking. The new services/media/jobs/voice/stream checks use real local HTTP peers and actual file bytes, including a generated6MiBWAVE job result, synthetic generic-brand MP4 audio/video and image attachment bytes.
+
+Repairs include optional service eligibility isolation, stale callback ownership, explicit file disclosure, scoped fallback and uncertain submission handling, generic host credential separation, masked credential edits, bounded streaming and disk integrity, typed job acceptance/status/result mapping, quota-managed capture originals, separate cancellable native media workers, preview context retirement, manual spoken playback, image draft attachment and detected media export filename/content type. Individual media files and job records have specific permanent-removal review; unrelated files and server jobs are preserved.
+
+One earlier parallel run withheld a large job result during integrity verification. A subsequent retry,8 serial repetitions and8 repetitions during building passed. Its cause was not established; the strict integrity checks were retained. Verification/UPGRADE-AUDIT.json preserves that observation rather than claiming a diagnosed repair.
+
+The signed APK retains RLLM/com.local.client.lab and the existing signing key. Both architectures, exact144build inputs, APK archive integrity, signature and16KiBalignment are inspected. Compilation and core effect checks do not establish physical microphone, decoder, touch/UI, lifecycle or live user endpoint acceptance. Those and independent current-byte review remain open. The earlier broader roadmap is preserved in the canonical engineering record and has not been declared finished.
+
+## Historical baseline audit (original text)
+
 # Release audit
 
 ## Current command and callback audit

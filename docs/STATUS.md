@@ -1,7 +1,9 @@
 # Current implementation
 
-Model operation catalogs now follow Workspace source-access switches and the assigned non-writing role in all four provider formats. Configured connections remain saved; re-enabled sources regain their permitted operations. Retired document and app-inspection callbacks preserve the exact prior state before project refresh. The intrinsic command process, reviewed internet search and captured child-to-parent return use the existing shared core. Diagnostics retain their exact 1–128 run averaging range and compact gauge layout.
+Optional generic server hosts, routes, credentials, request/response mappings and ordered fallbacks now connect foreground voice, file uploads, generation jobs and streamed artifacts to the existing primary/child workflow. Local work and the primary model remain usable when extra services are absent or unavailable.
 
-The app includes four provider text formats, incremental replies, user agent/skill settings, file inspection/comparison, typed source observations, web search/page capture, reviewed reconstruction/experiments, WebDAV storage, encrypted history and local MCP/A2A access.
+Setup, mappings, job behavior and limits: [SERVICES.md](SERVICES.md). The established text, investigation, web, file, storage, MCP/A2A and delegation paths remain part of the same app.
 
-Validation: 1230 current connected owner checks, 3 retained prior compatibility outcomes and 194 selected Rust cases. Exact filters, scoped outcomes and comparison references are recorded in verification/RESULTS.json. Development toolchain restoration, checks, package inspection and readback scripts accompany this source in tools/.
+Validation: 34/35 connected groups, 1415 executed checks, 194 selected Rust cases. Reports describe owner execution, not independent acceptance.
+
+Installed Android microphone/playback/UI/lifecycle acceptance, real user server endpoints and independent review remain unverified. Open microphone and a separate medical application are not implemented. The historical revision-two comparator is unavailable; its three compatibility checks remain open. Full Rust sweeps retain 14 failing historical fixtures also failing on the preserved baseline; no new fixture failures were found. Current operation equivalents are covered separately.
