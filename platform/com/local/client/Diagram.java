@@ -24,12 +24,12 @@ final class Diagram extends View {
     void update(JSONObject next){drawing=next;invalidate();}
     @Override protected void onMeasure(int widthSpec,int heightSpec){
         int width=MeasureSpec.getSize(widthSpec);
-        float ratio=(float)drawing.optDouble("height",340)/1000f;
+        float ratio=(float)(drawing.optDouble("height",340)/Math.max(1,drawing.optDouble("width",1000)));
         setMeasuredDimension(width,Math.max(1,Math.round(width*ratio)));
     }
     private int color(String key){try{return Color.parseColor(palette.optString(key,"#A2BCC5"));}catch(Exception ignored){return Color.GRAY;}}
     @Override protected void onDraw(Canvas canvas){
-        super.onDraw(canvas);scale=getWidth()/1000f;offset=0;canvas.save();canvas.scale(scale,scale);
+        super.onDraw(canvas);scale=(float)(getWidth()/Math.max(1,drawing.optDouble("width",1000)));offset=0;canvas.save();canvas.scale(scale,scale);
         JSONArray shapes=drawing.optJSONArray("shapes");
         if(shapes!=null)for(int i=0;i<Math.min(2048,shapes.length());i++){
             JSONObject p=shapes.optJSONObject(i);if(p==null)continue;

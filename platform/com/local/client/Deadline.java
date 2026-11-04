@@ -22,7 +22,7 @@ final class Deadline {
     }
     synchronized void clear(){session="";ticket="";until=0;}
     static int remaining(long until,long now) throws IOException {
-        if(now<0||until<=now||until-now>120000)throw new IOException("Page-read deadline expired or unavailable");
+        if(now<0||until<=now||until-now>120000)throw new IOException("Network deadline expired or unavailable");
         return (int)(until-now);
     }
 }
