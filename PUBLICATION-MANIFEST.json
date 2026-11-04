@@ -1,23 +1,41 @@
 {
-  "version": "0.1-lab.1793357549",
+  "state": "in_progress; current signed build",
+  "version": 1793750802,
+  "package": "com.local.client.lab",
+  "launcher_name": "RLLM",
+  "signing_certificate_sha256": "ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5",
+  "key_change_authorized": true,
+  "signed_apk": {
+    "path": "release/RLLM.apk",
+    "bytes": 5986322,
+    "sha256": "e17a7797a3ed32efc665810bb0c58f7f1c4907c0828841286c24975d8fa01eaa"
+  },
   "build_inputs": {
-    "AndroidManifest.xml": "b6369c2196bf4bbff999a1ee29392ff7ee45b3d23f2ec482e500873673ae102e",
+    "AndroidManifest.xml": "75548baef1fd8cc3e92cd112df73615c6081f108f65886a8af7e3c0d2c347f1f",
+    "core/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+    "core/a2a.rs": "185871b70cf5515d178806ff408842da5a4a416f1669f7b110979f6aabc142b2",
     "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-    "core/application.rs": "7dae4d1e9bf3c824b4027b533e541f870360602738cbd62253b5c2aef6d8495d",
-    "core/approval_rules.rs": "710b396c235d7203337641aa078a73b6e3389a49d5725569fad506384a6c1bb8",
+    "core/application.rs": "8b5f6d3b771c9228d2c9609db7c3dfb4cf7fe224babbd5156fab9984f1164824",
+    "core/approval_rules.rs": "4280166b46e22ccc489edc2590a4c4b3ed6d9b96c3d08d9e4540b65a7b1de569",
     "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
     "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
+    "core/binary_declarations.rs": "ccc94d3fd69d92deeaacfab99b7b54245b9a77e5f9ec5e3849154879caf0ba31",
+    "core/binary_evidence.rs": "f113547035a7529eb37235e638fb2cc7a4e4a8660e738cde28850288d360e554",
+    "core/binary_flow.rs": "5f71db173c028ce76cbd1e40d8b8d9f67cc35847a611fd14e83b24539572d0b3",
     "core/binary_observation.rs": "630368ff10116c484739751b06bc94ab36e315f8df1e51258d1de86e7bf5ccff",
     "core/capture_file.rs": "bc295f066f492a1246f6a75e8e23ca06e068ef8c18024d64ca12db6bab74f0e4",
-    "core/capture_job.rs": "a1f955f9b5065cbee13c7e49cc6b298dd9d58f25f922262dc949da416edf141a",
-    "core/claim_records.rs": "1b3c6eac34625ad729c13e95283e83c9f3a0f795811c76e0c9cb9c1a74c3e2c9",
-    "core/comparison.rs": "6623fb96d6de9ddd300fa5b2f569cf6a7d2530816d7eec8ef450f08e4fb08e8d",
+    "core/capture_job.rs": "a4890ee2a7d613c564622506f1b6fac2535752d44f3dadf9fbd3d67864f620b0",
+    "core/claim_records.rs": "509c346ea0a7b83c2aa967f759dd311be5521633cd3542ba4985ed81faaeabe6",
+    "core/comparison.rs": "f9e52d1686865d59550ee87a773d0b0d36f6901a414e4caeef47fdf61beb6d75",
     "core/compression.rs": "ac2ad8cc149ff2b7b79cde903bbb2cebcb51888700895495126260dee5fc7388",
+    "core/connection_migration.rs": "8649277c4a46d0040d9f9e21ab176bbfe53a24b08280b237b01ef0b450e11a62",
+    "core/console.rs": "dcb88fef6c64cfe8d812d5684222130168effe7b9f7d10cc4c56fbf42fe4285d",
+    "core/control_flow.rs": "a2e20ca0d75182db3cc902a39c80bb7f07d9665e40da006387f5783124b5a7bd",
     "core/css_cascade.rs": "90e078344ff20a056d91d4ea8486746093231eaf8eca0b6ab9b83436d210e47f",
     "core/css_selectors.rs": "082bcd967e7da8111b6cc70dbc36ab8d6c5e2ee74a418632f91c463f73fa6fbd",
     "core/css_stylesheet.rs": "2705d6437f61ba613b9695e6d5243b88131734d5577872b133e56813e3defbe5",
     "core/css_syntax.rs": "e1550592d461b660081d101c6ac3c7ab5a46269b20b5e3cbd05e3a5099144088",
-    "core/delegation.rs": "e06fe3ad50bdff8b7e78d438aafe79045b50728089b301902bd0865956de252b",
+    "core/delegation.rs": "fc0d7a345b1f63f4e36f985cb58327d0b489d7d18f28558c6659f7211ee9fbb4",
     "core/dex.rs": "dee1b5c5a0c865944c39da0b593ef404ade201ed9a6404b8d4dacccbb4ef9f0b",
     "core/dex_calls.rs": "3fe323ac8d3cfdb49f7f73f9df43cdae9064f7e4b5394a6111bd64b2bcd43a17",
     "core/dex_code.rs": "bec42b524a2e50294ecd44920824a8381bab45aef0d60d2a8bad5587642cd9de",
@@ -25,49 +43,54 @@
     "core/directory_comparison.rs": "62a8e8da8b9fb802bf2cabf228130fe56d41869829991c46c360f8b41ecc4b8e",
     "core/directory_observation.rs": "ca72382370d05cebad4088d8d9a02377344bc9fd7535fcbbde7efa32efaea169",
     "core/document.rs": "b7a0638cd22d79a25d61f1c5b5eb6644f4d84edbfb0c46dc04a87dd39c22a013",
-    "core/elf_observation.rs": "dbe97a7405e189975998ec0bf2f1faa98a5713f9e856b8e83390541efed05ac0",
-    "core/execution.rs": "2244b25dd35bd3e4d4c48818f81a219fbca588c00f1a70f36657064b7874dbcb",
-    "core/experiment_records.rs": "08fcac3f545fdec7cbb6edd730f35e48fac8e8b72e17e651eb8500bf6401c8c6",
+    "core/elf_code.rs": "2a9fc7f626b2381c600c44ee8567c6f4ce951854ec3ad09326276394d3d7e496",
+    "core/elf_observation.rs": "4c34cbfa18fc020effd12bb672461eeeb6f73af6aa61fdd9bb15dcee93b830e8",
+    "core/execution.rs": "2f7248b6030a668adb090aab624e92c237f12f84a504f98fb36ef52124c45789",
+    "core/experiment_records.rs": "a5fb8e2096ce39b1ae84650b104ba2a276ba9b7047c0bb38ed89470b97f6bb61",
     "core/exploration.rs": "fae803621412bb23577bcfb4157841ba6cea93a8bd2aebba8ae07650a0ecbefe",
-    "core/file_evidence.rs": "22774771cca653b2d205d8b5db97ddff452e825e3f5f0e458592f8d8e7d8165a",
+    "core/file_evidence.rs": "05e3f0dc6b35e7b8cce2da7f74f2e8dc28174de6cda52a8e50c7c7b8ef7cf38b",
     "core/font_outline.rs": "689c8bbf834450d98c868bdeb3411a644014f646da34404274e5f4c0f18971c6",
-    "core/gateway.rs": "503b37cfd1cc438ddc49c1977227fc3c7b84af56858a3771a9aa79e0d486fcc4",
+    "core/gateway.rs": "3bc3e26cfb91cc54ec34868f71192e679031c0c5b8c10001876a00baa197d244",
     "core/generation.rs": "5ffb914ca983efa2ab290f8ca5ee10a3f25f709c9118891435bf5015630ce9ca",
-    "core/generation_controls.rs": "f423c294849f6d1a596c505be8344202f6cd92239e3070d629f13d6a6f404763",
-    "core/harness.rs": "762df2dd8cfc7b0f2009eae4aad99aa56e68cdfff0ceb736d06c5cf4306bdfdb",
-    "core/harness_rules.rs": "7c9b78eb44f13bc4ae36ccab78ad41357e61f97972e967b6938e11e4defc041c",
+    "core/generation_controls.rs": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c",
+    "core/harness.rs": "8211d76a4949f2d39abb2ab6a27667dfffabf897ed617d0507ba982716c978f9",
+    "core/harness_rules.rs": "939d3c4bceff4dad6e254d02a37fdca522333718242d2f570e9484adaa6c6ac6",
     "core/history_view.rs": "9657effb36f29de5601719a6b8c8334e93490266c6526934516a4a734524efb8",
-    "core/hosted_search.rs": "130e7d67939db0e9b06425ca4f8e0963b9ee78c73e4357dc1b756e7623ae6b99",
+    "core/hosted_search.rs": "29f7b8657789391d1ff53aea6352707f95bca0c074283c6b4b81d98709e8ea3c",
     "core/html_document.rs": "2034fa68dde1984c55583caa137eddb1954a905ab0bc6537e4e7f4c6428499b2",
+    "core/http.rs": "ed4da2cc2d76ddd339269c2a7de9c8109c762cea73f717c21488d01e7ced0525",
     "core/http_content_coding.rs": "3e57b84bc1249dc5565d049e88fcd193fcba55292aa374965404d199da4ad923",
     "core/image_png.rs": "d9092643d4d7b4191728af3a34240caeb3d17135d5c6a810ed8570142b90841c",
     "core/incremental_digest.rs": "117bcf1ad7a8e069240cc4ba5cada7a4500d4170670209c80c4a97a14fa3191b",
-    "core/interaction.rs": "08b51b44183adb73efc954f650cb6ee116d22658108857b759cbbea7bcb3821d",
-    "core/investigation.rs": "b719995377db0a4a98bd1d8b1bec1f41974fbabd7dd5fc5854c6f59e2b9eda10",
-    "core/investigation_claims.rs": "cd7309044463e000c40e39edd53c59952426ae1f9c3e9eacdf258e10e1b90d3e",
+    "core/inquiry.rs": "5f8af816157ea95979162b7733c545e88d9c1337353e2b9989ff91fba1d1d528",
+    "core/instruction.rs": "97cedda11a56cc611c0aee49c5776b771c282754e0170e7102300f3ad0fa2d8a",
+    "core/interaction.rs": "23ed247d366a4928387aa3286317f2fc4d3cc67dab113b5ec84ea7c678c94df8",
+    "core/investigation.rs": "3f21b44d1cf5b6a0becaf818e585432a8393eaefb397352a198cde6f996b1ba3",
+    "core/investigation_claims.rs": "19ce0be47873fe7fbfde174f0acccffa494033208bc9a27531c308f9c72b2ddd",
     "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
-    "core/lib.rs": "a43d3f186dfc86a1192d3150ac0a16bc320af739f0ecc44f1f0162b1f741e027",
-    "core/mcp_identity.rs": "4c953da9e9cb16e5a248d86cff467023a1938a497759763eb3000232b6e884f7",
-    "core/mcp_lifecycle.rs": "765d3def15e38c002efa2f176f7fa4f88ae7aa60f40111d41610530f60b6d0ba",
-    "core/mcp_schema.rs": "db0b2f5c9025a6bc66744be4a2d9059995480c4d6afa2cb83949248aec368e9c",
+    "core/lib.rs": "e4a654eb0c7628aeb1debf780a6307b9b72ee8674525f45fde3d8747582cc9da",
+    "core/mcp_identity.rs": "8487fa1479ae947071be28ec4118d2becf56d2c32894adf47dbca3e8a0dcf4cb",
+    "core/mcp_lifecycle.rs": "9b23677d24cca981362accf03bbc238dd90c022fce988d6c1fb46f19b335d7ca",
+    "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
     "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
     "core/model_metadata.rs": "a7c2f2875f39f517364d1088e77d13d014bee603af9c1e91cc7947a17fc96ded",
-    "core/monitor.rs": "d71438968d4a2613c3f950c49f539f66ef28be8c2e4f3cd28ab3ce857d45e641",
-    "core/network.rs": "517031b69d052d0dc797e9ec8945db067423c8082bb2fe5c897bd1d9111b00a1",
-    "core/observation_graph.rs": "a736b7372076159556b3f9d2662f0615ff0fc2cb90bc7a33a5c75b620c59b733",
-    "core/observation_records.rs": "5897af9880f88bf94a2d72ee2216f428df70501d6fed01f506532c0eadd25e75",
+    "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
+    "core/network.rs": "a772d8eca2394fb1988313c3933161f29813edd462e70a930137b4df191f866e",
+    "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
+    "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
     "core/observation_store.rs": "8c8bb6b53a141a33392521f2d8c9e955b64a3d2537ab80936e03cec373393689",
-    "core/operation.rs": "ac78affdf1682da605ae9823f86bb9d5b60df5bc84af48ecb0f03ef8ae095cb4",
+    "core/operation.rs": "d581a546871e0c710a8075eb5b02fe14ab6e1baa44e31651b8976cf0506f8c3d",
     "core/page_capture.rs": "f4dcce673c5a7621cf444a89341299719157c4dfa87b5addc1f8b5256bfdc5af",
     "core/page_layout.rs": "a86392b40478de7ae08136287f98c9989e9c1f31cf69da5471dfaad79546eed5",
-    "core/page_program.rs": "ad25010aca78284b435846b03792b418e3d33c5d5d6d3a93b7e3c0d1fd0a109b",
-    "core/pe_observation.rs": "a44ac0e839ad2a21a54205ae6afb2798514877a9072f5f80fc5239ffb103a95d",
+    "core/page_program.rs": "2c80e145356e4fc2546b8dfc9fa6c1a98652cc275419bdf4eeaac1dd86eecebf",
+    "core/pe_observation.rs": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0",
     "core/png_inflate.rs": "bd0f4d5e4a60d52d942c5ec5f0e0a5ff8bbb649b3c4ab89b91175743cf83c5f0",
     "core/project_store.rs": "9e137016a5be8bbc459c4db3a9ed565684987d247d8d8cc055a311f3c5622957",
-    "core/provider.rs": "fa1dcbc502b6224ec60876cc79cde6c6acfcd2f94b077841ce7b1d86f682af67",
+    "core/provider.rs": "dd37ada978c8383385cf17c230a305167876c2633a9c865e313fda69152a403c",
+    "core/provider_calls.rs": "b00d9805e4174b56707f34984106561a6a0405cb0406fe1ce925811920b01fdb",
     "core/raster_surface.rs": "a475f9a953a9c54a6d9752fd5f169633437fcc609403caf5d1799364828e6a26",
     "core/reasoning_text.rs": "f2007c2f8306311ae3badc824000807cb27fa7c5ea885c7e50d535635da3189c",
-    "core/reconstruction.rs": "218080bb5b0d0ce858916aac9d73ca8e4dff2191e8c6d77a6889d50ddb0e9651",
+    "core/reconstruction.rs": "8c95d4d8b0d796b3c98d2a8c3a73311366410dcee8c73dabe93a1c884362bcd2",
     "core/redirect.rs": "4f55f161d677e307ba52af8983d15860d89f05e50c75e458789c1207d99d36c2",
     "core/remote_monitor.rs": "6223b278b7f2d83f611433601e3de1b7e75aa22962f675671411dde1ade215b3",
     "core/request_metrics.rs": "ec9822c7e3c4427d4bd3d6e4a6e7fdc51c77ebba3bf9325e7337f6ed321d14bf",
@@ -77,30 +100,35 @@
     "core/resources.rs": "1af0d186ff5af9e53d424df216712489abc1efe4cf065be7efcbf14f5cb92f50",
     "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
     "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
-    "core/stream.rs": "05107db64e208c8d6bc5e4d82d630f416d80c0266e003b1cbf6fd643eec2a616",
+    "core/stdio.rs": "40dc6770113b6d61fcb262a8a2f139e33efd0c98a33bc4f67c2c9ad82d633344",
+    "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
     "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
-    "core/throughput.rs": "27e15812a963a3bf2c3cc6df5f6d5936fd77129527dffe9a408e8dbb032be281",
-    "core/tool_format.rs": "9d9d9f698896f32fe66487d8e17571ac51fab945fbd0970bc403267d17830057",
-    "core/transfer.rs": "192d3cf4064440c6991b53c9c212b514104a0a318148291fc3deb5e7763f44a8",
+    "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
+    "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
+    "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
     "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
     "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
     "core/web_operation.rs": "308fa627b28613120977f88ba3e8551e69043e977a444baa2ecb24d80820e69a",
+    "core/workspace.rs": "e50362f7f890d77d8fc627a3c0b67559170db4854ba4370b4ed89bc8156d17e7",
+    "notices/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
     "notices/runtime.html": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27",
     "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
-    "package.sh": "dc8999a792e96fe7f96b15ad991fc5129fea19764ee42a525272f1d5b0acc0ff",
-    "platform/com/local/client/Activity.java": "b2f9db0e3da13d5594fe42d473c49f6442bd4c19712cf014c142f16d8c7a6f3a",
+    "package.sh": "5d555fa51611b71c25467f6623190ffce50875da8a4b67c5fe7308af5874161b",
+    "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+    "platform/com/local/client/Activity.java": "8cdc15aa88ef63e4a538c51c01230f0220d474d0eea4d79cf23b8269086d707a",
     "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
-    "platform/com/local/client/Deadline.java": "158e038221d4156773ae009c599d208af38fd0acc08942e8152f49aecbeb04c5",
-    "platform/com/local/client/Diagram.java": "6534583e73461c204b7467cc3d13a36cde9f0153e4fb4b3653d17cef900009a6",
+    "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
+    "platform/com/local/client/Diagram.java": "5fcab9863eb6a1be85b7a7e841c11cd927a3d722f4a53d6ac19e722177c341ce",
     "platform/com/local/client/Execution.java": "6c51afe3a8fce5283af4d8039e43913369da1ca0d3c3e1a14346a1b9d85d90d4",
     "platform/com/local/client/ExportStore.java": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573",
-    "platform/com/local/client/Gateway.java": "cb4689f58c80642542bc1a0a6cd7f39907f142db7f6e76a613299bcfc0f16c92",
+    "platform/com/local/client/Gateway.java": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7",
     "platform/com/local/client/Resolution.java": "9e706ecd3c199d7dee7f20ac312b4ba78d355e3eab8a534e07b4277216b3f068",
     "platform/com/local/client/TransferStore.java": "a164cf07e67e2ad8d98183c9dac5e367582f37c313fe01d8a99001eee61cd73b",
     "platform/com/local/client/Usage.java": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165",
+    "platform/com/local/client/Wire.java": "da76bf27d1a86f34164fd069411e4b6312122757213ffccc29f06f59916b11e0",
+    "platform/jni/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
     "platform/jni/bridge.c": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f",
-    "res/drawable-nodpi/wallpaper_dark.webp": "defca9af820cab1991b10c4b070d637c000151d86d4d2b35be10e6f36f967268",
-    "res/drawable-nodpi/wallpaper_light.jpg": "ac53ebcfcd066aba411373a2e75eb39550ace70dcd4bec4ecaf7750b5f6c6d33",
+    "res/drawable/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
     "res/drawable/actions.xml": "182afe6adaf73a5dccf178d15db3e76cb7430b86523e6ab89bff23d713253278",
     "res/drawable/addition.xml": "8071070af47aca255129b9b045332cd3bf0f1a6c592134677733efe797562c58",
     "res/drawable/arrow_left.xml": "8dcf18f6432aa67fb8b902d9a94a61a3d75bd8b6f13fa0b00b065a2516366950",
@@ -116,11 +144,11 @@
     "res/drawable/paper_plane.xml": "d6ede5f2c8b0cbf207f2e0d15ec94e59c038451946635e1118d4f4eb6ae49157",
     "res/drawable/settings.xml": "b009daea27c79b53515d24bce53ae8e87ad6ecd8a19f78505478dcd4d9520d36",
     "res/drawable/transfer.xml": "10142ed7d18986c21fc988d8a74e8bb232fa19c74107dcb45fd961f6d9a7b860",
-    "res/values/styles.xml": "66b7ac21724d0110d50b1ee59eb54b9b18cd8062f96c1822809e8a4cf1f6d17d"
-  },
-  "apk": {
-    "bytes": 7608281,
-    "sha256": "f46a007edd1ab55a0f84d1870e379cef3ce69813d9a7baa6747e38f83a34078b"
+    "res/drawable-nodpi/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+    "res/drawable-nodpi/wallpaper_dark.webp": "defca9af820cab1991b10c4b070d637c000151d86d4d2b35be10e6f36f967268",
+    "res/drawable-nodpi/wallpaper_light.jpg": "ac53ebcfcd066aba411373a2e75eb39550ace70dcd4bec4ecaf7750b5f6c6d33",
+    "res/values/styles.xml": "66b7ac21724d0110d50b1ee59eb54b9b18cd8062f96c1822809e8a4cf1f6d17d",
+    "res/xml/network.xml": "30607c8f0160843366cf48bbb318eafbf5a8793a35847732c77ebb564125e115"
   },
   "files": {
     ".gitignore": {
@@ -128,28 +156,32 @@
       "sha256": "269b22f425cebf2bbcc5dba02c9cd49457cd0983b8543bf9a35cc888c41ca118"
     },
     "AndroidManifest.xml": {
-      "bytes": 2029,
-      "sha256": "b6369c2196bf4bbff999a1ee29392ff7ee45b3d23f2ec482e500873673ae102e"
+      "bytes": 2074,
+      "sha256": "75548baef1fd8cc3e92cd112df73615c6081f108f65886a8af7e3c0d2c347f1f"
     },
     "README.md": {
-      "bytes": 3477,
-      "sha256": "0e017e284e3103428ed5276d3f854ebc397e7f2f6f70c1a8b8d170b552159dc6"
+      "bytes": 950,
+      "sha256": "c31fb06c9699f9c1ea1a309af4425431a56335e280a56758f3acde7e2e429a95"
     },
     "core/.gitkeep": {
       "bytes": 1,
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    "core/a2a.rs": {
+      "bytes": 35625,
+      "sha256": "185871b70cf5515d178806ff408842da5a4a416f1669f7b110979f6aabc142b2"
     },
     "core/app_observation.rs": {
       "bytes": 15800,
       "sha256": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be"
     },
     "core/application.rs": {
-      "bytes": 310068,
-      "sha256": "7dae4d1e9bf3c824b4027b533e541f870360602738cbd62253b5c2aef6d8495d"
+      "bytes": 332659,
+      "sha256": "8b5f6d3b771c9228d2c9609db7c3dfb4cf7fe224babbd5156fab9984f1164824"
     },
     "core/approval_rules.rs": {
-      "bytes": 17050,
-      "sha256": "710b396c235d7203337641aa078a73b6e3389a49d5725569fad506384a6c1bb8"
+      "bytes": 17072,
+      "sha256": "4280166b46e22ccc489edc2590a4c4b3ed6d9b96c3d08d9e4540b65a7b1de569"
     },
     "core/archive.rs": {
       "bytes": 58552,
@@ -158,6 +190,18 @@
     "core/attachments.rs": {
       "bytes": 17100,
       "sha256": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029"
+    },
+    "core/binary_declarations.rs": {
+      "bytes": 15210,
+      "sha256": "ccc94d3fd69d92deeaacfab99b7b54245b9a77e5f9ec5e3849154879caf0ba31"
+    },
+    "core/binary_evidence.rs": {
+      "bytes": 14458,
+      "sha256": "f113547035a7529eb37235e638fb2cc7a4e4a8660e738cde28850288d360e554"
+    },
+    "core/binary_flow.rs": {
+      "bytes": 11437,
+      "sha256": "5f71db173c028ce76cbd1e40d8b8d9f67cc35847a611fd14e83b24539572d0b3"
     },
     "core/binary_observation.rs": {
       "bytes": 21098,
@@ -168,20 +212,32 @@
       "sha256": "bc295f066f492a1246f6a75e8e23ca06e068ef8c18024d64ca12db6bab74f0e4"
     },
     "core/capture_job.rs": {
-      "bytes": 19423,
-      "sha256": "a1f955f9b5065cbee13c7e49cc6b298dd9d58f25f922262dc949da416edf141a"
+      "bytes": 19562,
+      "sha256": "a4890ee2a7d613c564622506f1b6fac2535752d44f3dadf9fbd3d67864f620b0"
     },
     "core/claim_records.rs": {
-      "bytes": 27635,
-      "sha256": "1b3c6eac34625ad729c13e95283e83c9f3a0f795811c76e0c9cb9c1a74c3e2c9"
+      "bytes": 30532,
+      "sha256": "509c346ea0a7b83c2aa967f759dd311be5521633cd3542ba4985ed81faaeabe6"
     },
     "core/comparison.rs": {
-      "bytes": 3471,
-      "sha256": "6623fb96d6de9ddd300fa5b2f569cf6a7d2530816d7eec8ef450f08e4fb08e8d"
+      "bytes": 4452,
+      "sha256": "f9e52d1686865d59550ee87a773d0b0d36f6901a414e4caeef47fdf61beb6d75"
     },
     "core/compression.rs": {
       "bytes": 8718,
       "sha256": "ac2ad8cc149ff2b7b79cde903bbb2cebcb51888700895495126260dee5fc7388"
+    },
+    "core/connection_migration.rs": {
+      "bytes": 10077,
+      "sha256": "8649277c4a46d0040d9f9e21ab176bbfe53a24b08280b237b01ef0b450e11a62"
+    },
+    "core/console.rs": {
+      "bytes": 236,
+      "sha256": "dcb88fef6c64cfe8d812d5684222130168effe7b9f7d10cc4c56fbf42fe4285d"
+    },
+    "core/control_flow.rs": {
+      "bytes": 13594,
+      "sha256": "a2e20ca0d75182db3cc902a39c80bb7f07d9665e40da006387f5783124b5a7bd"
     },
     "core/css_cascade.rs": {
       "bytes": 14410,
@@ -200,8 +256,8 @@
       "sha256": "e1550592d461b660081d101c6ac3c7ab5a46269b20b5e3cbd05e3a5099144088"
     },
     "core/delegation.rs": {
-      "bytes": 4208,
-      "sha256": "e06fe3ad50bdff8b7e78d438aafe79045b50728089b301902bd0865956de252b"
+      "bytes": 22497,
+      "sha256": "fc0d7a345b1f63f4e36f985cb58327d0b489d7d18f28558c6659f7211ee9fbb4"
     },
     "core/dex.rs": {
       "bytes": 31194,
@@ -231,61 +287,69 @@
       "bytes": 7759,
       "sha256": "b7a0638cd22d79a25d61f1c5b5eb6644f4d84edbfb0c46dc04a87dd39c22a013"
     },
+    "core/elf_code.rs": {
+      "bytes": 9544,
+      "sha256": "2a9fc7f626b2381c600c44ee8567c6f4ce951854ec3ad09326276394d3d7e496"
+    },
     "core/elf_observation.rs": {
-      "bytes": 30958,
-      "sha256": "dbe97a7405e189975998ec0bf2f1faa98a5713f9e856b8e83390541efed05ac0"
+      "bytes": 33336,
+      "sha256": "4c34cbfa18fc020effd12bb672461eeeb6f73af6aa61fdd9bb15dcee93b830e8"
     },
     "core/execution.rs": {
-      "bytes": 5195,
-      "sha256": "2244b25dd35bd3e4d4c48818f81a219fbca588c00f1a70f36657064b7874dbcb"
+      "bytes": 7368,
+      "sha256": "2f7248b6030a668adb090aab624e92c237f12f84a504f98fb36ef52124c45789"
     },
     "core/experiment_records.rs": {
-      "bytes": 28168,
-      "sha256": "08fcac3f545fdec7cbb6edd730f35e48fac8e8b72e17e651eb8500bf6401c8c6"
+      "bytes": 28385,
+      "sha256": "a5fb8e2096ce39b1ae84650b104ba2a276ba9b7047c0bb38ed89470b97f6bb61"
     },
     "core/exploration.rs": {
       "bytes": 14715,
       "sha256": "fae803621412bb23577bcfb4157841ba6cea93a8bd2aebba8ae07650a0ecbefe"
     },
     "core/file_evidence.rs": {
-      "bytes": 14331,
-      "sha256": "22774771cca653b2d205d8b5db97ddff452e825e3f5f0e458592f8d8e7d8165a"
+      "bytes": 15717,
+      "sha256": "05e3f0dc6b35e7b8cce2da7f74f2e8dc28174de6cda52a8e50c7c7b8ef7cf38b"
     },
     "core/font_outline.rs": {
       "bytes": 22523,
       "sha256": "689c8bbf834450d98c868bdeb3411a644014f646da34404274e5f4c0f18971c6"
     },
     "core/gateway.rs": {
-      "bytes": 9944,
-      "sha256": "503b37cfd1cc438ddc49c1977227fc3c7b84af56858a3771a9aa79e0d486fcc4"
+      "bytes": 10189,
+      "sha256": "3bc3e26cfb91cc54ec34868f71192e679031c0c5b8c10001876a00baa197d244"
     },
     "core/generation.rs": {
       "bytes": 5684,
       "sha256": "5ffb914ca983efa2ab290f8ca5ee10a3f25f709c9118891435bf5015630ce9ca"
     },
     "core/generation_controls.rs": {
-      "bytes": 8502,
-      "sha256": "f423c294849f6d1a596c505be8344202f6cd92239e3070d629f13d6a6f404763"
+      "bytes": 9294,
+      "sha256": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c"
     },
     "core/harness.rs": {
-      "bytes": 102142,
-      "sha256": "762df2dd8cfc7b0f2009eae4aad99aa56e68cdfff0ceb736d06c5cf4306bdfdb"
+      "bytes": 122457,
+      "sha256": "8211d76a4949f2d39abb2ab6a27667dfffabf897ed617d0507ba982716c978f9"
     },
     "core/harness_rules.rs": {
-      "bytes": 52442,
-      "sha256": "7c9b78eb44f13bc4ae36ccab78ad41357e61f97972e967b6938e11e4defc041c"
+      "bytes": 52449,
+      "sha256": "939d3c4bceff4dad6e254d02a37fdca522333718242d2f570e9484adaa6c6ac6"
     },
     "core/history_view.rs": {
       "bytes": 3553,
       "sha256": "9657effb36f29de5601719a6b8c8334e93490266c6526934516a4a734524efb8"
     },
     "core/hosted_search.rs": {
-      "bytes": 10360,
-      "sha256": "130e7d67939db0e9b06425ca4f8e0963b9ee78c73e4357dc1b756e7623ae6b99"
+      "bytes": 10185,
+      "sha256": "29f7b8657789391d1ff53aea6352707f95bca0c074283c6b4b81d98709e8ea3c"
     },
     "core/html_document.rs": {
       "bytes": 22908,
       "sha256": "2034fa68dde1984c55583caa137eddb1954a905ab0bc6537e4e7f4c6428499b2"
+    },
+    "core/http.rs": {
+      "bytes": 5329,
+      "sha256": "ed4da2cc2d76ddd339269c2a7de9c8109c762cea73f717c21488d01e7ced0525"
     },
     "core/http_content_coding.rs": {
       "bytes": 4674,
@@ -299,37 +363,45 @@
       "bytes": 3110,
       "sha256": "117bcf1ad7a8e069240cc4ba5cada7a4500d4170670209c80c4a97a14fa3191b"
     },
+    "core/inquiry.rs": {
+      "bytes": 62336,
+      "sha256": "5f8af816157ea95979162b7733c545e88d9c1337353e2b9989ff91fba1d1d528"
+    },
+    "core/instruction.rs": {
+      "bytes": 67149,
+      "sha256": "97cedda11a56cc611c0aee49c5776b771c282754e0170e7102300f3ad0fa2d8a"
+    },
     "core/interaction.rs": {
-      "bytes": 12391,
-      "sha256": "08b51b44183adb73efc954f650cb6ee116d22658108857b759cbbea7bcb3821d"
+      "bytes": 14638,
+      "sha256": "23ed247d366a4928387aa3286317f2fc4d3cc67dab113b5ec84ea7c678c94df8"
     },
     "core/investigation.rs": {
-      "bytes": 40096,
-      "sha256": "b719995377db0a4a98bd1d8b1bec1f41974fbabd7dd5fc5854c6f59e2b9eda10"
+      "bytes": 34454,
+      "sha256": "3f21b44d1cf5b6a0becaf818e585432a8393eaefb397352a198cde6f996b1ba3"
     },
     "core/investigation_claims.rs": {
-      "bytes": 14650,
-      "sha256": "cd7309044463e000c40e39edd53c59952426ae1f9c3e9eacdf258e10e1b90d3e"
+      "bytes": 15422,
+      "sha256": "19ce0be47873fe7fbfde174f0acccffa494033208bc9a27531c308f9c72b2ddd"
     },
     "core/layout.rs": {
       "bytes": 5621,
       "sha256": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1"
     },
     "core/lib.rs": {
-      "bytes": 21273,
-      "sha256": "a43d3f186dfc86a1192d3150ac0a16bc320af739f0ecc44f1f0162b1f741e027"
+      "bytes": 20738,
+      "sha256": "e4a654eb0c7628aeb1debf780a6307b9b72ee8674525f45fde3d8747582cc9da"
     },
     "core/mcp_identity.rs": {
-      "bytes": 3645,
-      "sha256": "4c953da9e9cb16e5a248d86cff467023a1938a497759763eb3000232b6e884f7"
+      "bytes": 4224,
+      "sha256": "8487fa1479ae947071be28ec4118d2becf56d2c32894adf47dbca3e8a0dcf4cb"
     },
     "core/mcp_lifecycle.rs": {
-      "bytes": 5822,
-      "sha256": "765d3def15e38c002efa2f176f7fa4f88ae7aa60f40111d41610530f60b6d0ba"
+      "bytes": 5907,
+      "sha256": "9b23677d24cca981362accf03bbc238dd90c022fce988d6c1fb46f19b335d7ca"
     },
     "core/mcp_schema.rs": {
-      "bytes": 34785,
-      "sha256": "db0b2f5c9025a6bc66744be4a2d9059995480c4d6afa2cb83949248aec368e9c"
+      "bytes": 34865,
+      "sha256": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70"
     },
     "core/model_artifact.rs": {
       "bytes": 16721,
@@ -340,28 +412,28 @@
       "sha256": "a7c2f2875f39f517364d1088e77d13d014bee603af9c1e91cc7947a17fc96ded"
     },
     "core/monitor.rs": {
-      "bytes": 15674,
-      "sha256": "d71438968d4a2613c3f950c49f539f66ef28be8c2e4f3cd28ab3ce857d45e641"
+      "bytes": 20013,
+      "sha256": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c"
     },
     "core/network.rs": {
-      "bytes": 16982,
-      "sha256": "517031b69d052d0dc797e9ec8945db067423c8082bb2fe5c897bd1d9111b00a1"
+      "bytes": 28727,
+      "sha256": "a772d8eca2394fb1988313c3933161f29813edd462e70a930137b4df191f866e"
     },
     "core/observation_graph.rs": {
-      "bytes": 12254,
-      "sha256": "a736b7372076159556b3f9d2662f0615ff0fc2cb90bc7a33a5c75b620c59b733"
+      "bytes": 12701,
+      "sha256": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed"
     },
     "core/observation_records.rs": {
-      "bytes": 28128,
-      "sha256": "5897af9880f88bf94a2d72ee2216f428df70501d6fed01f506532c0eadd25e75"
+      "bytes": 29449,
+      "sha256": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b"
     },
     "core/observation_store.rs": {
       "bytes": 4667,
       "sha256": "8c8bb6b53a141a33392521f2d8c9e955b64a3d2537ab80936e03cec373393689"
     },
     "core/operation.rs": {
-      "bytes": 12338,
-      "sha256": "ac78affdf1682da605ae9823f86bb9d5b60df5bc84af48ecb0f03ef8ae095cb4"
+      "bytes": 21780,
+      "sha256": "d581a546871e0c710a8075eb5b02fe14ab6e1baa44e31651b8976cf0506f8c3d"
     },
     "core/page_capture.rs": {
       "bytes": 9937,
@@ -372,12 +444,12 @@
       "sha256": "a86392b40478de7ae08136287f98c9989e9c1f31cf69da5471dfaad79546eed5"
     },
     "core/page_program.rs": {
-      "bytes": 68851,
-      "sha256": "ad25010aca78284b435846b03792b418e3d33c5d5d6d3a93b7e3c0d1fd0a109b"
+      "bytes": 70997,
+      "sha256": "2c80e145356e4fc2546b8dfc9fa6c1a98652cc275419bdf4eeaac1dd86eecebf"
     },
     "core/pe_observation.rs": {
-      "bytes": 18097,
-      "sha256": "a44ac0e839ad2a21a54205ae6afb2798514877a9072f5f80fc5239ffb103a95d"
+      "bytes": 29255,
+      "sha256": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0"
     },
     "core/png_inflate.rs": {
       "bytes": 18200,
@@ -388,8 +460,12 @@
       "sha256": "9e137016a5be8bbc459c4db3a9ed565684987d247d8d8cc055a311f3c5622957"
     },
     "core/provider.rs": {
-      "bytes": 16522,
-      "sha256": "fa1dcbc502b6224ec60876cc79cde6c6acfcd2f94b077841ce7b1d86f682af67"
+      "bytes": 19674,
+      "sha256": "dd37ada978c8383385cf17c230a305167876c2633a9c865e313fda69152a403c"
+    },
+    "core/provider_calls.rs": {
+      "bytes": 7786,
+      "sha256": "b00d9805e4174b56707f34984106561a6a0405cb0406fe1ce925811920b01fdb"
     },
     "core/raster_surface.rs": {
       "bytes": 12319,
@@ -400,8 +476,8 @@
       "sha256": "f2007c2f8306311ae3badc824000807cb27fa7c5ea885c7e50d535635da3189c"
     },
     "core/reconstruction.rs": {
-      "bytes": 18156,
-      "sha256": "218080bb5b0d0ce858916aac9d73ca8e4dff2191e8c6d77a6889d50ddb0e9651"
+      "bytes": 19818,
+      "sha256": "8c95d4d8b0d796b3c98d2a8c3a73311366410dcee8c73dabe93a1c884362bcd2"
     },
     "core/redirect.rs": {
       "bytes": 5771,
@@ -439,25 +515,29 @@
       "bytes": 12978,
       "sha256": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b"
     },
+    "core/stdio.rs": {
+      "bytes": 11240,
+      "sha256": "40dc6770113b6d61fcb262a8a2f139e33efd0c98a33bc4f67c2c9ad82d633344"
+    },
     "core/stream.rs": {
-      "bytes": 104264,
-      "sha256": "05107db64e208c8d6bc5e4d82d630f416d80c0266e003b1cbf6fd643eec2a616"
+      "bytes": 109271,
+      "sha256": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8"
     },
     "core/text_encoding.rs": {
       "bytes": 11393,
       "sha256": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318"
     },
     "core/throughput.rs": {
-      "bytes": 4861,
-      "sha256": "27e15812a963a3bf2c3cc6df5f6d5936fd77129527dffe9a408e8dbb032be281"
+      "bytes": 4755,
+      "sha256": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093"
     },
     "core/tool_format.rs": {
-      "bytes": 10318,
-      "sha256": "9d9d9f698896f32fe66487d8e17571ac51fab945fbd0970bc403267d17830057"
+      "bytes": 10132,
+      "sha256": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a"
     },
     "core/transfer.rs": {
-      "bytes": 16604,
-      "sha256": "192d3cf4064440c6991b53c9c212b514104a0a318148291fc3deb5e7763f44a8"
+      "bytes": 11455,
+      "sha256": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065"
     },
     "core/web_document.rs": {
       "bytes": 12726,
@@ -471,85 +551,117 @@
       "bytes": 14890,
       "sha256": "308fa627b28613120977f88ba3e8551e69043e977a444baa2ecb24d80820e69a"
     },
+    "core/workspace.rs": {
+      "bytes": 19784,
+      "sha256": "e50362f7f890d77d8fc627a3c0b67559170db4854ba4370b4ed89bc8156d17e7"
+    },
     "docs/.gitkeep": {
       "bytes": 1,
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
+    "docs/A2A.md": {
+      "bytes": 6422,
+      "sha256": "6f7b9e956d21ea32535d4e726c27ce2a78543e1cdd95824011f26ef771a42c1a"
+    },
     "docs/ACCESS-AND-DATA.md": {
-      "bytes": 22341,
-      "sha256": "cae031cfcb8f7c78a4f59477f2aedb257bee437a0e9785c3072035db8bf33896"
+      "bytes": 7000,
+      "sha256": "7ab3fd6a8e4e7cbba99572f90152921117c1ac2cb7ed4a9065eebdeda1337669"
     },
     "docs/ANALYTICS.md": {
-      "bytes": 2681,
-      "sha256": "f8587e86cdc266df8933b4185e01545249a24ca545a61d6d43af3d1e888131ed"
+      "bytes": 3530,
+      "sha256": "ea98d6f89776486630494de41ed654ae014daf6d7dad0dc435faf90e090961ac"
     },
     "docs/ARCHITECTURE.md": {
-      "bytes": 4408,
-      "sha256": "9ad5f8c7f5f359a57301bfcde8f38f57c5f4cf4e5bb890e3f8db00393e6af4e6"
+      "bytes": 5820,
+      "sha256": "8d5b73244ce52a82cb859b1ff3fcd982ac999a036a47505e0419b9f4a7955514"
     },
     "docs/ASSETS.md": {
-      "bytes": 1460,
-      "sha256": "9b1eb2685cb4d0fbf07834778cdd84967ceeb54deabfec11b190bd9a9f69bebc"
+      "bytes": 577,
+      "sha256": "4be441540c78cc579da26efcc8dd9678e95b6396ec7b0913e758f4d7b86cf10a"
+    },
+    "docs/AUDIT.md": {
+      "bytes": 7719,
+      "sha256": "c498f60147fe10c6e397f2cda400a40eaef6979a1f10ef0f93a8697973f87615"
+    },
+    "docs/BINARY-FLOW.md": {
+      "bytes": 6714,
+      "sha256": "6e0f40c106aaa07849a80af2cca067de6ad0a98de60c64d6ae7dc0fea66a3662"
     },
     "docs/BUILD.md": {
-      "bytes": 4326,
-      "sha256": "6528887f02a636f7989226e8783946e54e2169c7b7e27483fa37156e76910695"
+      "bytes": 8441,
+      "sha256": "707558a457d48f33b07263372343df836ee2c65b67ad65bfcec86f4fb119b560"
     },
     "docs/CHAT.md": {
-      "bytes": 1213,
-      "sha256": "35ba599fa033e1a9a682776ec959a2ef5606180bb3580443ca4d21e6e2f0b020"
+      "bytes": 1436,
+      "sha256": "78c8802ab8ed4e2c01e01263cfc5d9f40b54e8fbee6f8713a2f988644a201909"
+    },
+    "docs/COMMANDS.md": {
+      "bytes": 3470,
+      "sha256": "73bb6d1d2e59809531e5265164e60c2c5846ef2f8d668dc51adc8428627a016f"
     },
     "docs/CONNECTIONS.md": {
-      "bytes": 5571,
-      "sha256": "b6a8d3deb4b150f83a73a41679ee8b20d48cdf095ff75f9e263a8e9bef2f6165"
+      "bytes": 7582,
+      "sha256": "e5476186d9c6d02feee56eb9deee584d7abb7db95903020d18c0baf5a9965c33"
+    },
+    "docs/DECLARATIONS.md": {
+      "bytes": 1611,
+      "sha256": "3d0c0f8e95135d401de344b31489317dcb657d073ca236e5163d580fb068a7ba"
+    },
+    "docs/HEADLESS.md": {
+      "bytes": 4189,
+      "sha256": "3c7bd0fe34586cd269cbccb03d0b8517c9f865105bb5ab7d2d114614e1ca84e9"
     },
     "docs/HISTORY-AND-ATTACHMENTS.md": {
-      "bytes": 2241,
-      "sha256": "a20b62a17708bdf8d7feaa018e4ddd1b8151182755e553a4d6b5a16edae50e71"
-    },
-    "docs/IMAGE-PROMPTS.md": {
-      "bytes": 3297,
-      "sha256": "0ab8287ec27843afee98da21a3c2b013965625c42ab1cd7f25bad027d1d7489f"
-    },
-    "docs/INVESTIGATION-SCOPE.md": {
-      "bytes": 20739,
-      "sha256": "bc2d77d71a7001cd5e956b8022599bfbdd7add6eaec3e27ea55d8788ac2a4e47"
+      "bytes": 2150,
+      "sha256": "491b1ca20838bb7891ce745187e8bac175b6c3780cb941835b1a1676dcbf5286"
     },
     "docs/IOS.md": {
-      "bytes": 3710,
-      "sha256": "801e4558b6f1a7e2c8652223ee2f8fa2bc23d59e4994457aae151238a90342f8"
+      "bytes": 2422,
+      "sha256": "39e8105d6d966cbf19e1d28eb051b6bf4354cbe607b990e202787f0130c107f1"
     },
     "docs/NATIVE-INVESTIGATION.md": {
-      "bytes": 7844,
-      "sha256": "76ae4eacc7f43af1496a7cf0b82239aeb18c2f7c7735941337edc8ac4368ab8f"
+      "bytes": 1568,
+      "sha256": "b132203760c6e7b107223ea5d4a73b8f5305ba772df67d391d71d0e1026b3baa"
     },
     "docs/PUBLICATION.md": {
-      "bytes": 722,
-      "sha256": "b435422df82a4cf75cc2a05d4e8a816909baf22418d8b5219f46f54f8a931465"
+      "bytes": 768,
+      "sha256": "314075e351ae1d9d34fdab386ae31bcf6087d7b2ac9cc4572c32e1d1e5eda8e9"
+    },
+    "docs/QUESTION-PROCESS.md": {
+      "bytes": 3272,
+      "sha256": "15c9f1fe95c0d58c0ff417e982f4c4cebe7272edb921eff3a5f476a3c390f48f"
+    },
+    "docs/REPLIES.md": {
+      "bytes": 1206,
+      "sha256": "5c2f13bfc406eb77908b7b24d0e53e89fa222cf3206f85827f62109da18428c2"
     },
     "docs/SETUP.md": {
-      "bytes": 10735,
-      "sha256": "55e346c5c8114905b3f97fab4c178823a9f7f3170cff13e704808b8518c41f18"
+      "bytes": 7898,
+      "sha256": "f599ce8b81ee1739a11760f5228a4d9bbc609252e70977d5fe8d90d67e161e08"
     },
     "docs/STATIC-CAPTURE.md": {
-      "bytes": 2847,
-      "sha256": "21f462e926eb53e1f2e6e44e42d75fe5c400ca3c3ed102cdf805719a16ba020f"
+      "bytes": 2515,
+      "sha256": "93f5a206d83ac2fd56bf4cb74b50960d6df33005a90b3679856e7e6ae04189f6"
     },
     "docs/STATUS.md": {
-      "bytes": 2398,
-      "sha256": "8b4c5e95fcd6fa68065a5491049aba1d1abb8f67889fa4a5d61ca13088a653d2"
+      "bytes": 1164,
+      "sha256": "fd58e6d1467918ac7d9bc60f3d13a7efbff5b46e5c1b7dc0040002f982fd530d"
     },
     "docs/TOOL-FEEDBACK.md": {
-      "bytes": 1681,
-      "sha256": "3c1886485dce7a48ca59b66bec99572b70829137ce8fa1c47dbfb1ea412c47df"
+      "bytes": 4677,
+      "sha256": "a020f4c6551ca549d82f06ea7ba95887e11f87fafa58aab3755d6486793b2d62"
+    },
+    "docs/TOOLCHAIN.json": {
+      "bytes": 3077,
+      "sha256": "e2012fc5f7dfb537bf0fbdcf27d33ca71771026f8554a953959b5d6a8149ef9d"
     },
     "docs/USAGE.md": {
-      "bytes": 7014,
-      "sha256": "fd61eb4c365a90b4ecd7b343879a1515fbec4b9a200ad08e5886f4e91be52510"
+      "bytes": 8320,
+      "sha256": "b135de9de11da6d88b9956e5ce50e37ad25c568262aa5171e4bb75424f8b146a"
     },
     "docs/WEB-SEARCH.md": {
-      "bytes": 6629,
-      "sha256": "6285adebf167f559bc3a23b33903cdf75083fe9065f80f8deffe1f40055a80a1"
+      "bytes": 5531,
+      "sha256": "21e1a837e410a29acfdc4b8b8e73330ccd141f04e9d59f46ea42bb0fa186527e"
     },
     "docs/images/.gitkeep": {
       "bytes": 1,
@@ -562,6 +674,10 @@
     "docs/images/setup-preview.png": {
       "bytes": 1485907,
       "sha256": "2cba283837091b6b2a07a1be221b4ab84f3d6274fdba3aed40dea75066b1368a"
+    },
+    "headless.sh": {
+      "bytes": 552,
+      "sha256": "bdfe9e6f82af95bcaf2a099a0a04f6a1401da44f12a78e8c0a8866a4a231fdf9"
     },
     "notices/.gitkeep": {
       "bytes": 1,
@@ -576,28 +692,28 @@
       "sha256": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c"
     },
     "package.sh": {
-      "bytes": 4583,
-      "sha256": "dc8999a792e96fe7f96b15ad991fc5129fea19764ee42a525272f1d5b0acc0ff"
+      "bytes": 7603,
+      "sha256": "5d555fa51611b71c25467f6623190ffce50875da8a4b67c5fe7308af5874161b"
     },
     "platform/com/local/client/.gitkeep": {
       "bytes": 1,
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     "platform/com/local/client/Activity.java": {
-      "bytes": 150716,
-      "sha256": "b2f9db0e3da13d5594fe42d473c49f6442bd4c19712cf014c142f16d8c7a6f3a"
+      "bytes": 161943,
+      "sha256": "8cdc15aa88ef63e4a538c51c01230f0220d474d0eea4d79cf23b8269086d707a"
     },
     "platform/com/local/client/Core.java": {
       "bytes": 646,
       "sha256": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881"
     },
     "platform/com/local/client/Deadline.java": {
-      "bytes": 1331,
-      "sha256": "158e038221d4156773ae009c599d208af38fd0acc08942e8152f49aecbeb04c5"
+      "bytes": 1329,
+      "sha256": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827"
     },
     "platform/com/local/client/Diagram.java": {
-      "bytes": 3825,
-      "sha256": "6534583e73461c204b7467cc3d13a36cde9f0153e4fb4b3653d17cef900009a6"
+      "bytes": 3912,
+      "sha256": "5fcab9863eb6a1be85b7a7e841c11cd927a3d722f4a53d6ac19e722177c341ce"
     },
     "platform/com/local/client/Execution.java": {
       "bytes": 1680,
@@ -608,8 +724,8 @@
       "sha256": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573"
     },
     "platform/com/local/client/Gateway.java": {
-      "bytes": 6848,
-      "sha256": "cb4689f58c80642542bc1a0a6cd7f39907f142db7f6e76a613299bcfc0f16c92"
+      "bytes": 7225,
+      "sha256": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7"
     },
     "platform/com/local/client/Resolution.java": {
       "bytes": 3979,
@@ -623,6 +739,10 @@
       "bytes": 4302,
       "sha256": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165"
     },
+    "platform/com/local/client/Wire.java": {
+      "bytes": 1807,
+      "sha256": "da76bf27d1a86f34164fd069411e4b6312122757213ffccc29f06f59916b11e0"
+    },
     "platform/jni/.gitkeep": {
       "bytes": 1,
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
@@ -631,21 +751,25 @@
       "bytes": 916,
       "sha256": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f"
     },
+    "project-progress.md": {
+      "bytes": 3001,
+      "sha256": "85e0fa278608e439ab677353cd6d382954b0be45857c9e2607f5999a19ef746e"
+    },
     "release/.gitkeep": {
       "bytes": 1,
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     "release/NOTES.md": {
-      "bytes": 3499,
-      "sha256": "7be74767d1d1f4310f2d424c6122832303d67301d07c7a090b593413127cfcb9"
+      "bytes": 1129,
+      "sha256": "5e59fec67ede2f1959bbb9fea9acbbedfb4fc09bcc11d60242cc6873583cf505"
     },
-    "release/RLLM-Lab.apk": {
-      "bytes": 7608281,
-      "sha256": "f46a007edd1ab55a0f84d1870e379cef3ce69813d9a7baa6747e38f83a34078b"
+    "release/RLLM.apk": {
+      "bytes": 5986322,
+      "sha256": "e17a7797a3ed32efc665810bb0c58f7f1c4907c0828841286c24975d8fa01eaa"
     },
     "release/SHA256SUMS.txt": {
-      "bytes": 79,
-      "sha256": "7bf04db7ca4d1499482137bbddb1150d3fe4bc50275d93db938e25180d7caf63"
+      "bytes": 75,
+      "sha256": "ac152267c20d522ac6d7004f474e5c1daa74b44404ff477b609c99c3644d8311"
     },
     "res/drawable/.gitkeep": {
       "bytes": 1,
@@ -726,6 +850,2313 @@
     "res/values/styles.xml": {
       "bytes": 310,
       "sha256": "66b7ac21724d0110d50b1ee59eb54b9b18cd8062f96c1822809e8a4cf1f6d17d"
+    },
+    "res/xml/network.xml": {
+      "bytes": 311,
+      "sha256": "30607c8f0160843366cf48bbb318eafbf5a8793a35847732c77ebb564125e115"
+    },
+    "tools/apk.py": {
+      "bytes": 3894,
+      "sha256": "9005a4f9af2805f201140c7b8eda6c29546903c692d614e9bc183a7eb27d9f52"
+    },
+    "tools/checks.py": {
+      "bytes": 3524,
+      "sha256": "db76eb7557fa786068bcb16d4403e9c394be4d31e96053d0c2d9dd45fa406a50"
+    },
+    "tools/package.py": {
+      "bytes": 12090,
+      "sha256": "6ba8433c6042d51f191a1c72b031af099e14e09e0f3cde28a419181a74ec8141"
+    },
+    "tools/readback.py": {
+      "bytes": 1485,
+      "sha256": "87164e24f5301255840ad4c0d0cf9e6c93423bc332d2990d05b623139815bd6f"
+    },
+    "tools/signature.py": {
+      "bytes": 1315,
+      "sha256": "40069080e537e60b1a5c4fe0ba83806357bbe446c4440f41d324c0384b9565f2"
+    },
+    "tools/toolchain.py": {
+      "bytes": 4183,
+      "sha256": "3252e3efae9afb259f65712fd7e8721d0f601fda7d2ad1cca33a26ddafc5c0e4"
+    },
+    "verification/README.md": {
+      "bytes": 3315,
+      "sha256": "2ae644c93d8dfe5fac1e6118599f9f02c36cd8b41740590f8886019227be53de"
+    },
+    "verification/RESULTS.json": {
+      "bytes": 130735,
+      "sha256": "935ba73d6788511d7d7b4dfbad520970e3095b89a5fe7f72421d209c94ee3b2c"
+    },
+    "verification/a2a.py": {
+      "bytes": 16499,
+      "sha256": "2c5b0bdfe522306ee77c7c1d723232fb1ecc2e8fd000faae65584bb8d16454c0"
+    },
+    "verification/binary_flow.py": {
+      "bytes": 35354,
+      "sha256": "378d28d1ab1544409cbb0ee3b7659dc07b7bf22595e33aca4ddc91676145ef55"
+    },
+    "verification/carry_flow.py": {
+      "bytes": 6858,
+      "sha256": "84140c198548b3ee34260541de361dce7b484f1c9d7a3a97273b0d14f568a32a"
+    },
+    "verification/commands.py": {
+      "bytes": 12482,
+      "sha256": "6ed9e147427e0f6a7261c91bc48588fa5ff87804fb2cee8787f2a6060013c0b5"
+    },
+    "verification/dav_listing.py": {
+      "bytes": 12669,
+      "sha256": "869b1e07f6e1ba9c68caabbd448ad16548809a27f7c525a8bce18b122ee2776f"
+    },
+    "verification/delegation_visibility.py": {
+      "bytes": 21359,
+      "sha256": "7d2f6862553a9aacf04360ac20e61635c1d6b54ca65423b246d61de54885d271"
+    },
+    "verification/diagnostics.py": {
+      "bytes": 7750,
+      "sha256": "2d1e63b29b8757c94013aab595ce1f178a5cc590bd18ab210ba428cf7dfe67b2"
+    },
+    "verification/drive_ownership.py": {
+      "bytes": 10094,
+      "sha256": "f7e5d4daa48faf064b1eb9c3d3b66aa4cbf86f5ee85dd3ac209fec3370b087fd"
+    },
+    "verification/field_flow.py": {
+      "bytes": 8744,
+      "sha256": "77f133cfa0de818658e0629c06495611259934041450a29decad492bab7582d7"
+    },
+    "verification/flags_flow.py": {
+      "bytes": 8031,
+      "sha256": "df05e0f847a99e4a1f0e881c379d8e505444d91337f71638e6a18672d8dbc0ce"
+    },
+    "verification/history.py": {
+      "bytes": 2785,
+      "sha256": "17bc8fbc3da9ae565708a0f88139044788b266a956dccd233ae92fe12085ecd3"
+    },
+    "verification/history_migration.py": {
+      "bytes": 5343,
+      "sha256": "bccf36d21eb304122978b737f19c4ca5435625fa6f12f7eeaec5f1fa4bdaad87"
+    },
+    "verification/hosted_phases.py": {
+      "bytes": 8561,
+      "sha256": "8e159ac244847b26850902c6a35d5c3fe6d282cf114f044bcf1392afb72c799a"
+    },
+    "verification/http_framing.py": {
+      "bytes": 10475,
+      "sha256": "186b673d0505de53478e4db8af176085f159e5125c9c9a9a1b239b5f81b0a881"
+    },
+    "verification/live_web.py": {
+      "bytes": 5871,
+      "sha256": "a26c434dab7375eceab94bb8af26a6fb1e04ccd9780ff722ed6c9221928ce3f8"
+    },
+    "verification/local_feedback.py": {
+      "bytes": 10511,
+      "sha256": "e55382043eef763c8f0f771d2fad8708aa972737202479365263d4b4a5b8eadd"
+    },
+    "verification/network_drive.py": {
+      "bytes": 13729,
+      "sha256": "6e20413783b35ca5d57f57bd1d0afd9a1f9a2d2a5c7e259cf18a9ee7c9497954"
+    },
+    "verification/network_feedback.py": {
+      "bytes": 13620,
+      "sha256": "b612bf77051c7780af7b5c038dd8850e16822c905ded754d3ba270867732c9f0"
+    },
+    "verification/pe_declarations.py": {
+      "bytes": 7800,
+      "sha256": "e9ce80d2ff1e05fdc0f5783e3f726e0a464d78ae022f256fe873f808609d5dfe"
+    },
+    "verification/platform_resolution.py": {
+      "bytes": 6496,
+      "sha256": "1acdf8cd269204929002b35cee731e6955fb640ced1d899507aa20a167cf133a"
+    },
+    "verification/product_flow.py": {
+      "bytes": 8304,
+      "sha256": "0ad4e71c6d6a3a2e402c85edebae1b2ed7ac1461ac3cdf2eeeebcbdaf613c1e7"
+    },
+    "verification/prompt_reference.py": {
+      "bytes": 7371,
+      "sha256": "02c1330770a35a2a12977339d68a03dc2998241a172cb9f87754c75c9e0e4751"
+    },
+    "verification/proposal_feedback.py": {
+      "bytes": 10234,
+      "sha256": "d5949d2d860899211e689e1eb93986e1ada79b822c722aa7d89aaf1dcfd8e44a"
+    },
+    "verification/provider_evidence.py": {
+      "bytes": 15929,
+      "sha256": "1a213c2211a3cb9955133471c5ff0f36edf731ccf2bfebb7036eda1640e1f4ae"
+    },
+    "verification/provider_process.py": {
+      "bytes": 6552,
+      "sha256": "30f2fe3ef5fbecd5e0a4790a3c06b84786918586d07be4e01cb75e3e2ba88ee2"
+    },
+    "verification/query_feedback.py": {
+      "bytes": 12806,
+      "sha256": "5b3c70102c0f096031e993a376fb559d21ba4976b61dba0ec3715c812085ae7a"
+    },
+    "verification/question_process.py": {
+      "bytes": 6979,
+      "sha256": "9afa06ed29ec96b110ac607f657da1da1ae38d3fe4551ba244a02fa9fcfb6b67"
+    },
+    "verification/review_ownership.py": {
+      "bytes": 8801,
+      "sha256": "c87a4204221a9eed1b3a24d9023a61cf411948e2a1bb603c9233e54f2293311a"
+    },
+    "verification/server_admission.py": {
+      "bytes": 3570,
+      "sha256": "45159549cd938fc2b2d9c614f0d7ccc9faacefc92f2ba7d0fa314130f9d3edc6"
+    },
+    "verification/task_ownership.py": {
+      "bytes": 13310,
+      "sha256": "1adca344f81a9b15d068e102dda35b41c645343a2a2118745d92a5e14b995050"
+    },
+    "verification/workspace_navigation.py": {
+      "bytes": 22966,
+      "sha256": "89d65ed1da2317797264e658e76ef16b31989522cef7d6359c1ebd3895944f6f"
     }
-  }
+  },
+  "validation": {
+    "published_comparator": {
+      "version": 1793742554,
+      "source_sha256": "feb3a0ea908caa9ca63dbd571f7296ea985eaac6aaa8954f6aba3f861c0abddf",
+      "method": "Controller compiled from the exact published shared core before product edits; actual retained bytes pass through current view, query and exact export"
+    },
+    "connected": {
+      "provider_process_child": 52,
+      "network_drive": 46,
+      "drive_ownership": 38,
+      "manual_question_process": 14,
+      "history": 6,
+      "a2a": 66,
+      "binary_declarations_and_flow": 97,
+      "commands": 79,
+      "prior_controller_migration": 7,
+      "hosted_phases": 24,
+      "prompt_reference": 56,
+      "provider_evidence": 40,
+      "pe_declarations": 18,
+      "delegation_visibility": 94,
+      "local_failure_feedback": 29,
+      "network_failure_feedback": 41,
+      "proposal_feedback": 36,
+      "review_ownership": 28,
+      "task_ownership": 79,
+      "dav_listing": 31,
+      "server_admission": 8,
+      "http_framing": 40,
+      "platform_resolution": 8,
+      "query_feedback": 74,
+      "carry_arithmetic": 23,
+      "workspace_controls": 73,
+      "field_values": 37,
+      "flag_facts": 28,
+      "product_facts": 30,
+      "diagnostics": 31,
+      "total": 1233,
+      "executed_current": 1230,
+      "retained_prior": 3
+    },
+    "retained_compatibility": {
+      "source_sha256": "3d51564e00233805e4cb6cbc0145d1227ed125b7545a036e4a9cb0c8aaebaa6a",
+      "version": 1793600489,
+      "retained_from": {
+        "version": 1793742554,
+        "sha256": "feb3a0ea908caa9ca63dbd571f7296ea985eaac6aaa8954f6aba3f861c0abddf"
+      },
+      "inputs": {
+        "core/binary_declarations.rs": "ccc94d3fd69d92deeaacfab99b7b54245b9a77e5f9ec5e3849154879caf0ba31",
+        "core/binary_evidence.rs": "f113547035a7529eb37235e638fb2cc7a4e4a8660e738cde28850288d360e554",
+        "core/binary_flow.rs": "5f71db173c028ce76cbd1e40d8b8d9f67cc35847a611fd14e83b24539572d0b3",
+        "core/control_flow.rs": "a2e20ca0d75182db3cc902a39c80bb7f07d9665e40da006387f5783124b5a7bd",
+        "core/file_evidence.rs": "05e3f0dc6b35e7b8cce2da7f74f2e8dc28174de6cda52a8e50c7c7b8ef7cf38b",
+        "core/harness_rules.rs": "939d3c4bceff4dad6e254d02a37fdca522333718242d2f570e9484adaa6c6ac6",
+        "core/incremental_digest.rs": "117bcf1ad7a8e069240cc4ba5cada7a4500d4170670209c80c4a97a14fa3191b",
+        "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
+        "core/lib.rs": "e4a654eb0c7628aeb1debf780a6307b9b72ee8674525f45fde3d8747582cc9da",
+        "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
+        "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
+        "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
+        "core/pe_observation.rs": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0",
+        "core/reconstruction.rs": "8c95d4d8b0d796b3c98d2a8c3a73311366410dcee8c73dabe93a1c884362bcd2"
+      },
+      "checks": [
+        "actual revision-two controller retains original authenticated-word meaning",
+        "current native graph accepts actual revision-two bytes",
+        "revision-two authenticated word remains historical evidence"
+      ],
+      "scope": "Previously executed owner checks from verified signed source; named decoder/representation-reader modules unchanged. Current dispatch, native views, HTTP decoding, capture-time interpretation and approved-command completion are exercised separately with current and actual published captures. These three checks describe their original historical execution and were not re-executed."
+    },
+    "selected_rust_cases": 194,
+    "selected_rust_runs": [
+      {
+        "filter": "a2a::tests::",
+        "code": 0,
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 463 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "execution::scope_tests::",
+        "code": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::binary_flow::tests::",
+        "code": 0,
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 461 filtered out; finished in 0.01s"
+      },
+      {
+        "filter": "provider::",
+        "code": 0,
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 462 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "stream::",
+        "code": 0,
+        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 433 filtered out; finished in 0.26s"
+      },
+      {
+        "filter": "application::harness::",
+        "code": 0,
+        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 437 filtered out; finished in 5.97s"
+      },
+      {
+        "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
+        "code": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::checks::scoped_drive_listing",
+        "code": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::file_evidence::checks::",
+        "code": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::investigation::directory_observation::checks::cancellation_and_deadline_remain_scoped",
+        "code": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::elf_observation::",
+        "code": 0,
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 461 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::binary_observation::",
+        "code": 0,
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 462 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::observation_graph::",
+        "code": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::claim_records::",
+        "code": 0,
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 463 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::investigation::cancellation_scope_checks::",
+        "code": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::connection_migration::",
+        "code": 0,
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 463 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::binary_declarations::",
+        "code": 0,
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 463 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::checks::settings_menus_are_short_separate_and_preserve_the_thread",
+        "code": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::instruction::tests::",
+        "code": 0,
+        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 439 filtered out; finished in 0.36s"
+      },
+      {
+        "filter": "application::binary_evidence::path_checks::",
+        "code": 0,
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 465 filtered out; finished in 0.01s"
+      },
+      {
+        "filter": "application::operation::drive_checks::",
+        "code": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.03s"
+      },
+      {
+        "filter": "hosted_search::checks::",
+        "code": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.01s"
+      },
+      {
+        "filter": "application::pe_observation::relocation_checks::",
+        "code": 0,
+        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 459 filtered out; finished in 0.02s"
+      },
+      {
+        "filter": "resources::checks::",
+        "code": 0,
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 465 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "network::checks::",
+        "code": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "network::binary_checks::",
+        "code": 0,
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 465 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "network::binary_response_checks::",
+        "code": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::project_store::transfer::tests::",
+        "code": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 0.96s"
+      },
+      {
+        "filter": "application::monitor::checks::",
+        "code": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.01s"
+      },
+      {
+        "filter": "application::request_metrics::",
+        "code": 0,
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 465 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::throughput::",
+        "code": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::checks::live_rate_opens_analytics_without_losing_stream_or_draft",
+        "code": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.01s"
+      },
+      {
+        "filter": "application::checks::tls_guidance_preserves_explicit_endpoint",
+        "code": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+      }
+    ],
+    "checks": {
+      "provider_process_child": {
+        "passed": [
+          "chat declaration",
+          "chat review",
+          "chat held worker and retained evidence",
+          "chat plan",
+          "chat note",
+          "chat check",
+          "chat assessment",
+          "chat captured child return",
+          "chat final answer",
+          "chat child failure returns to captured parent",
+          "chat duplicate child failure cannot disturb parent request",
+          "chat parent can answer after child failure",
+          "chat cancelled callback refusal",
+          "local declaration",
+          "local review",
+          "local held worker and retained evidence",
+          "local plan",
+          "local note",
+          "local check",
+          "local assessment",
+          "local captured child return",
+          "local final answer",
+          "local child failure returns to captured parent",
+          "local duplicate child failure cannot disturb parent request",
+          "local parent can answer after child failure",
+          "local cancelled callback refusal",
+          "messages declaration",
+          "messages review",
+          "messages held worker and retained evidence",
+          "messages plan",
+          "messages note",
+          "messages check",
+          "messages assessment",
+          "messages captured child return",
+          "messages final answer",
+          "messages child failure returns to captured parent",
+          "messages duplicate child failure cannot disturb parent request",
+          "messages parent can answer after child failure",
+          "messages cancelled callback refusal",
+          "content declaration",
+          "content review",
+          "content held worker and retained evidence",
+          "content plan",
+          "content note",
+          "content check",
+          "content assessment",
+          "content captured child return",
+          "content final answer",
+          "content child failure returns to captured parent",
+          "content duplicate child failure cannot disturb parent request",
+          "content parent can answer after child failure",
+          "content cancelled callback refusal"
+        ],
+        "provider_replies": "controlled fixtures; actual file worker and process execution"
+      },
+      "network_drive": {
+        "passed": [
+          "manual PROPFIND route and certificate identity",
+          "explicit certificate alias accepted and rewritten",
+          "configured route and relative href accepted",
+          "unrelated hostname refused",
+          "different port refused",
+          "HTTP downgrade refused",
+          "sibling and outside roots refused",
+          "decoded traversal refused",
+          "double escapes refused",
+          "backslash and control bytes refused",
+          "aliased collection self entry omitted",
+          "manual file open retains VPN route and displays returned bytes",
+          "unconfigured alias refused",
+          "WebDAV listing accepts comments without interpreting their markup or entities",
+          "CDATA preserves literal property text and usable contained hrefs",
+          "malformed or external XML is refused locally: DOCTYPE",
+          "malformed or external XML is refused locally: entity declaration",
+          "malformed or external XML is refused locally: unfinished comment",
+          "malformed or external XML is refused locally: illegal comment",
+          "malformed or external XML is refused locally: trailing hyphen comment",
+          "malformed or external XML is refused locally: unfinished CDATA",
+          "malformed or external XML is refused locally: invalid character",
+          "malformed or external XML is refused locally: invalid character reference",
+          "delegated listing normalizes URLs and retains actual returned evidence",
+          "network evidence child returns to captured parent connection",
+          "parent completes after actual child storage result",
+          "manual create and actual readback comparison: text",
+          "completed create rejects duplicate verification: 26",
+          "manual create and actual readback comparison: empty",
+          "completed create rejects duplicate verification: 0",
+          "manual create and actual readback comparison: Unicode",
+          "completed create rejects duplicate verification: 26",
+          "manual create and actual readback comparison: maximum text size",
+          "completed create rejects duplicate verification: 1048576",
+          "mismatched readback never reports save success or replays PUT",
+          "missing readback remains unconfirmed",
+          "verification transport failure leaves no false success or write replay",
+          "unconfirmed prior creation does not block another reviewed create",
+          "cancelled write ignores late acknowledgement and reports unknown outcome",
+          "cancelled readback cannot certify a saved file",
+          "changed drive identity cannot certify prior destination",
+          "child waits for readback rather than returning on write acknowledgement",
+          "stale child write cannot replace current readback",
+          "child receives and retains only verified create result",
+          "verified child create returns through captured parent",
+          "child readback failure returns once to parent without a false result"
+        ],
+        "scope": "Controlled HTTP replies through real Rust event API; no live NAS or Android TLS handshake"
+      },
+      "drive_ownership": {
+        "passed": [
+          "each create receives a distinct exact owner",
+          "cancelled acknowledgement cannot start another create readback",
+          "missing acknowledgement owner is inert",
+          "wrong acknowledgement owner is inert",
+          "different-purpose acknowledgement owner is inert",
+          "authentic acknowledgement starts only its own target",
+          "write owner cannot settle its readback phase",
+          "authentic current readback verifies exact contents",
+          "duplicate readback cannot replay completed state",
+          "restored pre-completion state cannot revive consumed owner",
+          "cancelled same-phase same-content readback cannot certify a newer file",
+          "newer file remains verifiable after stale readback",
+          "cancelled listing cannot replace current rows",
+          "current listing remains available",
+          "changed drive cannot adopt bytes under prior owner",
+          "changed active cannot adopt bytes under prior owner",
+          "changed drive_creation cannot adopt bytes under prior owner",
+          "resume revokes the process-held owner even for restored saved state",
+          "old failure cannot clear a newer busy request",
+          "current failure settles its own request",
+          "reviewed update begins with an owned current read",
+          "current read prepares a conditional separate backup",
+          "backup acknowledgement starts owned backup verification",
+          "only verified backup enables guarded target update",
+          "target update acknowledgement starts owned confirmation",
+          "backup verification cannot settle target confirmation",
+          "owned revision completes only after matching target readback",
+          "cancelled snapshot acknowledgement cannot advance a newer snapshot",
+          "current snapshot acknowledgement waits for owned verification",
+          "snapshot saved success requires exact current readback",
+          "editor load receives an exact owner",
+          "changed editor path cannot receive older file contents",
+          "current editor loads exact returned text",
+          "child network effect has both exact owners",
+          "missing child owner cannot consume the current transport owner",
+          "authentic child response reaches its actual model",
+          "actual child returns to captured parent",
+          "parent can complete after owned storage result"
+        ]
+      },
+      "manual_question_process": {
+        "passed": [
+          "manual question without model or external MCP server",
+          "manual plan, unresolved finding and original design",
+          "partial item assessment retains missing evidence",
+          "plan revision preserves previous assessment and exact prior plan",
+          "revised plan does not inherit answered or partial status",
+          "reviewed export writes actual journal, unresolved state and original design",
+          "cancelled export cannot execute a stale approved write",
+          "deletion review displays its exact question and captures its identity",
+          "stale Question A confirmation cannot delete Question B",
+          "legacy unbound deletion callback cannot delete a journal",
+          "leaving deletion review prevents its captured callback from deleting",
+          "changed journal requires a fresh exact-content deletion confirmation",
+          "fresh confirmation deletes only its reviewed journal and preserves chat and exported files",
+          "completed deletion cannot replay against another question"
+        ],
+        "scope": "Native manual controls and real guarded file worker; no model prose validation"
+      },
+      "history": {
+        "passed": [
+          "empty Trash requires current review",
+          "keeping reviewed conversations preserves all items",
+          "changed message invalidates exact reviewed snapshot",
+          "newly trashed conversation invalidates old confirmation",
+          "duplicate identities cannot be purged as a snapshot",
+          "confirmed exact Trash purge preserves active history"
+        ],
+        "scope": "Isolated native event state transitions; no Android encrypted persistence or real data deletion"
+      },
+      "a2a": {
+        "passed": [
+          "native gateway captures selected root and identity",
+          "native settings retain explicit opt-in",
+          "native workspace LAN exposure refused",
+          "v1 card versions and bearer scheme",
+          "optional capabilities accurately disabled",
+          "authentication precedes method dispatch",
+          "wrong bearer refused",
+          "v1 real inspect task completes",
+          "task contains actual shared engine output",
+          "identical message retry retains original task",
+          "changed message ID reuse refused",
+          "get task omits history on request",
+          "completed task cannot restart",
+          "actual complete file comparison",
+          "directory inspection shares working resource limits",
+          "directory comparison shares working resource limits",
+          "missing version defaults to legacy",
+          "legacy get task",
+          "cross-version cached task representation",
+          "patch version ignored",
+          "equivalent query and header patches",
+          "conflicting version selection refused",
+          "unsupported protocol error",
+          "escaping path refused ../outside.txt",
+          "escaping path refused /etc/passwd",
+          "escaping symlink never reveals private data",
+          "write operation is not exposed",
+          "client cannot choose root",
+          "non-data part rejected",
+          "push notification request refused",
+          "stream capability unavailable",
+          "unknown method refused",
+          "list pages have bounded rows and counts",
+          "list omits history and artifacts by default",
+          "list orders latest status first",
+          "changed page filters rejected",
+          "cursor advances immutable snapshot",
+          "invalid timestamp rejected",
+          "future timestamp filters older work",
+          "invalid page size rejected",
+          "terminal cancel returns protocol error",
+          "unknown task uses scoped not-found",
+          "cached task unavailable after rule revocation",
+          "new denied task refused",
+          "unrelated health remains available",
+          "stopped interface retires task memory",
+          "root replacement refused",
+          "headless listener starts without a model",
+          "actual HTTP authentication enforced",
+          "actual HTTP shared inspection completes",
+          "actual HTTP legacy binding works",
+          "actual HTTP card advertised local URL",
+          "nonblocking task returns before large scan completes",
+          "active HTTP task cancellation accepted",
+          "v1 cancellation is idempotent",
+          "cancelled scan does not cancel another task",
+          "cancelled task publishes no late artifact",
+          "blocking wait admission leaves control capacity",
+          "status remains responsive during blocking request",
+          "cancellation remains available during blocking request",
+          "blocked retry receives terminal cancellation",
+          "overloaded blocking call creates no hidden task",
+          "completion releases blocking admission",
+          "duplicate JSON fields rejected on wire",
+          "SIGTERM stops local listener cleanly",
+          "publicly readable token file refused"
+        ]
+      },
+      "binary_declarations_and_flow": {
+        "passed": [
+          "independent assembler and disassembler produce branch fixture",
+          "native inspection enters existing review",
+          "review creates owned shared-engine worker",
+          "inspection retains typed source-bound control-flow",
+          "independent assembler recognizes BC.cond encoding",
+          "consistent branch retains exact target and feature hint",
+          "consistent branch retains a separate conditional continuation",
+          "independent braa retains exact authenticated operands",
+          "braa retains modifier and encoded link semantics",
+          "independent braaz retains exact authenticated operands",
+          "braaz retains modifier and encoded link semantics",
+          "independent brab retains exact authenticated operands",
+          "brab retains modifier and encoded link semantics",
+          "independent brabz retains exact authenticated operands",
+          "brabz retains modifier and encoded link semantics",
+          "independent blraa retains exact authenticated operands",
+          "blraa retains modifier and encoded link semantics",
+          "independent blraaz retains exact authenticated operands",
+          "blraaz retains modifier and encoded link semantics",
+          "independent blrab retains exact authenticated operands",
+          "blrab retains modifier and encoded link semantics",
+          "independent blrabz retains exact authenticated operands",
+          "blrabz retains modifier and encoded link semantics",
+          "independent retaa retains exact authenticated operands",
+          "retaa retains modifier and encoded link semantics",
+          "independent retab retains exact authenticated operands",
+          "retab retains modifier and encoded link semantics",
+          "authenticated return retains the conditional second-modifier context",
+          "typed declaration inventory retains original parser facts",
+          "LOAD declarations match independent program headers",
+          "mapping-symbol data interval remains explicit",
+          "declared data is excluded from encoding nodes",
+          "actual relocation declaration matches independent reference",
+          "relocation is a declaration without applied binding",
+          "BL target matches independently linked symbol",
+          "link address kept separate from call target",
+          "B target matches independently linked symbol",
+          "CBZ target and register retained",
+          "return target stays unresolved",
+          "data has no execution/reachability claim",
+          "actual ELF retains separate predecessor alternatives",
+          "captured predecessor join retains common bits separately",
+          "captured join preserves the unknown external-entry interpretation",
+          "predecessor identity matches independent assembled edge",
+          "path representation authenticates exact retained text",
+          "known mask and variable shift retain the original encoded constant",
+          "knowledge source is independently assembled and disassembled",
+          "common captured-entry bits feed the following mask",
+          "common captured-entry result feeds successor arithmetic",
+          "partial addition retains a constant through the following mask",
+          "conditional selection retains common bits through following arithmetic",
+          "independent assembler supplies the arithmetic and select encodings",
+          "real worker receipt retains graph",
+          "native graph page displays relationship meaning",
+          "native view includes typed declaration summaries",
+          "native node view contains its outgoing target",
+          "native node view retains derived known bits",
+          "native node query retains the common-entry successor result",
+          "UI description retains partial-arithmetic derived constant",
+          "UI description retains conditional-selection derived constant",
+          "native authenticated node exposes encoded key and modifier",
+          "native encoding view includes conditional facts",
+          "native node view retains captured-entry common bits",
+          "ordinary model query uses existing review",
+          "ordinary model receives actual typed relationship",
+          "ordinary model receives actual typed declarations",
+          "ordinary model query receives captured-entry common facts",
+          "ordinary model query receives actual predecessor facts",
+          "ordinary model query receives actual authenticated call operands",
+          "ordinary model query receives actual known-bit result",
+          "ordinary model query receives common-entry successor facts",
+          "ordinary model query receives partial-arithmetic findings",
+          "ordinary model query receives conditional-selection findings",
+          "model query settles through existing continuation",
+          "structural export enters review",
+          "structural export shares existing authority",
+          "actual structural export retains typed relationships",
+          "actual export retains typed declaration inventory",
+          "export labels semantics unresolved",
+          "actual conditional representation exports exact authenticated bytes",
+          "common-entry representation exports its exact retained bytes",
+          "conditional-selection representation exports exact retained bytes",
+          "real pure Arm64 PE retains relative coordinates",
+          "PE call source matches independent disassembly",
+          "PE actual callback retains typed flow",
+          "PE classification stays unknown and declared relocation absence is explicit",
+          "changed flow payload never becomes accepted native data",
+          "file engine still operates independently of historical payload",
+          "actual previous controller retains its original decoder meaning",
+          "current native graph accepts actual legacy observation bytes",
+          "legacy unclassified instruction remains historical evidence",
+          "current native view preserves actual published representation",
+          "current model query preserves actual published representation",
+          "current export preserves exact actual published representation",
+          "actual revision-two controller retains original authenticated-word meaning",
+          "current native graph accepts actual revision-two bytes",
+          "revision-two authenticated word remains historical evidence"
+        ],
+        "executed_checks": 94,
+        "retained_compatibility": {
+          "source_sha256": "3d51564e00233805e4cb6cbc0145d1227ed125b7545a036e4a9cb0c8aaebaa6a",
+          "version": 1793600489,
+          "retained_from": {
+            "version": 1793742554,
+            "sha256": "feb3a0ea908caa9ca63dbd571f7296ea985eaac6aaa8954f6aba3f861c0abddf"
+          },
+          "inputs": {
+            "core/binary_declarations.rs": "ccc94d3fd69d92deeaacfab99b7b54245b9a77e5f9ec5e3849154879caf0ba31",
+            "core/binary_evidence.rs": "f113547035a7529eb37235e638fb2cc7a4e4a8660e738cde28850288d360e554",
+            "core/binary_flow.rs": "5f71db173c028ce76cbd1e40d8b8d9f67cc35847a611fd14e83b24539572d0b3",
+            "core/control_flow.rs": "a2e20ca0d75182db3cc902a39c80bb7f07d9665e40da006387f5783124b5a7bd",
+            "core/file_evidence.rs": "05e3f0dc6b35e7b8cce2da7f74f2e8dc28174de6cda52a8e50c7c7b8ef7cf38b",
+            "core/harness_rules.rs": "939d3c4bceff4dad6e254d02a37fdca522333718242d2f570e9484adaa6c6ac6",
+            "core/incremental_digest.rs": "117bcf1ad7a8e069240cc4ba5cada7a4500d4170670209c80c4a97a14fa3191b",
+            "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
+            "core/lib.rs": "e4a654eb0c7628aeb1debf780a6307b9b72ee8674525f45fde3d8747582cc9da",
+            "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
+            "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
+            "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
+            "core/pe_observation.rs": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0",
+            "core/reconstruction.rs": "8c95d4d8b0d796b3c98d2a8c3a73311366410dcee8c73dabe93a1c884362bcd2"
+          },
+          "checks": [
+            "actual revision-two controller retains original authenticated-word meaning",
+            "current native graph accepts actual revision-two bytes",
+            "revision-two authenticated word remains historical evidence"
+          ],
+          "scope": "Previously executed owner checks from verified signed source; named decoder/representation-reader modules unchanged. Current dispatch, native views, HTTP decoding, capture-time interpretation and approved-command completion are exercised separately with current and actual published captures. These three checks describe their original historical execution and were not re-executed."
+        }
+      },
+      "commands": {
+        "passed": [
+          "saved connection migrates into protocol settings",
+          "saved tool permission migrates without an alias",
+          "old in-flight owner cannot resume",
+          "optional preferences and user instructions are preserved",
+          "preferences are in agent settings",
+          "core process is not presented as a selectable skill",
+          "remote call UI uses actual protocol naming",
+          "removed action is not an active alias",
+          "migrated connection emits an actual protocol initialization",
+          "ordinary command runs without a peer or journal",
+          "intrinsic process is present with additional guidance off",
+          "no branded workflow or remote activation is required",
+          "normal evidence operation uses existing review",
+          "normal command dispatches the actual file operation",
+          "file operation executes despite unavailable bookkeeping",
+          "actual evidence feeds directly back into command continuation",
+          "normal command completes through the existing answer path",
+          "chat structured catalog excludes absent connections and children",
+          "chat configured peer is explicitly available without leaking credentials",
+          "chat structured disabled source access is reflected in the text catalog",
+          "chat structured structured source catalog agrees with actual access",
+          "chat structured source revocation preserves intrinsic process and independent web access",
+          "chat structured re-enabled sources regain their existing contracts",
+          "chat json disabled source access is reflected in the text catalog",
+          "chat json structured source catalog agrees with actual access",
+          "chat json source revocation preserves intrinsic process and independent web access",
+          "chat json re-enabled sources regain their existing contracts",
+          "chat non-writing role offers only executable operation families",
+          "chat refinement structured catalog matches executor restrictions",
+          "chat refinement text catalog and child guidance match",
+          "chat text-only refinement has the same real availability",
+          "local structured catalog excludes absent connections and children",
+          "local configured peer is explicitly available without leaking credentials",
+          "local structured disabled source access is reflected in the text catalog",
+          "local structured structured source catalog agrees with actual access",
+          "local structured source revocation preserves intrinsic process and independent web access",
+          "local structured re-enabled sources regain their existing contracts",
+          "local json disabled source access is reflected in the text catalog",
+          "local json structured source catalog agrees with actual access",
+          "local json source revocation preserves intrinsic process and independent web access",
+          "local json re-enabled sources regain their existing contracts",
+          "local non-writing role offers only executable operation families",
+          "local refinement structured catalog matches executor restrictions",
+          "local refinement text catalog and child guidance match",
+          "local text-only refinement has the same real availability",
+          "messages structured catalog excludes absent connections and children",
+          "messages configured peer is explicitly available without leaking credentials",
+          "messages structured disabled source access is reflected in the text catalog",
+          "messages structured structured source catalog agrees with actual access",
+          "messages structured source revocation preserves intrinsic process and independent web access",
+          "messages structured re-enabled sources regain their existing contracts",
+          "messages json disabled source access is reflected in the text catalog",
+          "messages json structured source catalog agrees with actual access",
+          "messages json source revocation preserves intrinsic process and independent web access",
+          "messages json re-enabled sources regain their existing contracts",
+          "messages non-writing role offers only executable operation families",
+          "messages refinement structured catalog matches executor restrictions",
+          "messages refinement text catalog and child guidance match",
+          "messages text-only refinement has the same real availability",
+          "content structured catalog excludes absent connections and children",
+          "content configured peer is explicitly available without leaking credentials",
+          "content structured disabled source access is reflected in the text catalog",
+          "content structured structured source catalog agrees with actual access",
+          "content structured source revocation preserves intrinsic process and independent web access",
+          "content structured re-enabled sources regain their existing contracts",
+          "content json disabled source access is reflected in the text catalog",
+          "content json structured source catalog agrees with actual access",
+          "content json source revocation preserves intrinsic process and independent web access",
+          "content json re-enabled sources regain their existing contracts",
+          "content non-writing role offers only executable operation families",
+          "content refinement structured catalog matches executor restrictions",
+          "content refinement text catalog and child guidance match",
+          "content text-only refinement has the same real availability",
+          "eight actual reviewed operations reach their existing allowance",
+          "exhausted request offers an evidence-based answer without unusable tools",
+          "ninth proposal is refused before an impossible review",
+          "a new user instruction restores its ordinary operation allowance",
+          "legitimate missing input stays scoped",
+          "unrelated work remains available after scoped failure"
+        ]
+      },
+      "prior_controller_migration": {
+        "passed": [
+          "reference controller creates actual owned historical receipt",
+          "historical receipt uses current operation identifier",
+          "captured output bytes and digests are unchanged",
+          "migrated historical question remains readable",
+          "historical evidence is still available",
+          "migration refuses to bless altered receipt data",
+          "corrupt optional history does not block local operations"
+        ]
+      },
+      "hosted_phases": {
+        "passed": [
+          "baseline retains explicitly enabled provider search",
+          "proposal phase uses captured evidence without a provider search declaration",
+          "proposal prompt states the actual phase reason",
+          "proposal does not leak a provider-search execution instruction",
+          "probe retains explicitly enabled evidence operations",
+          "composition uses captured evidence without provider search",
+          "refinement still reaches its existing adoption review",
+          "actual compaction declares no provider search",
+          "compaction keeps intrinsic method and supplied-evidence-only instructions",
+          "actual compaction preserves original history and its summary",
+          "missing web permission keeps provider search disabled",
+          "permission-disabled search still permits an ordinary answer",
+          "eight actual reads suppress provider search at the existing allowance",
+          "exhausted hosted profile cannot substitute local web tools",
+          "exhausted provider-search turn can finish from actual evidence",
+          "fresh user request restores explicitly enabled provider search",
+          "manual task controls describe standalone execution",
+          "standalone task result is not represented as a spawned child",
+          "new result presentation retains exact hosted protocol context",
+          "same-connection continuation retains original hosted blocks",
+          "eligible provider pause retains explicit continuation",
+          "eligible explicit continuation retains its declared server tool",
+          "explicit continuation still settles normally",
+          "exhausted restored pause cannot re-enable provider search"
+        ]
+      },
+      "prompt_reference": {
+        "passed": [
+          "chat intrinsic method remains without a selected workflow",
+          "chat custom global agent and saved skill guidance stays intact",
+          "chat current read reference is explicit",
+          "chat unavailable advanced operation grammars are omitted",
+          "chat operation output remains untrusted and execution claims require results",
+          "chat actual read-only request is substantially smaller",
+          "chat permitted read retains its actual approval path",
+          "chat actual permitted file worker still executes",
+          "chat actual output returns through the same compact instruction path",
+          "chat normal final answer still completes",
+          "chat disabled and unconfigured sources are absent from reference and catalog",
+          "chat configured source metadata restores its permitted references",
+          "chat an absent broad grant omits browsing while preserving selected-folder creation",
+          "chat enabled advanced operation contracts remain available",
+          "local intrinsic method remains without a selected workflow",
+          "local custom global agent and saved skill guidance stays intact",
+          "local current read reference is explicit",
+          "local unavailable advanced operation grammars are omitted",
+          "local operation output remains untrusted and execution claims require results",
+          "local actual read-only request is substantially smaller",
+          "local permitted read retains its actual approval path",
+          "local actual permitted file worker still executes",
+          "local actual output returns through the same compact instruction path",
+          "local normal final answer still completes",
+          "local disabled and unconfigured sources are absent from reference and catalog",
+          "local configured source metadata restores its permitted references",
+          "local an absent broad grant omits browsing while preserving selected-folder creation",
+          "local enabled advanced operation contracts remain available",
+          "messages intrinsic method remains without a selected workflow",
+          "messages custom global agent and saved skill guidance stays intact",
+          "messages current read reference is explicit",
+          "messages unavailable advanced operation grammars are omitted",
+          "messages operation output remains untrusted and execution claims require results",
+          "messages actual read-only request is substantially smaller",
+          "messages permitted read retains its actual approval path",
+          "messages actual permitted file worker still executes",
+          "messages actual output returns through the same compact instruction path",
+          "messages normal final answer still completes",
+          "messages disabled and unconfigured sources are absent from reference and catalog",
+          "messages configured source metadata restores its permitted references",
+          "messages an absent broad grant omits browsing while preserving selected-folder creation",
+          "messages enabled advanced operation contracts remain available",
+          "content intrinsic method remains without a selected workflow",
+          "content custom global agent and saved skill guidance stays intact",
+          "content current read reference is explicit",
+          "content unavailable advanced operation grammars are omitted",
+          "content operation output remains untrusted and execution claims require results",
+          "content actual read-only request is substantially smaller",
+          "content permitted read retains its actual approval path",
+          "content actual permitted file worker still executes",
+          "content actual output returns through the same compact instruction path",
+          "content normal final answer still completes",
+          "content disabled and unconfigured sources are absent from reference and catalog",
+          "content configured source metadata restores its permitted references",
+          "content an absent broad grant omits browsing while preserving selected-folder creation",
+          "content enabled advanced operation contracts remain available"
+        ],
+        "request_bytes": [
+          {
+            "protocol": "chat",
+            "previous_request_bytes": 27209,
+            "current_request_bytes": 5663
+          },
+          {
+            "protocol": "local",
+            "previous_request_bytes": 27209,
+            "current_request_bytes": 5637
+          },
+          {
+            "protocol": "messages",
+            "previous_request_bytes": 27239,
+            "current_request_bytes": 5645
+          },
+          {
+            "protocol": "content",
+            "previous_request_bytes": 27195,
+            "current_request_bytes": 5624
+          }
+        ]
+      },
+      "provider_evidence": {
+        "passed": [
+          "ordinary owned search automatically retains one evidence receipt",
+          "receipt correlates observed query and reported source",
+          "provider metadata is not presented as fetched pages or verified truth",
+          "projection excludes opaque blocks and profile credentials",
+          "same-profile private protocol history retains the actual original blocks",
+          "receipt digests measure exact metadata bytes",
+          "completed callback cannot create a duplicate receipt",
+          "native returned-evidence page shows the same provider receipt",
+          "finite check uses actual retained metadata",
+          "reviewed real file export retains exact receipt and comparison",
+          "changed key hides historical provider evidence",
+          "changed endpoint hides historical provider evidence",
+          "changed hosted_identity hides historical provider evidence",
+          "changed hosted_search hides historical provider evidence",
+          "current policy change hides old provider receipts",
+          "modified receipt output fails journal integrity",
+          "model reads provider evidence without enabling a local web fallback",
+          "model permission revocation returns an error without historical source disclosure",
+          "intrinsic method needs no journal tool invocation",
+          "automatic source capture needs no journal tool permission",
+          "standalone task also captures its actual provider source",
+          "reviewed child retains intrinsic method and its actual owner",
+          "actual child return retains evidence in its own linked question",
+          "owned child source response resumes the captured parent",
+          "query-only paused response does not invent completed evidence",
+          "explicit continuation correlates the actual prior query",
+          "reported provider errors remain labelled observed errors",
+          "large result preserves an explicit bounded metadata prefix",
+          "missing partial-output match stays unresolved",
+          "cancelled model callback cannot retain evidence",
+          "changed in-flight connection cannot capture returned sources",
+          "off optional journal does not block actual answer",
+          "malformed optional journal does not block actual answer",
+          "full optional journal does not block actual answer",
+          "receipt capacity retains earlier results and reports omission without gating",
+          "proposal automatically receives existing journal metadata",
+          "synthesis does not receive private protocol state",
+          "metadata read does not re-enable server search in proposal",
+          "composition includes both actual baseline and probe metadata",
+          "refinement finishes its existing review after automatic evidence capture"
+        ],
+        "scope": "Owner public-interface checks: controlled provider replies, native question records, finite comparisons, guarded file export and refinement transitions."
+      },
+      "pe_declarations": {
+        "passed": [
+          "independent linked PE contains an actual DIR64 base relocation",
+          "ordinary command uses intrinsic investigation without a separate skill",
+          "normal binary inspection uses the existing approval path",
+          "typed source declarations agree with independent relocation coordinates",
+          "typed record retains the actual held source word location",
+          "mapping reports only captured field bytes without adding an image base",
+          "declared inventory and unsupported classifications stay distinct",
+          "padding records never become loaded targets",
+          "observations never claim applied relocations or loaded values",
+          "actual owned callback retains exact typed declarations",
+          "ordinary model continuation receives the actual relocation evidence",
+          "ordinary retained query uses the same source declaration data",
+          "native evidence view uses actual retained PE data",
+          "structural export enters the existing authority review",
+          "actual structural export preserves exact typed PE declarations",
+          "retained source report exports exact hashed representation bytes",
+          "altered typed declaration is not adopted as historical evidence",
+          "ordinary file work remains available after optional history corruption"
+        ],
+        "scope": "Owner connected checks: original assembled/linked PE, LLVM metadata comparison, guarded file inspection, callbacks, retained queries, native views and export/readback."
+      },
+      "delegation_visibility": {
+        "passed": [
+          "chat request identifies the actual active primary model",
+          "chat primary receives every configured model identity",
+          "chat callable agent indexes expose exact effective connection and role",
+          "chat model catalog exposes permission data without credentials",
+          "chat omitted selector uses declared default through real review",
+          "chat approved default starts the actual selected child",
+          "chat child request identifies its actual configured model",
+          "chat actual owned child return is visible to its captured parent",
+          "chat old child callback cannot settle the parent request",
+          "chat child transport failure returns an explicit parent result",
+          "local request identifies the actual active primary model",
+          "local primary receives every configured model identity",
+          "local callable agent indexes expose exact effective connection and role",
+          "local model catalog exposes permission data without credentials",
+          "local omitted selector uses declared default through real review",
+          "local approved default starts the actual selected child",
+          "local child request identifies its actual configured model",
+          "local actual owned child return is visible to its captured parent",
+          "local old child callback cannot settle the parent request",
+          "local child transport failure returns an explicit parent result",
+          "messages request identifies the actual active primary model",
+          "messages primary receives every configured model identity",
+          "messages callable agent indexes expose exact effective connection and role",
+          "messages model catalog exposes permission data without credentials",
+          "messages omitted selector uses declared default through real review",
+          "messages approved default starts the actual selected child",
+          "messages child request identifies its actual configured model",
+          "messages actual owned child return is visible to its captured parent",
+          "messages old child callback cannot settle the parent request",
+          "messages child transport failure returns an explicit parent result",
+          "content request identifies the actual active primary model",
+          "content primary receives every configured model identity",
+          "content callable agent indexes expose exact effective connection and role",
+          "content model catalog exposes permission data without credentials",
+          "content omitted selector uses declared default through real review",
+          "content approved default starts the actual selected child",
+          "content child request identifies its actual configured model",
+          "content actual owned child return is visible to its captured parent",
+          "content old child callback cannot settle the parent request",
+          "content child transport failure returns an explicit parent result",
+          "chat rejected child operation records actual interruption and settles ownership",
+          "chat native status shows the actual stopped child transition",
+          "chat following primary request receives the actual interruption",
+          "chat a new conversation excludes another conversation child transition",
+          "local rejected child operation records actual interruption and settles ownership",
+          "local native status shows the actual stopped child transition",
+          "local following primary request receives the actual interruption",
+          "local a new conversation excludes another conversation child transition",
+          "messages rejected child operation records actual interruption and settles ownership",
+          "messages native status shows the actual stopped child transition",
+          "messages following primary request receives the actual interruption",
+          "messages a new conversation excludes another conversation child transition",
+          "content rejected child operation records actual interruption and settles ownership",
+          "content native status shows the actual stopped child transition",
+          "content following primary request receives the actual interruption",
+          "content a new conversation excludes another conversation child transition",
+          "rejected nested delegation records the already running child interruption",
+          "next primary request identifies the stopped child after nested review rejection",
+          "selector {\"model\": \"CHILD_MODEL_TWO\"} resolves the actual reviewed destination",
+          "selector {\"model\": \"Exact child one\"} resolves the actual reviewed destination",
+          "selector {\"connection\": 2} resolves the actual reviewed destination",
+          "selector {\"agent\": 1} resolves the actual reviewed destination",
+          "selector {\"role\": \"nonwrite\"} resolves the actual reviewed destination",
+          "selector {\"specialty\": \"Review\"} resolves the actual reviewed destination",
+          "rejected {\"model\": \"guessed-provider-token\"} returns feedback without a child",
+          "rejected {\"connection\": 3} returns feedback without a child",
+          "rejected {\"agent\": 0} returns feedback without a child",
+          "rejected {\"agent\": \"bad-index\"} returns feedback without a child",
+          "rejected {\"provider\": \"minimax\"} returns feedback without a child",
+          "repeated invalid delegation cannot create an automatic feedback loop",
+          "fresh native instruction resets bounded failure feedback",
+          "ambiguous model identity requires an exact permitted agent",
+          "exact agent selector resolves shared-model ambiguity",
+          "catalog marks a missing route and selects the next routable permitted default",
+          "default execution matches the catalog after a broken child route",
+          "disabled delegation still exposes configured identities without inventing callability",
+          "disabled tool returns the actual permission refusal to its model",
+          "native rejection records that no child was started",
+          "the next primary request sees the actual native rejection",
+          "cancellation records interruption and rejects the late result",
+          "failed parent continuation preserves the actual child return and exact failure",
+          "changed reviewed child destination cannot start a different model",
+          "explicit unroutable agent returns the actual route error to its requester",
+          "response admission refusal leaves the captured parent settled",
+          "actual admission reason remains in the parent conversation",
+          "local file work remains usable after model admission refusal",
+          "native reviewed file work settles locally after model admission refusal",
+          "fresh request after resource recovery starts the exact selected route",
+          "approval-time route refusal records its actual controller outcome",
+          "failed parent preparation retains the actual child failure and retires its frame",
+          "nested admission failure unwinds through captured parents with its actual reason",
+          "primary sees the exact queued review and its originating question",
+          "queued child and resumed parent preserve the original question after a status turn",
+          "model-supplied review metadata is replaced by the actual current question"
+        ],
+        "scope": "Owner public-interface checks: four controlled provider envelopes, actual configuration catalogs, controller routing, review identity, owned child callbacks and retained outcomes."
+      },
+      "local_failure_feedback": {
+        "passed": [
+          "chat actual failed worker returns to its requesting model",
+          "chat actual error is retained with an explicit failed outcome",
+          "chat consumed worker callback is inert on replay",
+          "chat model can settle using the actual operation failure",
+          "local actual failed worker returns to its requesting model",
+          "local actual error is retained with an explicit failed outcome",
+          "local consumed worker callback is inert on replay",
+          "local model can settle using the actual operation failure",
+          "messages actual failed worker returns to its requesting model",
+          "messages actual error is retained with an explicit failed outcome",
+          "messages consumed worker callback is inert on replay",
+          "messages model can settle using the actual operation failure",
+          "content actual failed worker returns to its requesting model",
+          "content actual error is retained with an explicit failed outcome",
+          "content consumed worker callback is inert on replay",
+          "content model can settle using the actual operation failure",
+          "a wrong callback owner cannot enter the model conversation",
+          "permission change preserves callback rejection",
+          "native cancellation revokes held local failure ownership",
+          "native manual failure settles locally",
+          "response admission refusal retains the actual error and settles the request",
+          "three new reviewed failed operations return three actual model results",
+          "repeated worker failures settle at the bounded feedback limit",
+          "fresh native instruction resets bounded local error feedback",
+          "local failure resumes the actual selected connection",
+          "standalone task failure resumes its assigned connection",
+          "standalone task saves its final answer after the actual failure",
+          "paused remote mode retains the operation error and settles locally",
+          "actual child worker failure retains its captured parent return"
+        ],
+        "scope": "Owner public-interface checks using actual missing-file workers, four provider envelopes, native review, exact callback ownership, current permission identity and response admission."
+      },
+      "network_failure_feedback": {
+        "passed": [
+          "chat missing network file returns its owned HTTP error",
+          "chat failed outcome is saved in the requesting conversation",
+          "chat consumed network error callback stays inert",
+          "chat command can finish after the actual network error",
+          "local missing network file returns its owned HTTP error",
+          "local failed outcome is saved in the requesting conversation",
+          "local consumed network error callback stays inert",
+          "local command can finish after the actual network error",
+          "messages missing network file returns its owned HTTP error",
+          "messages failed outcome is saved in the requesting conversation",
+          "messages consumed network error callback stays inert",
+          "messages command can finish after the actual network error",
+          "content missing network file returns its owned HTTP error",
+          "content failed outcome is saved in the requesting conversation",
+          "content consumed network error callback stays inert",
+          "content command can finish after the actual network error",
+          "current transport error returns through the normal command flow",
+          "malformed current folder response returns an actual parser error",
+          "a scoped folder error leaves a separately reviewed read usable",
+          "folder creation refusal returns its actual error",
+          "refused network create returns its actual outcome",
+          "failed create retains its unconfirmed outcome without replay",
+          "create acknowledgement still waits for exact readback",
+          "mismatched create readback reaches the requesting model",
+          "mismatched readback remains unconfirmed with a model-only continuation",
+          "readback transport error reaches the requesting model",
+          "readback transport error preserves unconfirmed file state",
+          "verified create remains verified when model continuation is paused",
+          "revision reaches target write only after exact backup verification",
+          "target readback mismatch reaches the model with actual revision details",
+          "revision failure does not dispatch another write",
+          "verified revision survives model continuation refusal",
+          "incorrect network owner cannot enter model feedback",
+          "changed agent permissions still reject the old network owner",
+          "cancelled network failure stays inert even with restored state",
+          "resource refusal retains the actual network error and retires model ownership",
+          "new reviewed network errors share the existing bounded feedback allowance",
+          "repeated network errors settle at the operation feedback bound",
+          "manual network errors stay local",
+          "standalone task receives the network failure on its assigned model",
+          "child network failure keeps the captured parent return"
+        ],
+        "scope": "Owner public-event checks: four controlled provider formats, exact held WebDAV callbacks, HTTP/transport/parser failure returns, create/update readback phases, current permissions, cancellation, response admission and captured child returns."
+      },
+      "proposal_feedback": {
+        "passed": [
+          "chat disabled operation returns its actual refusal",
+          "chat original proposal and diagnostic remain in the conversation",
+          "chat corrected operation still requires ordinary review",
+          "chat separate reviewed worker returns its actual file contents",
+          "chat malformed permitted arguments return their actual validation error",
+          "chat model can finish after the argument refusal",
+          "local disabled operation returns its actual refusal",
+          "local original proposal and diagnostic remain in the conversation",
+          "local corrected operation still requires ordinary review",
+          "local separate reviewed worker returns its actual file contents",
+          "local malformed permitted arguments return their actual validation error",
+          "local model can finish after the argument refusal",
+          "messages disabled operation returns its actual refusal",
+          "messages original proposal and diagnostic remain in the conversation",
+          "messages corrected operation still requires ordinary review",
+          "messages separate reviewed worker returns its actual file contents",
+          "messages malformed permitted arguments return their actual validation error",
+          "messages model can finish after the argument refusal",
+          "content disabled operation returns its actual refusal",
+          "content original proposal and diagnostic remain in the conversation",
+          "content corrected operation still requires ordinary review",
+          "content separate reviewed worker returns its actual file contents",
+          "content malformed permitted arguments return their actual validation error",
+          "content model can finish after the argument refusal",
+          "invalid website proposal returns a refusal before any web request",
+          "standalone task receives the refusal on its assigned connection",
+          "standalone task saves its final answer after rejection",
+          "refusal resumes the exact selected connection",
+          "refusal feedback preserves a previously queued child review",
+          "preserved queued review still starts its exact original child",
+          "invalid proposals share the bounded ordinary feedback allowance",
+          "repeated invalid proposals settle without executing an operation",
+          "fresh instruction resets proposal feedback allowance",
+          "response admission refusal retains the actual rejection and settles ownership",
+          "paused remote mode retains the refusal without a continuation request",
+          "child refusal keeps its captured parent return"
+        ],
+        "scope": "Owner public-event checks: actual proposal/refusal/review transitions through four provider formats, real subsequent file workers, exact routes, bounded feedback, queued review preservation, response admission and captured child returns."
+      },
+      "review_ownership": {
+        "passed": [
+          "chat later valid proposal retains the exact current review",
+          "chat current child review remains visible to the model",
+          "chat duplicate child proposal retains the original review owner",
+          "chat rejected child selector leaves the original review intact",
+          "chat original review starts only its exact child and question",
+          "local later valid proposal retains the exact current review",
+          "local current child review remains visible to the model",
+          "local duplicate child proposal retains the original review owner",
+          "local rejected child selector leaves the original review intact",
+          "local original review starts only its exact child and question",
+          "messages later valid proposal retains the exact current review",
+          "messages current child review remains visible to the model",
+          "messages duplicate child proposal retains the original review owner",
+          "messages rejected child selector leaves the original review intact",
+          "messages original review starts only its exact child and question",
+          "content later valid proposal retains the exact current review",
+          "content current child review remains visible to the model",
+          "content duplicate child proposal retains the original review owner",
+          "content rejected child selector leaves the original review intact",
+          "content original review starts only its exact child and question",
+          "manual write review survives a conflicting model proposal",
+          "review conflict does not disclose unapproved manual arguments",
+          "original manual review still executes its exact approved file operation",
+          "later web proposal preserves current review before any page dispatch",
+          "explicit native dismissal clears the original review",
+          "a fresh operation is available after explicit dismissal",
+          "feedback exhaustion retains the original current review",
+          "current review still works after conflicting feedback settles"
+        ],
+        "scope": "Owner public-event checks: current review identity, four provider formats, queued child question/route ownership, duplicate/conflicting proposals, actual manual file execution, unapproved argument privacy and bounded feedback."
+      },
+      "task_ownership": {
+        "passed": [
+          "chat regenerate preserves active task conversation and review",
+          "chat new preserves active task conversation and review",
+          "chat history preserves active task conversation and review",
+          "chat branch_accept preserves active task conversation and review",
+          "chat conversation_accept preserves active task conversation and review",
+          "chat retry preserves the child review and its assigned connection",
+          "chat composer send retains the active child owner and current review",
+          "chat new message remains an unsent composer draft",
+          "chat native status retains the captured task and draft",
+          "chat reviewed file result resumes the actual child connection",
+          "chat child findings return to the original parent question",
+          "chat draft remains available after actual task settlement",
+          "chat preserved draft starts a fresh ordinary request after settlement",
+          "local regenerate preserves active task conversation and review",
+          "local new preserves active task conversation and review",
+          "local history preserves active task conversation and review",
+          "local branch_accept preserves active task conversation and review",
+          "local conversation_accept preserves active task conversation and review",
+          "local retry preserves the child review and its assigned connection",
+          "local composer send retains the active child owner and current review",
+          "local new message remains an unsent composer draft",
+          "local native status retains the captured task and draft",
+          "local reviewed file result resumes the actual child connection",
+          "local child findings return to the original parent question",
+          "local draft remains available after actual task settlement",
+          "local preserved draft starts a fresh ordinary request after settlement",
+          "messages regenerate preserves active task conversation and review",
+          "messages new preserves active task conversation and review",
+          "messages history preserves active task conversation and review",
+          "messages branch_accept preserves active task conversation and review",
+          "messages conversation_accept preserves active task conversation and review",
+          "messages retry preserves the child review and its assigned connection",
+          "messages composer send retains the active child owner and current review",
+          "messages new message remains an unsent composer draft",
+          "messages native status retains the captured task and draft",
+          "messages reviewed file result resumes the actual child connection",
+          "messages child findings return to the original parent question",
+          "messages draft remains available after actual task settlement",
+          "messages preserved draft starts a fresh ordinary request after settlement",
+          "content regenerate preserves active task conversation and review",
+          "content new preserves active task conversation and review",
+          "content history preserves active task conversation and review",
+          "content branch_accept preserves active task conversation and review",
+          "content conversation_accept preserves active task conversation and review",
+          "content retry preserves the child review and its assigned connection",
+          "content composer send retains the active child owner and current review",
+          "content new message remains an unsent composer draft",
+          "content native status retains the captured task and draft",
+          "content reviewed file result resumes the actual child connection",
+          "content child findings return to the original parent question",
+          "content draft remains available after actual task settlement",
+          "content preserved draft starts a fresh ordinary request after settlement",
+          "chat malformed child proposal pauses with the task owner retained",
+          "chat explicit retry uses the captured child and task context",
+          "chat retried proposal follows the existing operation review",
+          "chat retry returns actual findings to the original parent question",
+          "local malformed child proposal pauses with the task owner retained",
+          "local explicit retry uses the captured child and task context",
+          "local retried proposal follows the existing operation review",
+          "local retry returns actual findings to the original parent question",
+          "messages malformed child proposal pauses with the task owner retained",
+          "messages explicit retry uses the captured child and task context",
+          "messages retried proposal follows the existing operation review",
+          "messages retry returns actual findings to the original parent question",
+          "content malformed child proposal pauses with the task owner retained",
+          "content explicit retry uses the captured child and task context",
+          "content retried proposal follows the existing operation review",
+          "content retry returns actual findings to the original parent question",
+          "standalone retry preserves the task review and assigned connection",
+          "standalone task retains its assigned owner and draft",
+          "standalone reviewed result still uses its assigned connection",
+          "standalone final result and later draft are both retained",
+          "standalone retry without a review keeps the assigned task route",
+          "standalone retry retains its actual reviewed file result",
+          "standalone retry settles in the original conversation",
+          "explicit native cancellation settles the task while preserving the new draft",
+          "cancelled child callback cannot replace the fresh primary request",
+          "fresh request after cancellation uses the preserved message",
+          "status question before a child starts retains ordinary model access"
+        ],
+        "scope": "Owner public-event checks: four provider formats, active child and standalone ownership, actual reviewed file workers, captured question/parent return, native status/cancellation, composer draft privacy, task retries and conversation ownership through navigation/regeneration."
+      },
+      "dav_listing": {
+        "passed": [
+          "nested metadata href preserves the exact listed file route",
+          "nested collection metadata does not change a file into a folder",
+          "manual file open uses the actual resource href",
+          "manual file open displays the fresh returned bytes",
+          "failed property values are reported as errors instead of file metadata",
+          "successful requested properties survive mixed property statuses True",
+          "successful requested properties survive mixed property statuses False",
+          "successful resource type still produces a usable folder row",
+          "manual folder open retains PROPFIND routing",
+          "whole-resource status remains explicit in data and the row label",
+          "a historical listing status does not prevent a new explicit read",
+          "fresh read can succeed after an earlier resource status",
+          "legacy absent-status property listings retain their prior behavior",
+          "quoted tag delimiters preserve Unicode and entity-decoded property values",
+          "comments preserve surrounding field text and resource coordinates",
+          "current malformed listing is scoped to its request: empty property status",
+          "current malformed listing is scoped to its request: malformed property status",
+          "current malformed listing is scoped to its request: empty resource status",
+          "current malformed listing is scoped to its request: duplicate resource status",
+          "current malformed listing is scoped to its request: duplicate resource href",
+          "invalid listing envelope is an actual scoped error: plain text",
+          "invalid listing envelope is an actual scoped error: wrong root",
+          "invalid listing envelope is an actual scoped error: multiple roots",
+          "invalid listing envelope is an actual scoped error: trailing data",
+          "a new folder request clears rows from the earlier location",
+          "failed navigation does not present old-folder rows under the new location",
+          "chat model receives exact resource routes and scoped property/status data",
+          "local model receives exact resource routes and scoped property/status data",
+          "messages model receives exact resource routes and scoped property/status data",
+          "content model receives exact resource routes and scoped property/status data",
+          "child listing uses the same source-correct parser and actual route"
+        ],
+        "scope": "Owner public-event checks: current WebDAV resource/property/status scopes, actual row/open routing, mixed and absent statuses, nested metadata, XML field text, scoped errors, stale-view prevention, four provider formats and captured child return. Primary protocol reference: RFC4918 sections13and14."
+      },
+      "server_admission": {
+        "passed": [
+          "1.0 sequential task acknowledgements leave capacity ready for the next task",
+          "1.0 every admitted task returns its actual fresh source digest",
+          "1.0 each fresh message owns a distinct actual task",
+          "1.0 identical message retry preserves its historical result without replay",
+          "0.3 sequential task acknowledgements leave capacity ready for the next task",
+          "0.3 every admitted task returns its actual fresh source digest",
+          "0.3 each fresh message owns a distinct actual task",
+          "0.3 identical message retry preserves its historical result without replay"
+        ],
+        "scope": "Owner public-interface checks: authenticated current/legacy local-agent protocol,256immediate sequential real file-inspection tasks with changed source bytes, complete source/output hashes, distinct identities and cached-message idempotency. No retries or sleeps between fresh requests."
+      },
+      "http_framing": {
+        "passed": [
+          "length completes before the persistent peer closes",
+          "chunked completes before the persistent peer closes",
+          "interim completes before the persistent peer closes",
+          "bodyless completes before the persistent peer closes",
+          "unchanged length metadata completes before the persistent peer closes",
+          "unchanged chunk metadata completes before the persistent peer closes",
+          "unchanged coded metadata completes before the persistent peer closes",
+          "head chunk metadata completes before the persistent peer closes",
+          "head completes before the persistent peer closes",
+          "large WebDAV207 completes within the response bound",
+          "framing preserves coded response bytes",
+          "close-delimited response waits for observed EOF",
+          "unobserved EOF cannot settle close-delimited response",
+          "short length remains a scoped incomplete response",
+          "unfinished chunk remains a scoped incomplete response",
+          "missing trailer terminator remains a scoped incomplete response",
+          "duplicate length is refused locally",
+          "duplicate length retires only its failed session",
+          "ambiguous framing is refused locally",
+          "ambiguous framing retires only its failed session",
+          "bodyless extra bytes is refused locally",
+          "bodyless extra bytes retires only its failed session",
+          "extra bytes is refused locally",
+          "extra bytes retires only its failed session",
+          "framing trailer is refused locally",
+          "framing trailer retires only its failed session",
+          "downstream bodyless metadata preserves its actual304 diagnostic Content-Length",
+          "downstream bodyless metadata preserves its actual304 diagnostic Transfer-Encoding",
+          "downstream bodyless metadata preserves its actual304 diagnostic Content-Encoding",
+          "foreign owner leaves the actual response session intact",
+          "declared response above its current bound is refused",
+          "wire bytes above current bound are refused",
+          "one-byte response fragmentation preserves the complete frame",
+          "response slots remain bounded",
+          "ordinary response remains available after scoped failures",
+          "persistent primary HTTP reply opens the actual child review",
+          "persistent child reply returns through its captured parent",
+          "persistent parent continuation settles its actual task",
+          "persistent NAS response resumes its requesting model with actual bytes",
+          "persistent NAS continuation settles without replay"
+        ],
+        "scope": "Owner public-API and real loopback persistent-socket framing; actual complete wire bytes, gzip preservation, EOF ownership, bounds, malformed input and scoped session failures."
+      },
+      "platform_resolution": {
+        "passed": [
+          "numeric IPv4 retains exact address without DNS",
+          "numeric IPv6 retains exact address without DNS",
+          "resolved hostname connects to actual socket bytes",
+          "occupied resolver refuses an unrelated caller without queueing",
+          "deadline retires its caller while system lookup remains blocked",
+          "DNS failure retains the actual resolver diagnostic",
+          "activity or service closure retires its waiting lookup owner",
+          "released resolver slot serves a fresh actual socket after prior failures"
+        ],
+        "scope": "Owner portable Java execution of production Resolution/Deadline with controlled OS lookup outcomes, actual loopback sockets, occupied slot, monotonic deadline, lifecycle closure and recovery. Android platform call sites also compile against SDK35."
+      },
+      "query_feedback": {
+        "passed": [
+          "chat observations runtime error returns to its current model",
+          "chat observations corrected query remains available and settles",
+          "chat hypotheses runtime error returns to its current model",
+          "chat hypotheses corrected query remains available and settles",
+          "chat experiments runtime error returns to its current model",
+          "chat experiments corrected query remains available and settles",
+          "local observations runtime error returns to its current model",
+          "local observations corrected query remains available and settles",
+          "local hypotheses runtime error returns to its current model",
+          "local hypotheses corrected query remains available and settles",
+          "local experiments runtime error returns to its current model",
+          "local experiments corrected query remains available and settles",
+          "messages observations runtime error returns to its current model",
+          "messages observations corrected query remains available and settles",
+          "messages hypotheses runtime error returns to its current model",
+          "messages hypotheses corrected query remains available and settles",
+          "messages experiments runtime error returns to its current model",
+          "messages experiments corrected query remains available and settles",
+          "content observations runtime error returns to its current model",
+          "content observations corrected query remains available and settles",
+          "content hypotheses runtime error returns to its current model",
+          "content hypotheses corrected query remains available and settles",
+          "content experiments runtime error returns to its current model",
+          "content experiments corrected query remains available and settles",
+          "observations standalone failure keeps its assigned model",
+          "observations standalone failure can settle its task",
+          "observations child failure returns to its captured parent and settles",
+          "observations manual failure remains local",
+          "hypotheses standalone failure keeps its assigned model",
+          "hypotheses standalone failure can settle its task",
+          "hypotheses child failure returns to its captured parent and settles",
+          "hypotheses manual failure remains local",
+          "experiments standalone failure keeps its assigned model",
+          "experiments standalone failure can settle its task",
+          "experiments child failure returns to its captured parent and settles",
+          "experiments manual failure remains local",
+          "chat approved design survives paused model continuation",
+          "chat fresh instruction reads the actual preserved design",
+          "local approved design survives paused model continuation",
+          "local fresh instruction reads the actual preserved design",
+          "messages approved design survives paused model continuation",
+          "messages fresh instruction reads the actual preserved design",
+          "content approved design survives paused model continuation",
+          "content fresh instruction reads the actual preserved design",
+          "failed core query leaves no new standing approval",
+          "repeated approval preserves the current error-feedback request",
+          "core query errors share the bounded feedback allowance",
+          "repeated query errors settle at the existing feedback bound",
+          "fresh instruction resets the core-query feedback allowance",
+          "permission change still preserves the unexecuted review",
+          "hypotheses process changed profile preserves captured review",
+          "hypotheses process changed profile has no feedback or mutation",
+          "hypotheses process changed connection preserves captured review",
+          "hypotheses process changed connection has no feedback or mutation",
+          "hypotheses create changed profile preserves captured review",
+          "hypotheses create changed profile has no feedback or mutation",
+          "hypotheses create changed connection preserves captured review",
+          "hypotheses create changed connection has no feedback or mutation",
+          "experiments create changed profile preserves captured review",
+          "experiments create changed profile has no feedback or mutation",
+          "experiments create changed connection preserves captured review",
+          "experiments create changed connection has no feedback or mutation",
+          "paused task retains its successful local result and owner",
+          "paused task resumes its assigned model with the actual saved result",
+          "resumed successful task settles without replaying its journal operation",
+          "paused child design survives the captured parent return",
+          "paused parent retry uses its original primary connection",
+          "paused child design is retained once across parent retry",
+          "review starts the configured child connection",
+          "actual child worker retains its own observation identity",
+          "child observation retains its task and depth",
+          "actual child result returns to the captured primary",
+          "primary queries the actual retained child report",
+          "primary settles after consuming the child report"
+        ],
+        "scope": "Owner public core-event checks through four controlled provider envelopes, actual journal failures/successes, current permission and approval ownership, bounded feedback, paused continuation/retry, real child file inspection and parent queries."
+      },
+      "carry_arithmetic": {
+        "passed": [
+          "adc64 matches independent encoding and carry result",
+          "sbc64 matches independent encoding and carry result",
+          "adcs64 matches independent encoding and carry result",
+          "sbcs64 matches independent encoding and carry result",
+          "adc32 matches independent encoding and carry result",
+          "sbc32 matches independent encoding and carry result",
+          "adcs32 matches independent encoding and carry result",
+          "sbcs32 matches independent encoding and carry result",
+          "carry-updated flags drive the following conditional select",
+          "unknown carry retains common result bits",
+          "following mask derives a constant from unknown carry",
+          "carry arithmetic preserves coordinate provenance",
+          "identity_sub retains its register identity and flags",
+          "identity_flags retains its register identity and flags",
+          "identity_sbc retains its register identity and flags",
+          "identity_bic retains its register identity and flags",
+          "identity_orn retains its register identity and flags",
+          "identity_eon retains its register identity and flags",
+          "identity_selected retains its register identity and flags",
+          "identity_bics retains its register identity and flags",
+          "native view retains actual carry result",
+          "ordinary model query receives actual carry result",
+          "guarded export retains exact carry representation"
+        ],
+        "scope": "Owner shared-core checks using original LLVM-assembled AArch64 carry instructions, actual retained observations, UI descriptions, controlled provider query and exact file export."
+      },
+      "workspace_controls": {
+        "passed": [
+          "Workspace has six unique categories",
+          "Storage separates phone, network and Google Drive",
+          "phone browsing has no connection setup action",
+          "Back returns from phone to Storage",
+          "Back returns from Storage to Workspace",
+          "all27 previous Workspace operations remain reachable",
+          "phone attachment is available beside phone files",
+          "Google Drive browsing is separate from account setup",
+          "app inspection remains visible under diagnostics",
+          "Setup exposes unique connection and permission routes",
+          "phone setup separates scope and permission from browsing",
+          "phone setup returns to Setup",
+          "workspace creation and selection are visible",
+          "New workspace creates its actual separate directory",
+          "creation preserves original files",
+          "project browsing uses the selected workspace",
+          "original workspace selection preserves its files",
+          "saved workspace can be selected again",
+          "active work retains its workspace root",
+          "phone access toggle blocks the actual file effect",
+          "network access toggle blocks the actual request",
+          "access toggles preserve connection credentials",
+          "folder setup remains available while source access is off",
+          "MCP setup offers save and discovery",
+          "MCP setup exposes selected-agent tool permission",
+          "MCP permission adds only its selected-agent tool",
+          "connection stores credentials separately from permission controls",
+          "MCP permission can be removed while retaining setup",
+          "real MCP discovery opens the named tool list",
+          "server received initialization, notification and listing",
+          "MCP review keeps connection credentials out of its UI",
+          "changed MCP connection retires its reviewed approval",
+          "Back releases the manual MCP review and retains its draft",
+          "an approval after Back sends no request",
+          "selected MCP tool 0 carries its exact name and schema",
+          "MCP review 0 sends no call before approval",
+          "approved MCP call 0 returns the actual server output",
+          "selected MCP tool 1 carries its exact name and schema",
+          "MCP review 1 sends no call before approval",
+          "approved MCP call 1 returns the actual server output",
+          "MCP call parameters retain only the reviewed tool and arguments",
+          "server build produced its actual workspace file",
+          "primary sees the configured MCP command flow",
+          "primary receives the actual server names and schemas",
+          "MCP access can be revoked during an active request",
+          "revoked MCP response is withheld and settles the request",
+          "disabled MCP access sends no new request",
+          "Google Drive sign-in uses the Android account action",
+          "owned document selection opens local file controls",
+          "text read has an owned platform effect and active state",
+          "owned text result remains in its local source view",
+          "copying selected text uses the existing reviewed editor",
+          "Google Drive access off blocks file opening",
+          "disabled Google Drive routes browsing to access setup",
+          "workspace changes retire the old document selection",
+          "owned file selection completes while the primary remains active",
+          "primary response remains usable after independent file selection",
+          "cancel retires the current Google Drive read owner",
+          "cloud_text_result from a cancelled read leaves the newer model and UI unchanged",
+          "cloud_failure from a cancelled read leaves the newer model and UI unchanged",
+          "cloud_cancel from a cancelled read leaves the newer model and UI unchanged",
+          "cloud_result from a cancelled read leaves the newer model and UI unchanged",
+          "new model callback still completes after all stale file callbacks",
+          "application recovery retires its previous document request",
+          "recovered old selection is an exact state-preserving no-op",
+          "nested document metadata preserves the actual typed agent name",
+          "document result is retained separately from the settings form",
+          "legacy flat metadata retains the previously captured form name",
+          "unowned file callback is rejected before any form capture",
+          "picker cancellation settles only its selection owner",
+          "primary completes normally after picker cancellation",
+          "revoked selection withholds data without settling unrelated model work",
+          "source revocation preserves the ordinary primary completion"
+        ],
+        "scope": "Owner public core-event checks, actual separate filesystem workspaces, real loopback MCP initialization/discovery/review/calls and server artifact, source revocation, and controlled Android document callbacks. Android account/provider views require installed-device execution."
+      },
+      "field_values": {
+        "passed": [
+          "independent assembler emits field and extraction instructions",
+          "unsigned_field retains the selected known bits",
+          "merged_field retains the selected known bits",
+          "inserted_field retains the selected known bits",
+          "positive_field retains the selected known bits",
+          "negative_field retains the selected known bits",
+          "signed_wrap retains the selected known bits",
+          "unsigned_wrap retains the selected known bits",
+          "extract_low retains the selected known bits",
+          "extract_high retains the selected known bits",
+          "extract_rotation retains the selected known bits",
+          "word_field retains the selected known bits",
+          "word_merge retains the selected known bits",
+          "word_extract retains the selected known bits",
+          "unsigned_zero derives its constant from the preceding field",
+          "merged_constant derives its constant from the preceding field",
+          "inserted_constant derives its constant from the preceding field",
+          "positive_zero derives its constant from the preceding field",
+          "negative_constant derives its constant from the preceding field",
+          "signed_wrap_zero derives its constant from the preceding field",
+          "unsigned_wrap_zero derives its constant from the preceding field",
+          "extract_low_zero derives its constant from the preceding field",
+          "extract_high_zero derives its constant from the preceding field",
+          "rotation_zero derives its constant from the preceding field",
+          "word_zero derives its constant from the preceding field",
+          "word_constant derives its constant from the preceding field",
+          "word_extract_zero derives its constant from the preceding field",
+          "coordinate_unsigned preserves source-coordinate identity",
+          "coordinate_signed preserves source-coordinate identity",
+          "coordinate_merge preserves source-coordinate identity",
+          "coordinate_alias preserves source-coordinate identity",
+          "coordinate_extract preserves source-coordinate identity",
+          "native view retains actual partial field value",
+          "ordinary model query receives the same partial field value",
+          "reviewed export retains the exact field representation",
+          "actual published capture retains its encoded field facts",
+          "current view preserves the actual prior field capture"
+        ],
+        "scope": "Owner current shared-core checks with original LLVM-assembled AArch64 field/extraction instructions, independent disassembly, retained observations, native UI descriptions, controlled provider query, exact export and genuine immediately-published core capture compatibility."
+      },
+      "flag_facts": {
+        "passed": [
+          "independent assembler retains actual flag consumers",
+          "flag_adc uses the determining known flags",
+          "flag_sbc uses the determining known flags",
+          "flag_cc uses the determining known flags",
+          "flag_vc uses the determining known flags",
+          "flag_pl uses the determining known flags",
+          "flag_hi uses the determining known flags",
+          "flag_ls uses the determining known flags",
+          "unknown_sign_vc uses the determining known flags",
+          "arithmetic_adc uses the determining known flags",
+          "arithmetic_ne uses the determining known flags",
+          "arithmetic_eq uses the determining known flags",
+          "arithmetic_vc uses the determining known flags",
+          "word_adc uses the determining known flags",
+          "word_cc uses the determining known flags",
+          "join_adc uses the determining known flags",
+          "join_vc uses the determining known flags",
+          "flag_eq retains its actual unresolved condition",
+          "unknown_sign_pl retains its actual unresolved condition",
+          "arithmetic_pl retains its actual unresolved condition",
+          "logical carry is independently available to ADC",
+          "arithmetic carry survives an unknown result sign",
+          "joined flag display labels its unknown Z directly",
+          "native view retains the actual known-carry result",
+          "ordinary model query receives the actual known-carry result",
+          "reviewed export retains the exact flag-derived representation",
+          "actual published capture retains the same flag-consumer encoding",
+          "current view preserves the actual prior flag capture"
+        ],
+        "scope": "Owner current shared-core checks with original LLVM-assembled AArch64 flag-producing and consuming instructions, independent disassembly, retained observations, native UI descriptions, controlled provider query, exact export and genuine immediately-published core capture compatibility."
+      },
+      "product_facts": {
+        "passed": [
+          "independent assembler retains actual product instruction encodings",
+          "zero_product retains its determined product or accumulator",
+          "zero_addend retains its determined product or accumulator",
+          "zero_subtract retains its determined product or accumulator",
+          "same_register_cancel retains its determined product or accumulator",
+          "masked_product retains its determined product or accumulator",
+          "forced_zero retains its determined product or accumulator",
+          "forced_accumulator retains its determined product or accumulator",
+          "masked_addend retains its determined product or accumulator",
+          "flag_product retains its determined product or accumulator",
+          "preserved_flags retains its determined product or accumulator",
+          "word_zero retains its determined product or accumulator",
+          "word_accumulator retains its determined product or accumulator",
+          "word_mask retains its determined product or accumulator",
+          "coordinate_cancel retains its determined product or accumulator",
+          "unit_product retains each proved product bit",
+          "shift_product retains each proved product bit",
+          "commuted_product retains each proved product bit",
+          "low_product retains each proved product bit",
+          "partial_addend retains each proved product bit",
+          "partial_subtract retains each proved product bit",
+          "word_shift retains each proved product bit",
+          "coordinate_shift retains each proved product bit",
+          "coordinate_unit preserves source-coordinate identity",
+          "coordinate_accumulator preserves source-coordinate identity",
+          "native view retains actual partial product bits",
+          "ordinary model query receives the actual product bits",
+          "reviewed export retains the exact product representation",
+          "actual published capture retains the same product encoding",
+          "current view preserves the actual prior product capture"
+        ],
+        "scope": "Owner current shared-core checks with original LLVM-assembled AArch64 product instruction encodings, independent disassembly, retained observations, native UI descriptions, controlled provider query, exact export and genuine immediately-published core capture compatibility."
+      },
+      "diagnostics": {
+        "passed": [
+          "startup keeps phone permissions under explicit Setup control",
+          "actual completed requests produce weighted token average",
+          "response and first-text gauges use selected means",
+          "selected gauge sample count is visible",
+          "exact count control is exposed",
+          "unapplied count survives form capture and recovery",
+          "invalid count retains prior range and review",
+          "exact count applies to actual completed history",
+          "range survives saved-state recovery",
+          "live estimate has its own card",
+          "live request preserves completed-run average",
+          "range changes preserve active callback and draft",
+          "stale model delivery preserves exact state: rate_tick",
+          "stale model delivery preserves exact state: model_progress",
+          "stale model delivery preserves exact state: failure",
+          "stale platform delivery preserves exact state before project refresh: document_result",
+          "stale platform delivery preserves exact state before project refresh: image_result",
+          "stale platform delivery preserves exact state before project refresh: document_cancel",
+          "stale platform delivery preserves exact state before project refresh: document_failure",
+          "stale platform delivery preserves exact state before project refresh: apps_result",
+          "explicit navigation still refreshes current project instructions",
+          "cancelled run is excluded from successful averages",
+          "model filter precedes selected count",
+          "model statistics share selected history",
+          "request list shares selected history",
+          "retention ceiling remains explicit",
+          "gauge arcs stay within their drawing bounds: ESTIMATED TOKENS / S",
+          "gauge arcs stay within their drawing bounds: RESPONSE TIME",
+          "gauge arcs stay within their drawing bounds: FIRST TEXT",
+          "gauge arcs stay within their drawing bounds: ERROR RATE",
+          "range failure leaves ordinary local tools available"
+        ],
+        "scope": "Owner connected core execution with actual completed requests, saved-state round trip, active callback preservation, selected model/range, ordinary artifact-free local worker and scoped range refusal. Geometry checks describe drawing bounds; installed Android visual acceptance is separate."
+      }
+    },
+    "apk": {
+      "version": 1793750802,
+      "bytes": 5986322,
+      "sha256": "e17a7797a3ed32efc665810bb0c58f7f1c4907c0828841286c24975d8fa01eaa",
+      "native": [
+        {
+          "abi": "arm64-v8a",
+          "machine": 183,
+          "load_alignments": [
+            16384,
+            16384,
+            16384,
+            16384
+          ],
+          "bytes": 4387784
+        },
+        {
+          "abi": "x86_64",
+          "machine": 62,
+          "load_alignments": [
+            16384,
+            16384,
+            16384,
+            16384
+          ],
+          "bytes": 5341000
+        }
+      ],
+      "label": "RLLM",
+      "package": "com.local.client.lab",
+      "signature": "v2/v3; one pinned current signer",
+      "zip_crc": "passed",
+      "build_inputs": {
+        "AndroidManifest.xml": "75548baef1fd8cc3e92cd112df73615c6081f108f65886a8af7e3c0d2c347f1f",
+        "core/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "core/a2a.rs": "185871b70cf5515d178806ff408842da5a4a416f1669f7b110979f6aabc142b2",
+        "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
+        "core/application.rs": "8b5f6d3b771c9228d2c9609db7c3dfb4cf7fe224babbd5156fab9984f1164824",
+        "core/approval_rules.rs": "4280166b46e22ccc489edc2590a4c4b3ed6d9b96c3d08d9e4540b65a7b1de569",
+        "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
+        "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
+        "core/binary_declarations.rs": "ccc94d3fd69d92deeaacfab99b7b54245b9a77e5f9ec5e3849154879caf0ba31",
+        "core/binary_evidence.rs": "f113547035a7529eb37235e638fb2cc7a4e4a8660e738cde28850288d360e554",
+        "core/binary_flow.rs": "5f71db173c028ce76cbd1e40d8b8d9f67cc35847a611fd14e83b24539572d0b3",
+        "core/binary_observation.rs": "630368ff10116c484739751b06bc94ab36e315f8df1e51258d1de86e7bf5ccff",
+        "core/capture_file.rs": "bc295f066f492a1246f6a75e8e23ca06e068ef8c18024d64ca12db6bab74f0e4",
+        "core/capture_job.rs": "a4890ee2a7d613c564622506f1b6fac2535752d44f3dadf9fbd3d67864f620b0",
+        "core/claim_records.rs": "509c346ea0a7b83c2aa967f759dd311be5521633cd3542ba4985ed81faaeabe6",
+        "core/comparison.rs": "f9e52d1686865d59550ee87a773d0b0d36f6901a414e4caeef47fdf61beb6d75",
+        "core/compression.rs": "ac2ad8cc149ff2b7b79cde903bbb2cebcb51888700895495126260dee5fc7388",
+        "core/connection_migration.rs": "8649277c4a46d0040d9f9e21ab176bbfe53a24b08280b237b01ef0b450e11a62",
+        "core/console.rs": "dcb88fef6c64cfe8d812d5684222130168effe7b9f7d10cc4c56fbf42fe4285d",
+        "core/control_flow.rs": "a2e20ca0d75182db3cc902a39c80bb7f07d9665e40da006387f5783124b5a7bd",
+        "core/css_cascade.rs": "90e078344ff20a056d91d4ea8486746093231eaf8eca0b6ab9b83436d210e47f",
+        "core/css_selectors.rs": "082bcd967e7da8111b6cc70dbc36ab8d6c5e2ee74a418632f91c463f73fa6fbd",
+        "core/css_stylesheet.rs": "2705d6437f61ba613b9695e6d5243b88131734d5577872b133e56813e3defbe5",
+        "core/css_syntax.rs": "e1550592d461b660081d101c6ac3c7ab5a46269b20b5e3cbd05e3a5099144088",
+        "core/delegation.rs": "fc0d7a345b1f63f4e36f985cb58327d0b489d7d18f28558c6659f7211ee9fbb4",
+        "core/dex.rs": "dee1b5c5a0c865944c39da0b593ef404ade201ed9a6404b8d4dacccbb4ef9f0b",
+        "core/dex_calls.rs": "3fe323ac8d3cfdb49f7f73f9df43cdae9064f7e4b5394a6111bd64b2bcd43a17",
+        "core/dex_code.rs": "bec42b524a2e50294ecd44920824a8381bab45aef0d60d2a8bad5587642cd9de",
+        "core/dex_exceptions.rs": "b25e5f2ef048f92806f662edd0342b15b1ea2ee115766d98a1ddc8e949794c7b",
+        "core/directory_comparison.rs": "62a8e8da8b9fb802bf2cabf228130fe56d41869829991c46c360f8b41ecc4b8e",
+        "core/directory_observation.rs": "ca72382370d05cebad4088d8d9a02377344bc9fd7535fcbbde7efa32efaea169",
+        "core/document.rs": "b7a0638cd22d79a25d61f1c5b5eb6644f4d84edbfb0c46dc04a87dd39c22a013",
+        "core/elf_code.rs": "2a9fc7f626b2381c600c44ee8567c6f4ce951854ec3ad09326276394d3d7e496",
+        "core/elf_observation.rs": "4c34cbfa18fc020effd12bb672461eeeb6f73af6aa61fdd9bb15dcee93b830e8",
+        "core/execution.rs": "2f7248b6030a668adb090aab624e92c237f12f84a504f98fb36ef52124c45789",
+        "core/experiment_records.rs": "a5fb8e2096ce39b1ae84650b104ba2a276ba9b7047c0bb38ed89470b97f6bb61",
+        "core/exploration.rs": "fae803621412bb23577bcfb4157841ba6cea93a8bd2aebba8ae07650a0ecbefe",
+        "core/file_evidence.rs": "05e3f0dc6b35e7b8cce2da7f74f2e8dc28174de6cda52a8e50c7c7b8ef7cf38b",
+        "core/font_outline.rs": "689c8bbf834450d98c868bdeb3411a644014f646da34404274e5f4c0f18971c6",
+        "core/gateway.rs": "3bc3e26cfb91cc54ec34868f71192e679031c0c5b8c10001876a00baa197d244",
+        "core/generation.rs": "5ffb914ca983efa2ab290f8ca5ee10a3f25f709c9118891435bf5015630ce9ca",
+        "core/generation_controls.rs": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c",
+        "core/harness.rs": "8211d76a4949f2d39abb2ab6a27667dfffabf897ed617d0507ba982716c978f9",
+        "core/harness_rules.rs": "939d3c4bceff4dad6e254d02a37fdca522333718242d2f570e9484adaa6c6ac6",
+        "core/history_view.rs": "9657effb36f29de5601719a6b8c8334e93490266c6526934516a4a734524efb8",
+        "core/hosted_search.rs": "29f7b8657789391d1ff53aea6352707f95bca0c074283c6b4b81d98709e8ea3c",
+        "core/html_document.rs": "2034fa68dde1984c55583caa137eddb1954a905ab0bc6537e4e7f4c6428499b2",
+        "core/http.rs": "ed4da2cc2d76ddd339269c2a7de9c8109c762cea73f717c21488d01e7ced0525",
+        "core/http_content_coding.rs": "3e57b84bc1249dc5565d049e88fcd193fcba55292aa374965404d199da4ad923",
+        "core/image_png.rs": "d9092643d4d7b4191728af3a34240caeb3d17135d5c6a810ed8570142b90841c",
+        "core/incremental_digest.rs": "117bcf1ad7a8e069240cc4ba5cada7a4500d4170670209c80c4a97a14fa3191b",
+        "core/inquiry.rs": "5f8af816157ea95979162b7733c545e88d9c1337353e2b9989ff91fba1d1d528",
+        "core/instruction.rs": "97cedda11a56cc611c0aee49c5776b771c282754e0170e7102300f3ad0fa2d8a",
+        "core/interaction.rs": "23ed247d366a4928387aa3286317f2fc4d3cc67dab113b5ec84ea7c678c94df8",
+        "core/investigation.rs": "3f21b44d1cf5b6a0becaf818e585432a8393eaefb397352a198cde6f996b1ba3",
+        "core/investigation_claims.rs": "19ce0be47873fe7fbfde174f0acccffa494033208bc9a27531c308f9c72b2ddd",
+        "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
+        "core/lib.rs": "e4a654eb0c7628aeb1debf780a6307b9b72ee8674525f45fde3d8747582cc9da",
+        "core/mcp_identity.rs": "8487fa1479ae947071be28ec4118d2becf56d2c32894adf47dbca3e8a0dcf4cb",
+        "core/mcp_lifecycle.rs": "9b23677d24cca981362accf03bbc238dd90c022fce988d6c1fb46f19b335d7ca",
+        "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
+        "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
+        "core/model_metadata.rs": "a7c2f2875f39f517364d1088e77d13d014bee603af9c1e91cc7947a17fc96ded",
+        "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
+        "core/network.rs": "a772d8eca2394fb1988313c3933161f29813edd462e70a930137b4df191f866e",
+        "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
+        "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
+        "core/observation_store.rs": "8c8bb6b53a141a33392521f2d8c9e955b64a3d2537ab80936e03cec373393689",
+        "core/operation.rs": "d581a546871e0c710a8075eb5b02fe14ab6e1baa44e31651b8976cf0506f8c3d",
+        "core/page_capture.rs": "f4dcce673c5a7621cf444a89341299719157c4dfa87b5addc1f8b5256bfdc5af",
+        "core/page_layout.rs": "a86392b40478de7ae08136287f98c9989e9c1f31cf69da5471dfaad79546eed5",
+        "core/page_program.rs": "2c80e145356e4fc2546b8dfc9fa6c1a98652cc275419bdf4eeaac1dd86eecebf",
+        "core/pe_observation.rs": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0",
+        "core/png_inflate.rs": "bd0f4d5e4a60d52d942c5ec5f0e0a5ff8bbb649b3c4ab89b91175743cf83c5f0",
+        "core/project_store.rs": "9e137016a5be8bbc459c4db3a9ed565684987d247d8d8cc055a311f3c5622957",
+        "core/provider.rs": "dd37ada978c8383385cf17c230a305167876c2633a9c865e313fda69152a403c",
+        "core/provider_calls.rs": "b00d9805e4174b56707f34984106561a6a0405cb0406fe1ce925811920b01fdb",
+        "core/raster_surface.rs": "a475f9a953a9c54a6d9752fd5f169633437fcc609403caf5d1799364828e6a26",
+        "core/reasoning_text.rs": "f2007c2f8306311ae3badc824000807cb27fa7c5ea885c7e50d535635da3189c",
+        "core/reconstruction.rs": "8c95d4d8b0d796b3c98d2a8c3a73311366410dcee8c73dabe93a1c884362bcd2",
+        "core/redirect.rs": "4f55f161d677e307ba52af8983d15860d89f05e50c75e458789c1207d99d36c2",
+        "core/remote_monitor.rs": "6223b278b7f2d83f611433601e3de1b7e75aa22962f675671411dde1ade215b3",
+        "core/request_metrics.rs": "ec9822c7e3c4427d4bd3d6e4a6e7fdc51c77ebba3bf9325e7337f6ed321d14bf",
+        "core/resource_plan.rs": "e9d01d96656ce040381050630d3f9b2395b05ffac6dfdceda2acd0256b1de143",
+        "core/resource_session.rs": "55a6369ba8628ce7a7d5cb99b5392c612c0e90851156175615ab555b326b7dff",
+        "core/resource_url.rs": "a8ff45f4d5022413a2516d89ef296093b2a3d89a58c3404a67ea33c954ce1e73",
+        "core/resources.rs": "1af0d186ff5af9e53d424df216712489abc1efe4cf065be7efcbf14f5cb92f50",
+        "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
+        "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
+        "core/stdio.rs": "40dc6770113b6d61fcb262a8a2f139e33efd0c98a33bc4f67c2c9ad82d633344",
+        "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
+        "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
+        "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
+        "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
+        "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
+        "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
+        "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
+        "core/web_operation.rs": "308fa627b28613120977f88ba3e8551e69043e977a444baa2ecb24d80820e69a",
+        "core/workspace.rs": "e50362f7f890d77d8fc627a3c0b67559170db4854ba4370b4ed89bc8156d17e7",
+        "notices/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "notices/runtime.html": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27",
+        "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
+        "package.sh": "5d555fa51611b71c25467f6623190ffce50875da8a4b67c5fe7308af5874161b",
+        "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "platform/com/local/client/Activity.java": "8cdc15aa88ef63e4a538c51c01230f0220d474d0eea4d79cf23b8269086d707a",
+        "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
+        "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
+        "platform/com/local/client/Diagram.java": "5fcab9863eb6a1be85b7a7e841c11cd927a3d722f4a53d6ac19e722177c341ce",
+        "platform/com/local/client/Execution.java": "6c51afe3a8fce5283af4d8039e43913369da1ca0d3c3e1a14346a1b9d85d90d4",
+        "platform/com/local/client/ExportStore.java": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573",
+        "platform/com/local/client/Gateway.java": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7",
+        "platform/com/local/client/Resolution.java": "9e706ecd3c199d7dee7f20ac312b4ba78d355e3eab8a534e07b4277216b3f068",
+        "platform/com/local/client/TransferStore.java": "a164cf07e67e2ad8d98183c9dac5e367582f37c313fe01d8a99001eee61cd73b",
+        "platform/com/local/client/Usage.java": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165",
+        "platform/com/local/client/Wire.java": "da76bf27d1a86f34164fd069411e4b6312122757213ffccc29f06f59916b11e0",
+        "platform/jni/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "platform/jni/bridge.c": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f",
+        "res/drawable-nodpi/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "res/drawable-nodpi/wallpaper_dark.webp": "defca9af820cab1991b10c4b070d637c000151d86d4d2b35be10e6f36f967268",
+        "res/drawable-nodpi/wallpaper_light.jpg": "ac53ebcfcd066aba411373a2e75eb39550ace70dcd4bec4ecaf7750b5f6c6d33",
+        "res/drawable/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+        "res/drawable/actions.xml": "182afe6adaf73a5dccf178d15db3e76cb7430b86523e6ab89bff23d713253278",
+        "res/drawable/addition.xml": "8071070af47aca255129b9b045332cd3bf0f1a6c592134677733efe797562c58",
+        "res/drawable/arrow_left.xml": "8dcf18f6432aa67fb8b902d9a94a61a3d75bd8b6f13fa0b00b065a2516366950",
+        "res/drawable/arrow_right.xml": "d6310d3d713f85aad2cd082e9904a8774295e793b6806cbb7a7a650b9dc64036",
+        "res/drawable/arrow_up.xml": "53b4d62e387730f6743e4b65e982515ce9af1f90281875ac9d61ce7b152bdb71",
+        "res/drawable/cancellation.xml": "1665af19ee45b1a3b30c7ef1f8d6404df5012ea74315ee4466e88be507f9894f",
+        "res/drawable/confirmation.xml": "25140f9a60a6ae6eeb97bd47e656faf7db254887565b716976cb366169b6b3bc",
+        "res/drawable/conversation.xml": "f36eec459df9477208e634792642c285c5caa1f5429c1e1923e8ec2d4ae56fc4",
+        "res/drawable/directory.xml": "d9dab32ec82da604d159ea8c00d28f71c684f46ec8ab3c9369ba0174d6cd06b8",
+        "res/drawable/history.xml": "16592b78426cf5f36e23e312a636f94783dd0c7c4213f488683d8d7a805e2576",
+        "res/drawable/icon.xml": "3687ef2771593e70261bbb6977d0505a3a6f3c1a9e83f6d51c1520293301418a",
+        "res/drawable/message.xml": "10692738c06bf508b0e743e0fed397f25b360032196dff80eea675d511ba64d7",
+        "res/drawable/paper_plane.xml": "d6ede5f2c8b0cbf207f2e0d15ec94e59c038451946635e1118d4f4eb6ae49157",
+        "res/drawable/settings.xml": "b009daea27c79b53515d24bce53ae8e87ad6ecd8a19f78505478dcd4d9520d36",
+        "res/drawable/transfer.xml": "10142ed7d18986c21fc988d8a74e8bb232fa19c74107dcb45fd961f6d9a7b860",
+        "res/values/styles.xml": "66b7ac21724d0110d50b1ee59eb54b9b18cd8062f96c1822809e8a4cf1f6d17d",
+        "res/xml/network.xml": "30607c8f0160843366cf48bbb318eafbf5a8793a35847732c77ebb564125e115"
+      },
+      "network_security": {
+        "path": "res/xml/network.xml",
+        "resource_id": "0x7f030000",
+        "trust_anchors": [
+          "system",
+          "user"
+        ],
+        "pin_overrides": false
+      }
+    },
+    "evidence_owner": "implementation owner; LLVM metadata and actual prior-core comparison references",
+    "authentication_comparator": {
+      "version": 1793593529,
+      "source_sha256": "af219d4d2269f8f9ef0b9b9656106a8eca5dedbcebc5ef95047216de0c26b289",
+      "method": "actual revision-two shared-core controller with authenticated words unclassified; retained prior execution is identified separately when present"
+    },
+    "flow_comparator": {
+      "version": 1793395702,
+      "source_sha256": "f9d0dac9e3e8ae02cf5e787ffa71871f7d1242020fa6c87a3740af5b2d827ab8",
+      "method": "actual prior shared-core controller with thin JSON-lines envelope; held-source revision-one graph and current retained view"
+    },
+    "independent_acceptance": false,
+    "installed_device_tested": false,
+    "live_model_NAS_tested": false,
+    "history_comparator": {
+      "version": 1793395702,
+      "source_sha256": "f9d0dac9e3e8ae02cf5e787ffa71871f7d1242020fa6c87a3740af5b2d827ab8",
+      "method": "actual prior core with thin JSON-lines envelope adapter; negotiate its requested protocol revision"
+    },
+    "additional_audit": {
+      "scope": "Current owner audit of command, source permissions, role catalogs, stale document/app callbacks, live public search, provider/delegation routing and retained connected regressions.",
+      "published_source": {
+        "version": 1793742554,
+        "sha256": "feb3a0ea908caa9ca63dbd571f7296ea985eaac6aaa8954f6aba3f861c0abddf"
+      },
+      "reproduced_before_repair": [
+        {
+          "issue": "Disabled-source operations still offered to the model",
+          "source": "Actual published controller; new public command regression fails at disabled-source text catalog"
+        },
+        {
+          "issue": "Non-writing role offered write and MCP",
+          "source": "Actual published controller declares read,write,mcp; executor rejects write under non-writing role"
+        },
+        {
+          "issue": "Retired document or app result refreshes unrelated project state",
+          "source": "Actual published controller; project instructions change externally before stale callback; exact-state assertion fails at document_result"
+        }
+      ],
+      "repairs": [
+        "Source switches filter both text references and structured provider catalogs while preserving configured connections.",
+        "Non-writing roles use the executor's existing read-only classification in both catalogs.",
+        "Retired document/image/cancel/failure and app callbacks return the exact prior state before project refresh."
+      ],
+      "fresh_regression_groups": [
+        {
+          "name": "provider_process",
+          "code": 0
+        },
+        {
+          "name": "network_drive",
+          "code": 0
+        },
+        {
+          "name": "drive_ownership",
+          "code": 0
+        },
+        {
+          "name": "question_process",
+          "code": 0
+        },
+        {
+          "name": "history",
+          "code": 0
+        },
+        {
+          "name": "a2a",
+          "code": 0
+        },
+        {
+          "name": "binary_flow",
+          "code": 0
+        },
+        {
+          "name": "pe_declarations",
+          "code": 0
+        },
+        {
+          "name": "commands",
+          "code": 0
+        },
+        {
+          "name": "history_migration",
+          "code": 0
+        },
+        {
+          "name": "hosted_phases",
+          "code": 0
+        },
+        {
+          "name": "prompt_reference",
+          "code": 0
+        },
+        {
+          "name": "provider_evidence",
+          "code": 0
+        },
+        {
+          "name": "delegation_visibility",
+          "code": 0
+        },
+        {
+          "name": "local_feedback",
+          "code": 0
+        },
+        {
+          "name": "network_feedback",
+          "code": 0
+        },
+        {
+          "name": "proposal_feedback",
+          "code": 0
+        },
+        {
+          "name": "review_ownership",
+          "code": 0
+        },
+        {
+          "name": "task_ownership",
+          "code": 0
+        },
+        {
+          "name": "dav_listing",
+          "code": 0
+        },
+        {
+          "name": "server_admission",
+          "code": 0
+        },
+        {
+          "name": "http_framing",
+          "code": 0
+        },
+        {
+          "name": "platform_resolution",
+          "code": 0
+        },
+        {
+          "name": "query_feedback",
+          "code": 0
+        },
+        {
+          "name": "carry_flow",
+          "code": 0
+        },
+        {
+          "name": "workspace_navigation",
+          "code": 0
+        },
+        {
+          "name": "field_flow",
+          "code": 0
+        },
+        {
+          "name": "flags_flow",
+          "code": 0
+        },
+        {
+          "name": "product_flow",
+          "code": 0
+        },
+        {
+          "name": "diagnostics",
+          "code": 0
+        }
+      ],
+      "live_public_search": {
+        "passed": [
+          "intrinsic command process is present with optional guidance off",
+          "child selection enters review",
+          "approved child uses its assigned model",
+          "child search enters its own review",
+          "actual live search evidence returns to the assigned child",
+          "retained results include source URLs and actual snippets",
+          "live returned evidence reaches the integrated journal",
+          "actual child completion returns to the captured parent",
+          "parent completes the ordinary command"
+        ],
+        "transport_observations": [
+          {
+            "url": "https://api.mwmbl.org/api/v2/search/?q=Rust%20programming%20language",
+            "bytes": 47687,
+            "sha256": "bf20ec20c319446ac24d7ce367f71c53f377c186195bb8e68bc7f1f230438e8a"
+          }
+        ],
+        "scope": "Live public HTTPS search responses transported by curl through actual core review, owned callbacks, evidence retention and child/parent continuation. Model replies are controlled protocol fixtures; configured model inference and installed Android transport require their own execution."
+      },
+      "artifact_free_execution": "Command group runs actual file read with no peer, no optional guidance and a malformed journal, then exercises a legitimate missing-file failure followed by independent successful file work.",
+      "android_evidence": "Shared-core UI description checks and real Android Java compilation; installed runtime visual/lifecycle/IME/Keystore acceptance remains open.",
+      "separate_review": "Unavailable in this execution; owner audit evidence remains identified as owner evidence.",
+      "legacy_fixtures": {
+        "status": "Historical comparison preserved from prior release; current public-flow equivalents pass connected groups.",
+        "previous_release": {
+          "scope": "Owner audit. Current source inventory and public connected checks are separately recorded.",
+          "previous_source": "06ffb8e78537914c932da623dc62048ab734bcc42dcbd9a01b0abd523bfad375",
+          "prior_failures": [
+            "conversation_import_and_branch_respect_encrypted_vault_capacity",
+            "conversation_webdav_save_is_pending_until_exact_readback",
+            "failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+            "interrupted_phone_creation_warns_without_replay",
+            "legacy_compose_recovery_preserves_draft_in_inline_chat",
+            "live_rate_opens_analytics_without_losing_stream_or_draft",
+            "network_conversation_requires_review",
+            "network_text_to_project_requires_local_review_and_preserves_existing_files",
+            "pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+            "phone_update_editor_binds_original_and_late_failure_is_scoped",
+            "retry_verifies_first_and_creates_only_after_framed_not_found",
+            "reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+            "reviewed_network_update_preserves_revision_before_conditional_write",
+            "reviewed_phone_file_creation_needs_a_grant_and_valid_name",
+            "saved_export_recovery_is_explicit_scoped_and_immutable",
+            "viewport_and_capture_preserve_drafts_forms_and_active_work"
+          ],
+          "intermediate_failures": [
+            "conversation_import_and_branch_respect_encrypted_vault_capacity",
+            "conversation_webdav_save_is_pending_until_exact_readback",
+            "failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+            "interrupted_phone_creation_warns_without_replay",
+            "legacy_compose_recovery_preserves_draft_in_inline_chat",
+            "live_rate_opens_analytics_without_losing_stream_or_draft",
+            "network_conversation_requires_review",
+            "network_text_to_project_requires_local_review_and_preserves_existing_files",
+            "pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+            "phone_update_editor_binds_original_and_late_failure_is_scoped",
+            "retry_verifies_first_and_creates_only_after_framed_not_found",
+            "reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+            "reviewed_network_update_preserves_revision_before_conditional_write",
+            "reviewed_phone_file_creation_needs_a_grant_and_valid_name",
+            "saved_export_recovery_is_explicit_scoped_and_immutable",
+            "tls_guidance_preserves_explicit_endpoint",
+            "viewport_and_capture_preserve_drafts_forms_and_active_work"
+          ],
+          "intermediate_core_run": "FAILED. 396 passed; 2 failed; 0 ignored; 0 measured; 70 filtered out; finished in 11.70s",
+          "font_followup": "ok. 2 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 0.02s",
+          "disposition": "Missing font checks passed with the documented test input. TLS literal schemes were restored. The stale model no-op and first-start permission cases are repaired and rerun in current validation. Remaining historical application fixtures preserve their original bytes and use retired callback/review assumptions.",
+          "current_core": {
+            "summary": "FAILED. 397 passed; 1 failed; 0 ignored; 0 measured; 70 filtered out; finished in 12.42s",
+            "failures": []
+          },
+          "current_application": {
+            "summary": "FAILED. 43 passed; 12 failed; 0 ignored; 0 measured; 413 filtered out; finished in 0.90s",
+            "failures": [
+              "conversation_import_and_branch_respect_encrypted_vault_capacity",
+              "conversation_webdav_save_is_pending_until_exact_readback",
+              "failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+              "interrupted_phone_creation_warns_without_replay",
+              "network_conversation_requires_review",
+              "network_text_to_project_requires_local_review_and_preserves_existing_files",
+              "pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+              "phone_update_editor_binds_original_and_late_failure_is_scoped",
+              "retry_verifies_first_and_creates_only_after_framed_not_found",
+              "reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+              "reviewed_network_update_preserves_revision_before_conditional_write",
+              "reviewed_phone_file_creation_needs_a_grant_and_valid_name"
+            ]
+          },
+          "isolated_core": {
+            "summary": "ok. 398 passed; 0 failed; 0 ignored; 0 measured; 70 filtered out; finished in 13.51s",
+            "fixture": "Fresh working directory with the expected toolchain parent and explicit DejaVuSans test font"
+          },
+          "core_fixture_disposition": "The resource fixtures keep their output file and the ZIP fixture expects a toolchain parent. The final fresh working directory supplies that parent and the explicit font; all 398 applicable core cases pass without changing the fixtures or production overwrite checks.",
+          "runtime_exports": {
+            "arm64_export_names": [
+              "Java_com_local_client_Core_process"
+            ],
+            "previous_export_names_identical": true
+          }
+        }
+      },
+      "remaining_implementation": [
+        "ISA/type/alias/inter-block analysis and structured decompilation",
+        "Domain/process reconstruction and browser/language/compiler/runtime/inference coverage",
+        "Provider authorization, ACP and storage extensions including SMB",
+        "Resource/accelerator and recursive scheduling coverage"
+      ],
+      "acceptance": [
+        "Installed Android visual/accessibility/lifecycle/IME/Keystore and installation",
+        "Configured live primary/child models and NAS/TLS",
+        "Separate current-byte review"
+      ],
+      "button_wiring": {
+        "literal_event_count": 288,
+        "method": "Source inventory plus connected handler tracing; parameterized events resolve through explicit prefix handlers.",
+        "parameterized_families": [
+          "server_monitor_panel:",
+          "workspace_select:",
+          "workspace_source_access:",
+          "format:"
+        ],
+        "installed_button_execution": "Pending installed Android runtime"
+      }
+    }
+  },
+  "checkpoint_utc": "2026-11-04T00:10:25.219206+00:00",
+  "whole_project_complete": false
 }
