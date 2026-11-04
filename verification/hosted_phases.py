@@ -1,0 +1,47 @@
+"""Real core phase transitions keep provider search inside operation phases."""
+import base64,copy,json,pathlib,subprocess,tempfile
+PROJECT=pathlib.Path(__file__).resolve().parents[1];passed=[]
+def check(name,value):assert value,name;passed.append(name)
+with tempfile.TemporaryDirectory(prefix='hosted-phases-',dir=PROJECT/'output')as directory:
+ root=pathlib.Path(directory);(root/'evidence.txt').write_text('Actual supplied file evidence.')
+ p=subprocess.Popen([str(PROJECT/'output/headless/RLLM'),'--jsonl'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+ def op(v):
+  p.stdin.write(json.dumps(v)+'\n');p.stdin.flush();r=json.loads(p.stdout.readline());assert 'value'in r,r;return r['value']
+ def event(st,a,i=None):return op(dict(op='event',state=st,action=a,inputs=i or {},root=str(root)))
+ def state():
+  st=event(None,'resume')['state'];st['profiles']=[dict(name='Controlled',endpoint='http://provider.test/anthropic/v1/messages',protocol='messages',model='controlled',plain=True,stream=False,hosted_search='minimax_messages_v1',tool_format='structured')];st['agents']=[dict(name='General',tools='read,web_search,web_read')];return st
+ def body(d):return json.loads(d['effect']['wire'].split('\r\n\r\n',1)[1])
+ def searches(d):return any(t.get('name')=='web_search'for t in body(d).get('tools',[]))
+ def reply(d,text,stop='end_turn',blocks=None):
+  b=json.dumps(dict(role='assistant',content=blocks or [dict(type='text',text=text)],stop_reason=stop)).encode();wire=b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(b)).encode()+b'\r\n\r\n'+b;return event(d['state'],'network_result',dict(purpose='model',model_ticket=d['state']['model_expected'],data=base64.b64encode(wire).decode()))
+ try:
+  d=event(state(),'refine',{'task':'Refine instructions from observed evidence.'});check('baseline retains explicitly enabled provider search',searches(d)and d['state']['request_hosted_search'])
+  d=reply(d,'Observed baseline.');check('proposal phase uses captured evidence without a provider search declaration',d['state']['task_run']['phase']=='propose'and not searches(d)and not d['state']['request_hosted_search'])
+  check('proposal prompt states the actual phase reason','phase or exhausted operation allowance uses captured evidence only'in d['effect']['wire']and 'agent has not permitted'not in d['effect']['wire'])
+  check('proposal does not leak a provider-search execution instruction','Use the provider\'s declared web_search server tool'not in d['effect']['wire'])
+  d=reply(d,'Candidate instructions based on the observed baseline.');check('probe retains explicitly enabled evidence operations',d['state']['task_run']['phase']=='probe'and searches(d)and d['state']['request_hosted_search'])
+  d=reply(d,'Observed probe.');check('composition uses captured evidence without provider search',d['state']['task_run']['phase']=='compose'and not searches(d)and not d['state']['request_hosted_search'])
+  d=reply(d,'Composed instructions from actual baseline and probe.');check('refinement still reaches its existing adoption review',not d['state']['busy']and d['state']['dialog']=='refinement_review'and d['state']['refinement_pending']['composition'].startswith('Composed instructions'))
+  st=state()
+  for n in range(3):d=event(st,'send',{'draft':'Controlled ordinary question '+str(n)});assert searches(d);d=reply(d,'Observed ordinary answer '+str(n));st=d['state']
+  chat=next(c for c in st['chats']if c['id']==st['active']);original=copy.deepcopy(chat['messages']);d=event(st,'compact');check('actual compaction declares no provider search',d['state']['task_run']['phase']=='compact'and not searches(d)and not d['state']['request_hosted_search'])
+  check('compaction keeps intrinsic method and supplied-evidence-only instructions','Investigation is intrinsic'in d['effect']['wire']and 'This phase summarizes supplied evidence'in d['effect']['wire'])
+  d=reply(d,'Summary of supplied conversation evidence.');chat=next(c for c in d['state']['chats']if c['id']==d['state']['active']);check('actual compaction preserves original history and its summary',not d['state']['busy']and chat['messages']==original and chat['context_summary']=='Summary of supplied conversation evidence.')
+  st=state();st['agents'][0]['tools']='read';d=event(st,'send',{'draft':'Answer without web permission.'});check('missing web permission keeps provider search disabled',not searches(d)and 'selected agent has not permitted web_search'in d['effect']['wire']);d=reply(d,'Answer from supplied context.');check('permission-disabled search still permits an ordinary answer',not d['state']['busy'])
+  d=event(state(),'send',{'draft':'Read the actual evidence within this turn.'})
+  for n in range(8):
+   assert searches(d);d=reply(d,json.dumps({'tool':'read','args':{'path':'evidence.txt'}}));assert d['state']['dialog']=='approval';d=event(d['state'],'approve');e=d['effect'];output=op(dict(e,op='tool',root=str(root)));assert output=='Actual supplied file evidence.';i={k:e[k]for k in ['purpose','tool_ticket','tool_binding','child_ticket','child_owner']if k in e};i['output']=output;d=event(d['state'],'tool_result',i)
+  check('eight actual reads suppress provider search at the existing allowance',d['state']['steps']==8 and not searches(d)and not d['state']['request_hosted_search'])
+  check('exhausted hosted profile cannot substitute local web tools','tools'not in body(d)and 'Available operations for this agent: .'in d['effect']['wire']and 'Actual supplied file evidence.'in d['effect']['wire'])
+  d=reply(d,'Answer from the eight actual observations.');check('exhausted provider-search turn can finish from actual evidence',not d['state']['busy']and d['effect']is None)
+  d=event(d['state'],'send',{'draft':'A fresh ordinary question.'});check('fresh user request restores explicitly enabled provider search',d['state']['steps']==0 and searches(d));d=reply(d,'Fresh answer.')
+  task=event(state(),'task');check('manual task controls describe standalone execution',any(b.get('text')=='Run agent task' or b.get('label')=='Run agent task'for b in task['ui']['modal']['buttons'])and 'its answer is saved in this conversation'in json.dumps(task['ui']))
+  task=event(task['state'],'delegate',{'task':'Answer this standalone task.'});blocks=[{'type':'thinking','thinking':'CONTROLLED_HIDDEN_THINKING','signature':'exact-signature'},{'type':'text','text':'Actual standalone answer.'}];task=reply(task,'',blocks=blocks);c=next(c for c in task['state']['chats']if c['id']==task['state']['active']);last=c['messages'][-1]
+  check('standalone task result is not represented as a spawned child',last['content']=='Agent task result:\nActual standalone answer.'and not task['state'].get('delegation_stack')and 'Agent task result saved'in task['state']['notice'])
+  check('new result presentation retains exact hosted protocol context',last.get('hosted_content')==blocks and all('CONTROLLED_HIDDEN_THINKING'not in m.get('content','')for m in task['ui'].get('messages',[])))
+  task=event(task['state'],'send',{'draft':'Continue from the actual saved task answer.'});check('same-connection continuation retains original hosted blocks',any(m.get('role')=='assistant'and m.get('content')==blocks for m in body(task)['messages']));task=reply(task,'Continued from the actual task.');assert not task['state']['busy']
+  d=event(state(),'send',{'draft':'Use current provider search if needed.'});d=reply(d,'Provider paused.','pause_turn');check('eligible provider pause retains explicit continuation',d['state']['dialog']=='hosted_pause'and not d['state']['busy'])
+  resumed=event(d['state'],'hosted_continue');check('eligible explicit continuation retains its declared server tool',resumed['effect']is not None and searches(resumed));resumed=reply(resumed,'Actual continued answer.');check('explicit continuation still settles normally',not resumed['state']['busy'])
+  d=event(state(),'send',{'draft':'Bounded search turn.'});d=reply(d,'Provider paused.','pause_turn');changed=copy.deepcopy(d['state']);changed['steps']=8;refused=event(changed,'hosted_continue');check('exhausted restored pause cannot re-enable provider search',refused['effect']is None and refused['state']['notice_error']and 'cannot continue provider search'in refused['state']['notice'])
+ finally:p.stdin.close();p.wait(timeout=10)
+print(json.dumps({'passed':len(passed),'checks':passed,'scope':'Owner connected phase checks: controlled Messages replies, actual core file work and lifecycle transitions.'},indent=2));(PROJECT/'output/checks/hosted-phases.json').write_text(json.dumps({'passed':passed},indent=2)+'\n')
