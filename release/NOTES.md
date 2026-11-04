@@ -1,10 +1,9 @@
-# RLLM 1793750802
+# RLLM 1793825052 — signed candidate
 
-RLLM, com.local.client.lab, Android8.0+, ARM64 and x86-64. The retained current signing identity is used for this update.
+Optional generic server hosts, routes, credentials, request/response mappings and ordered fallbacks now connect foreground voice, file uploads, generation jobs and streamed artifacts to the existing primary/child workflow. Local work and the primary model remain usable when extra services are absent or unavailable.
 
-Model operation catalogs now follow Workspace source-access switches and the assigned non-writing role in all four provider formats. Configured connections remain saved; re-enabled sources regain their permitted operations. Retired document and app-inspection callbacks preserve the exact prior state before project refresh. The intrinsic command process, reviewed internet search and captured child-to-parent return use the existing shared core. Diagnostics retain their exact 1–128 run averaging range and compact gauge layout.
+34/35 connected groups passed; 1415 executed checks and 194 selected Rust cases. Incomplete groups are explicitly recorded in verification/RESULTS.json.
 
-Validated with 1230 current connected checks across 30 groups and 194 selected Rust cases. Three historical compatibility outcomes retain their original execution provenance. Additional audit findings and baseline fixture comparisons are recorded in docs/AUDIT.md. The signed APK identity, both architectures, archive integrity and 16 KiB alignment are verified.
+Installed Android microphone/playback/UI/lifecycle acceptance, real user server endpoints and independent review remain unverified. Open microphone and a separate medical application are not implemented. The historical revision-two comparator is unavailable; its three compatibility checks remain open. Full Rust sweeps retain 14 failing historical fixtures also failing on the preserved baseline; no new fixture failures were found. Current operation equivalents are covered separately.
 
-
-APK5986322bytes, SHA256e17a7797a3ed32efc665810bb0c58f7f1c4907c0828841286c24975d8fa01eaa.
+Package com.local.client.lab, Android 8.0+, ARM64 and x86-64; retained current signing identity, APK CRC, exact build inputs and 16 KiB alignment verified. APK 6273042 bytes, SHA256 abb9e47a403c1eb537a2efdf8a248f119c62453bea6ed9f0d5a2207129e6d25f.
