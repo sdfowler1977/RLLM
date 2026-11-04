@@ -253,6 +253,10 @@ selection_result:
   if retained_auth:
    passed.extend(retained_auth['checks'])
   else:
+   if not args.previous_auth_controller.is_file():
+    unavailable=['actual revision-two controller retains original authenticated-word meaning','current native graph accepts actual revision-two bytes','revision-two authenticated word remains historical evidence']
+    (PROJECT/'output/checks/binary-flow.json').write_text(json.dumps(dict(passed=passed,executed_checks=len(passed),retained_compatibility=None,unavailable=unavailable,reason='Genuine revision-two comparator absent; reader fingerprint was not weakened or substituted.'),indent=2)+'\n')
+    raise FileNotFoundError('Genuine revision-two comparator required; earlier current checks were recorded separately')
    old=subprocess.Popen([str(args.previous_auth_controller.resolve()),'--jsonl'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
    def old_op(v):
     old.stdin.write(json.dumps(v)+'\n');old.stdin.flush();answer=json.loads(old.stdout.readline());assert'value'in answer,answer;return answer['value']
