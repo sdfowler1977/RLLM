@@ -51,7 +51,8 @@ fn record(prepare:&Json,size:usize)->Result<Json>{
  let phone=boolean(prepare,"phone");let connection=get(prepare,"connection").clone();let artifact=boolean(prepare,"artifact");
  let name=if artifact{text(prepare,"name")}else{format!("RLLM__Project-Snapshot-{}.zip",text(prepare,"ticket"))};
  let target=if phone{name.clone()}else{format!("{}{}",drive_root(&obj(vec![("drive",connection.clone())]))?,network::encoded(&name))};
- Ok(obj(vec![("mime",s(if artifact{"application/octet-stream"}else{"application/zip"})),("source",get(prepare,"source").clone()),("phone",Bool(phone)),("tree",get(prepare,"tree").clone()),("connection",connection),("target",s(&target)),("archive",Null),("stage_ticket",get(prepare,"ticket").clone()),("bytes",Num(size.to_string())),("phase",s("ready"))]))
+ let mime=if artifact{payload_mime(prepare)?}else{"application/zip".into()};
+ Ok(obj(vec![("mime",s(&mime)),("source",get(prepare,"source").clone()),("phone",Bool(phone)),("tree",get(prepare,"tree").clone()),("connection",connection),("target",s(&target)),("archive",Null),("stage_ticket",get(prepare,"ticket").clone()),("bytes",Num(size.to_string())),("phase",s("ready"))]))
 }
 fn stream_record(prepare:&Json,size:usize)->Result<Json>{if !boolean(prepare,"artifact")||size>256*1024*1024{return Err("Chunked snapshots require a regular artifact up to 256 MiB".into());}let mut p=record(prepare,0)?;put(&mut p,"bytes",Num(size.to_string()));put(&mut p,"format",Num("2".into()));Ok(p)}
 pub(super) fn chunks(v:&Json)->Result<Json>{transfer::call(v)}
@@ -69,7 +70,7 @@ pub(super) fn built(st:&mut Json,inputs:&Json,artifact:bool)->Result<Json>{
  if next.string().len()>6*1024*1024-4096{return Err("Encrypted history has insufficient room for this pending record; original files and staged bytes remain unchanged".into());}
  let e=request(&mut next,"write")?;*st=next;Ok(e)
 }
-fn payload_mime(p:&Json)->Result<String>{let value=text(p,"mime");if value.is_empty(){return Ok("application/zip".into());}if ["application/zip","application/octet-stream"].contains(&value.as_str()){Ok(value)}else{Err("Unsupported snapshot content type".into())}}
+fn payload_mime(p:&Json)->Result<String>{let value=text(p,"mime");if value.is_empty(){return Ok("application/zip".into());}if ["application/zip","application/octet-stream","image/png","image/jpeg","audio/wav","audio/ogg","audio/mpeg","audio/mp4","video/mp4","application/pdf","model/gltf-binary"].contains(&value.as_str()){Ok(value)}else{Err("Unsupported snapshot content type".into())}}
 fn payload_bytes(p:&Json,encoded:&str)->Result<Vec<u8>> {
  if encoded.len()>7*1024*1024{return Err("Pending payload exceeds its bound".into());}
  let bytes=network::unbase64(encoded)?;

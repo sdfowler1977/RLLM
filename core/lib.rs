@@ -413,6 +413,8 @@ fn operation(input: &str) -> Result<Json> {
         }
         "event" => application::event(&v),
         "tool" => application::tool(&v),
+        "media_stream_feed"|"media_stream_finish"|"media_stream_cancel"=>application::media_stream_operation(&v),
+        "media_verify"=>application::media_verification(&v),
         "capture_document" => application::capture_document(&v),
         "capture_document_cancel" => application::capture_document_cancel(&v),
         "request" => request(&v),

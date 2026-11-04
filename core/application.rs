@@ -1,5 +1,10 @@
 use super::*;
 #[path="harness.rs"] mod harness;
+#[path="services.rs"] mod services;
+#[path="media.rs"] mod media;
+#[path="jobs.rs"] mod jobs;
+#[path="voice.rs"] mod voice;
+#[path="media_stream.rs"] mod media_stream;
 #[path="connection_migration.rs"] mod connection_migration;
 #[path="approval_rules.rs"] mod approval_rules;
 #[path="harness_rules.rs"] mod harness_rules;
@@ -478,6 +483,8 @@ fn ui(st: &Json) -> Json {
         ),
         ("rows", Arr(rows)),
         ("draft", s(&text(st, "draft"))),
+        ("service_artifacts",get(&current,"service_artifacts").clone()),
+        ("capture_active",Bool(get(st,"media_expected")!=&Null)),
         ("draft_attachments",Arr(array(&current,"draft_attachments").iter().filter_map(|v|crate::attachments::metadata(v).ok()).collect())),
         (
             "profile_fields",
@@ -489,9 +496,9 @@ fn ui(st: &Json) -> Json {
     let dialog = text(st, "dialog");
     if page=="diagnostics" {put(&mut out,"monitor",monitor::dashboard(st));}
     let edit = get(st, "edit");
-    let mut pop=if let Some(value)=workspace::modal_for(st){value}else{match dialog.as_str(){
+    let mut pop=if let Some(value)=voice::dialog(st){value}else if let Some(value)=jobs::dialog(st){value}else if let Some(value)=media::dialog(st){value}else if let Some(value)=services::dialog(st){value}else if let Some(value)=workspace::modal_for(st){value}else{match dialog.as_str(){
  "chat_actions"=>modal("Conversation actions",vec![],{
-    let mut actions=vec![button("Main agent profile","chat_agents"),button("Agent task / compact context","task"),button("New conversation","new"),button("Attach image or text file","phone_file"),button("Save conversation to default storage","save_drive"),button("Export conversation","conversation_export"),button(if get(st,"pending")!=&Null {"Review proposed operation"}else{"Retry last request"},if get(st,"pending")!=&Null {"review"}else{"retry"})];
+    let mut actions=vec![button("Main agent profile","chat_agents"),button("Agent task / compact context","task"),button("New conversation","new"),button("Attach image or text file","phone_file"),button("Generation jobs","jobs_menu"),button("Voice and media","media_menu"),button("Service request","service_request"),button("Save conversation to default storage","save_drive"),button("Export conversation","conversation_export"),button(if get(st,"pending")!=&Null {"Review proposed operation"}else{"Retry last request"},if get(st,"pending")!=&Null {"review"}else{"retry"})];
     if array(&current,"messages").last().map(|m|text(m,"role")=="assistant").unwrap_or(false){actions.push(button("Regenerate reply in new branch","regenerate"));}if boolean(get(st,"hosted_request"),"paused"){actions.push(button("Continue hosted search","hosted_continue"));}if !array(&current,"hosted_responses").is_empty(){actions.push(button("Inspect hosted search responses","hosted_details"));}if tool_format::available(st){actions.push(button("Request format correction","format_correction"));}actions
  }),
  "chat_models"=>model_picker(st),
@@ -503,7 +510,7 @@ fn ui(st: &Json) -> Json {
  "storage_settings"=>workspace::modal_for(&{let mut current=st.clone();put(&mut current,"dialog",s("workspace_setup"));current}).unwrap_or(Null),
  "instruction_settings"=>menu("Instructions and preferences",vec![button("Global instructions","instructions"),button("Investigation preferences","investigation_preferences"),button("Saved refinement","refinement_review")]),
  "connections"=>menu("LLM connections",vec![button("Choose or add an LLM","chat_models"),button("Edit current connection","profile_edit"),button("Optional model-list check","connection_test"),button("Connection details","configuration"),button("Export configuration","configuration_export")]),
- "services"=>menu("Network services",vec![button("MCP server connection","mcp_client_settings"),button("Web access","web_settings"),button("Phone API gateway","gateway_edit")]),
+ "services"=>menu("Network services",vec![button("Service connections","service_connections"),button("MCP server connection","mcp_client_settings"),button("Web access","web_settings"),button("Phone API gateway","gateway_edit")]),
  "observability"=>menu("Diagnostics",vec![button("Phone observations","diagnostics"),button("App inspection","apps_view"),button("Server monitor","server_monitor"),button("Features","capabilities")]),
  "configuration"=>modal("Configuration",vec![field_ui("server","Model server address",&endpoint_summary(&text(&p,"endpoint")),"readonly"),field_ui("detail","Current configuration",&text(&out,"detail"),"readonly"),field_ui("notice","Operation status",&text(st,"notice"),"readonly"),field_ui("fields","Profile fields",if p==Null {"0"}else{"9"},"readonly"),field_ui("budget","Configured memory budget",&format!("{} bytes; measured resource inputs: {}",number(get(st,"policy"),"budget_bytes"),boolean(get(st,"policy"),"measured")),"readonly"),field_ui("rate","Last reply measurements",&telemetry_summary(get(st,"telemetry")),"readonly")],{let mut buttons=vec![button("Apply profile settings","profile_edit"),button("Export configuration","configuration_export")];if get(st,"export_pending")!=&Null{buttons.push(button("Review saved export","export_review"));}buttons}),
  "status"=>modal("Operation status",{
@@ -579,6 +586,8 @@ fn capture(st: &mut Json, inputs: &Json) {
     }
     let dialog = text(st, "dialog");
     if [
+        "service_connections",
+        "service_request",
         "profile",
         "workspace_new",
         "workspace_permissions",
@@ -1382,7 +1391,12 @@ fn event_inner(v: &Json) -> Result<Json> {
     let observation_format=boolean(get(&st,"operation_expected"),"observation_format");
     approval_rules::namespace(&mut st,&text(v,"root"));harness_rules::identity_refresh(&mut st);
     let requested_action = field(v, "action")?;
-    let action = if matches!(requested_action,"approve_session"|"approve_always"|"approve_matching_rule"){"approve"}else{requested_action};
+    let action = if matches!(requested_action,"back"|"close")&&get(&st,"media_expected")!=&Null{"cancel"}else if matches!(requested_action,"approve_session"|"approve_always"|"approve_matching_rule"){"approve"}else{requested_action};
+    let media_callback=media::callback(action);
+    if media_callback&&!media::consume(&mut st,inputs){let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));}
+    if matches!(action,"cancel"|"resume"){voice::interrupt(&mut st);media::interrupt(&mut st);}
+    let service_callback=services::callback(action,inputs);
+    if matches!(action,"cancel"|"resume"){services::interrupt(&mut st);}
     if workspace::cloud_callback(action)&&!workspace::cloud_expected(&st,action,inputs){let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));}
     if matches!(action,"cancel"|"resume"){put(&mut st,"cloud_expected",Null);}
     let creation_callback=matches!(action,"network_result"|"failure")&&matches!(text(inputs,"purpose").as_str(),"drive_tool_create"|"drive_create_verify");
@@ -1407,6 +1421,7 @@ fn event_inner(v: &Json) -> Result<Json> {
     if !array(&st,"delegation_stack").is_empty()&&matches!(action,"network_result"|"tool_result"|"failure"|"phone_revision_result")&&!child_callback&&!background_callback{
         let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));
     }
+    if service_callback&&!services::consume(&mut st,inputs){let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));}
     if child_callback&&text(get(&st,"child_network"),"ticket")==text(inputs,"child_ticket")&&!text(inputs,"child_ticket").is_empty(){put(&mut st,"child_network",Null);}
     if matches!(action,"cancel"|"resume"){experiment_records::interrupt(&mut st,&experiment_descriptor,"Execution interrupted; no completed new observation was adopted and nothing was replayed");operation::interrupt(&mut st);}
     if action=="failure"&&experiment_descriptor!=Null{experiment_records::interrupt(&mut st,&experiment_descriptor,"Execution failed; no completed new observation was adopted");}
@@ -1489,7 +1504,7 @@ fn event_inner(v: &Json) -> Result<Json> {
     if get(inputs,"phone_access_granted")!=&Null {put(&mut st,"phone_access_granted",Bool(boolean(inputs,"phone_access_granted")));}
     if get(inputs,"device")!=&Null {put(&mut st,"device",get(inputs,"device").clone());}
     if get(inputs,"gateway_status")!=&Null {put(&mut st,"gateway_status",s(&text(inputs,"gateway_status")));}
-    if workspace::cloud_callback(action) || metadata_callback || mcp_client_callback || web_callback || matches!(action,"apps_result"|"model_progress"|"rate_tick"|"resume"|"archive_built"|"artifact_built"|"artifact_failed"|"project_cleared"|"project_recovered") || (matches!(action,"network_result"|"project_phone_result"|"failure") && (remote_monitor::is_result(inputs)||project_store::is_result(inputs))) {
+    if media_callback || service_callback || workspace::cloud_callback(action) || metadata_callback || mcp_client_callback || web_callback || matches!(action,"apps_result"|"model_progress"|"rate_tick"|"resume"|"archive_built"|"artifact_built"|"artifact_failed"|"project_cleared"|"project_recovered") || (matches!(action,"network_result"|"project_phone_result"|"failure") && (remote_monitor::is_result(inputs)||project_store::is_result(inputs))) {
         // Android includes the current draft/form with asynchronous callbacks.
         // Keep those edits, but never persist transport payloads as form data.
         let form=ui(&st);
@@ -1510,6 +1525,11 @@ fn event_inner(v: &Json) -> Result<Json> {
     let mut effect = if metadata_cancel || app_navigation_cancel {obj(vec![("kind",s("cancel"))])}else{Null};
     let mut format_error_received=false;
     let result = (|| -> Result<()> {
+        if get(&st,"media_expected")!=&Null&&!media_callback&&!matches!(action,"media_record_stop"|"voice_stop"|"cancel"|"resume"|"capture"|"viewport"|"status"|"phone_access_status"){return Err("Finish or cancel the current media capture first".into());}
+        if voice::handles(action){effect=voice::event(&mut st,action)?;return Ok(());}
+        if jobs::handles(action){effect=jobs::event(&mut st,action)?;return Ok(());}
+        if media::handles(action){effect=media::event(&mut st,action,inputs)?;return Ok(());}
+        if service_callback {effect=services::result(&mut st,action,inputs)?;return Ok(());}
         if metadata_callback {effect=model_metadata::result(&mut st,action,inputs);return Ok(());}
         if action=="project_recovered"{project_store::recover(&mut st,inputs);return Ok(());}
         if action=="project_cleared"{effect=project_store::stage_event(&mut st,action,inputs)?;return Ok(());}
@@ -1571,6 +1591,7 @@ fn event_inner(v: &Json) -> Result<Json> {
         if app_observation::handles(action){effect=app_observation::event(&mut st,action,inputs)?;return Ok(());}
         workspace::remember(&mut st,action);
         if workspace::handles(action){effect=workspace::event(&mut st,action,inputs,&text(v,"root"))?;return Ok(());}
+        if services::handles(action){effect=services::event(&mut st,action)?;return Ok(());}
         if harness::handles(action) { effect=harness::event_for(&mut st,action,inputs)?;if matches!(action,"delegate"|"refine"|"compact"){put(&mut st,"web_failure_followups",Num("0".into()));put(&mut st,"local_failure_followups",Num("0".into()));} return Ok(()); }
         match action {
             "model_progress" => {
@@ -1742,6 +1763,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 put(&mut st, "branch_index", Null);
             }
             "send" => {
+                if !boolean(inputs,"voice_transcript"){put(&mut st,"voice_turn",Bool(false));}
                 let draft = text(&st, "draft");
                 if draft.trim().is_empty() && array(&chat(&st),"draft_attachments").is_empty() {
                     return Err("Enter a message or attach an image".into());
@@ -2758,6 +2780,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     effect = drive_tool_effect(&mut st, &effect)?;
                 }
                 if active_tool=="web_read" || active_tool=="web_search" {let proposal=effect.clone();effect=investigation::web_effect(&mut st,&proposal)?;web_operation::bind(&mut st,&mut effect,&proposal)?;}
+                if active_tool=="service" {effect=services::start(&mut st,&effect)?;}
                 if active_tool=="mcp" {effect=harness::mcp_client_tool_effect(&mut st,get(&effect,"args"))?;}
                 if active_tool=="phone_update" {
                     let revision=super::document::begin(get(&effect,"args"),&text(&st,"phone_uri"),&now(),&stamp())?;
@@ -2969,6 +2992,9 @@ fn event_inner(v: &Json) -> Result<Json> {
             put(&mut st, "notice", s(&e));
         }
     }
+    if action=="network_result"&&text(inputs,"purpose")=="model"&&boolean(&st,"voice_turn")&&!boolean(&st,"busy")&&effect==Null&&get(&st,"pending")==&Null&&array(&st,"delegation_stack").is_empty()&&!boolean(&st,"notice_error"){
+        match voice::answer(&mut st){Ok(next)=>effect=next,Err(reason)=>{put(&mut st,"voice_turn",Bool(false));put(&mut st,"voice_phase",Null);put(&mut st,"notice",s(&format!("Text reply retained; speech unavailable: {reason}")));}}
+    }
     let cancelled_captures=capture_job::reconcile(&mut st);if cancelled_captures.contains(&text(&effect,"capture_token")){effect=Null;}
     if effect!=Null {if let Err(reason)=workspace::check_effect(&st,&effect).and_then(|_|harness_rules::effect_check(&st,&effect,effect_model_origin)){effect=Null;put(&mut st,"busy",Bool(false));put(&mut st,"notice_error",Bool(true));put(&mut st,"notice",s(&reason));put(&mut st,"dialog",s("harness_denial"));let token=text(get(&st,"web_expected"),"capture_token");capture_job::cancel(&token);}}
     if creation_interrupted {let notice=text(&st,"notice");put(&mut st,"notice",s(&format!("{notice} A network file creation was interrupted and may exist remotely; its contents are unconfirmed. No write was repeated.")));}
@@ -2977,7 +3003,7 @@ fn event_inner(v: &Json) -> Result<Json> {
     }
     let policy =
         super::resources::policy(get(&st, "device"), get(&st, "resources"), st.string().len());
-    if text(&effect, "kind") == "network" {
+    if text(&effect,"kind")=="network"&&!text(&effect,"media_download").is_empty(){if number(&policy,"budget_bytes")<16*1024*1024||st.string().len()>5*1024*1024{services::interrupt(&mut st);effect=Null;put(&mut st,"busy",Bool(false));put(&mut st,"notice",s("Current memory cannot admit this transfer; existing files and text remain available"));}}else if text(&effect, "kind") == "network" {
         let mut limit = number(&policy, "response_bytes");
         if text(&effect, "purpose") == "project_file" {
             if number(&policy, "budget_bytes") < 64 * 1024 * 1024
@@ -3004,6 +3030,7 @@ fn event_inner(v: &Json) -> Result<Json> {
             put(&mut effect, "limit", Num(limit.to_string()));
         }
     }
+    if get(&st,"service_expected")!=&Null && !text(&effect,"purpose").starts_with("service_request:") && !boolean(&st,"busy"){services::interrupt(&mut st);}
     if action=="approve" && get(&st,"web_expected")!=&Null && text(&effect,"purpose")!="web_tool" {
         let context=get(&st,"web_expected").clone();put(&mut st,"web_expected",Null);put(&mut st,"active_tool",Null);put(&mut st,"busy",Bool(false));
         let reason=text(&st,"notice");web_operation::record(&mut st,&context,"Blocked before network dispatch",&reason);harness::reset_task(&mut st);
@@ -3064,6 +3091,7 @@ fn event_inner(v: &Json) -> Result<Json> {
     ]))
 }
 fn validate_tool(v: &Json) -> Result<()> {
+    if text(v,"tool")=="service"{return services::validate_args(get(v,"args"));}
     if text(v,"tool")=="reconstruct"{return reconstruction::validate(get(v,"args"));}
     if text(v,"tool")=="experiments"{return experiment_records::validate(get(v,"args"));}
     if text(v,"tool")=="hypotheses"{return claim_records::validate_tool(get(v,"args"));}
@@ -3176,6 +3204,8 @@ fn read_file(p: &Path) -> Result<String> {
     }
     String::from_utf8(bytes).map_err(|_| "File is not UTF-8 text".into())
 }
+pub fn media_stream_operation(v:&Json)->Result<Json>{media_stream::operation(v)}
+pub fn media_verification(v:&Json)->Result<Json>{media::verification(v)}
 pub fn capture_document(v:&Json)->Result<Json>{capture_job::run(v)}
 pub fn capture_document_cancel(v:&Json)->Result<Json>{capture_job::cancel(field(v,"ticket")?);Ok(Null)}
 pub fn local_tool_start(v:&Json)->Result<Json>{operation::authorize(v)?;Ok(Null)}
@@ -3408,6 +3438,7 @@ fn phone_read_scope(st:&Json,effect:&mut Json)->Result<()> {
 fn proposal(st: &mut Json, root: &str) -> Result<()> {
     let mut pending = get(st, "pending").clone();
     let kind = text(&pending, "tool");
+    if kind=="service"{services::prepare(st,&mut pending)?;put(st,"pending",pending);return Ok(());}
     if kind=="reconstruct"{reconstruction::prepare(st,&mut pending,boolean(st,"agent_pending"))?;put(st,"pending",pending);return Ok(());}
     if kind=="experiments"{experiment_records::prepare(st,&mut pending,boolean(st,"agent_pending"))?;put(st,"pending",pending);return Ok(());}
     if let Obj(fields)=&mut pending{fields.remove("experiment");}put(st,"pending",pending.clone());
