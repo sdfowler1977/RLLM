@@ -1,22 +1,22 @@
 {
-  "state": "in_progress; current signed build",
-  "version": 1793750802,
+  "state": "in_progress; signed candidate",
+  "version": 1793825052,
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
   "signing_certificate_sha256": "ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5",
   "key_change_authorized": true,
   "signed_apk": {
     "path": "release/RLLM.apk",
-    "bytes": 5986322,
-    "sha256": "e17a7797a3ed32efc665810bb0c58f7f1c4907c0828841286c24975d8fa01eaa"
+    "bytes": 6273042,
+    "sha256": "abb9e47a403c1eb537a2efdf8a248f119c62453bea6ed9f0d5a2207129e6d25f"
   },
   "build_inputs": {
-    "AndroidManifest.xml": "75548baef1fd8cc3e92cd112df73615c6081f108f65886a8af7e3c0d2c347f1f",
+    "AndroidManifest.xml": "ef6afc68b66c070971db7177cfc80e4f9e519aba45f72fb3bbba64f83a19a8f4",
     "core/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
     "core/a2a.rs": "185871b70cf5515d178806ff408842da5a4a416f1669f7b110979f6aabc142b2",
     "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-    "core/application.rs": "8b5f6d3b771c9228d2c9609db7c3dfb4cf7fe224babbd5156fab9984f1164824",
-    "core/approval_rules.rs": "4280166b46e22ccc489edc2590a4c4b3ed6d9b96c3d08d9e4540b65a7b1de569",
+    "core/application.rs": "50fa92b59b628d2f45506b0661c3e84c888b5b8b65fc325125ec25f4288d99fb",
+    "core/approval_rules.rs": "e7a5ceec21ecc960f28b87d9d00f4981eb6ba03cd4dc7c7ef32665f78766cc13",
     "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
     "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
     "core/binary_declarations.rs": "ccc94d3fd69d92deeaacfab99b7b54245b9a77e5f9ec5e3849154879caf0ba31",
@@ -53,8 +53,8 @@
     "core/gateway.rs": "3bc3e26cfb91cc54ec34868f71192e679031c0c5b8c10001876a00baa197d244",
     "core/generation.rs": "5ffb914ca983efa2ab290f8ca5ee10a3f25f709c9118891435bf5015630ce9ca",
     "core/generation_controls.rs": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c",
-    "core/harness.rs": "8211d76a4949f2d39abb2ab6a27667dfffabf897ed617d0507ba982716c978f9",
-    "core/harness_rules.rs": "939d3c4bceff4dad6e254d02a37fdca522333718242d2f570e9484adaa6c6ac6",
+    "core/harness.rs": "c4f6a0d4fdf2dd971bdf2f1c1f1e3e34d47cf814e67f9a2cc0559e5b40f1cf8e",
+    "core/harness_rules.rs": "09632ca0c6d0fe434d79eaae1ac7b7e4f6ea52eead45db82bad217a268c99704",
     "core/history_view.rs": "9657effb36f29de5601719a6b8c8334e93490266c6526934516a4a734524efb8",
     "core/hosted_search.rs": "29f7b8657789391d1ff53aea6352707f95bca0c074283c6b4b81d98709e8ea3c",
     "core/html_document.rs": "2034fa68dde1984c55583caa137eddb1954a905ab0bc6537e4e7f4c6428499b2",
@@ -67,11 +67,14 @@
     "core/interaction.rs": "23ed247d366a4928387aa3286317f2fc4d3cc67dab113b5ec84ea7c678c94df8",
     "core/investigation.rs": "3f21b44d1cf5b6a0becaf818e585432a8393eaefb397352a198cde6f996b1ba3",
     "core/investigation_claims.rs": "19ce0be47873fe7fbfde174f0acccffa494033208bc9a27531c308f9c72b2ddd",
+    "core/jobs.rs": "e2e0cd6949e362fd87185e323b7fc19c5bf36a43bf538cf9325bfdbc6cd989c3",
     "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
-    "core/lib.rs": "e4a654eb0c7628aeb1debf780a6307b9b72ee8674525f45fde3d8747582cc9da",
+    "core/lib.rs": "fe29cadddf3e42c5fbee801b411643509da795368e51a1ec7471f3d65046de1b",
     "core/mcp_identity.rs": "8487fa1479ae947071be28ec4118d2becf56d2c32894adf47dbca3e8a0dcf4cb",
     "core/mcp_lifecycle.rs": "9b23677d24cca981362accf03bbc238dd90c022fce988d6c1fb46f19b335d7ca",
     "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
+    "core/media.rs": "8fe273da1aa70f9e45b693deacb75bd48c647fe39838b22293f34748381e799c",
+    "core/media_stream.rs": "2b886ac0f5358f0da8198755298f7f32b1e345f1f1197e449e20ab64bf70bcd6",
     "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
     "core/model_metadata.rs": "a7c2f2875f39f517364d1088e77d13d014bee603af9c1e91cc7947a17fc96ded",
     "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
@@ -85,7 +88,7 @@
     "core/page_program.rs": "2c80e145356e4fc2546b8dfc9fa6c1a98652cc275419bdf4eeaac1dd86eecebf",
     "core/pe_observation.rs": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0",
     "core/png_inflate.rs": "bd0f4d5e4a60d52d942c5ec5f0e0a5ff8bbb649b3c4ab89b91175743cf83c5f0",
-    "core/project_store.rs": "9e137016a5be8bbc459c4db3a9ed565684987d247d8d8cc055a311f3c5622957",
+    "core/project_store.rs": "8415a71473e592f65eea82510244c933e9cb42dfb7877515bf3bec528be79da3",
     "core/provider.rs": "dd37ada978c8383385cf17c230a305167876c2633a9c865e313fda69152a403c",
     "core/provider_calls.rs": "b00d9805e4174b56707f34984106561a6a0405cb0406fe1ce925811920b01fdb",
     "core/raster_surface.rs": "a475f9a953a9c54a6d9752fd5f169633437fcc609403caf5d1799364828e6a26",
@@ -100,12 +103,14 @@
     "core/resources.rs": "1af0d186ff5af9e53d424df216712489abc1efe4cf065be7efcbf14f5cb92f50",
     "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
     "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
+    "core/services.rs": "8cf529d429b4c416b75d1b988ac6af15866a9599120206bef4f52ff38fa98f19",
     "core/stdio.rs": "40dc6770113b6d61fcb262a8a2f139e33efd0c98a33bc4f67c2c9ad82d633344",
     "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
     "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
     "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
     "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
     "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
+    "core/voice.rs": "9821aacbdede644e2200faf404ad066765cdd424c54e413c1226e2d757947498",
     "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
     "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
     "core/web_operation.rs": "308fa627b28613120977f88ba3e8551e69043e977a444baa2ecb24d80820e69a",
@@ -115,17 +120,18 @@
     "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
     "package.sh": "5d555fa51611b71c25467f6623190ffce50875da8a4b67c5fe7308af5874161b",
     "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-    "platform/com/local/client/Activity.java": "8cdc15aa88ef63e4a538c51c01230f0220d474d0eea4d79cf23b8269086d707a",
+    "platform/com/local/client/Activity.java": "3007800f86608601bea68755e28e1b1f23d697775b85043e06cd448f3997be24",
     "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
     "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
     "platform/com/local/client/Diagram.java": "5fcab9863eb6a1be85b7a7e841c11cd927a3d722f4a53d6ac19e722177c341ce",
     "platform/com/local/client/Execution.java": "6c51afe3a8fce5283af4d8039e43913369da1ca0d3c3e1a14346a1b9d85d90d4",
     "platform/com/local/client/ExportStore.java": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573",
     "platform/com/local/client/Gateway.java": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7",
+    "platform/com/local/client/Media.java": "2311491fe75e7835e47131eae82cea70415d102fef6ff0a7c12c58324ffd2616",
     "platform/com/local/client/Resolution.java": "9e706ecd3c199d7dee7f20ac312b4ba78d355e3eab8a534e07b4277216b3f068",
     "platform/com/local/client/TransferStore.java": "a164cf07e67e2ad8d98183c9dac5e367582f37c313fe01d8a99001eee61cd73b",
     "platform/com/local/client/Usage.java": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165",
-    "platform/com/local/client/Wire.java": "da76bf27d1a86f34164fd069411e4b6312122757213ffccc29f06f59916b11e0",
+    "platform/com/local/client/Wire.java": "a8889e2d1d76afbfdfbd4d6cf1952bb6c85be2cc34f1423825de3094282556ff",
     "platform/jni/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
     "platform/jni/bridge.c": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f",
     "res/drawable/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
@@ -156,12 +162,12 @@
       "sha256": "269b22f425cebf2bbcc5dba02c9cd49457cd0983b8543bf9a35cc888c41ca118"
     },
     "AndroidManifest.xml": {
-      "bytes": 2074,
-      "sha256": "75548baef1fd8cc3e92cd112df73615c6081f108f65886a8af7e3c0d2c347f1f"
+      "bytes": 2230,
+      "sha256": "ef6afc68b66c070971db7177cfc80e4f9e519aba45f72fb3bbba64f83a19a8f4"
     },
     "README.md": {
-      "bytes": 950,
-      "sha256": "c31fb06c9699f9c1ea1a309af4425431a56335e280a56758f3acde7e2e429a95"
+      "bytes": 1334,
+      "sha256": "d9f39e59293e70482dd5aaf0bd60f27b3942c63caa64f19bf60de65a20db51a8"
     },
     "core/.gitkeep": {
       "bytes": 1,
@@ -176,12 +182,12 @@
       "sha256": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be"
     },
     "core/application.rs": {
-      "bytes": 332659,
-      "sha256": "8b5f6d3b771c9228d2c9609db7c3dfb4cf7fe224babbd5156fab9984f1164824"
+      "bytes": 336346,
+      "sha256": "50fa92b59b628d2f45506b0661c3e84c888b5b8b65fc325125ec25f4288d99fb"
     },
     "core/approval_rules.rs": {
-      "bytes": 17072,
-      "sha256": "4280166b46e22ccc489edc2590a4c4b3ed6d9b96c3d08d9e4540b65a7b1de569"
+      "bytes": 17224,
+      "sha256": "e7a5ceec21ecc960f28b87d9d00f4981eb6ba03cd4dc7c7ef32665f78766cc13"
     },
     "core/archive.rs": {
       "bytes": 58552,
@@ -328,12 +334,12 @@
       "sha256": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c"
     },
     "core/harness.rs": {
-      "bytes": 122457,
-      "sha256": "8211d76a4949f2d39abb2ab6a27667dfffabf897ed617d0507ba982716c978f9"
+      "bytes": 122577,
+      "sha256": "c4f6a0d4fdf2dd971bdf2f1c1f1e3e34d47cf814e67f9a2cc0559e5b40f1cf8e"
     },
     "core/harness_rules.rs": {
-      "bytes": 52449,
-      "sha256": "939d3c4bceff4dad6e254d02a37fdca522333718242d2f570e9484adaa6c6ac6"
+      "bytes": 52600,
+      "sha256": "09632ca0c6d0fe434d79eaae1ac7b7e4f6ea52eead45db82bad217a268c99704"
     },
     "core/history_view.rs": {
       "bytes": 3553,
@@ -383,13 +389,17 @@
       "bytes": 15422,
       "sha256": "19ce0be47873fe7fbfde174f0acccffa494033208bc9a27531c308f9c72b2ddd"
     },
+    "core/jobs.rs": {
+      "bytes": 11718,
+      "sha256": "e2e0cd6949e362fd87185e323b7fc19c5bf36a43bf538cf9325bfdbc6cd989c3"
+    },
     "core/layout.rs": {
       "bytes": 5621,
       "sha256": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1"
     },
     "core/lib.rs": {
-      "bytes": 20738,
-      "sha256": "e4a654eb0c7628aeb1debf780a6307b9b72ee8674525f45fde3d8747582cc9da"
+      "bytes": 20913,
+      "sha256": "fe29cadddf3e42c5fbee801b411643509da795368e51a1ec7471f3d65046de1b"
     },
     "core/mcp_identity.rs": {
       "bytes": 4224,
@@ -402,6 +412,14 @@
     "core/mcp_schema.rs": {
       "bytes": 34865,
       "sha256": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70"
+    },
+    "core/media.rs": {
+      "bytes": 26443,
+      "sha256": "8fe273da1aa70f9e45b693deacb75bd48c647fe39838b22293f34748381e799c"
+    },
+    "core/media_stream.rs": {
+      "bytes": 4508,
+      "sha256": "2b886ac0f5358f0da8198755298f7f32b1e345f1f1197e449e20ab64bf70bcd6"
     },
     "core/model_artifact.rs": {
       "bytes": 16721,
@@ -456,8 +474,8 @@
       "sha256": "bd0f4d5e4a60d52d942c5ec5f0e0a5ff8bbb649b3c4ab89b91175743cf83c5f0"
     },
     "core/project_store.rs": {
-      "bytes": 26871,
-      "sha256": "9e137016a5be8bbc459c4db3a9ed565684987d247d8d8cc055a311f3c5622957"
+      "bytes": 27015,
+      "sha256": "8415a71473e592f65eea82510244c933e9cb42dfb7877515bf3bec528be79da3"
     },
     "core/provider.rs": {
       "bytes": 19674,
@@ -515,6 +533,10 @@
       "bytes": 12978,
       "sha256": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b"
     },
+    "core/services.rs": {
+      "bytes": 31665,
+      "sha256": "8cf529d429b4c416b75d1b988ac6af15866a9599120206bef4f52ff38fa98f19"
+    },
     "core/stdio.rs": {
       "bytes": 11240,
       "sha256": "40dc6770113b6d61fcb262a8a2f139e33efd0c98a33bc4f67c2c9ad82d633344"
@@ -538,6 +560,10 @@
     "core/transfer.rs": {
       "bytes": 11455,
       "sha256": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065"
+    },
+    "core/voice.rs": {
+      "bytes": 9021,
+      "sha256": "9821aacbdede644e2200faf404ad066765cdd424c54e413c1226e2d757947498"
     },
     "core/web_document.rs": {
       "bytes": 12726,
@@ -580,8 +606,8 @@
       "sha256": "4be441540c78cc579da26efcc8dd9678e95b6396ec7b0913e758f4d7b86cf10a"
     },
     "docs/AUDIT.md": {
-      "bytes": 7719,
-      "sha256": "c498f60147fe10c6e397f2cda400a40eaef6979a1f10ef0f93a8697973f87615"
+      "bytes": 10462,
+      "sha256": "8fd87cb4e8abc6d3d91dbdd105b54749e7a981af63ce22a59e801e5e6e3ec338"
     },
     "docs/BINARY-FLOW.md": {
       "bytes": 6714,
@@ -635,6 +661,10 @@
       "bytes": 1206,
       "sha256": "5c2f13bfc406eb77908b7b24d0e53e89fa222cf3206f85827f62109da18428c2"
     },
+    "docs/SERVICES.md": {
+      "bytes": 10445,
+      "sha256": "462a56c917521a4e5fde948ba49327e69b8aa87e6f5fc57bcb258aeb729eb529"
+    },
     "docs/SETUP.md": {
       "bytes": 7898,
       "sha256": "f599ce8b81ee1739a11760f5228a4d9bbc609252e70977d5fe8d90d67e161e08"
@@ -645,7 +675,7 @@
     },
     "docs/STATUS.md": {
       "bytes": 1164,
-      "sha256": "fd58e6d1467918ac7d9bc60f3d13a7efbff5b46e5c1b7dc0040002f982fd530d"
+      "sha256": "2bb1e01d89da28970fe431f717e9ac3ed6ed3e46299ffd12cc90625b9e14d551"
     },
     "docs/TOOL-FEEDBACK.md": {
       "bytes": 4677,
@@ -700,8 +730,8 @@
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     "platform/com/local/client/Activity.java": {
-      "bytes": 161943,
-      "sha256": "8cdc15aa88ef63e4a538c51c01230f0220d474d0eea4d79cf23b8269086d707a"
+      "bytes": 163625,
+      "sha256": "3007800f86608601bea68755e28e1b1f23d697775b85043e06cd448f3997be24"
     },
     "platform/com/local/client/Core.java": {
       "bytes": 646,
@@ -727,6 +757,10 @@
       "bytes": 7225,
       "sha256": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7"
     },
+    "platform/com/local/client/Media.java": {
+      "bytes": 17469,
+      "sha256": "2311491fe75e7835e47131eae82cea70415d102fef6ff0a7c12c58324ffd2616"
+    },
     "platform/com/local/client/Resolution.java": {
       "bytes": 3979,
       "sha256": "9e706ecd3c199d7dee7f20ac312b4ba78d355e3eab8a534e07b4277216b3f068"
@@ -740,8 +774,8 @@
       "sha256": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165"
     },
     "platform/com/local/client/Wire.java": {
-      "bytes": 1807,
-      "sha256": "da76bf27d1a86f34164fd069411e4b6312122757213ffccc29f06f59916b11e0"
+      "bytes": 2773,
+      "sha256": "a8889e2d1d76afbfdfbd4d6cf1952bb6c85be2cc34f1423825de3094282556ff"
     },
     "platform/jni/.gitkeep": {
       "bytes": 1,
@@ -752,24 +786,20 @@
       "sha256": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f"
     },
     "project-progress.md": {
-      "bytes": 3001,
-      "sha256": "85e0fa278608e439ab677353cd6d382954b0be45857c9e2607f5999a19ef746e"
-    },
-    "release/.gitkeep": {
-      "bytes": 1,
-      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+      "bytes": 2327,
+      "sha256": "4e3b104e5b2f218d28de2500c219b52aa1b0b53cc8013a07e4855f7d8adabaed"
     },
     "release/NOTES.md": {
-      "bytes": 1129,
-      "sha256": "5e59fec67ede2f1959bbb9fea9acbbedfb4fc09bcc11d60242cc6873583cf505"
+      "bytes": 1249,
+      "sha256": "c8e0008c8ed921c1b5259b9db4c91086d827fea9c524ca900e4cc62ad14645fc"
     },
     "release/RLLM.apk": {
-      "bytes": 5986322,
-      "sha256": "e17a7797a3ed32efc665810bb0c58f7f1c4907c0828841286c24975d8fa01eaa"
+      "bytes": 6273042,
+      "sha256": "abb9e47a403c1eb537a2efdf8a248f119c62453bea6ed9f0d5a2207129e6d25f"
     },
     "release/SHA256SUMS.txt": {
       "bytes": 75,
-      "sha256": "ac152267c20d522ac6d7004f474e5c1daa74b44404ff477b609c99c3644d8311"
+      "sha256": "dc77e9d914fa6abdf72eb03ccba185ae7dea6b139ae8c083242cbcc7fa528003"
     },
     "res/drawable/.gitkeep": {
       "bytes": 1,
@@ -859,13 +889,17 @@
       "bytes": 3894,
       "sha256": "9005a4f9af2805f201140c7b8eda6c29546903c692d614e9bc183a7eb27d9f52"
     },
+    "tools/checkpoint.py": {
+      "bytes": 1409,
+      "sha256": "7cc25c68497399f80d5d9ab7183687014a7d844f22a881b2a2fdf13bd59a783b"
+    },
     "tools/checks.py": {
-      "bytes": 3524,
-      "sha256": "db76eb7557fa786068bcb16d4403e9c394be4d31e96053d0c2d9dd45fa406a50"
+      "bytes": 3573,
+      "sha256": "da9e523958170ba22e89f975be78f85fe7a4de675b3e2ba05fc7350bfd5a1f7f"
     },
     "tools/package.py": {
-      "bytes": 12090,
-      "sha256": "6ba8433c6042d51f191a1c72b031af099e14e09e0f3cde28a419181a74ec8141"
+      "bytes": 11056,
+      "sha256": "abbb180d73bf598d64223b1c594ac0b2001d0cd773618789fe458b75c48372fb"
     },
     "tools/readback.py": {
       "bytes": 1485,
@@ -879,21 +913,33 @@
       "bytes": 4183,
       "sha256": "3252e3efae9afb259f65712fd7e8721d0f601fda7d2ad1cca33a26ddafc5c0e4"
     },
+    "verification/FULL-UNIT-BASELINE.log": {
+      "bytes": 49728,
+      "sha256": "18cbaa218ffb17878d0996cdd90e3d9ee6eab3fc4a080c38658c50f2822b7c07"
+    },
+    "verification/FULL-UNIT-CURRENT.log": {
+      "bytes": 49561,
+      "sha256": "d377fe34b1a4082626e7b0f81a596bd6c7fefdf685b3b4aae703c8e035c3b9c3"
+    },
     "verification/README.md": {
-      "bytes": 3315,
-      "sha256": "2ae644c93d8dfe5fac1e6118599f9f02c36cd8b41740590f8886019227be53de"
+      "bytes": 3802,
+      "sha256": "1a645803b4477e09c324075c34c1d3adf0e5407576ade8126d0d32e63e967574"
     },
     "verification/RESULTS.json": {
-      "bytes": 130735,
-      "sha256": "935ba73d6788511d7d7b4dfbad520970e3095b89a5fe7f72421d209c94ee3b2c"
+      "bytes": 135711,
+      "sha256": "99c2a404f8e1e364fe95b01175a727b06c05731b26ee8355eb6a74bdd5dd4a9d"
+    },
+    "verification/UPGRADE-AUDIT.json": {
+      "bytes": 4433,
+      "sha256": "9df12d308a6210c3dc49f9dc96ab8c6056784e68e9a2d61c7dffe6f87c4fa49a"
     },
     "verification/a2a.py": {
       "bytes": 16499,
       "sha256": "2c5b0bdfe522306ee77c7c1d723232fb1ecc2e8fd000faae65584bb8d16454c0"
     },
     "verification/binary_flow.py": {
-      "bytes": 35354,
-      "sha256": "378d28d1ab1544409cbb0ee3b7659dc07b7bf22595e33aca4ddc91676145ef55"
+      "bytes": 36026,
+      "sha256": "955991d3ae9d9b6cce1a40b49744b8c3d0868dba3a27fd0a94bc1a90162962dd"
     },
     "verification/carry_flow.py": {
       "bytes": 6858,
@@ -923,6 +969,18 @@
       "bytes": 8744,
       "sha256": "77f133cfa0de818658e0629c06495611259934041450a29decad492bab7582d7"
     },
+    "verification/fixtures/README.md": {
+      "bytes": 403,
+      "sha256": "b4d30777d796be3c059feb92775c73712883e62fc78ff0c454906ccaf42c1edf"
+    },
+    "verification/fixtures/track-audio.mp4": {
+      "bytes": 1740,
+      "sha256": "27c2c85fc1220d9f3279929e1c1045861848677cd42954537b27a834cc382c59"
+    },
+    "verification/fixtures/track-video.mp4": {
+      "bytes": 1551,
+      "sha256": "e56ebe934af9f54fcb9d06d39b07a7f73892c33d531b1b8db6ab359f271180b5"
+    },
     "verification/flags_flow.py": {
       "bytes": 8031,
       "sha256": "df05e0f847a99e4a1f0e881c379d8e505444d91337f71638e6a18672d8dbc0ce"
@@ -943,6 +1001,10 @@
       "bytes": 10475,
       "sha256": "186b673d0505de53478e4db8af176085f159e5125c9c9a9a1b239b5f81b0a881"
     },
+    "verification/jobs.py": {
+      "bytes": 9439,
+      "sha256": "72caa7968c724262b04156960950f6ebbbe2222f746682b31f1a8aa8dbf959c5"
+    },
     "verification/live_web.py": {
       "bytes": 5871,
       "sha256": "a26c434dab7375eceab94bb8af26a6fb1e04ccd9780ff722ed6c9221928ce3f8"
@@ -950,6 +1012,14 @@
     "verification/local_feedback.py": {
       "bytes": 10511,
       "sha256": "e55382043eef763c8f0f771d2fad8708aa972737202479365263d4b4a5b8eadd"
+    },
+    "verification/media.py": {
+      "bytes": 10453,
+      "sha256": "a41efa716a7e509f2b08a6811a23c78f2d99bd96788b35be7c7406c31ec567a4"
+    },
+    "verification/media_stream.py": {
+      "bytes": 7993,
+      "sha256": "942a23a825e5c98936ac8d64f70d754526c17b120ccc7b328de48d31c8552535"
     },
     "verification/network_drive.py": {
       "bytes": 13729,
@@ -1003,9 +1073,17 @@
       "bytes": 3570,
       "sha256": "45159549cd938fc2b2d9c614f0d7ccc9faacefc92f2ba7d0fa314130f9d3edc6"
     },
+    "verification/services.py": {
+      "bytes": 14695,
+      "sha256": "69b9b7a980beb09fe3284caed341d38f1244013f9690853b24fada5a94abd165"
+    },
     "verification/task_ownership.py": {
       "bytes": 13310,
       "sha256": "1adca344f81a9b15d068e102dda35b41c645343a2a2118745d92a5e14b995050"
+    },
+    "verification/voice.py": {
+      "bytes": 7940,
+      "sha256": "f559045de180b5770523f1accd08b6beeab516b722131d870f214e5d3132b2ca"
     },
     "verification/workspace_navigation.py": {
       "bytes": 22966,
@@ -1013,75 +1091,53 @@
     }
   },
   "validation": {
-    "published_comparator": {
-      "version": 1793742554,
-      "source_sha256": "feb3a0ea908caa9ca63dbd571f7296ea985eaac6aaa8954f6aba3f861c0abddf",
-      "method": "Controller compiled from the exact published shared core before product edits; actual retained bytes pass through current view, query and exact export"
-    },
     "connected": {
-      "provider_process_child": 52,
-      "network_drive": 46,
-      "drive_ownership": 38,
-      "manual_question_process": 14,
-      "history": 6,
-      "a2a": 66,
-      "binary_declarations_and_flow": 97,
-      "commands": 79,
-      "prior_controller_migration": 7,
-      "hosted_phases": 24,
-      "prompt_reference": 56,
-      "provider_evidence": 40,
-      "pe_declarations": 18,
-      "delegation_visibility": 94,
-      "local_failure_feedback": 29,
-      "network_failure_feedback": 41,
-      "proposal_feedback": 36,
-      "review_ownership": 28,
-      "task_ownership": 79,
-      "dav_listing": 31,
-      "server_admission": 8,
-      "http_framing": 40,
-      "platform_resolution": 8,
-      "query_feedback": 74,
-      "carry_arithmetic": 23,
-      "workspace_controls": 73,
-      "field_values": 37,
-      "flag_facts": 28,
-      "product_facts": 30,
-      "diagnostics": 31,
-      "total": 1233,
-      "executed_current": 1230,
-      "retained_prior": 3
-    },
-    "retained_compatibility": {
-      "source_sha256": "3d51564e00233805e4cb6cbc0145d1227ed125b7545a036e4a9cb0c8aaebaa6a",
-      "version": 1793600489,
-      "retained_from": {
-        "version": 1793742554,
-        "sha256": "feb3a0ea908caa9ca63dbd571f7296ea985eaac6aaa8954f6aba3f861c0abddf"
+      "counts": {
+        "provider_process": 52,
+        "network_drive": 46,
+        "drive_ownership": 38,
+        "question_process": 14,
+        "history": 6,
+        "a2a": 66,
+        "binary_flow": 94,
+        "commands": 79,
+        "history_migration": 7,
+        "hosted_phases": 24,
+        "prompt_reference": 56,
+        "provider_evidence": 40,
+        "pe_declarations": 18,
+        "delegation_visibility": 94,
+        "local_feedback": 29,
+        "network_feedback": 41,
+        "proposal_feedback": 36,
+        "review_ownership": 28,
+        "task_ownership": 79,
+        "dav_listing": 31,
+        "server_admission": 8,
+        "http_framing": 40,
+        "platform_resolution": 8,
+        "query_feedback": 74,
+        "carry_flow": 23,
+        "workspace_navigation": 73,
+        "field_flow": 37,
+        "flags_flow": 28,
+        "product_flow": 30,
+        "diagnostics": 31,
+        "services": 69,
+        "media": 28,
+        "jobs": 18,
+        "voice": 57,
+        "media_stream": 13
       },
-      "inputs": {
-        "core/binary_declarations.rs": "ccc94d3fd69d92deeaacfab99b7b54245b9a77e5f9ec5e3849154879caf0ba31",
-        "core/binary_evidence.rs": "f113547035a7529eb37235e638fb2cc7a4e4a8660e738cde28850288d360e554",
-        "core/binary_flow.rs": "5f71db173c028ce76cbd1e40d8b8d9f67cc35847a611fd14e83b24539572d0b3",
-        "core/control_flow.rs": "a2e20ca0d75182db3cc902a39c80bb7f07d9665e40da006387f5783124b5a7bd",
-        "core/file_evidence.rs": "05e3f0dc6b35e7b8cce2da7f74f2e8dc28174de6cda52a8e50c7c7b8ef7cf38b",
-        "core/harness_rules.rs": "939d3c4bceff4dad6e254d02a37fdca522333718242d2f570e9484adaa6c6ac6",
-        "core/incremental_digest.rs": "117bcf1ad7a8e069240cc4ba5cada7a4500d4170670209c80c4a97a14fa3191b",
-        "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
-        "core/lib.rs": "e4a654eb0c7628aeb1debf780a6307b9b72ee8674525f45fde3d8747582cc9da",
-        "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
-        "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
-        "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
-        "core/pe_observation.rs": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0",
-        "core/reconstruction.rs": "8c95d4d8b0d796b3c98d2a8c3a73311366410dcee8c73dabe93a1c884362bcd2"
-      },
-      "checks": [
-        "actual revision-two controller retains original authenticated-word meaning",
-        "current native graph accepts actual revision-two bytes",
-        "revision-two authenticated word remains historical evidence"
-      ],
-      "scope": "Previously executed owner checks from verified signed source; named decoder/representation-reader modules unchanged. Current dispatch, native views, HTTP decoding, capture-time interpretation and approved-command completion are exercised separately with current and actual published captures. These three checks describe their original historical execution and were not re-executed."
+      "total_executed": 1415,
+      "groups_passed": 34,
+      "groups": 35,
+      "unavailable": [
+        {
+          "name": "binary_flow",
+          "code": 1
+        }
+      ]
     },
     "selected_rust_cases": 194,
     "selected_rust_runs": [
@@ -1098,7 +1154,7 @@
       {
         "filter": "application::binary_flow::tests::",
         "code": 0,
-        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 461 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 461 filtered out; finished in 0.00s"
       },
       {
         "filter": "provider::",
@@ -1108,12 +1164,12 @@
       {
         "filter": "stream::",
         "code": 0,
-        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 433 filtered out; finished in 0.26s"
+        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 433 filtered out; finished in 0.16s"
       },
       {
         "filter": "application::harness::",
         "code": 0,
-        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 437 filtered out; finished in 5.97s"
+        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 437 filtered out; finished in 3.21s"
       },
       {
         "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -1178,17 +1234,17 @@
       {
         "filter": "application::instruction::tests::",
         "code": 0,
-        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 439 filtered out; finished in 0.36s"
+        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 439 filtered out; finished in 0.33s"
       },
       {
         "filter": "application::binary_evidence::path_checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 465 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 465 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::operation::drive_checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.03s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.02s"
       },
       {
         "filter": "hosted_search::checks::",
@@ -1198,7 +1254,7 @@
       {
         "filter": "application::pe_observation::relocation_checks::",
         "code": 0,
-        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 459 filtered out; finished in 0.02s"
+        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 459 filtered out; finished in 0.01s"
       },
       {
         "filter": "resources::checks::",
@@ -1223,12 +1279,12 @@
       {
         "filter": "application::project_store::transfer::tests::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 0.96s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 0.88s"
       },
       {
         "filter": "application::monitor::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::request_metrics::",
@@ -1252,7 +1308,7 @@
       }
     ],
     "checks": {
-      "provider_process_child": {
+      "provider_process": {
         "passed": [
           "chat declaration",
           "chat review",
@@ -1402,7 +1458,7 @@
           "parent can complete after owned storage result"
         ]
       },
-      "manual_question_process": {
+      "question_process": {
         "passed": [
           "manual question without model or external MCP server",
           "manual plan, unresolved finding and original design",
@@ -1502,7 +1558,7 @@
           "publicly readable token file refused"
         ]
       },
-      "binary_declarations_and_flow": {
+      "binary_flow": {
         "passed": [
           "independent assembler and disassembler produce branch fixture",
           "native inspection enters existing review",
@@ -1597,42 +1653,16 @@
           "legacy unclassified instruction remains historical evidence",
           "current native view preserves actual published representation",
           "current model query preserves actual published representation",
-          "current export preserves exact actual published representation",
+          "current export preserves exact actual published representation"
+        ],
+        "executed_checks": 94,
+        "retained_compatibility": null,
+        "unavailable": [
           "actual revision-two controller retains original authenticated-word meaning",
           "current native graph accepts actual revision-two bytes",
           "revision-two authenticated word remains historical evidence"
         ],
-        "executed_checks": 94,
-        "retained_compatibility": {
-          "source_sha256": "3d51564e00233805e4cb6cbc0145d1227ed125b7545a036e4a9cb0c8aaebaa6a",
-          "version": 1793600489,
-          "retained_from": {
-            "version": 1793742554,
-            "sha256": "feb3a0ea908caa9ca63dbd571f7296ea985eaac6aaa8954f6aba3f861c0abddf"
-          },
-          "inputs": {
-            "core/binary_declarations.rs": "ccc94d3fd69d92deeaacfab99b7b54245b9a77e5f9ec5e3849154879caf0ba31",
-            "core/binary_evidence.rs": "f113547035a7529eb37235e638fb2cc7a4e4a8660e738cde28850288d360e554",
-            "core/binary_flow.rs": "5f71db173c028ce76cbd1e40d8b8d9f67cc35847a611fd14e83b24539572d0b3",
-            "core/control_flow.rs": "a2e20ca0d75182db3cc902a39c80bb7f07d9665e40da006387f5783124b5a7bd",
-            "core/file_evidence.rs": "05e3f0dc6b35e7b8cce2da7f74f2e8dc28174de6cda52a8e50c7c7b8ef7cf38b",
-            "core/harness_rules.rs": "939d3c4bceff4dad6e254d02a37fdca522333718242d2f570e9484adaa6c6ac6",
-            "core/incremental_digest.rs": "117bcf1ad7a8e069240cc4ba5cada7a4500d4170670209c80c4a97a14fa3191b",
-            "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
-            "core/lib.rs": "e4a654eb0c7628aeb1debf780a6307b9b72ee8674525f45fde3d8747582cc9da",
-            "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
-            "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
-            "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
-            "core/pe_observation.rs": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0",
-            "core/reconstruction.rs": "8c95d4d8b0d796b3c98d2a8c3a73311366410dcee8c73dabe93a1c884362bcd2"
-          },
-          "checks": [
-            "actual revision-two controller retains original authenticated-word meaning",
-            "current native graph accepts actual revision-two bytes",
-            "revision-two authenticated word remains historical evidence"
-          ],
-          "scope": "Previously executed owner checks from verified signed source; named decoder/representation-reader modules unchanged. Current dispatch, native views, HTTP decoding, capture-time interpretation and approved-command completion are exercised separately with current and actual published captures. These three checks describe their original historical execution and were not re-executed."
-        }
+        "reason": "Genuine revision-two comparator absent; reader fingerprint was not weakened or substituted."
       },
       "commands": {
         "passed": [
@@ -1717,7 +1747,7 @@
           "unrelated work remains available after scoped failure"
         ]
       },
-      "prior_controller_migration": {
+      "history_migration": {
         "passed": [
           "reference controller creates actual owned historical receipt",
           "historical receipt uses current operation identifier",
@@ -2005,7 +2035,7 @@
         ],
         "scope": "Owner public-interface checks: four controlled provider envelopes, actual configuration catalogs, controller routing, review identity, owned child callbacks and retained outcomes."
       },
-      "local_failure_feedback": {
+      "local_feedback": {
         "passed": [
           "chat actual failed worker returns to its requesting model",
           "chat actual error is retained with an explicit failed outcome",
@@ -2039,7 +2069,7 @@
         ],
         "scope": "Owner public-interface checks using actual missing-file workers, four provider envelopes, native review, exact callback ownership, current permission identity and response admission."
       },
-      "network_failure_feedback": {
+      "network_feedback": {
         "passed": [
           "chat missing network file returns its owned HTTP error",
           "chat failed outcome is saved in the requesting conversation",
@@ -2429,7 +2459,7 @@
         ],
         "scope": "Owner public core-event checks through four controlled provider envelopes, actual journal failures/successes, current permission and approval ownership, bounded feedback, paused continuation/retry, real child file inspection and parent queries."
       },
-      "carry_arithmetic": {
+      "carry_flow": {
         "passed": [
           "adc64 matches independent encoding and carry result",
           "sbc64 matches independent encoding and carry result",
@@ -2457,7 +2487,7 @@
         ],
         "scope": "Owner shared-core checks using original LLVM-assembled AArch64 carry instructions, actual retained observations, UI descriptions, controlled provider query and exact file export."
       },
-      "workspace_controls": {
+      "workspace_navigation": {
         "passed": [
           "Workspace has six unique categories",
           "Storage separates phone, network and Google Drive",
@@ -2535,7 +2565,7 @@
         ],
         "scope": "Owner public core-event checks, actual separate filesystem workspaces, real loopback MCP initialization/discovery/review/calls and server artifact, source revocation, and controlled Android document callbacks. Android account/provider views require installed-device execution."
       },
-      "field_values": {
+      "field_flow": {
         "passed": [
           "independent assembler emits field and extraction instructions",
           "unsigned_field retains the selected known bits",
@@ -2577,7 +2607,7 @@
         ],
         "scope": "Owner current shared-core checks with original LLVM-assembled AArch64 field/extraction instructions, independent disassembly, retained observations, native UI descriptions, controlled provider query, exact export and genuine immediately-published core capture compatibility."
       },
-      "flag_facts": {
+      "flags_flow": {
         "passed": [
           "independent assembler retains actual flag consumers",
           "flag_adc uses the determining known flags",
@@ -2610,7 +2640,7 @@
         ],
         "scope": "Owner current shared-core checks with original LLVM-assembled AArch64 flag-producing and consuming instructions, independent disassembly, retained observations, native UI descriptions, controlled provider query, exact export and genuine immediately-published core capture compatibility."
       },
-      "product_facts": {
+      "product_flow": {
         "passed": [
           "independent assembler retains actual product instruction encodings",
           "zero_product retains its determined product or accumulator",
@@ -2680,12 +2710,227 @@
           "range failure leaves ordinary local tools available"
         ],
         "scope": "Owner connected core execution with actual completed requests, saved-state round trip, active callback preservation, selected model/range, ordinary artifact-free local worker and scoped range refusal. Geometry checks describe drawing bounds; installed Android visual acceptance is separate."
+      },
+      "services": {
+        "passed": 69,
+        "checks": [
+          "configuration editor masks existing keys",
+          "masked save retains original credentials",
+          "host change cannot silently retain credentials",
+          "custom header values are masked",
+          "case variant duplicate headers are refused",
+          "review discloses exact destination without host key",
+          "shared approval dispatches real network effect",
+          "wrong callback is exact state no-op",
+          "typed request mapping executes exact input",
+          "host credential sent only to selected server",
+          "response mapping retains actual fixture response",
+          "duplicate callback is exact state no-op",
+          "explicit503 advances exactly one configured fallback",
+          "fallback has independent host credentials",
+          "unlisted401 is scoped and never cascades",
+          "202 remains acceptance and no resubmission",
+          "changed credentials invalidate displayed review",
+          "cancelled result cannot change draft or state",
+          "changed callback context withholds all response values",
+          "pre-send fallback",
+          "uncertain sent request never replays",
+          "invalid header rejected without replacing working settings",
+          "invalid duplicate rejected without replacing working settings",
+          "invalid pointer rejected without replacing working settings",
+          "invalid capability rejected without replacing working settings",
+          "keyless hosts work",
+          "chat service catalog excludes host credentials",
+          "chat model proposal uses ordinary approval",
+          "chat actual result returns to requesting model",
+          "chat answer completes",
+          "chat malformed extras do not block primary",
+          "local service catalog excludes host credentials",
+          "local model proposal uses ordinary approval",
+          "local actual result returns to requesting model",
+          "local answer completes",
+          "local malformed extras do not block primary",
+          "messages service catalog excludes host credentials",
+          "messages model proposal uses ordinary approval",
+          "messages actual result returns to requesting model",
+          "messages answer completes",
+          "messages malformed extras do not block primary",
+          "content service catalog excludes host credentials",
+          "content model proposal uses ordinary approval",
+          "content actual result returns to requesting model",
+          "content answer completes",
+          "content malformed extras do not block primary",
+          "disabled fallback cannot block primary service",
+          "malformed unrelated service remains scoped",
+          "chat child starts on captured route",
+          "chat child service uses review",
+          "chat actual result returns to child",
+          "chat child returns to captured parent",
+          "chat child service settles",
+          "local child starts on captured route",
+          "local child service uses review",
+          "local actual result returns to child",
+          "local child returns to captured parent",
+          "local child service settles",
+          "messages child starts on captured route",
+          "messages child service uses review",
+          "messages actual result returns to child",
+          "messages child returns to captured parent",
+          "messages child service settles",
+          "content child starts on captured route",
+          "content child service uses review",
+          "content actual result returns to child",
+          "content child returns to captured parent",
+          "content child service settles",
+          "model-free local work remains available"
+        ],
+        "scope": "Owner checks with actual local HTTP fixture peers and controlled model responses; no device or live configured provider acceptance."
+      },
+      "media": {
+        "passed": 28,
+        "checks": [
+          "selected audio stored as actual owned file",
+          "input bytes excluded from saved conversation JSON",
+          "file disclosure is explicit before dispatch",
+          "multipart transfer contains exact selected bytes",
+          "multipart fields mapped from typed input",
+          "actual mapped transcription returned",
+          "raw transfer preserves all bytes",
+          "explicit JSON file mapping preserves all bytes",
+          "changed file is withheld before upload",
+          "cancelled native input callback is exact state no-op",
+          "wrong native capture owner is exact state no-op",
+          "binary result stored outside encrypted JSON",
+          "returned artifact SHA matches actual bytes",
+          "returned file appears in current conversation",
+          "media export keeps actual detected extension and MIME",
+          "media export metadata passes existing chunk transfer contract",
+          "validated audio hands off to native decoder",
+          "changed returned file cannot reach decoder",
+          "generic MP4 audio classification uses actual track handler",
+          "generic MP4 video classification uses actual track handler",
+          "malformed MP4 and embedded handler text cannot assert video",
+          "multipart cannot silently upload without file consent",
+          "media manager lists actual retained file",
+          "file cannot be removed without its review",
+          "leaving removal review retains file",
+          "changed file is withheld from old removal approval",
+          "specific reviewed file removal clears selected input only",
+          "selected image attaches exact bytes to draft without sending"
+        ],
+        "scope": "Owner file/HTTP fixture checks. No physical microphone, installed Android decoding, live provider or independent acceptance claimed."
+      },
+      "jobs": {
+        "passed": 18,
+        "checks": [
+          "202 tracks actual server job ID",
+          "acceptance does not claim artifact completion",
+          "resume preserves job without resubmission",
+          "status uses captured ID and separate route",
+          "server success remains ready until actual file exists",
+          "only validated returned file completes job",
+          "status and result never repeat generation",
+          "202 cancellation is a request rather than proof",
+          "changed origin cannot receive tracked server ID",
+          "failed poll preserves known server state",
+          "job archive is reversible",
+          "job history restore preserves identity",
+          "configured HTTP 200 submission tracks acceptance",
+          "boolean terminal status retains its type",
+          "result path maps actual status response field",
+          "job record removal requires selected review",
+          "reviewed job removal preserves other records and local artifact",
+          "HTTP 200 acceptance without usable identifier remains unconfirmed without replay"
+        ],
+        "scope": "Owner asynchronous HTTP fixture tests. Explicit polling; no background scheduler or live user generation service acceptance."
+      },
+      "voice": {
+        "passed": 57,
+        "checks": [
+          "chat consent review discloses destinations without capturing",
+          "chat enabling voice alone never opens microphone",
+          "chat recording begins only through explicit action",
+          "chat capture is visible in quota-managed media storage",
+          "chat consented capture starts actual recognition route",
+          "chat transcript becomes ordinary conversation turn",
+          "chat exact selected audio reached recognition host",
+          "chat final answer starts configured synthesis",
+          "chat synthesis receives actual answer text",
+          "chat actual returned audio reaches native playback effect",
+          "chat text reply remains in history",
+          "chat stop revokes consent without removing text",
+          "chat process recovery does not restore automatic voice",
+          "local consent review discloses destinations without capturing",
+          "local enabling voice alone never opens microphone",
+          "local recording begins only through explicit action",
+          "local capture is visible in quota-managed media storage",
+          "local consented capture starts actual recognition route",
+          "local transcript becomes ordinary conversation turn",
+          "local exact selected audio reached recognition host",
+          "local final answer starts configured synthesis",
+          "local synthesis receives actual answer text",
+          "local actual returned audio reaches native playback effect",
+          "local text reply remains in history",
+          "local stop revokes consent without removing text",
+          "local process recovery does not restore automatic voice",
+          "messages consent review discloses destinations without capturing",
+          "messages enabling voice alone never opens microphone",
+          "messages recording begins only through explicit action",
+          "messages capture is visible in quota-managed media storage",
+          "messages consented capture starts actual recognition route",
+          "messages transcript becomes ordinary conversation turn",
+          "messages exact selected audio reached recognition host",
+          "messages final answer starts configured synthesis",
+          "messages synthesis receives actual answer text",
+          "messages actual returned audio reaches native playback effect",
+          "messages text reply remains in history",
+          "messages stop revokes consent without removing text",
+          "messages process recovery does not restore automatic voice",
+          "content consent review discloses destinations without capturing",
+          "content enabling voice alone never opens microphone",
+          "content recording begins only through explicit action",
+          "content capture is visible in quota-managed media storage",
+          "content consented capture starts actual recognition route",
+          "content transcript becomes ordinary conversation turn",
+          "content exact selected audio reached recognition host",
+          "content final answer starts configured synthesis",
+          "content synthesis receives actual answer text",
+          "content actual returned audio reaches native playback effect",
+          "content text reply remains in history",
+          "content stop revokes consent without removing text",
+          "content process recovery does not restore automatic voice",
+          "stop during primary generation preserves primary owner",
+          "stopped voice still returns the primary text answer",
+          "recognition preserves and appends to existing draft for review",
+          "manual speech first uses ordinary request review",
+          "manual speech plays actual returned audio"
+        ],
+        "scope": "Owner HTTP/audio fixture orchestration through all four model formats. Capture callback is controlled; physical microphone and installed playback not exercised."
+      },
+      "media_stream": {
+        "passed": 13,
+        "checks": [
+          "artifact URL creates a separate bounded GET",
+          "download credentials belong only to artifact host",
+          "wrong ticket cancel cannot stop active stream",
+          "stream adopts complete actual bytes outside conversation state",
+          "duplicate completed callback does not alter state",
+          "unconfigured artifact origin is refused before download",
+          "wrong stream purpose cannot feed bytes",
+          "oversized native chunks are refused",
+          "truncated response cannot become a receipt",
+          "stream never follows redirects or replays generation",
+          "configured file size bound is enforced",
+          "same length disk mutation invalidates ready receipt",
+          "cancelled artifact callback is an exact state no-op"
+        ],
+        "scope": "Owner public-core and real local HTTP checks; Android storage/decoder and live configured endpoints need device acceptance."
       }
     },
     "apk": {
-      "version": 1793750802,
-      "bytes": 5986322,
-      "sha256": "e17a7797a3ed32efc665810bb0c58f7f1c4907c0828841286c24975d8fa01eaa",
+      "version": 1793825052,
+      "bytes": 6273042,
+      "sha256": "abb9e47a403c1eb537a2efdf8a248f119c62453bea6ed9f0d5a2207129e6d25f",
       "native": [
         {
           "abi": "arm64-v8a",
@@ -2696,7 +2941,7 @@
             16384,
             16384
           ],
-          "bytes": 4387784
+          "bytes": 4656392
         },
         {
           "abi": "x86_64",
@@ -2707,7 +2952,7 @@
             16384,
             16384
           ],
-          "bytes": 5341000
+          "bytes": 5704296
         }
       ],
       "label": "RLLM",
@@ -2715,12 +2960,12 @@
       "signature": "v2/v3; one pinned current signer",
       "zip_crc": "passed",
       "build_inputs": {
-        "AndroidManifest.xml": "75548baef1fd8cc3e92cd112df73615c6081f108f65886a8af7e3c0d2c347f1f",
+        "AndroidManifest.xml": "ef6afc68b66c070971db7177cfc80e4f9e519aba45f72fb3bbba64f83a19a8f4",
         "core/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
         "core/a2a.rs": "185871b70cf5515d178806ff408842da5a4a416f1669f7b110979f6aabc142b2",
         "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-        "core/application.rs": "8b5f6d3b771c9228d2c9609db7c3dfb4cf7fe224babbd5156fab9984f1164824",
-        "core/approval_rules.rs": "4280166b46e22ccc489edc2590a4c4b3ed6d9b96c3d08d9e4540b65a7b1de569",
+        "core/application.rs": "50fa92b59b628d2f45506b0661c3e84c888b5b8b65fc325125ec25f4288d99fb",
+        "core/approval_rules.rs": "e7a5ceec21ecc960f28b87d9d00f4981eb6ba03cd4dc7c7ef32665f78766cc13",
         "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
         "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
         "core/binary_declarations.rs": "ccc94d3fd69d92deeaacfab99b7b54245b9a77e5f9ec5e3849154879caf0ba31",
@@ -2757,8 +3002,8 @@
         "core/gateway.rs": "3bc3e26cfb91cc54ec34868f71192e679031c0c5b8c10001876a00baa197d244",
         "core/generation.rs": "5ffb914ca983efa2ab290f8ca5ee10a3f25f709c9118891435bf5015630ce9ca",
         "core/generation_controls.rs": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c",
-        "core/harness.rs": "8211d76a4949f2d39abb2ab6a27667dfffabf897ed617d0507ba982716c978f9",
-        "core/harness_rules.rs": "939d3c4bceff4dad6e254d02a37fdca522333718242d2f570e9484adaa6c6ac6",
+        "core/harness.rs": "c4f6a0d4fdf2dd971bdf2f1c1f1e3e34d47cf814e67f9a2cc0559e5b40f1cf8e",
+        "core/harness_rules.rs": "09632ca0c6d0fe434d79eaae1ac7b7e4f6ea52eead45db82bad217a268c99704",
         "core/history_view.rs": "9657effb36f29de5601719a6b8c8334e93490266c6526934516a4a734524efb8",
         "core/hosted_search.rs": "29f7b8657789391d1ff53aea6352707f95bca0c074283c6b4b81d98709e8ea3c",
         "core/html_document.rs": "2034fa68dde1984c55583caa137eddb1954a905ab0bc6537e4e7f4c6428499b2",
@@ -2771,11 +3016,14 @@
         "core/interaction.rs": "23ed247d366a4928387aa3286317f2fc4d3cc67dab113b5ec84ea7c678c94df8",
         "core/investigation.rs": "3f21b44d1cf5b6a0becaf818e585432a8393eaefb397352a198cde6f996b1ba3",
         "core/investigation_claims.rs": "19ce0be47873fe7fbfde174f0acccffa494033208bc9a27531c308f9c72b2ddd",
+        "core/jobs.rs": "e2e0cd6949e362fd87185e323b7fc19c5bf36a43bf538cf9325bfdbc6cd989c3",
         "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
-        "core/lib.rs": "e4a654eb0c7628aeb1debf780a6307b9b72ee8674525f45fde3d8747582cc9da",
+        "core/lib.rs": "fe29cadddf3e42c5fbee801b411643509da795368e51a1ec7471f3d65046de1b",
         "core/mcp_identity.rs": "8487fa1479ae947071be28ec4118d2becf56d2c32894adf47dbca3e8a0dcf4cb",
         "core/mcp_lifecycle.rs": "9b23677d24cca981362accf03bbc238dd90c022fce988d6c1fb46f19b335d7ca",
         "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
+        "core/media.rs": "8fe273da1aa70f9e45b693deacb75bd48c647fe39838b22293f34748381e799c",
+        "core/media_stream.rs": "2b886ac0f5358f0da8198755298f7f32b1e345f1f1197e449e20ab64bf70bcd6",
         "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
         "core/model_metadata.rs": "a7c2f2875f39f517364d1088e77d13d014bee603af9c1e91cc7947a17fc96ded",
         "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
@@ -2789,7 +3037,7 @@
         "core/page_program.rs": "2c80e145356e4fc2546b8dfc9fa6c1a98652cc275419bdf4eeaac1dd86eecebf",
         "core/pe_observation.rs": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0",
         "core/png_inflate.rs": "bd0f4d5e4a60d52d942c5ec5f0e0a5ff8bbb649b3c4ab89b91175743cf83c5f0",
-        "core/project_store.rs": "9e137016a5be8bbc459c4db3a9ed565684987d247d8d8cc055a311f3c5622957",
+        "core/project_store.rs": "8415a71473e592f65eea82510244c933e9cb42dfb7877515bf3bec528be79da3",
         "core/provider.rs": "dd37ada978c8383385cf17c230a305167876c2633a9c865e313fda69152a403c",
         "core/provider_calls.rs": "b00d9805e4174b56707f34984106561a6a0405cb0406fe1ce925811920b01fdb",
         "core/raster_surface.rs": "a475f9a953a9c54a6d9752fd5f169633437fcc609403caf5d1799364828e6a26",
@@ -2804,12 +3052,14 @@
         "core/resources.rs": "1af0d186ff5af9e53d424df216712489abc1efe4cf065be7efcbf14f5cb92f50",
         "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
         "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
+        "core/services.rs": "8cf529d429b4c416b75d1b988ac6af15866a9599120206bef4f52ff38fa98f19",
         "core/stdio.rs": "40dc6770113b6d61fcb262a8a2f139e33efd0c98a33bc4f67c2c9ad82d633344",
         "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
         "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
         "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
         "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
         "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
+        "core/voice.rs": "9821aacbdede644e2200faf404ad066765cdd424c54e413c1226e2d757947498",
         "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
         "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
         "core/web_operation.rs": "308fa627b28613120977f88ba3e8551e69043e977a444baa2ecb24d80820e69a",
@@ -2819,17 +3069,18 @@
         "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
         "package.sh": "5d555fa51611b71c25467f6623190ffce50875da8a4b67c5fe7308af5874161b",
         "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-        "platform/com/local/client/Activity.java": "8cdc15aa88ef63e4a538c51c01230f0220d474d0eea4d79cf23b8269086d707a",
+        "platform/com/local/client/Activity.java": "3007800f86608601bea68755e28e1b1f23d697775b85043e06cd448f3997be24",
         "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
         "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
         "platform/com/local/client/Diagram.java": "5fcab9863eb6a1be85b7a7e841c11cd927a3d722f4a53d6ac19e722177c341ce",
         "platform/com/local/client/Execution.java": "6c51afe3a8fce5283af4d8039e43913369da1ca0d3c3e1a14346a1b9d85d90d4",
         "platform/com/local/client/ExportStore.java": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573",
         "platform/com/local/client/Gateway.java": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7",
+        "platform/com/local/client/Media.java": "2311491fe75e7835e47131eae82cea70415d102fef6ff0a7c12c58324ffd2616",
         "platform/com/local/client/Resolution.java": "9e706ecd3c199d7dee7f20ac312b4ba78d355e3eab8a534e07b4277216b3f068",
         "platform/com/local/client/TransferStore.java": "a164cf07e67e2ad8d98183c9dac5e367582f37c313fe01d8a99001eee61cd73b",
         "platform/com/local/client/Usage.java": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165",
-        "platform/com/local/client/Wire.java": "da76bf27d1a86f34164fd069411e4b6312122757213ffccc29f06f59916b11e0",
+        "platform/com/local/client/Wire.java": "a8889e2d1d76afbfdfbd4d6cf1952bb6c85be2cc34f1423825de3094282556ff",
         "platform/jni/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
         "platform/jni/bridge.c": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f",
         "res/drawable-nodpi/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
@@ -2864,299 +3115,214 @@
         "pin_overrides": false
       }
     },
-    "evidence_owner": "implementation owner; LLVM metadata and actual prior-core comparison references",
-    "authentication_comparator": {
-      "version": 1793593529,
-      "source_sha256": "af219d4d2269f8f9ef0b9b9656106a8eca5dedbcebc5ef95047216de0c26b289",
-      "method": "actual revision-two shared-core controller with authenticated words unclassified; retained prior execution is identified separately when present"
+    "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
+    "published_comparator": {
+      "version": 1793750802,
+      "source_sha256": "2676d5476035cc32db9b85f652c94ecc5e21ca09f925ac2dc983cce932e94917",
+      "method": "Exact published shared core compiled locally; actual retained representations exercised through current query, native view and export"
     },
     "flow_comparator": {
       "version": 1793395702,
       "source_sha256": "f9d0dac9e3e8ae02cf5e787ffa71871f7d1242020fa6c87a3740af5b2d827ab8",
-      "method": "actual prior shared-core controller with thin JSON-lines envelope; held-source revision-one graph and current retained view"
+      "method": "Actual prior core with thin original JSON-lines envelope"
+    },
+    "authentication_comparator": {
+      "version": 1793593529,
+      "source_sha256": "af219d4d2269f8f9ef0b9b9656106a8eca5dedbcebc5ef95047216de0c26b289",
+      "available": false,
+      "method": "Genuine comparator required; no substitution or weakened historical reader fingerprint"
     },
     "independent_acceptance": false,
     "installed_device_tested": false,
+    "live_service_endpoints_tested": false,
     "live_model_NAS_tested": false,
-    "history_comparator": {
-      "version": 1793395702,
-      "source_sha256": "f9d0dac9e3e8ae02cf5e787ffa71871f7d1242020fa6c87a3740af5b2d827ab8",
-      "method": "actual prior core with thin JSON-lines envelope adapter; negotiate its requested protocol revision"
+    "upgrade_audit": {
+      "full_rust_suite": {
+        "current": {
+          "source": "current",
+          "code": 101,
+          "summary": "test result: FAILED. 454 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.97s",
+          "failures": [
+            "application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity",
+            "application::checks::conversation_webdav_save_is_pending_until_exact_readback",
+            "application::checks::disconnected_provider_preserves_tools",
+            "application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+            "application::checks::interrupted_phone_creation_warns_without_replay",
+            "application::checks::network_conversation_requires_review",
+            "application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path",
+            "application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files",
+            "application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+            "application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped",
+            "application::checks::retry_verifies_first_and_creates_only_after_framed_not_found",
+            "application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+            "application::checks::reviewed_network_update_preserves_revision_before_conditional_write",
+            "application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name"
+          ]
+        },
+        "baseline": {
+          "source": "baseline",
+          "code": 101,
+          "summary": "test result: FAILED. 454 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.42s",
+          "failures": [
+            "application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity",
+            "application::checks::conversation_webdav_save_is_pending_until_exact_readback",
+            "application::checks::disconnected_provider_preserves_tools",
+            "application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+            "application::checks::interrupted_phone_creation_warns_without_replay",
+            "application::checks::network_conversation_requires_review",
+            "application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path",
+            "application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files",
+            "application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+            "application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped",
+            "application::checks::retry_verifies_first_and_creates_only_after_framed_not_found",
+            "application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+            "application::checks::reviewed_network_update_preserves_revision_before_conditional_write",
+            "application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name"
+          ]
+        },
+        "new_failures": [],
+        "scope": "Fresh serial full 468-case Rust sweeps; exact published baseline2676d547 source; distinct clean working/temporary directories and explicit test font. Historical fixtures are preserved, not relabeled as passes."
+      },
+      "job_retrieval_repeats": [
+        {
+          "run": 0,
+          "code": 0
+        },
+        {
+          "run": 1,
+          "code": 0
+        },
+        {
+          "run": 2,
+          "code": 0
+        },
+        {
+          "run": 3,
+          "code": 0
+        },
+        {
+          "run": 4,
+          "code": 0
+        },
+        {
+          "run": 5,
+          "code": 0
+        },
+        {
+          "run": 6,
+          "code": 0
+        },
+        {
+          "run": 7,
+          "code": 0
+        }
+      ],
+      "job_retrieval_concurrent_repeats": [
+        {
+          "run": 0,
+          "code": 0
+        },
+        {
+          "run": 1,
+          "code": 0
+        },
+        {
+          "run": 2,
+          "code": 0
+        },
+        {
+          "run": 3,
+          "code": 0
+        },
+        {
+          "run": 4,
+          "code": 0
+        },
+        {
+          "run": 5,
+          "code": 0
+        },
+        {
+          "run": 6,
+          "code": 0
+        },
+        {
+          "run": 7,
+          "code": 0
+        }
+      ],
+      "earlier_refusal": "One earlier parallel validation received an integrity refusal in large-file retrieval. One retry,8 repetitions and8 repetitions concurrent with building passed. No invalid bytes were adopted; strict integrity checks remain in place. Cause was not established.",
+      "owner_only": true,
+      "device_acceptance": false
     },
-    "additional_audit": {
-      "scope": "Current owner audit of command, source permissions, role catalogs, stale document/app callbacks, live public search, provider/delegation routing and retained connected regressions.",
-      "published_source": {
-        "version": 1793742554,
-        "sha256": "feb3a0ea908caa9ca63dbd571f7296ea985eaac6aaa8954f6aba3f861c0abddf"
+    "full_rust_suite": {
+      "current": {
+        "source": "current",
+        "code": 101,
+        "summary": "test result: FAILED. 454 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.97s",
+        "failures": [
+          "application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity",
+          "application::checks::conversation_webdav_save_is_pending_until_exact_readback",
+          "application::checks::disconnected_provider_preserves_tools",
+          "application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+          "application::checks::interrupted_phone_creation_warns_without_replay",
+          "application::checks::network_conversation_requires_review",
+          "application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path",
+          "application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files",
+          "application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+          "application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped",
+          "application::checks::retry_verifies_first_and_creates_only_after_framed_not_found",
+          "application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+          "application::checks::reviewed_network_update_preserves_revision_before_conditional_write",
+          "application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name"
+        ]
       },
-      "reproduced_before_repair": [
+      "baseline": {
+        "source": "baseline",
+        "code": 101,
+        "summary": "test result: FAILED. 454 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.42s",
+        "failures": [
+          "application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity",
+          "application::checks::conversation_webdav_save_is_pending_until_exact_readback",
+          "application::checks::disconnected_provider_preserves_tools",
+          "application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+          "application::checks::interrupted_phone_creation_warns_without_replay",
+          "application::checks::network_conversation_requires_review",
+          "application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path",
+          "application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files",
+          "application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+          "application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped",
+          "application::checks::retry_verifies_first_and_creates_only_after_framed_not_found",
+          "application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+          "application::checks::reviewed_network_update_preserves_revision_before_conditional_write",
+          "application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name"
+        ]
+      },
+      "new_failures": [],
+      "scope": "Fresh serial full 468-case Rust sweeps; exact published baseline2676d547 source; distinct clean working/temporary directories and explicit test font. Historical fixtures are preserved, not relabeled as passes."
+    },
+    "live_public_web": {
+      "passed": [
+        "intrinsic command process is present with optional guidance off",
+        "child selection enters review",
+        "approved child uses its assigned model",
+        "child search enters its own review",
+        "actual live search evidence returns to the assigned child",
+        "retained results include source URLs and actual snippets",
+        "live returned evidence reaches the integrated journal",
+        "actual child completion returns to the captured parent",
+        "parent completes the ordinary command"
+      ],
+      "transport_observations": [
         {
-          "issue": "Disabled-source operations still offered to the model",
-          "source": "Actual published controller; new public command regression fails at disabled-source text catalog"
-        },
-        {
-          "issue": "Non-writing role offered write and MCP",
-          "source": "Actual published controller declares read,write,mcp; executor rejects write under non-writing role"
-        },
-        {
-          "issue": "Retired document or app result refreshes unrelated project state",
-          "source": "Actual published controller; project instructions change externally before stale callback; exact-state assertion fails at document_result"
+          "url": "https://api.mwmbl.org/api/v2/search/?q=Rust%20programming%20language",
+          "bytes": 47644,
+          "sha256": "80f34fd2d53cd61e9aa322ce7746becc178646010f0acfdb72467c33e5c62a5f"
         }
       ],
-      "repairs": [
-        "Source switches filter both text references and structured provider catalogs while preserving configured connections.",
-        "Non-writing roles use the executor's existing read-only classification in both catalogs.",
-        "Retired document/image/cancel/failure and app callbacks return the exact prior state before project refresh."
-      ],
-      "fresh_regression_groups": [
-        {
-          "name": "provider_process",
-          "code": 0
-        },
-        {
-          "name": "network_drive",
-          "code": 0
-        },
-        {
-          "name": "drive_ownership",
-          "code": 0
-        },
-        {
-          "name": "question_process",
-          "code": 0
-        },
-        {
-          "name": "history",
-          "code": 0
-        },
-        {
-          "name": "a2a",
-          "code": 0
-        },
-        {
-          "name": "binary_flow",
-          "code": 0
-        },
-        {
-          "name": "pe_declarations",
-          "code": 0
-        },
-        {
-          "name": "commands",
-          "code": 0
-        },
-        {
-          "name": "history_migration",
-          "code": 0
-        },
-        {
-          "name": "hosted_phases",
-          "code": 0
-        },
-        {
-          "name": "prompt_reference",
-          "code": 0
-        },
-        {
-          "name": "provider_evidence",
-          "code": 0
-        },
-        {
-          "name": "delegation_visibility",
-          "code": 0
-        },
-        {
-          "name": "local_feedback",
-          "code": 0
-        },
-        {
-          "name": "network_feedback",
-          "code": 0
-        },
-        {
-          "name": "proposal_feedback",
-          "code": 0
-        },
-        {
-          "name": "review_ownership",
-          "code": 0
-        },
-        {
-          "name": "task_ownership",
-          "code": 0
-        },
-        {
-          "name": "dav_listing",
-          "code": 0
-        },
-        {
-          "name": "server_admission",
-          "code": 0
-        },
-        {
-          "name": "http_framing",
-          "code": 0
-        },
-        {
-          "name": "platform_resolution",
-          "code": 0
-        },
-        {
-          "name": "query_feedback",
-          "code": 0
-        },
-        {
-          "name": "carry_flow",
-          "code": 0
-        },
-        {
-          "name": "workspace_navigation",
-          "code": 0
-        },
-        {
-          "name": "field_flow",
-          "code": 0
-        },
-        {
-          "name": "flags_flow",
-          "code": 0
-        },
-        {
-          "name": "product_flow",
-          "code": 0
-        },
-        {
-          "name": "diagnostics",
-          "code": 0
-        }
-      ],
-      "live_public_search": {
-        "passed": [
-          "intrinsic command process is present with optional guidance off",
-          "child selection enters review",
-          "approved child uses its assigned model",
-          "child search enters its own review",
-          "actual live search evidence returns to the assigned child",
-          "retained results include source URLs and actual snippets",
-          "live returned evidence reaches the integrated journal",
-          "actual child completion returns to the captured parent",
-          "parent completes the ordinary command"
-        ],
-        "transport_observations": [
-          {
-            "url": "https://api.mwmbl.org/api/v2/search/?q=Rust%20programming%20language",
-            "bytes": 47687,
-            "sha256": "bf20ec20c319446ac24d7ce367f71c53f377c186195bb8e68bc7f1f230438e8a"
-          }
-        ],
-        "scope": "Live public HTTPS search responses transported by curl through actual core review, owned callbacks, evidence retention and child/parent continuation. Model replies are controlled protocol fixtures; configured model inference and installed Android transport require their own execution."
-      },
-      "artifact_free_execution": "Command group runs actual file read with no peer, no optional guidance and a malformed journal, then exercises a legitimate missing-file failure followed by independent successful file work.",
-      "android_evidence": "Shared-core UI description checks and real Android Java compilation; installed runtime visual/lifecycle/IME/Keystore acceptance remains open.",
-      "separate_review": "Unavailable in this execution; owner audit evidence remains identified as owner evidence.",
-      "legacy_fixtures": {
-        "status": "Historical comparison preserved from prior release; current public-flow equivalents pass connected groups.",
-        "previous_release": {
-          "scope": "Owner audit. Current source inventory and public connected checks are separately recorded.",
-          "previous_source": "06ffb8e78537914c932da623dc62048ab734bcc42dcbd9a01b0abd523bfad375",
-          "prior_failures": [
-            "conversation_import_and_branch_respect_encrypted_vault_capacity",
-            "conversation_webdav_save_is_pending_until_exact_readback",
-            "failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
-            "interrupted_phone_creation_warns_without_replay",
-            "legacy_compose_recovery_preserves_draft_in_inline_chat",
-            "live_rate_opens_analytics_without_losing_stream_or_draft",
-            "network_conversation_requires_review",
-            "network_text_to_project_requires_local_review_and_preserves_existing_files",
-            "pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
-            "phone_update_editor_binds_original_and_late_failure_is_scoped",
-            "retry_verifies_first_and_creates_only_after_framed_not_found",
-            "reviewed_network_folder_creation_is_scoped_and_requires_created_status",
-            "reviewed_network_update_preserves_revision_before_conditional_write",
-            "reviewed_phone_file_creation_needs_a_grant_and_valid_name",
-            "saved_export_recovery_is_explicit_scoped_and_immutable",
-            "viewport_and_capture_preserve_drafts_forms_and_active_work"
-          ],
-          "intermediate_failures": [
-            "conversation_import_and_branch_respect_encrypted_vault_capacity",
-            "conversation_webdav_save_is_pending_until_exact_readback",
-            "failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
-            "interrupted_phone_creation_warns_without_replay",
-            "legacy_compose_recovery_preserves_draft_in_inline_chat",
-            "live_rate_opens_analytics_without_losing_stream_or_draft",
-            "network_conversation_requires_review",
-            "network_text_to_project_requires_local_review_and_preserves_existing_files",
-            "pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
-            "phone_update_editor_binds_original_and_late_failure_is_scoped",
-            "retry_verifies_first_and_creates_only_after_framed_not_found",
-            "reviewed_network_folder_creation_is_scoped_and_requires_created_status",
-            "reviewed_network_update_preserves_revision_before_conditional_write",
-            "reviewed_phone_file_creation_needs_a_grant_and_valid_name",
-            "saved_export_recovery_is_explicit_scoped_and_immutable",
-            "tls_guidance_preserves_explicit_endpoint",
-            "viewport_and_capture_preserve_drafts_forms_and_active_work"
-          ],
-          "intermediate_core_run": "FAILED. 396 passed; 2 failed; 0 ignored; 0 measured; 70 filtered out; finished in 11.70s",
-          "font_followup": "ok. 2 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 0.02s",
-          "disposition": "Missing font checks passed with the documented test input. TLS literal schemes were restored. The stale model no-op and first-start permission cases are repaired and rerun in current validation. Remaining historical application fixtures preserve their original bytes and use retired callback/review assumptions.",
-          "current_core": {
-            "summary": "FAILED. 397 passed; 1 failed; 0 ignored; 0 measured; 70 filtered out; finished in 12.42s",
-            "failures": []
-          },
-          "current_application": {
-            "summary": "FAILED. 43 passed; 12 failed; 0 ignored; 0 measured; 413 filtered out; finished in 0.90s",
-            "failures": [
-              "conversation_import_and_branch_respect_encrypted_vault_capacity",
-              "conversation_webdav_save_is_pending_until_exact_readback",
-              "failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
-              "interrupted_phone_creation_warns_without_replay",
-              "network_conversation_requires_review",
-              "network_text_to_project_requires_local_review_and_preserves_existing_files",
-              "pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
-              "phone_update_editor_binds_original_and_late_failure_is_scoped",
-              "retry_verifies_first_and_creates_only_after_framed_not_found",
-              "reviewed_network_folder_creation_is_scoped_and_requires_created_status",
-              "reviewed_network_update_preserves_revision_before_conditional_write",
-              "reviewed_phone_file_creation_needs_a_grant_and_valid_name"
-            ]
-          },
-          "isolated_core": {
-            "summary": "ok. 398 passed; 0 failed; 0 ignored; 0 measured; 70 filtered out; finished in 13.51s",
-            "fixture": "Fresh working directory with the expected toolchain parent and explicit DejaVuSans test font"
-          },
-          "core_fixture_disposition": "The resource fixtures keep their output file and the ZIP fixture expects a toolchain parent. The final fresh working directory supplies that parent and the explicit font; all 398 applicable core cases pass without changing the fixtures or production overwrite checks.",
-          "runtime_exports": {
-            "arm64_export_names": [
-              "Java_com_local_client_Core_process"
-            ],
-            "previous_export_names_identical": true
-          }
-        }
-      },
-      "remaining_implementation": [
-        "ISA/type/alias/inter-block analysis and structured decompilation",
-        "Domain/process reconstruction and browser/language/compiler/runtime/inference coverage",
-        "Provider authorization, ACP and storage extensions including SMB",
-        "Resource/accelerator and recursive scheduling coverage"
-      ],
-      "acceptance": [
-        "Installed Android visual/accessibility/lifecycle/IME/Keystore and installation",
-        "Configured live primary/child models and NAS/TLS",
-        "Separate current-byte review"
-      ],
-      "button_wiring": {
-        "literal_event_count": 288,
-        "method": "Source inventory plus connected handler tracing; parameterized events resolve through explicit prefix handlers.",
-        "parameterized_families": [
-          "server_monitor_panel:",
-          "workspace_select:",
-          "workspace_source_access:",
-          "format:"
-        ],
-        "installed_button_execution": "Pending installed Android runtime"
-      }
+      "scope": "Live public HTTPS search responses transported by curl through actual core review, owned callbacks, evidence retention and child/parent continuation. Model replies are controlled protocol fixtures; configured model inference and installed Android transport require their own execution."
     }
   },
-  "checkpoint_utc": "2026-11-04T00:10:25.219206+00:00",
+  "checkpoint_utc": "2026-11-04T20:51:39.339198+00:00",
   "whole_project_complete": false
 }
