@@ -1,7 +1,7 @@
 //! Non-executing feedback for model responses that violate the proposal envelope.
 use super::*;
 
-pub(super) const FEEDBACK: &str = "Tool-shaped JSON was found inside text and was not registered as a proposal. No local proposal was executed. If you intended a tool request, return the entire response as one bare JSON object with tool and args, without commentary or fences. Otherwise answer in ordinary text and put illustrative JSON in a fenced or quoted example. A valid proposal still requires user approval. Do not claim a tool ran without an actual tool result.";
+pub(super) const FEEDBACK: &str = "Proposal format review: return a tool request as one bare JSON object containing tool and args. Use ordinary text for answers and fenced or quoted JSON for examples. The controller reviews valid proposals and returns their actual execution results.";
 const NOTICE: &str = "Tool-shaped JSON inside text was not registered as a proposal. Tap this message for the raw response. Conversation actions → Request format correction sends one explicit correction request; a corrected local tool proposal still requires approval.";
 
 fn envelope(value: &Json) -> bool {

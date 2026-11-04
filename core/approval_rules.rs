@@ -12,11 +12,11 @@ pub(super) fn namespace(st:&mut Json,directory:&str){
  let identity=fs::metadata(&canonical).ok().map(|m|{use std::os::unix::fs::MetadataExt;format!("{}:{}",m.dev(),m.ino())}).unwrap_or_default();put(st,"approval_root_identity",s(&identity));
  put(st,"approval_root",s(&canonical));
 }
-fn binding(st:&Json)->Json{
+pub(super) fn binding(st:&Json)->Json{
  let run=get(st,"task_run");let agent=if run==&Null{harness::active_agent(st)}else{get(run,"agent").clone()};
  let child=if text(get(st,"pending"),"tool")=="delegate"{delegation::target(st,get(st,"pending")).unwrap_or(Null)}else{Null};
  let child_index=if child==Null{None}else{delegation::connection(st,get(st,"pending")).ok()};let child_profile=if child==Null{Null}else{child_index.and_then(|i|array(st,"profiles").get(i).cloned()).unwrap_or(Null)};
- obj(vec![("harness",harness_rules::binding(st)),("root",s(&root(st))),("root_identity",get(st,"approval_root_identity").clone()),("origin",s(if boolean(st,"agent_pending"){"agent"}else{"user"})),("agent",agent),("connection",search::binding(st)),("child",child),("child_profile",child_profile),("phone",get(st,"phone_uri").clone()),("phone_mode",get(st,"phone_access_mode").clone()),("drive",get(st,"drive").clone()),("rea",get(st,"rea").clone())])
+ obj(vec![("harness",harness_rules::binding(st)),("root",s(&root(st))),("root_identity",get(st,"approval_root_identity").clone()),("origin",s(if boolean(st,"agent_pending"){"agent"}else{"user"})),("agent",agent),("connection",search::binding(st)),("child",child),("child_profile",child_profile),("phone",get(st,"phone_uri").clone()),("phone_mode",get(st,"phone_access_mode").clone()),("drive",get(st,"drive").clone()),("mcp",get(st,"mcp").clone())])
 }
 fn identities(b:&Json)->String{let p=get(get(b,"connection"),"profile");let endpoint=text(p,"endpoint");let endpoint=origin(&endpoint).unwrap_or_else(|_|"unconfigured endpoint".into());let mut label=format!("Origin: {}\nAgent: {}\nConnection: {} · {} · {}",if text(b,"origin")=="user"{"your manual action"}else{"model proposal"},text(get(b,"agent"),"name"),text(p,"name"),text(p,"model"),endpoint);if get(b,"child")!=&Null{let p=get(b,"child_profile");label.push_str(&format!("\nSubagent: {} · {} · {}",text(get(b,"child"),"name"),text(p,"model"),origin(&text(p,"endpoint")).unwrap_or_else(|_|"unconfigured endpoint".into())));}label}
 fn rows_fit(rows:&[Json])->Result<()>{if rows.len()>MAX_RULES||Arr(rows.to_vec()).string().len()>MAX_BYTES{Err("Approval rules are full (64 rules / 128 KiB); remove an old rule or approve once".into())}else{Ok(())}}
@@ -42,7 +42,7 @@ fn scope(tool:&str,args:&Json,kind:&str)->Result<Json>{
  };
  Ok(obj(vec![("kind",s(kind)),("target",target),("shape",if kind=="exact"{Null}else{args_shape(tool,args)})]))
 }
-fn description(tool:&str,sc:&Json)->String{
+pub(super) fn description(tool:&str,sc:&Json)->String{
  let target=text(sc,"target");match text(sc,"kind").as_str(){
  "search"=>format!("{tool}: future queries through the same configured search sources"),
  "site"=>format!("{tool}: this site ({target}); same read/capture settings and output"),

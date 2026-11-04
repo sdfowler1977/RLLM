@@ -4,8 +4,10 @@ mod compression;
 mod layout;
 mod execution;
 mod gateway;
+mod a2a;
 mod network;
 mod provider;
+mod provider_calls;
 mod hosted_search;
 mod attachments;
 mod generation;
@@ -364,40 +366,12 @@ fn request(v: &Json) -> Result<Json> {
     Ok(body)
 }
 fn response(v: &Json) -> Result<Json> {
-    let protocol = field(v, "protocol")?;
-    let body = parse(field(v, "body")?)?;
-    if let Ok(e) = body.get("error") {
-        return Err(format!("Server error: {}", e.string()));
-    }
-    let text = match protocol {
-        "chat" => {
-            let choice = body
-                .get("choices")?
-                .array()?
-                .first()
-                .ok_or("No response choices")?;
-            let msg = choice.get("message")?;
-            msg.get("content")?.text()?.to_string()
-        }
-        "local" => field(body.get("message")?, "content")?.to_string(),
-        "messages" => {
-            let mut parts = Vec::new();
-            for p in body.get("content")?.array()? {
-                if field(p, "type") == Ok("text") {
-                    parts.push(field(p, "text")?.to_string());
-                }
-            }
-            parts.join("\n")
-        }
-        "content" => stream::content_text(&body)?,
-
-        _ => return Err("Unknown API format".into()),
-    };
-    if text.trim().is_empty() {
-        return Err("Server returned no text response".into());
-    }
-    Ok(s(&text))
+    let reply=provider::reply(field(v,"protocol")?,field(v,"body")?)?;
+    // The original text-only headless interface keeps its empty-text contract.
+    if reply.text.trim().is_empty(){return Err("Server returned no text response".into());}
+    Ok(s(&reply.text))
 }
+
 fn operation(input: &str) -> Result<Json> {
     let v = parse(input)?;
     match field(&v, "op")? {
@@ -416,6 +390,7 @@ fn operation(input: &str) -> Result<Json> {
         "project_close" => application::project_close(&v),
         "archive_preview" => archive::preview(&v),
         "archive_import" => archive::import(&v),
+        "network_frame_open"|"network_frame_feed"|"network_frame_finish"|"network_frame_close"=>network::frame(&v),
         "network_binary" => {
             let raw = network::unbase64(v.get("data")?.text()?)?;
             let (_, body) = network::decoded_bytes(&raw)?;
@@ -426,6 +401,7 @@ fn operation(input: &str) -> Result<Json> {
         }
         "gateway_size" => gateway::size(&v),
         "gateway_incoming" => gateway::incoming(&v),
+        "a2a_close" => { a2a::close(v.get("config")?)?; Ok(Null) },
         "local_tool_start" => application::local_tool_start(&v),
         "local_tool_cancel" => application::local_tool_cancel(&v),
         "harness_policy_commit" => application::harness_policy_commit(&v),
@@ -441,6 +417,7 @@ fn operation(input: &str) -> Result<Json> {
         "capture_document_cancel" => application::capture_document_cancel(&v),
         "request" => request(&v),
         "response" => response(&v),
+        "response_details" => Ok(provider::reply(field(&v,"protocol")?,field(&v,"body")?)?.details()),
         "validate" => {
             let value = v.get("value")?;
             Ok(value.clone())

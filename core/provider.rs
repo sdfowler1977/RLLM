@@ -1,4 +1,34 @@
 use super::*;
+/// Provider metadata describes interruption; generated prose cannot set it.
+pub struct Reply {pub text:String,pub stop_reason:Option<String>,pub interrupted:bool,pub proposal:Option<Json>}
+pub(super) fn limit_reason(protocol:&str,reason:&str)->bool{
+ match protocol{"chat"|"local"=>reason=="length","messages"=>matches!(reason,"max_tokens"|"model_context_window_exceeded"),"content"=>reason=="MAX_TOKENS",_=>false}
+}
+fn stop(value:&Json,key:&str)->Option<String>{
+ // Missing or unknown optional metadata never gates an otherwise valid text
+ // reply. Only a bounded explicit known marker can declare a limit.
+ match value.get(key){Ok(Str(reason))if reason.len()<=128&&!reason.chars().any(char::is_control)=>Some(reason.clone()),_=>None}
+}
+fn visible(value:&Json,key:&str,interrupted:bool)->Result<String>{
+ match value.get(key){Ok(Null) if interrupted=>Ok(String::new()),_=>Ok(field(value,key)?.to_string())}
+}
+pub fn reply(protocol:&str,source:&str)->Result<Reply>{
+ let body=parse(source)?;
+ if let Ok(error)=body.get("error"){return Err(format!("Server error: {}",error.string()));}
+ let (text,reason)=match protocol{
+  "chat"=>{let choice=super::provider_calls::choice(&body)?;let reason=stop(choice,"finish_reason");let m=choice.get("message")?;let text=if matches!(m.get("content"),Err(_)|Ok(Null))&&m.get("tool_calls").is_ok(){String::new()}else{visible(m,"content",reason.as_ref().is_some_and(|r|limit_reason(protocol,r)))?};(text,reason)},
+  "local"=>{let reason=stop(&body,"done_reason");let m=body.get("message")?;let text=if matches!(m.get("content"),Err(_)|Ok(Null))&&m.get("tool_calls").is_ok(){String::new()}else{visible(m,"content",reason.as_ref().is_some_and(|r|limit_reason(protocol,r)))?};(text,reason)},
+  "messages"=>{let mut parts=Vec::new();for part in body.get("content")?.array()?{if field(part,"type")==Ok("text"){parts.push(field(part,"text")?.to_string());}}(parts.join("\n"),stop(&body,"stop_reason"))},
+  "content"=>{let text=stream::content_text(&body)?;let candidate=body.get("candidates")?.array()?.iter().find(|c|c.get("index").unwrap_or(&Num("0".into()))==&Num("0".into())).ok_or("No response candidate zero")?;(text,stop(candidate,"finishReason"))},
+  _=>return Err("Unknown API format".into())
+ };
+ let interrupted=reason.as_ref().is_some_and(|reason|limit_reason(protocol,reason));
+ let proposal=if interrupted {None}else{super::provider_calls::proposal(protocol,&body)?};
+ if text.trim().is_empty()&&!interrupted&&proposal.is_none(){return Err("Server returned no text response".into());}
+ if proposal.is_some() && match protocol{"chat"=>reason.as_deref()!=Some("tool_calls"),"messages"=>reason.as_deref()!=Some("tool_use"),"content"=>reason.as_deref()!=Some("STOP"),"local"=>body.get("done")!=Ok(&Bool(true)),_=>false}{return Err("Tool proposal has no completed provider turn".into());}
+ Ok(Reply{text,stop_reason:reason,interrupted,proposal})
+}
+impl Reply{pub fn details(&self)->Json{obj(vec![("version",Num("1".into())),("text",s(&self.text)),("stop_reason",self.stop_reason.as_ref().map(|r|s(r)).unwrap_or(Null)),("interrupted",Bool(self.interrupted)),("proposal",self.proposal.clone().unwrap_or(Null))])}}
 fn text<'a>(p: &'a Json, k: &str) -> &'a str {
     p.get(k).and_then(Json::text).unwrap_or("")
 }

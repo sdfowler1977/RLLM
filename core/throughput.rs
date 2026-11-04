@@ -1,7 +1,7 @@
 //! App-observed visible text and monotonic request time. No provider usage input.
 use super::*;
 
-pub(super) const METHOD:&str="Approximate tokens = received visible Unicode characters ÷ 4. Rate = that estimate ÷ elapsed request seconds, including waiting and network time. This is a running request average, not engine generation speed. Language, code and tokenizer differences affect accuracy. Text-form tool requests are counted; hidden reasoning and structured tool-call fields are excluded. Server-reported usage is separate.";
+pub(super) const METHOD:&str="Estimated tokens = received visible Unicode characters ÷ 4. Divide by elapsed request seconds for tokens/s, including queue, waiting and network time. Accuracy varies by model, language, code and tokenizer. Visible text includes text-form tool requests. Provider-reported counts appear separately.";
 
 pub(super) fn start(st:&mut Json) {
     put(st,"local_rate",obj(vec![("chat",s(&text(st,"request_chat"))),

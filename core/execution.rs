@@ -4,13 +4,44 @@ use std::{
     os::unix::{io::AsRawFd, process::CommandExt},
     process::{Command, Stdio},
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, Instant},
 };
 static CANCEL: AtomicBool = AtomicBool::new(false);
 // A new worker may reset the legacy flag; it cannot revive an older owner.
 static CANCEL_GENERATION: AtomicU64 = AtomicU64::new(0);
+const SCOPED_BIT:u64=1<<63;
+static SCOPED_SERIAL:AtomicU64=AtomicU64::new(SCOPED_BIT);
+static SCOPES:OnceLock<Mutex<BTreeMap<u64,Weak<AtomicBool>>>>=OnceLock::new();
+fn scopes()->&'static Mutex<BTreeMap<u64,Weak<AtomicBool>>>{SCOPES.get_or_init(||Mutex::new(BTreeMap::new()))}
+pub(crate) fn scoped_token(token:u64)->bool{token!=u64::MAX&&token&SCOPED_BIT!=0}
+/// An independent read operation never cancels or resets another operation.
+pub(crate) struct CancellationScope{token:u64,_flag:Arc<AtomicBool>}
+impl CancellationScope{
+ pub(crate) fn new(flag:Arc<AtomicBool>)->Result<Self>{
+  let mut held=scopes().lock().map_err(|_|"Operation cancellation unavailable")?;
+  held.retain(|_,v|v.strong_count()>0);
+  if held.len()>=64{return Err("Concurrent operation capacity reached".into());}
+  let token=SCOPED_SERIAL.try_update(Ordering::SeqCst,Ordering::SeqCst,|v|v.checked_add(1).filter(|n|*n<u64::MAX)).map_err(|_|"Operation identity capacity reached")?;
+  held.insert(token,Arc::downgrade(&flag));Ok(Self{token,_flag:flag})
+ }
+ pub(crate) fn token(&self)->u64{self.token}
+}
+impl Drop for CancellationScope{fn drop(&mut self){if let Ok(mut held)=scopes().lock(){held.remove(&self.token);}}}
+#[cfg(test)]mod scope_tests{
+ use super::*;
+ #[test]fn cancellation_is_per_owner_and_retired_tokens_stay_cancelled(){
+  reset();let first=Arc::new(AtomicBool::new(false));let second=Arc::new(AtomicBool::new(false));
+  let a=CancellationScope::new(first.clone()).unwrap();let b=CancellationScope::new(second.clone()).unwrap();let token=a.token();
+  assert!(!token_cancelled(token));assert!(!token_cancelled(b.token()));
+  first.store(true,Ordering::SeqCst);assert!(token_cancelled(token));assert!(!token_cancelled(b.token()));assert!(!cancelled());
+  cancel();reset();assert!(token_cancelled(token));assert!(!token_cancelled(b.token()));
+  drop(a);first.store(false,Ordering::SeqCst);assert!(token_cancelled(token));assert!(!token_cancelled(b.token()));
+ }
+}
 pub fn cancellation_token() -> u64 { CANCEL_GENERATION.load(Ordering::SeqCst) }
 pub fn token_cancelled(token:u64) -> bool {
+    if scoped_token(token){return scopes().lock().ok().and_then(|held|held.get(&token).and_then(Weak::upgrade)).map(|flag|flag.load(Ordering::SeqCst)).unwrap_or(true);}
     token==u64::MAX || CANCEL_GENERATION.load(Ordering::SeqCst)!=token || cancelled()
 }
 unsafe extern "C" {
@@ -32,7 +63,7 @@ pub fn cancelled() -> bool {
     CANCEL.load(Ordering::SeqCst)
 }
 pub fn cancel() {
-    let _=CANCEL_GENERATION.fetch_update(Ordering::SeqCst,Ordering::SeqCst,|n|Some(n.saturating_add(1)));
+    let _=CANCEL_GENERATION.try_update(Ordering::SeqCst,Ordering::SeqCst,|n|Some(if n<SCOPED_BIT-1{n+1}else{u64::MAX}));
     CANCEL.store(true, Ordering::SeqCst);
 }
 fn drain(input: &mut impl Read, out: &mut Vec<u8>) -> Result<()> {

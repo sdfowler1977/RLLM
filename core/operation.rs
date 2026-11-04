@@ -14,7 +14,11 @@ impl InspectionAccess { pub fn cancelled(&self)->bool { super::super::execution:
 struct Permit { root: String, dev: u64, ino: u64, tool: String, invocation: String, policy: String, created: Instant, inspection:InspectionAccess }
 static PERMITS: OnceLock<Mutex<BTreeMap<String, Permit>>> = OnceLock::new();
 fn permits() -> &'static Mutex<BTreeMap<String, Permit>> { PERMITS.get_or_init(||Mutex::new(BTreeMap::new())) }
-fn retire(ticket: &str) { if let Ok(mut current)=permits().lock() { current.remove(ticket); } }
+struct Callback { expected:String, root:String, dev:u64, ino:u64, invocation:String, created:Instant, cancellation_token:u64 }
+static CALLBACKS:OnceLock<Mutex<BTreeMap<String,Callback>>>=OnceLock::new();
+fn callbacks()->&'static Mutex<BTreeMap<String,Callback>>{CALLBACKS.get_or_init(||Mutex::new(BTreeMap::new()))}
+fn retire(ticket: &str) { if let Ok(mut current)=permits().lock() { current.remove(ticket); }if let Ok(mut current)=callbacks().lock(){current.remove(ticket);} }
+
 fn invocation(v: &Json) -> String {
     let mut value=v.clone();
     // Root is checked by canonical path and filesystem identity. The remaining
@@ -69,10 +73,11 @@ pub(super) fn cancel(v: &Json) -> Result<bool> {
     let (root,dev,ino)=workspace(&text(v,"root"))?;
     let dispatched=invocation(v);
     let mut current=permits().lock().map_err(|_|"Local execution ownership unavailable")?;
-    if current.get(&ticket).map(|p|p.root==root&&p.dev==dev&&p.ino==ino&&p.invocation==dispatched).unwrap_or(false) {
-        current.remove(&ticket); return Ok(true);
-    }
-    Ok(false)
+    let permit=current.get(&ticket).map(|p|p.root==root&&p.dev==dev&&p.ino==ino&&p.invocation==dispatched).unwrap_or(false);
+    if permit{current.remove(&ticket);}drop(current);
+    let mut owners=callbacks().lock().map_err(|_|"Local callback ownership unavailable")?;
+    let callback=owners.get(&ticket).is_some_and(|p|p.root==root&&p.dev==dev&&p.ino==ino&&p.invocation==dispatched);
+    if callback{owners.remove(&ticket);}Ok(permit||callback)
 }
 
 fn context(st: &Json, root: &str) -> Result<Json> {
@@ -119,6 +124,14 @@ pub(super) fn consume(st: &mut Json, root: &str, action: &str, inputs: &Json) ->
     if action=="tool_result" && (boolean(expected,"editor")!=boolean(inputs,"editor") || text(expected,"editor_dialog")!=text(inputs,"editor_dialog")) { return false; }
     match context(st,root) {
         Ok(current) if get(expected,"context") == &current => {
+            // The single-use worker permit is not callback lifetime authority.
+            // This held owner survives worker start and is revoked on cancellation,
+            // restart, replacement and one authenticated terminal callback.
+            let accepted=if let Ok(mut owners)=callbacks().lock(){
+                let valid=owners.get(&ticket).is_some_and(|held|held.expected==harness_rules::digest(expected)&&held.cancellation_token!=u64::MAX&&held.cancellation_token==super::super::execution::cancellation_token()&&(action=="failure"||held.created.elapsed()<Duration::from_secs(120)));
+                if valid{owners.remove(&ticket);}valid
+            }else{false};
+            if !accepted{return false;}
             retire(&ticket);
             put(st,"operation_expected",Null); true
         },
@@ -126,7 +139,7 @@ pub(super) fn consume(st: &mut Json, root: &str, action: &str, inputs: &Json) ->
     }
 }
 
-pub(super) fn interrupt(st: &mut Json) { retire(&text(get(st,"operation_expected"),"ticket")); put(st,"operation_expected",Null); }
+pub(super) fn interrupt(st: &mut Json) { retire(&text(get(st,"operation_expected"),"ticket"));retire_drive(&text(get(st,"drive_expected"),"ticket"));put(st,"operation_expected",Null);put(st,"drive_expected",Null); }
 
 /// Called only for a final admitted local-tool effect, after existing permission
 /// and resource checks. Network/web/MCP/revision callbacks keep their own owners.
@@ -170,17 +183,62 @@ pub(super) fn bind(st: &mut Json, effect: &mut Json, root: &str, model_origin:bo
     let inspection=InspectionAccess{list:permitted("list"),read:permitted("read"),graph,budget:if tool=="capture"{web_document::response_room(&next)}else{number(get(st,"policy"),"response_bytes")},root_identity:Some((dev,ino)),deadline:Instant::now()+Duration::from_secs(120),cancellation_token:super::super::execution::cancellation_token()};
     let permit=Permit{root:path,dev,ino,tool:tool.clone(),invocation:invocation(effect),
       policy:harness_rules::digest(&harness_rules::gateway_global(st)),created:Instant::now(),inspection};
+    let callback=Callback{expected:harness_rules::digest(&expected),root:permit.root.clone(),dev:permit.dev,ino:permit.ino,invocation:permit.invocation.clone(),created:permit.created,cancellation_token:permit.inspection.cancellation_token};
+    // Acquire both maps in one order only for atomic admission. Cleanup releases
+    // each lock before taking the other; callback consumption releases its lock
+    // before retiring the execution permit.
     {
         let mut current=permits().lock().map_err(|_|"Local execution ownership unavailable")?;
+        let mut owners=callbacks().lock().map_err(|_|"Local callback ownership unavailable")?;
         current.retain(|_,p|p.created.elapsed()<Duration::from_secs(120));
-        if current.len()>=64 { return Err("Local execution dispatch capacity is occupied; no operation was started".into()); }
+        owners.retain(|_,p|p.created.elapsed()<Duration::from_secs(120)&&p.cancellation_token!=u64::MAX&&p.cancellation_token==super::super::execution::cancellation_token());
+        if current.len()>=64||owners.len()>=64 { return Err("Local execution dispatch capacity is occupied; no operation was started".into()); }
         let old=text(get(st,"operation_expected"),"ticket");
-        current.remove(&old);
-        current.insert(ticket.clone(),permit);
+        current.remove(&old);owners.remove(&old);
+        current.insert(ticket.clone(),permit);owners.insert(ticket.clone(),callback);
     }
     put(effect,"purpose",s("local_tool"));
     put(effect,"tool_binding",Num("1".into()));
     put(effect,"tool_ticket",s(&ticket));
     *st=next;
     Ok(())
+}
+
+// WebDAV has multi-request write/readback and revision workflows. A purpose or
+// phase alone cannot identify which request actually produced a response.
+static DRIVE_CALLBACKS:OnceLock<Mutex<BTreeMap<String,Callback>>>=OnceLock::new();
+fn drive_callbacks()->&'static Mutex<BTreeMap<String,Callback>>{DRIVE_CALLBACKS.get_or_init(||Mutex::new(BTreeMap::new()))}
+fn retire_drive(ticket:&str){if let Ok(mut owners)=drive_callbacks().lock(){owners.remove(ticket);}}
+fn drive_purpose(purpose:&str)->bool{matches!(purpose,"listing"|"file"|"saved"|"saved_probe"|"saved_verify"|"drive_tool_list"|"drive_tool_read"|"drive_tool_create"|"drive_tool_folder"|"drive_editor_read"|"drive_project_read"|"drive_create_verify"|"drive_update_read"|"drive_update_backup"|"drive_update_verify"|"drive_update_write"|"drive_update_confirm")}
+pub(super) fn is_drive_callback(action:&str,inputs:&Json)->bool{matches!(action,"network_result"|"failure")&&(drive_purpose(&text(inputs,"purpose"))||!text(inputs,"drive_ticket").is_empty())}
+fn drive_context(st:&Json,root:&str,purpose:&str)->Result<Json>{Ok(s(&harness_rules::digest(&obj(vec![("owner",context(st,root)?),("connection",s(&harness_rules::digest(get(st,"drive")))),("creation",s(&harness_rules::digest(get(st,"drive_creation")))),("revision",s(&harness_rules::digest(get(st,"drive_revision")))),("snapshot",s(&harness_rules::digest(get(st,"remote_save")))),("active_tool",get(st,"active_tool").clone()),("remote_url",get(st,"remote_url").clone()),("copy_destination",get(st,"copy_destination").clone()),("editor",if purpose=="drive_editor_read"{s(&harness_rules::digest(&obj(vec![("dialog",get(st,"dialog").clone()),("edit",get(st,"edit").clone())])))}else{Null})]))))}
+pub(super) fn bind_drive(st:&mut Json,effect:&mut Json,root:&str)->Result<()>{
+ if text(effect,"kind")!="network"||!drive_purpose(&text(effect,"purpose")){return Ok(());}
+ let scope=drive_context(st,root,&text(effect,"purpose"))?;let(root,dev,ino)=workspace(root)?;
+ let serial=SERIAL.try_update(Ordering::SeqCst,Ordering::SeqCst,|n|n.checked_add(1)).map_err(|_|"Network operation ticket space exhausted")?;
+ let ticket=format!("drive-{}-{serial}",SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
+ let request=harness_rules::digest(effect);let expected=obj(vec![("binding",Num("1".into())),("ticket",s(&ticket)),("purpose",get(effect,"purpose").clone()),("context",scope),("request",s(&request))]);
+ let mut next=st.clone();put(&mut next,"drive_expected",expected.clone());
+ if super::super::mcp_schema::state_bytes(&next)>6*1024*1024-4096{return Err("Insufficient saved-state room for exact network ownership; no request started".into());}
+ let callback=Callback{expected:harness_rules::digest(&expected),root,dev,ino,invocation:request,created:Instant::now(),cancellation_token:super::super::execution::cancellation_token()};
+ let mut owners=drive_callbacks().lock().map_err(|_|"Network callback ownership unavailable")?;
+ owners.retain(|_,p|p.created.elapsed()<Duration::from_secs(120)&&p.cancellation_token!=u64::MAX&&p.cancellation_token==super::super::execution::cancellation_token());let old=text(get(st,"drive_expected"),"ticket");
+ if owners.len()>=64&&!owners.contains_key(&old){return Err("Network callback capacity occupied; no request started".into());}
+ owners.remove(&old);owners.insert(ticket.clone(),callback);drop(owners);put(effect,"drive_ticket",s(&ticket));*st=next;Ok(())
+}
+pub(super) fn consume_drive(st:&mut Json,root:&str,action:&str,inputs:&Json)->bool{
+ if !is_drive_callback(action,inputs)||!boolean(st,"busy"){return false;}
+ let expected=get(st,"drive_expected");let ticket=text(expected,"ticket");
+ if ticket.is_empty()||ticket.len()>128||ticket!=text(inputs,"drive_ticket")||get(expected,"binding")!=&Num("1".into())||text(expected,"purpose")!=text(inputs,"purpose")||drive_context(st,root,&text(expected,"purpose")).ok().as_ref()!=Some(get(expected,"context")){return false;}
+ let accepted=if let Ok(mut owners)=drive_callbacks().lock(){let valid=owners.get(&ticket).is_some_and(|held|held.expected==harness_rules::digest(expected)&&held.cancellation_token!=u64::MAX&&held.cancellation_token==super::super::execution::cancellation_token()&&(action=="failure"||held.created.elapsed()<Duration::from_secs(120)));if valid{owners.remove(&ticket);}valid}else{false};
+ if accepted{put(st,"drive_expected",Null);}accepted
+}
+#[cfg(test)]mod drive_checks{
+ use super::*;
+ fn fixture()->(std::path::PathBuf,Json,Json){let root=std::env::temp_dir().join(format!("rllm-drive-owner-{}-{}",std::process::id(),SERIAL.fetch_add(1,Ordering::SeqCst)));fs::create_dir(&root).unwrap();let mut st=blank();put(&mut st,"busy",Bool(true));put(&mut st,"drive",obj(vec![("url",s("http://nas.test/share/"))]));let effect=obj(vec![("kind",s("network")),("purpose",s("listing")),("wire",s("PROPFIND /share/ HTTP/1.1\r\n\r\n"))]);(root,st,effect)}
+ fn inputs(effect:&Json)->Json{obj(vec![("purpose",get(effect,"purpose").clone()),("drive_ticket",get(effect,"drive_ticket").clone())])}
+ #[test]fn drive_callback_requires_the_exact_single_use_owner(){let(root,mut st,mut effect)=fixture();let path=root.to_str().unwrap();bind_drive(&mut st,&mut effect,path).unwrap();let old=st.clone();assert!(!consume_drive(&mut st,path,"network_result",&obj(vec![("purpose",s("listing"))])));assert_eq!(st,old);assert!(consume_drive(&mut st,path,"network_result",&inputs(&effect)));let mut replay=old;assert!(!consume_drive(&mut replay,path,"network_result",&inputs(&effect)));fs::remove_dir(root).unwrap();}
+ #[test]fn network_owner_preserves_current_source_and_revocation(){let(root,mut st,mut effect)=fixture();let path=root.to_str().unwrap();bind_drive(&mut st,&mut effect,path).unwrap();for key in ["drive","drive_creation","drive_revision","remote_save"]{let mut changed=st.clone();put(&mut changed,key,obj(vec![("changed",Bool(true))]));assert!(!consume_drive(&mut changed,path,"network_result",&inputs(&effect)),"{key}");}let mut replay=st.clone();interrupt(&mut st);assert!(!consume_drive(&mut replay,path,"failure",&inputs(&effect)));fs::remove_dir(root).unwrap();}
+ #[test]fn unrelated_network_operations_keep_their_own_protocol_owners(){let(root,mut st,mut effect)=fixture();put(&mut effect,"purpose",s("model"));let old=st.clone();bind_drive(&mut st,&mut effect,root.to_str().unwrap()).unwrap();assert_eq!(old,st);assert_eq!(get(&effect,"drive_ticket"),&Null);assert!(!is_drive_callback("network_result",&obj(vec![("purpose",s("model"))])));fs::remove_dir(root).unwrap();}
+ #[test]fn full_network_ownership_does_not_block_local_work(){let(root,st,effect)=fixture();let path=root.to_str().unwrap();let mut owned=Vec::new();for _ in 0..64{let mut next=st.clone();let mut work=effect.clone();bind_drive(&mut next,&mut work,path).unwrap();owned.push(next);}let mut refused=st.clone();assert!(bind_drive(&mut refused,&mut effect.clone(),path).is_err());let mut local=st;let mut work=obj(vec![("kind",s("tool")),("tool",s("read")),("args",obj(vec![("path",s("file.txt"))]))]);bind(&mut local,&mut work,path,false).unwrap();assert!(!text(&work,"tool_ticket").is_empty());interrupt(&mut local);for mut next in owned{interrupt(&mut next);}fs::remove_dir(root).unwrap();}
 }

@@ -7,19 +7,53 @@ const CHUNK:usize=65536;
 const METHOD:&str="SHA-256 of every byte read from the complete held regular file";
 fn u64_value(v:&Json)->Result<u64>{match v{Num(s)=>s.parse().map_err(|_|"Invalid complete-file byte count".into()),_=>Err("Complete-file byte count must be an integer".into())}}
 fn hex(v:&[u8])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
-fn normalize(value:&str)->Result<Vec<u8>>{let mut p=PathBuf::new();for c in Path::new(value).components(){match c{std::path::Component::Normal(n)=>p.push(n),std::path::Component::CurDir=>{},_=>return Err("Selected file must stay within the workspace".into())}}let raw=p.as_os_str().as_bytes().to_vec();reconstruction::raw(&hex(&raw))?;Ok(raw)}
+pub(super) fn normalize(value:&str)->Result<Vec<u8>>{let mut p=PathBuf::new();for c in Path::new(value).components(){match c{std::path::Component::Normal(n)=>p.push(n),std::path::Component::CurDir=>{},_=>return Err("Selected file must stay within the workspace".into())}}let raw=p.as_os_str().as_bytes().to_vec();reconstruction::raw(&hex(&raw))?;Ok(raw)}
 struct Guard<'a>{access:&'a operation::InspectionAccess,policy:String,tool:String,args:Json}
 impl<'a> Guard<'a>{
  fn new(tool:&str,args:&Json,access:&'a operation::InspectionAccess)->Result<Self>{let p=harness_rules::gateway_current(&Null)?;harness_rules::gateway_check(&p,tool,args)?;Ok(Self{access,policy:harness_rules::digest(&p),tool:tool.into(),args:args.clone()})}
  fn check(&self)->Result<()>{if self.access.cancelled(){return Err("Complete-file operation cancelled; no automatic replay".into());}if Instant::now()>=self.access.deadline{return Err("Complete-file operation deadline expired; no completed evidence".into());}let p=harness_rules::gateway_current(&Null)?;if harness_rules::digest(&p)!=self.policy{return Err("Current rules changed during the complete-file operation".into());}harness_rules::gateway_check(&p,&self.tool,&self.args)?;harness_rules::gateway_check(&p,"read",&obj(vec![("path",get(&self.args,"path").clone())]))?;if self.tool=="compare"{harness_rules::gateway_check(&p,"read",&obj(vec![("path",get(&self.args,"other").clone())]))?;}if self.tool=="reconstruct"{harness_rules::gateway_check(&p,"write",&obj(vec![("path",get(&self.args,"output").clone())]))?;}Ok(())}
 }
 fn open_at(parent:&fs::File,name:&[u8],directory:bool)->Result<fs::File>{unsafe extern "C"{fn openat(fd:i32,name:*const std::ffi::c_char,flags:i32,...)->i32;}let name=std::ffi::CString::new(name).map_err(|_|"Invalid selected file component")?;let fd=unsafe{openat(parent.as_raw_fd(),name.as_ptr(),0x80000|0x20000|0x800|if directory{0x10000}else{0})};if fd<0{return Err(format!("Cannot open held selected file: {}",std::io::Error::last_os_error()));}Ok(unsafe{fs::File::from_raw_fd(fd)})}
-struct Held{root_path:PathBuf,root_identity:Json,components:Vec<Vec<u8>>,handles:Vec<fs::File>,path:Vec<u8>,identity:Json}
+struct Held{root_path:PathBuf,root_identity:Json,components:Vec<Vec<u8>>,bindings:Vec<(u64,u64)>,handles:Vec<fs::File>,path:Vec<u8>,identity:Json}
 impl Held{
- fn open(root:&Path,path:Vec<u8>,access:&operation::InspectionAccess)->Result<Self>{let r=fs::OpenOptions::new().read(true).custom_flags(0x10000|0x20000).open(root).map_err(|e|e.to_string())?;let m=r.metadata().map_err(|e|e.to_string())?;if access.root_identity.is_some_and(|(d,i)|d!=m.dev()||i!=m.ino()){return Err("Selected workspace identity changed".into());}let root_identity=s(&format!("{}:{}",m.dev(),m.ino()));let components:Vec<Vec<u8>>=path.split(|b|*b==b'/').map(|p|p.to_vec()).collect();if components.is_empty()||components.len()>64{return Err("Complete-file path exceeds the 64 held-component allowance".into());}let mut handles=vec![r];for(i,c)in components.iter().enumerate(){let f=open_at(handles.last().unwrap(),c,i+1<components.len())?;handles.push(f);}let metadata=handles.last().unwrap().metadata().map_err(|e|e.to_string())?;if !metadata.is_file(){return Err("Complete-file observation requires a selected regular file".into());}let identity=reconstruction::identity(&metadata);let out=Self{root_path:root.into(),root_identity,components,handles,path,identity};out.binding()?;Ok(out)}
- fn binding(&self)->Result<()>{reconstruction::same_root(&self.root_path,&self.handles[0],&self.root_identity)?;for(i,c)in self.components.iter().enumerate(){let current=open_at(&self.handles[i],c,i+1<self.components.len())?;let m=current.metadata().map_err(|e|e.to_string())?;let old=self.handles[i+1].metadata().map_err(|e|e.to_string())?;if m.dev()!=old.dev()||m.ino()!=old.ino(){return Err("Selected file component binding changed".into());}}if reconstruction::identity(&self.handles.last().unwrap().metadata().map_err(|e|e.to_string())?)!=self.identity{return Err("Selected file changed during complete observation".into());}Ok(())}
+ fn open(root:&Path,path:Vec<u8>,access:&operation::InspectionAccess)->Result<Self>{
+  let r=fs::OpenOptions::new().read(true).custom_flags(0x10000|0x20000).open(root).map_err(|e|e.to_string())?;
+  let m=r.metadata().map_err(|e|e.to_string())?;
+  if access.root_identity.is_some_and(|(d,i)|d!=m.dev()||i!=m.ino()){return Err("Selected workspace identity changed".into());}
+  let root_identity=s(&format!("{}:{}",m.dev(),m.ino()));
+  let components:Vec<Vec<u8>>=path.split(|b|*b==b'/').map(|p|p.to_vec()).collect();
+  if components.is_empty()||components.len()>512{return Err("Selected file path exceeds the 1024-byte workspace path allowance".into());}
+  // Keep root and selected file open. Intermediate identities are re-walked
+  // from the held root; path depth cannot exhaust one descriptor per segment.
+  let mut parent=r.try_clone().map_err(|e|e.to_string())?;let mut bindings=vec![];
+  for(i,c)in components.iter().enumerate(){let current=open_at(&parent,c,i+1<components.len())?;let metadata=current.metadata().map_err(|e|e.to_string())?;bindings.push((metadata.dev(),metadata.ino()));parent=current;}
+  let metadata=parent.metadata().map_err(|e|e.to_string())?;
+  if !metadata.is_file(){return Err("File observation requires a selected regular file".into());}
+  let identity=reconstruction::identity(&metadata);
+  let out=Self{root_path:root.into(),root_identity,components,bindings,handles:vec![r,parent],path,identity};out.binding()?;Ok(out)
+ }
+ fn binding(&self)->Result<()>{
+  reconstruction::same_root(&self.root_path,&self.handles[0],&self.root_identity)?;
+  let mut parent=self.handles[0].try_clone().map_err(|e|e.to_string())?;
+  for(i,c)in self.components.iter().enumerate(){let current=open_at(&parent,c,i+1<self.components.len())?;let m=current.metadata().map_err(|e|e.to_string())?;if self.bindings[i]!=(m.dev(),m.ino()){return Err("Selected file component binding changed".into());}parent=current;}
+  if reconstruction::identity(&parent.metadata().map_err(|e|e.to_string())?)!=self.identity||reconstruction::identity(&self.handles.last().unwrap().metadata().map_err(|e|e.to_string())?)!=self.identity{return Err("Selected file changed during observation".into());}
+  reconstruction::same_root(&self.root_path,&self.handles[0],&self.root_identity)
+ }
  fn rewind(&mut self)->Result<()>{self.binding()?;self.handles.last_mut().unwrap().seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;Ok(())}
  fn scan(&mut self,g:&Guard,mut consume:impl FnMut(&[u8])->Result<()>)->Result<(u64,String)>{let expected=u64_value(get(&self.identity,"size"))?;let mut count=0u64;let mut digest=incremental_digest::Digest::new();let mut buffer=[0u8;CHUNK];loop{g.check()?;self.binding()?;let n=self.handles.last_mut().unwrap().read(&mut buffer).map_err(|e|e.to_string())?;g.check()?;self.binding()?;if n==0{break;}count=count.checked_add(n as u64).ok_or("Complete-file byte count overflow")?;if count>expected{return Err("Selected file grew during observation".into());}digest.update(&buffer[..n])?;consume(&buffer[..n])?;g.check()?;}if count!=expected{return Err("Selected file ended before its observed length".into());}self.binding()?;g.check()?;Ok((count,digest.finish()))}
+}
+/// Ordinary observations share the same held component chain as full digests.
+/// Nonblocking opens reject special files before any read can wait for a peer.
+pub(super) struct Source<'a>{held:Held,guard:Guard<'a>}
+impl<'a> Source<'a>{
+ pub(super) fn open(root:&Path,relative:&str,tool:&str,args:&Json,access:&'a operation::InspectionAccess)->Result<Self>{
+  if !access.read{return Err("File observation requires read permission".into());}
+  let guard=Guard::new(tool,args,access)?;guard.check()?;
+  let held=Held::open(root,normalize(relative)?,access)?;
+  let out=Self{held,guard};out.check()?;Ok(out)
+ }
+ pub(super) fn file(&self)->Result<fs::File>{self.check()?;self.held.handles.last().unwrap().try_clone().map_err(|e|e.to_string())}
+ pub(super) fn check(&self)->Result<()>{self.guard.check()?;self.held.binding()}
 }
 pub(super) fn validate_mode(args:&Json)->Result<()>{if get(args,"content")!=&Null&&text(args,"content")!="complete_digest"{return Err("Inspection content mode must be complete_digest when selected".into());}Ok(())}
 fn observe(root:&Path,args:&Json,access:&operation::InspectionAccess,tool:&str,selected:&str)->Result<(String,Json)>{if !access.read{return Err("Complete-file observation requires current read permission".into());}if access.budget<CHUNK+32768{return Err("Current response allowance cannot admit a 64 KiB complete-file buffer".into());}let g=Guard::new(tool,args,access)?;g.check()?;let mut held=Held::open(root,normalize(selected)?,access)?;let(n,digest)=held.scan(&g,|_|Ok(()))?;

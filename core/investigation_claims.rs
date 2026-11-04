@@ -31,19 +31,20 @@ pub enum Origin {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind { File, Directory, Symlink, Other, WebResponse, WebSearch, SearchResult, PageCapture, PngArtifact }
+pub enum Kind { File, Directory, Symlink, Other, WebResponse, WebSearch, SearchResult, PageCapture, PngArtifact, BinarySource, Encoding }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Criterion {
     Kind { source: Citation, expected: Kind },
     Size { source: Citation, expected: u64 },
+    EncodingWord { source: Citation, expected: u32 },
     CompleteCaptureDigestEqual { left: Citation, right: Citation },
     RepresentationDigestEqual { left: Citation, right: Citation },
 }
 impl Criterion {
     pub fn sources(&self) -> Vec<&Citation> {
         match self {
-            Self::Kind { source, .. } | Self::Size { source, .. } => vec![source],
+            Self::Kind { source, .. } | Self::Size { source, .. } | Self::EncodingWord { source, .. } => vec![source],
             Self::CompleteCaptureDigestEqual { left, right } | Self::RepresentationDigestEqual { left, right } => vec![left, right],
         }
     }
@@ -169,6 +170,7 @@ pub struct Fact {
     pub changed_during_observation: bool,
     pub sample: Option<Sample>,
     pub representation: Option<Representation>,
+    pub encoding: Option<u32>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Representation { pub length:u64, pub sha256:[u8;32], pub method:String }
@@ -207,6 +209,13 @@ pub fn evaluate(criterion: &Criterion, mut lookup: impl FnMut(&Citation) -> Opti
             },
             _ => (Verdict::Unresolved, "Observation is unavailable or changed during acquisition"),
         },
+        Criterion::EncodingWord { source, expected } => match lookup(source) {
+            Some(f) if !f.changed_during_observation => match f.encoding {
+                Some(word) => (if word == *expected { Verdict::Supported } else { Verdict::Contradicted }, "Compared the exact retained32-bit encoding word; this does not prove valid instructions, execution or behavior"),
+                None => (Verdict::Unresolved, "The cited node has no captured32-bit encoding word"),
+            },
+            _ => (Verdict::Unresolved, "Encoding observation is unavailable or changed during acquisition"),
+        },
         Criterion::RepresentationDigestEqual { left, right } => match (lookup(left),lookup(right)) {
             (Some(a),Some(b)) if !a.changed_during_observation&&!b.changed_during_observation => match (a.representation,b.representation) {
                 (Some(a),Some(b)) if a.method==b.method => (if a.length==b.length&&a.sha256==b.sha256{Verdict::Supported}else{Verdict::Contradicted},"Compared length and SHA-256 of the same representation method; this does not prove remote content or semantic equivalence"),
@@ -237,7 +246,7 @@ mod tests {
     use super::*;
     fn citation(id: &str) -> Citation { Citation { record: id.into(), snapshot: Some(0), node: Some(0) } }
     fn draft() -> Draft { Draft { previous: None, question: "What format is the selected item?".into(), hypothesis: "It is a regular file.".into(), citations: vec![citation("one")], criterion: Some(Criterion::Kind { source: citation("one"), expected: Kind::File }) } }
-    fn fact() -> Fact { Fact { kind: Some(Kind::File), size: Some(4), changed_during_observation: false, representation:None, sample: Some(Sample { offset: 0, length: 4, complete_file: true, sha256: [7; 32] }) } }
+    fn fact() -> Fact { Fact { kind: Some(Kind::File), size: Some(4), changed_during_observation: false, representation:None, encoding:None, sample: Some(Sample { offset: 0, length: 4, complete_file: true, sha256: [7; 32] }) } }
     #[test]
     fn revisions_keep_origin_and_prior_text() {
         let mut claims = Claims::default();

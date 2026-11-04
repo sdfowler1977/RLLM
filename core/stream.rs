@@ -17,6 +17,7 @@ struct Transfer {
     pending_cursor: Option<String>,
     resume_until: Option<std::time::Instant>,
     resumes: usize,
+    retry_ms: Option<u64>,
     server_notifications: usize,
     server_messages: usize,
     messages: bool,
@@ -53,6 +54,10 @@ struct Transfer {
     first_line: bool,
     finish_reason: Option<String>,
     usage: Option<Json>,
+    call_fragments: super::provider_calls::Fragments,
+    native_call: Option<Json>,
+    call_input: String,
+    call_block: Option<usize>,
 }
 impl Transfer {
     fn request_id(&self)->Result<Json>{super::mcp_identity::captured(self.control.as_ref().ok_or("MCP request binding unavailable")?)?.ok_or("MCP GET has no client request ID".into())}
@@ -64,8 +69,8 @@ impl Transfer {
         if self.headers&&context.get("request").and_then(Json::text)==Ok("initialize"){return Ok(&self.mcp_session);}
         Ok("")
     }
-    // Messages events are text-only presentation. Thinking and extension blocks
-    // are not transcript text; structured tool execution is not implemented here.
+    // Structured calls are retained until the complete provider turn is framed.
+    // They remain proposals; no stream event executes application operations.
     fn message_event(&mut self, record: &Json, event_name: &str) -> Result<()> {
         let kind=field(record,"type")?;
         if !event_name.is_empty() && event_name!=kind {return Err("Messages event name does not match its data".into());}
@@ -88,7 +93,13 @@ impl Transfer {
                 let index=message_index(record)?;
                 if index!=self.blocks {return Err("Messages content block index is not sequential".into());}
                 let block=record.get("content_block")?;let block_kind=field(block,"type")?;
-                if ["tool_use","server_tool_use"].contains(&block_kind) {return Err("Structured Messages tool blocks are not supported; no tool was executed".into());}
+                if block_kind=="server_tool_use" {return Err("Provider-hosted tool blocks require their configured hosted workflow".into());}
+                if block_kind=="tool_use" {
+                    if self.native_call.is_some(){return Err("Multiple streamed tool proposals require separate reviewed turns".into());}
+                    super::provider_calls::canonical(field(block,"name")?,block.get("input")?)?;
+                    let id=field(block,"id")?;if id.is_empty()||id.len()>256||id.chars().any(char::is_control){return Err("Invalid streamed tool identity".into());}
+                    self.native_call=Some(block.clone());self.call_input.clear();self.call_block=Some(index);
+                }
                 let text=block_kind=="text";
                 if text {if self.text_blocks>0 {self.append("\n")?;}self.text_blocks+=1;self.append(field(block,"text")?)?;}
                 self.block=Some((index,text));self.blocks+=1;
@@ -98,12 +109,26 @@ impl Transfer {
                 if index!=message_index(record)? {return Err("Messages delta has the wrong block index".into());}
                 let delta=record.get("delta")?;let kind=field(delta,"type")?;
                 if kind=="text_delta" {if !is_text {return Err("Text delta does not belong to a text block".into());}self.append(field(delta,"text")?)?;}
-                else if is_text && ["thinking_delta","signature_delta","input_json_delta"].contains(&kind) {return Err("Non-text delta does not belong to a text block".into());}
+                else if kind=="input_json_delta" {
+                    if is_text||self.call_block!=Some(index){return Err("Tool input delta does not belong to a tool block".into());}
+                    let fragment=field(delta,"partial_json")?;
+                    if self.call_input.len().saturating_add(fragment.len())>65536{return Err("Streamed tool arguments exceed 64 KiB".into());}
+                    self.call_input.push_str(fragment);
+                }
+                else if is_text && ["thinking_delta","signature_delta"].contains(&kind) {return Err("Non-text delta does not belong to a text block".into());}
                 // Other typed deltas are not promoted to generated text or tools.
             },
             "content_block_stop" => {
                 let (index,_)=self.block.ok_or("Messages stop has no open block")?;
                 if index!=message_index(record)? {return Err("Messages stop has the wrong block index".into());}
+                if self.call_block==Some(index){if let Some(call)=self.native_call.as_mut(){
+                    if !self.call_input.is_empty(){
+                        if call.get("input")!=Ok(&obj(vec![])){return Err("Streamed tool input supplied both initial fields and JSON deltas".into());}
+                        let input=parse(&self.call_input).unwrap_or_else(|_|s(&self.call_input));
+                        if let Obj(fields)=call{fields.insert("input".into(),input);}
+                        self.call_input.clear();
+                    }
+                }self.call_block=None;}
                 self.block=None;
             },
             "message_delta" => {
@@ -116,10 +141,12 @@ impl Transfer {
             "message_stop" => {
                 if !self.message_delta || self.block.is_some() {return Err("Messages stream stopped before its content completed".into());}
                 let reason=self.finish_reason.as_ref().ok_or("Messages stream has no stop reason")?;
-                if ["tool_use","pause_turn"].contains(&reason.as_str()) {return Err("Messages reply requires an unsupported structured continuation".into());}
+                if reason=="pause_turn" {return Err("Messages reply requires its configured hosted continuation".into());}
                 let mut message=self.message.take().ok_or("Messages stream has no start")?;
                 if let Obj(fields)=&mut message {
-                    fields.insert("content".into(),Arr(vec![obj(vec![("type",s("text")),("text",s(&self.text))])]));
+                    let mut parts=vec![obj(vec![("type",s("text")),("text",s(&self.text))])];
+                    if let Some(call)=&self.native_call{parts.push(call.clone());}
+                    fields.insert("content".into(),Arr(parts));
                     fields.insert("stop_reason".into(),s(reason));
                     if let Some(usage)=&self.usage {fields.insert("usage".into(),usage.clone());}
                 }
@@ -169,7 +196,13 @@ impl Transfer {
                 let parts=content.get("parts")?.array()?;
                 self.content_parts=self.content_parts.checked_add(parts.len()).ok_or("Content part count overflow")?;
                 if self.content_parts>4096 {return Err("Content reply exceeds 4096 parts".into());}
-                for part in parts {if let Some(text)=content_part(part)? {self.append(text)?;}}
+                for part in parts {
+                    if part.get("functionCall").is_ok(){
+                        if self.native_call.is_some(){return Err("Multiple streamed tool proposals require separate reviewed turns".into());}
+                        self.native_call=Some(part.clone());
+                    }
+                    if let Some(text)=content_part(part)? {self.append(text)?;}
+                }
             }
             if let Ok(reason)=candidate.get("finishReason") {
                 if reason!=&Null && !reason.text()?.is_empty() && reason.text()?!="FINISH_REASON_UNSPECIFIED" {
@@ -198,10 +231,10 @@ impl Transfer {
         let context=self.control.as_ref().ok_or("MCP control transport context is unavailable")?;
         let endpoint=field(context,"endpoint")?;let version=field(context,"version")?;
         let configured=context.get("session").and_then(Json::text).unwrap_or("");
-        if !configured.is_empty()&&!self.mcp_session.is_empty()&&configured!=self.mcp_session{return Err("MCP response changed its session".into());}
-        if configured.is_empty()&&!self.mcp_session.is_empty()&&context.get("request").is_ok()&&context.get("request").and_then(Json::text)!=Ok("initialize"){return Err("MCP session was assigned outside initialization".into());}
+        super::mcp_identity::session_binding(context.get("request").and_then(Json::text).unwrap_or(""),configured,if self.mcp_session.is_empty(){None}else{Some(&self.mcp_session)})?;
         let session=if self.mcp_session.is_empty(){configured}else{&self.mcp_session};
-        let mut headers=vec![("Content-Type","application/json".into()),("Accept","application/json, text/event-stream".into()),("MCP-Protocol-Version",version.into())];
+        let mut headers=vec![("Content-Type","application/json".into()),("Accept","application/json, text/event-stream".into())];
+        if context.get("request").and_then(Json::text)!=Ok("initialize"){headers.push(("MCP-Protocol-Version",version.into()));}
         let key=context.get("key").and_then(Json::text).unwrap_or("");if !key.is_empty(){headers.push(("Authorization",format!("Bearer {key}")));}
         if !session.is_empty(){headers.push(("Mcp-Session-Id",session.into()));}
         let mut effect=network::wire(endpoint,endpoint.starts_with("http://"),"POST",&reply.string(),headers)?;
@@ -262,8 +295,8 @@ impl Transfer {
     fn event(&mut self) -> Result<()> {
         let data = std::mem::take(&mut self.event);
         let event_name = std::mem::take(&mut self.event_name);
-        if data.is_empty() { self.cursor_event(); return Ok(()); }
         let data = data.strip_suffix('\n').unwrap_or(&data);
+        if data.is_empty() { self.cursor_event(); return Ok(()); }
         if self.mcp {
             if self.server_stream&&data.len()>4096{return Err("MCP server message exceeds 4 KiB".into());}
             let record=parse(data)?;
@@ -287,7 +320,9 @@ impl Transfer {
         if self.messages {return self.message_event(&parse(data)?, &event_name);}
         if data == "[DONE]" {
             let reason = self.finish_reason.as_ref().ok_or("Stream ended without a completed choice")?;
-            let mut fields = vec![("choices",Arr(vec![obj(vec![("index",Num("0".into())),("message",obj(vec![("role",s("assistant")),("content",s(&self.text))])),("finish_reason",s(reason))])]))];
+            let mut message=obj(vec![("role",s("assistant")),("content",s(&self.text))]);
+            if self.call_fragments.present&&!super::provider::limit_reason("chat",reason){if let Obj(fields)=&mut message{fields.insert("tool_calls".into(),Arr(vec![self.call_fragments.complete()?]));}}
+            let mut fields = vec![("choices",Arr(vec![obj(vec![("index",Num("0".into())),("message",message),("finish_reason",s(reason))])]))];
             if let Some(usage) = &self.usage {fields.push(("usage",usage.clone()));}
             self.terminal = Some(obj(fields)); return Ok(());
         }
@@ -307,6 +342,8 @@ impl Transfer {
                 continue;
             }
             if let Ok(content) = delta.get("content") {if content != &Null {self.append(content.text()?)?;}}
+            if delta.get("function_call").is_ok(){return Err("Legacy streamed function_call is not a supported proposal".into());}
+            if let Ok(calls)=delta.get("tool_calls"){self.call_fragments.append(calls)?;}
             if let Ok(reason) = choice.get("finish_reason") {if reason != &Null {self.finish_reason=Some(reason.text()?.to_string());}}
         }
         if let Ok(usage) = record.get("usage") {if matches!(usage,Obj(_)) {self.usage=Some(usage.clone());}}
@@ -326,6 +363,12 @@ impl Transfer {
         if self.messages && name == "event" {
             if value.len()>256 {return Err("Stream event name exceeds limit".into());}
             self.event_name=value.strip_prefix(' ').unwrap_or(value).to_string();
+        }
+        if self.mcp && name=="retry" {
+            let value=value.strip_prefix(' ').unwrap_or(value);
+            if !value.is_empty() && value.bytes().all(|b|b.is_ascii_digit()){
+                self.retry_ms=Some(value.bytes().fold(0u64,|n,b|n.saturating_mul(10).saturating_add((b-b'0') as u64)));
+            }
         }
         if self.resumable && name=="id" {
             let value=value.strip_prefix(' ').unwrap_or(value);
@@ -350,6 +393,11 @@ impl Transfer {
                 let content = content.text()?;
                 self.append(content)?;
             }
+            if let Ok(calls)=message.get("tool_calls") {if calls!=&Null {for call in calls.array()? {
+                if self.native_call.is_some(){return Err("Multiple streamed tool proposals require separate reviewed turns".into());}
+                if call.string().len()>65536{return Err("Streamed tool proposal exceeds 64 KiB".into());}
+                self.native_call=Some(call.clone());
+            }}}
         }
         match record.get("done") {
             Ok(Bool(true)) => self.terminal = Some(record),
@@ -411,6 +459,10 @@ impl Transfer {
                 if name.eq_ignore_ascii_case("content-type") { self.json = value.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("application/json"); }
             }
             if (self.mcp||self.messages||self.content)&&self.chunked&&self.expected.is_some(){return Err("Ambiguous streaming response framing".into());}
+            if self.mcp {
+                let context=self.control.as_ref().ok_or("MCP response requires its captured context")?;
+                super::mcp_identity::session_binding(context.get("request").and_then(Json::text).unwrap_or(""),field(context,"session")?,if self.mcp_session.is_empty(){None}else{Some(&self.mcp_session)})?;
+            }
             if self.server_stream {
                 if !server_sse{return Err("MCP server GET requires text/event-stream".into());}
                 let configured=self.control.as_ref().ok_or("No MCP server stream binding")?.get("session")?.text()?;
@@ -479,7 +531,7 @@ impl Transfer {
         let (_, body) = network::decoded(&self.raw)?;
         if self.json || !self.headers || (self.chat && self.text.is_empty() && self.terminal.is_none() && body.trim_start().starts_with('{')) {
             // A compatible server may ignore stream=true and return one JSON reply.
-            response(&obj(vec![("protocol",s(if self.content {"content"} else if self.messages {"messages"} else if self.chat {"chat"} else {"local"})),("body",s(&body))]))?;
+            super::provider::reply(if self.content {"content"} else if self.messages {"messages"} else if self.chat {"chat"} else {"local"},&body)?;
             if parse(&body)?.get("done")==Ok(&Bool(false)){return Err("Connection ended before the model completed its reply".into());}
             return Ok(body);
         }
@@ -488,25 +540,33 @@ impl Transfer {
         if !self.chat {let line = std::mem::take(&mut self.line); self.record(&line)?;}
         if self.content {
             let reason=self.finish_reason.as_ref().ok_or("Connection ended before the Content candidate completed")?;
-            if self.text.trim().is_empty(){return Err("Server returned no text response".into());}
-            let mut fields=vec![("candidates",Arr(vec![obj(vec![("index",Num("0".into())),("content",obj(vec![("role",s("model")),("parts",Arr(vec![obj(vec![("text",s(&self.text))])]))])),("finishReason",s(reason))])]))];
+            if self.text.trim().is_empty()&&self.native_call.is_none()&&!super::provider::limit_reason("content",reason){return Err("Server returned no text response".into());}
+            let mut parts=vec![obj(vec![("text",s(&self.text))])];if let Some(call)=&self.native_call{parts.push(call.clone());}
+            let mut fields=vec![("candidates",Arr(vec![obj(vec![("index",Num("0".into())),("content",obj(vec![("role",s("model")),("parts",Arr(parts))])),("finishReason",s(reason))])]))];
             if let Some(usage)=&self.usage {fields.push(("usageMetadata",usage.clone()));}
-            return Ok(obj(fields).string());
+            let body=obj(fields).string();super::provider::reply("content",&body)?;return Ok(body);
         }
         let mut complete = self.terminal.take().ok_or("Connection ended before the model completed its reply")?;
-        if self.text.trim().is_empty() { return Err("Server returned no text response".into()); }
-        if !self.chat {if let Obj(fields) = &mut complete { fields.insert("message".into(),obj(vec![("role",s("assistant")),("content",s(&self.text))])); }}
+        let (protocol,key)=if self.messages{("messages","stop_reason")}else if self.chat{("chat","finish_reason")}else{("local","done_reason")};
+        let reason=if protocol=="chat"{complete.get("choices").ok().and_then(|v|v.array().ok()).and_then(|v|v.first()).and_then(|v|v.get(key).ok()).and_then(|v|v.text().ok()).unwrap_or("")}else{complete.get(key).ok().and_then(|v|v.text().ok()).unwrap_or("")};
+        if protocol=="local" {if let Obj(fields) = &mut complete {
+            let mut message=obj(vec![("role",s("assistant")),("content",s(&self.text))]);
+            if let Some(call)=&self.native_call{if let Obj(fields)=&mut message{fields.insert("tool_calls".into(),Arr(vec![call.clone()]));}}
+            fields.insert("message".into(),message);
+        }}
+        super::provider::reply(protocol,&complete.string())?;
         Ok(complete.string())
     }
 }
 
 fn content_part(part:&Json)->Result<Option<&str>> {
     let Obj(_) = part else{return Err("Invalid Content part".into());};
-    for key in ["functionCall","functionResponse","executableCode","codeExecutionResult","inlineData","fileData"] {
+    for key in ["functionResponse","executableCode","codeExecutionResult","inlineData","fileData"] {
         if part.get(key).is_ok(){return Err("Structured Content tools and media are not supported here; no tool was executed".into());}
     }
     let thought=match part.get("thought") {Ok(Bool(v))=>*v,Err(_)=>false,_=>return Err("Invalid Content thought marker".into())};
-    if thought {return Ok(None);}
+    if thought {if part.get("functionCall").is_ok(){return Err("A thought part cannot supply a tool proposal".into());}return Ok(None);}
+    if let Ok(call)=part.get("functionCall") {super::provider_calls::canonical(field(call,"name")?,call.get("args")?)?;return Ok(None);}
     match part.get("text") {Ok(t)=>Ok(Some(t.text()?)),Err(_)=>Ok(None)}
 }
 pub(super) fn content_text(body:&Json)->Result<String> {
@@ -517,7 +577,8 @@ pub(super) fn content_text(body:&Json)->Result<String> {
     for candidate in body.get("candidates")?.array()? {
         if candidate.get("index").unwrap_or(&Num("0".into()))!=&Num("0".into()) {continue;}
         let mut parts=Vec::new();
-        for part in candidate.get("content")?.get("parts")?.array()? {if let Some(text)=content_part(part)? {parts.push(text);}}
+        let content=match candidate.get("content"){Ok(content)=>content,Err(_)=>return Ok(String::new())};
+        for part in content.get("parts")?.array()? {if let Some(text)=content_part(part)? {parts.push(text);}}
         return Ok(parts.join("\n"));
     }
     Err("No response candidate zero; content may have been blocked".into())
@@ -601,7 +662,7 @@ fn control_framed(bytes:&[u8])->bool {
     let Ok(header)=std::str::from_utf8(&bytes[..end]) else{return false;};
     header.lines().skip(1).any(|line|line.split_once(':').map(|(key,_)|key.eq_ignore_ascii_case("content-length")||key.eq_ignore_ascii_case("transfer-encoding")).unwrap_or(false))
 }
-struct Lease { token:u64, context:Json, cursor:String, until:std::time::Instant, resumes:usize, reserved:Option<String> }
+struct Lease { token:u64, context:Json, cursor:String, until:std::time::Instant, resumes:usize, retry_ms:Option<u64>, resume_after:std::time::Instant, reserved:Option<String> }
 struct Sessions { next: u64, entries: BTreeMap<u64, Transfer>, openings:BTreeMap<u64,Json>, lease:Option<Lease> }
 fn summary_wire(t:&Transfer,token:Option<u64>,paused:bool)->Json{
  let mut summary=obj(vec![("stream_schema",Num("1".into())),("notifications",Num(t.server_notifications.to_string())),("requests",Num(t.control_count.to_string())),("messages",Num(t.server_messages.to_string())),("paused",Bool(paused))]);
@@ -615,16 +676,17 @@ fn suspend(sessions:&mut Sessions,id:u64,owner:&Json,paused:bool)->Result<Json>{
  if t.cursor.is_empty()||std::time::Instant::now()>=until||t.resumes>=4{return Err("No usable MCP cursor or resume lifetime remains; close and listen anew".into());}
  if sessions.lease.is_some(){return Err("A paused MCP stream already owns the resume slot".into());}
  let token=sessions.next;sessions.next=token.checked_add(1).ok_or("MCP resume ticket exhausted")?;
- let t=sessions.entries.remove(&id).unwrap();sessions.lease=Some(Lease{token,context:t.control.clone().unwrap(),cursor:t.cursor.clone(),until,resumes:t.resumes,reserved:None});Ok(summary_wire(&t,Some(token),paused))
+ let t=sessions.entries.remove(&id).unwrap();let resume_after=std::time::Instant::now().checked_add(std::time::Duration::from_millis(t.retry_ms.unwrap_or(0))).unwrap_or(until);sessions.lease=Some(Lease{token,context:t.control.clone().unwrap(),cursor:t.cursor.clone(),until,resumes:t.resumes,retry_ms:t.retry_ms,resume_after,reserved:None});Ok(summary_wire(&t,Some(token),paused))
 }
 
 #[cfg(test)] mod mcp_checks {
  use super::*;
+ fn context(session:&str)->Json{obj(vec![("request_binding",Num("1".into())),("version",s("2025-06-18")),("session",s(session)),("request",s("tools/list"))])}
  #[test]fn persistent_sse_waits_for_matching_result_and_preserves_session(){
   let events="data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/custom\"}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{}}\n\ndata: {\"jsonrpc\":\"2.0\",\n data: ignored\n";
   let good="data: {\"jsonrpc\":\"2.0\",\ndata: \"id\":1,\"result\":{\"tools\":[]}}\n\n";
   let prefix=events.split("data: {\"jsonrpc\":\"2.0\",\n").next().unwrap();
-  for chunks in [false,true]{let header=if chunks{"Transfer-Encoding: chunked\r\n"}else{""};let head=format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nMcp-Session-Id: session-123\r\n{header}\r\n");let mut t=Transfer{chat:true,mcp:true,control:Some(obj(vec![("request_binding",Num("1".into())),("version",s("2025-06-18"))])),..Transfer::default()};t.feed(head.as_bytes()).unwrap();
+  for chunks in [false,true]{let header=if chunks{"Transfer-Encoding: chunked\r\n"}else{""};let head=format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nMcp-Session-Id: session-123\r\n{header}\r\n");let mut t=Transfer{chat:true,mcp:true,control:Some(context("session-123")),..Transfer::default()};t.feed(head.as_bytes()).unwrap();
    let encode=|body:&str|if chunks{format!("{:x}\r\n{body}\r\n",body.len())}else{body.into()};
    t.feed(encode(prefix).as_bytes()).unwrap();assert!(!t.framed());
    for b in encode(good).as_bytes(){t.feed(&[*b]).unwrap();}
@@ -632,9 +694,9 @@ fn suspend(sessions:&mut Sessions,id:u64,owner:&Json,paused:bool)->Result<Json>{
   }
  }
  #[test]fn wrong_id_and_ambiguous_framing_are_not_success(){
-  for body in ["{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}","{\"jsonrpc\":\"2.0\",\"id\":1}","{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{},\"error\":{}}"]{let wire=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",body.len());let mut t=Transfer{chat:true,mcp:true,control:Some(obj(vec![("request_binding",Num("1".into())),("version",s("2025-06-18"))])),..Transfer::default()};t.feed(wire.as_bytes()).unwrap();assert!(t.finish().is_err());}
-  for status in ["200 OK","204 No Content"]{let mut t=Transfer{chat:true,mcp:true,control:Some(obj(vec![("request_binding",Num("1".into())),("version",s("2025-06-18"))])),..Transfer::default()};let wire=format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\ndata: {{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}\n\n");assert!(t.feed(wire.as_bytes()).is_err());}
-  let mut t=Transfer{chat:true,mcp:true,control:Some(obj(vec![("request_binding",Num("1".into())),("version",s("2025-06-18"))])),..Transfer::default()};assert!(t.feed(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n").is_err());
+  for body in ["{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}","{\"jsonrpc\":\"2.0\",\"id\":1}","{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{},\"error\":{}}"]{let wire=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",body.len());let mut t=Transfer{chat:true,mcp:true,control:Some(context("")),..Transfer::default()};t.feed(wire.as_bytes()).unwrap();assert!(t.finish().is_err());}
+  for status in ["200 OK","204 No Content"]{let mut t=Transfer{chat:true,mcp:true,control:Some(context("")),..Transfer::default()};let wire=format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\ndata: {{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}\n\n");assert!(t.feed(wire.as_bytes()).is_err());}
+  let mut t=Transfer{chat:true,mcp:true,control:Some(context("")),..Transfer::default()};assert!(t.feed(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n").is_err());
  }
 }
 static SESSIONS: OnceLock<Mutex<Sessions>> = OnceLock::new();
@@ -644,7 +706,7 @@ pub fn operation(v: &Json) -> Result<Json> {
     if action=="stream_prepare" {
         let context=v.get("context")?;let owner=field(context,"owner")?;let endpoint=field(context,"endpoint")?;let key=field(context,"key")?;let session=field(context,"session")?;
         network::url(endpoint,endpoint.starts_with("http://"))?;
-        if endpoint.len()>8192||key.len()>8192||owner.is_empty()||owner.len()>256||session.len()>256||!session.bytes().all(|b|(0x21..=0x7e).contains(&b))||!["2025-03-26","2025-06-18"].contains(&field(context,"version")?)||field(context,"request")?!="GET"||context.get("resumable")!=Ok(&Bool(true)){return Err("Invalid resumable MCP GET admission".into());}
+        if endpoint.len()>8192||key.len()>8192||owner.is_empty()||owner.len()>256||session.len()>256||!session.bytes().all(|b|(0x21..=0x7e).contains(&b))||!super::mcp_schema::VERSIONS.contains(&field(context,"version")?)||field(context,"request")?!="GET"||context.get("resumable")!=Ok(&Bool(true)){return Err("Invalid resumable MCP GET admission".into());}
         super::mcp_identity::captured(context)?;
         if sessions.openings.len()>=4||sessions.entries.len()+sessions.openings.len()>=4{return Err("MCP GET opening capacity is full".into());}
         if sessions.openings.values().any(|c|c.get("owner")==context.get("owner"))||sessions.entries.values().any(|t|t.control.as_ref().and_then(|c|c.get("owner").ok())==context.get("owner").ok()){return Err("MCP GET owner already has an opening".into());}
@@ -681,6 +743,7 @@ pub fn operation(v: &Json) -> Result<Json> {
         if std::time::Instant::now()>=lease.until{return Err("MCP resume lifetime expired; close the paused stream".into());}
         if action=="stream_resume_summary"{if lease.reserved.is_some(){return Err("MCP cursor summary cannot adopt a reserved resume opening".into());}for key in ["owner","version","session"]{if v.get(key)!=lease.context.get(key){return Err("MCP cursor summary belongs to a different stream lifecycle".into());}}return Ok(Null);}
         if action=="stream_resume"&&lease.reserved.is_some(){return Err("MCP resume ticket was already reserved".into());}
+        if std::time::Instant::now()<lease.resume_after{return Err(format!("MCP stream resume is available after {} milliseconds",lease.resume_after.saturating_duration_since(std::time::Instant::now()).as_millis()));}
         let reservation_token=if action=="stream_resume"{sessions.next}else{lease.token};
         let mut context=lease.context.clone();if let Obj(f)=&mut context{f.insert("owner".into(),v.get("owner")?.clone());f.insert("resumable".into(),Bool(true));f.insert("resume_token".into(),Num(reservation_token.to_string()));}
         let endpoint=field(config,"endpoint")?;let key=field(config,"key")?;
@@ -697,7 +760,7 @@ pub fn operation(v: &Json) -> Result<Json> {
         if !["local","chat","mcp","mcp_server","messages","content"].contains(&protocol) {return Err("Unsupported incremental API format".into());}
         let control=if protocol=="mcp"||protocol=="mcp_server" {match v.get("mcp_control") {Ok(context)=>{
             let endpoint=field(context,"endpoint")?;network::url(endpoint,endpoint.starts_with("http://"))?;
-            if endpoint.len()>8192||field(context,"key")?.len()>8192||field(context,"owner")?.is_empty()||field(context,"owner")?.len()>256||!["2025-03-26","2025-06-18"].contains(&field(context,"version")?){return Err("Invalid MCP control binding".into());}
+            if endpoint.len()>8192||field(context,"key")?.len()>8192||field(context,"owner")?.is_empty()||field(context,"owner")?.len()>256||!super::mcp_schema::VERSIONS.contains(&field(context,"version")?){return Err("Invalid MCP control binding".into());}
             if let Ok(request)=context.get("request"){if !["initialize","tools/list","tools/call","GET"].contains(&request.text()?){return Err("Invalid MCP lifecycle request binding".into());}}
             let session=field(context,"session")?;if session.len()>256||!session.bytes().all(|b|(0x21..=0x7e).contains(&b)){return Err("Invalid MCP control session".into());}
             let expected=super::mcp_identity::captured(context)?;
@@ -707,19 +770,19 @@ pub fn operation(v: &Json) -> Result<Json> {
         if protocol=="mcp"&&control.as_ref().and_then(|c|c.get("request").ok()).and_then(|m|m.text().ok())==Some("GET"){return Err("MCP GET requires the standalone server stream mode".into());}
         if protocol=="mcp_server"&&control.as_ref().and_then(|c|c.get("request").ok()).and_then(|m|m.text().ok())!=Some("GET"){return Err("MCP server stream requires a GET lifecycle binding".into());}
         let resumable=protocol=="mcp_server"&&v.get("mcp_control").and_then(|c|c.get("resumable"))==Ok(&Bool(true));
-        let mut cursor=String::new();let mut resume_until=if resumable{Some(std::time::Instant::now()+std::time::Duration::from_secs(600))}else{None};let mut resumes=0;
+        let mut retry_ms=None;let mut cursor=String::new();let mut resume_until=if resumable{Some(std::time::Instant::now()+std::time::Duration::from_secs(600))}else{None};let mut resumes=0;
         if let Ok(token)=v.get("mcp_control").and_then(|c|c.get("resume_token")){
             let lease=sessions.lease.as_ref().ok_or("MCP resume lease was consumed")?;
             if token!=&Num(lease.token.to_string())||std::time::Instant::now()>=lease.until{return Err("MCP resume lease is no longer current".into());}
             if lease.reserved.as_deref()!=control.as_ref().and_then(|c|c.get("owner").ok()).and_then(|v|v.text().ok()){return Err("MCP resume owner is not reserved".into());}
             for key in ["endpoint","key","version","session"]{if control.as_ref().and_then(|c|c.get(key).ok())!=lease.context.get(key).ok(){return Err("MCP resume binding changed".into());}}
-            let lease=sessions.lease.take().unwrap();cursor=lease.cursor;resume_until=Some(lease.until);resumes=lease.resumes+1;
+            let lease=sessions.lease.take().unwrap();cursor=lease.cursor;resume_until=Some(lease.until);resumes=lease.resumes+1;retry_ms=lease.retry_ms;
         }
         if resumable&&v.get("mcp_control").and_then(|c|c.get("resume_token")).is_err(){
             let context=v.get("mcp_control")?;let token=match context.get("admission_token")?{Num(n)=>n.parse::<u64>().map_err(|_|"Invalid MCP opening ticket")?,_=>return Err("Invalid MCP opening ticket".into())};
             if sessions.openings.get(&token)!=Some(context){return Err("MCP GET opening was cancelled, consumed or changed".into());}sessions.openings.remove(&token);
         }
-        sessions.entries.insert(id,Transfer{resumable,cursor,resume_until,resumes,control,server_stream:protocol=="mcp_server",chat:protocol!="local",mcp:protocol=="mcp"||protocol=="mcp_server",messages:protocol=="messages",content:protocol=="content",..Transfer::default()}); return Ok(Num(id.to_string()));
+        sessions.entries.insert(id,Transfer{resumable,cursor,resume_until,resumes,retry_ms,control,server_stream:protocol=="mcp_server",chat:protocol!="local",mcp:protocol=="mcp"||protocol=="mcp_server",messages:protocol=="messages",content:protocol=="content",..Transfer::default()}); return Ok(Num(id.to_string()));
     }
     let id = match v.get("id")? { Num(n)=>n.parse::<u64>().map_err(|_| "Invalid stream identifier")?, _=>return Err("Invalid stream identifier".into()) };
     if action=="stream_suspend" {return suspend(&mut sessions,id,v.get("owner")?,true);}
@@ -768,8 +831,7 @@ pub fn operation(v: &Json) -> Result<Json> {
                 let cleanup=transfer.control.as_ref().and_then(|context|{super::mcp_lifecycle::plan(context,transfer.lifecycle_session().ok()?,false).ok()}).unwrap_or(Arr(vec![]));
                 return Ok(obj(vec![("delta",s("")),("complete",Bool(false)),("error",s(&error)),("cleanup",cleanup),("observation",transfer.server_observation())]));
             }
-            if transfer.chat||transfer.messages||transfer.content {return Ok(obj(vec![("delta",s(&transfer.text[previous..])),("complete",Bool(false)),("error",s(&error))]));}
-            return Err(error);
+            return Ok(obj(vec![("delta",s(&transfer.text[previous..])),("complete",Bool(false)),("error",s(&error))]));
         }
         let controls=std::mem::take(&mut transfer.controls);
         Ok(obj(vec![("delta",s(&transfer.text[previous..])),("complete",Bool(transfer.framed())),("controls",Arr(controls)),("observation",transfer.server_observation())]))

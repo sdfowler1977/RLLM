@@ -4,9 +4,10 @@ use super::*;
 // A plan contains only Rust-authored requests pinned to the old connection.
 pub(super) fn plan(context:&Json,session:&str,cancel:bool)->Result<Json>{
     let endpoint=field(context,"endpoint")?;let key=field(context,"key")?;let version=field(context,"version")?;
-    if endpoint.len()>8192||key.len()>8192||!["2025-03-26","2025-06-18"].contains(&version){return Err("Invalid MCP lifecycle binding".into());}
+    if endpoint.len()>8192||key.len()>8192||!super::mcp_schema::VERSIONS.contains(&version){return Err("Invalid MCP lifecycle binding".into());}
     if session.len()>256||!session.bytes().all(|b|(0x21..=0x7e).contains(&b)){return Err("Invalid MCP lifecycle session".into());}
-    let mut headers=vec![("Accept","application/json, text/event-stream".into()),("MCP-Protocol-Version",version.into())];
+    let mut headers=vec![("Accept","application/json, text/event-stream".into())];
+    if context.get("request").and_then(Json::text)!=Ok("initialize"){headers.push(("MCP-Protocol-Version",version.into()));}
     if !key.is_empty(){headers.push(("Authorization",format!("Bearer {key}")));}
     if !session.is_empty(){headers.push(("Mcp-Session-Id",session.into()));}
     if context.get("request").is_ok(){super::mcp_identity::captured(context)?;}

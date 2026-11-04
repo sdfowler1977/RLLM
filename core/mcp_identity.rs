@@ -8,6 +8,19 @@ fn serial(counter:&AtomicU64)->Result<Json>{
         .map_err(|_|"MCP request identifier exhausted")?;
     Ok(s(&format!("client-{n}")))
 }
+// A session header is bound to the selected connection and current phase.
+pub(super) fn session_binding(request:&str,expected:&str,received:Option<&str>)->Result<()> {
+    if let Some(value)=received {
+        if value.is_empty()||value.len()>256||!value.bytes().all(|b|(0x21..=0x7e).contains(&b)) {
+            return Err("MCP session identity requires one to 256 visible ASCII bytes".into());
+        }
+        if request!="initialize" && value!=expected {
+            return Err("MCP response session must match the negotiated session".into());
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn next()->Result<Json>{
     static NEXT:AtomicU64=AtomicU64::new(1);
     serial(&NEXT)

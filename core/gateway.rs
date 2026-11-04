@@ -11,7 +11,8 @@ fn text(j: &Json, key: &str) -> String {
 }
 fn reply(code: u16, body: Json) -> Json {
     let body = body.string();
-    s(&format!("HTTP/1.1 {code} {}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{}",match code{200=>"OK",400=>"Bad Request",401=>"Unauthorized",404=>"Not Found",429=>"Too Many Requests",_=>"Bad Gateway"},body.len(),body))
+    let challenge=if code==401 {"WWW-Authenticate: Bearer realm=\"RLLM\"\r\n"}else{""};
+    s(&format!("HTTP/1.1 {code} {}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n{challenge}\r\n{}",match code{200=>"OK",400=>"Bad Request",401=>"Unauthorized",404=>"Not Found",429=>"Too Many Requests",_=>"Bad Gateway"},body.len(),body))
 }
 fn error(code: u16, message: &str) -> Json {
     obj(vec![(
@@ -84,6 +85,7 @@ pub fn incoming(v: &Json) -> Result<Json> {
     if mismatch != 0 {
         return Ok(error(401, "A valid gateway bearer token is required"));
     }
+    if let Some(response)=super::a2a::incoming(config,&method,&path,&headers,field(v,"body")?)? { return Ok(obj(vec![("reply",s(&response))])); }
     let profiles = config.get("profiles")?.array()?;
     if method == "GET" && path == "/health" {
         return Ok(obj(vec![(

@@ -1,5 +1,6 @@
 //! Original bounded ELF envelope and declared-linkage observations, never a loader.
 use std::fmt::Write as _;
+#[path="elf_code.rs"] mod code;
 const INPUT_LIMIT:usize=128*1024;
 const TABLE_LIMIT:u64=64;
 const SYMBOL_TABLE_LIMIT:usize=4;
@@ -110,7 +111,7 @@ fn dynamic(reader:&Reader<'_>,header:&Header,entry:Dynamic,loads:&[Load],loads_c
  for(tag,offset)in names{let label=match tag{1=>"DT_NEEDED dependency candidate",14=>"DT_SONAME declaration",15=>"DT_RPATH declaration (not used)",_=>"DT_RUNPATH declaration (not used)"};match named(strings,offset){Ok(name)=>{let _=writeln!(out,"{label}: \"{name}\". No dependency was located, fetched or loaded.");found+=1;},Err(reason)=>{let _=writeln!(out,"{label}: name unavailable ({reason}).");}}}
  found
 }
-fn contents(reader:&Reader<'_>,wide:bool,out:&mut String){
+fn contents(reader:&Reader<'_>,wide:bool,out:&mut String,flow:&mut super::control_flow::Observation,cancelled:&impl Fn()->bool){
  let minimum=if wide{64}else{52};if reader.bytes.len()<minimum{out.push_str("Class-specific ELF header is truncated in examined bytes; table fields withheld.\n");return;}
  let(kind,architecture,version)=(reader.u16(16).unwrap(),reader.u16(18).unwrap(),reader.u32(20).unwrap());
  let(entry,flags,ehsize,mut header)=if wide{(reader.u64(24).unwrap(),reader.u32(48).unwrap(),reader.u16(52).unwrap(),Header{wide,phoff:reader.u64(32).unwrap(),shoff:reader.u64(40).unwrap(),phsize:reader.u16(54).unwrap() as u64,phnum:reader.u16(56).unwrap() as u64,shsize:reader.u16(58).unwrap() as u64,shnum:reader.u16(60).unwrap() as u64,names:reader.u16(62).unwrap() as u64})}
@@ -127,7 +128,7 @@ fn contents(reader:&Reader<'_>,wide:bool,out:&mut String){
  }
  let ph_valid=table_extent(reader,header.phoff,header.phsize,header.phnum,phminimum,"Program table",out);
  let sh_valid=table_extent(reader,header.shoff,header.shsize,header.shnum,shminimum,"Section table",out);
- let mut loads=Vec::new();let mut dynamics:Vec<Dynamic>=Vec::new();let mut ph_observed=0;let mut loads_complete=ph_valid;
+ let mut flow_regions=Vec::new();let mut loads=Vec::new();let mut dynamics:Vec<Dynamic>=Vec::new();let mut ph_observed=0;let mut loads_complete=ph_valid;
  if ph_valid{for i in 0..header.phnum.min(TABLE_LIMIT){
   let at=match header.phsize.checked_mul(i).and_then(|v|header.phoff.checked_add(v)){Some(v)=>v,None=>break};if reader.slice(at,header.phsize).is_none(){let _=writeln!(out,"Program header {i} is not fully available in the examined prefix; later headers unexamined.");break;}
   let ptype=reader.u32(at).unwrap();let(offset,address,file_size,memory_size,flags,align)=if wide{(reader.u64(at+8).unwrap(),reader.u64(at+16).unwrap(),reader.u64(at+32).unwrap(),reader.u64(at+40).unwrap(),reader.u32(at+4).unwrap(),reader.u64(at+48).unwrap())}else{(reader.u32(at+4).unwrap() as u64,reader.u32(at+8).unwrap() as u64,reader.u32(at+16).unwrap() as u64,reader.u32(at+20).unwrap() as u64,reader.u32(at+24).unwrap(),reader.u32(at+28).unwrap() as u64)};ph_observed+=1;
@@ -138,7 +139,7 @@ fn contents(reader:&Reader<'_>,wide:bool,out:&mut String){
    if file_size>memory_size||!pow2_or_small(align)||(align>1&&offset%align!=address%align){let _=writeln!(out,"LOAD {i}: inconsistent file/memory sizes or alignment/congruence; mapping withheld.");loads_complete=false;continue;}
    let file_address_end=address+file_size;
    let _=writeln!(out,"Declared LOAD mapping: file [{offset},{end}) -> virtual [0x{address:x},0x{file_address_end:x}); declared zero-fill tail {} bytes to 0x{memory_end:x}. This is an ELF address mapping, not an actual process address or loaded-memory observation.",memory_size-file_size);
-   loads.push(Load{offset,address,file_size,memory_size});
+   loads.push(Load{offset,address,file_size,memory_size});flow_regions.push(super::control_flow::Region{offset,address,file_size,memory_size,executable:flags&1!=0});
   }
   if ptype==2&&dynamics.len()<DYNAMIC_TABLE_LIMIT{dynamics.push(Dynamic{offset,size:file_size,string_section:None});}
  }}
@@ -160,14 +161,24 @@ fn contents(reader:&Reader<'_>,wide:bool,out:&mut String){
   }
  }}
  if header.phnum>TABLE_LIMIT||header.shnum>TABLE_LIMIT{out.push_str("Some declared table headers were omitted under the 64-header bound; unseen mappings, symbols and relationships remain unknown.\n");}
- loads_complete&=ph_observed==header.phnum;let mut dynamic_names=0;for d in dynamics{dynamic_names+=dynamic(reader,&header,d,&loads,loads_complete,out);}
+ loads_complete&=ph_observed==header.phnum;
+ if architecture==183&&wide{
+  *flow=match code::inspect(reader,&header,kind,sh_valid,&flow_regions,cancelled){Ok(context)=>super::control_flow::observe(reader.bytes,&flow_regions,loads_complete&&reader.total.is_some(),"declared VA ",cancelled,&context.data).map(|mut value|{value.text.push('\n');value.text.push_str(&context.report);value.classifications=context.classifications;value.classifications_complete=Some(context.classifications_complete);value.relocations=context.relocations;value.relocations_complete=Some(context.relocations_complete);value}),Err(e)=>Err(e)}.unwrap_or_else(|e|super::control_flow::Observation{text:format!("Control-flow observation unavailable: {e}."),coordinate:"declared VA ".into(),..Default::default()});
+ }
+ else{flow.text=format!("Control-flow instruction interpretation unavailable for ELF class/machine {architecture}; existing structural observations remain available.\n");}
+ let mut dynamic_names=0;for d in dynamics{dynamic_names+=dynamic(reader,&header,d,&loads,loads_complete,out);}
  let _=writeln!(out,"Observed {ph_observed} program headers and {sh_observed} section headers; classified {symbol_candidates} named symbol candidates and {dynamic_names} dynamic-name declarations. Symbol section-index extensions and executable semantics are not resolved.");
  let observed_memory=loads.iter().fold(0u64,|n,l|n.saturating_add(l.memory_size));let _=writeln!(out,"Observed LOAD memory-size fields sum to {observed_memory} bytes before overlap reconciliation; this is not memory usage, allocation, or a unique-address total.");
 }
 
 /// Inspect original held bytes only. Total size is caller metadata, not proof
 /// that the file or process remained unchanged outside this read.
-pub(super) fn analyze(data:&[u8],complete:bool,total:u64)->String{
+pub(super) fn analyze(data:&[u8],complete:bool,total:u64)->String{analyze_using(data,complete,total,&||false)}
+pub(super) fn analyze_with_cancel(data:&[u8],complete:bool,total:u64,cancelled:&impl Fn()->bool)->Result<String,String>{if cancelled(){return Err("Inspection cancelled during ELF observations".into());}let value=analyze_using(data,complete,total,cancelled);if cancelled(){return Err("Inspection cancelled during ELF observations".into());}Ok(value)}
+pub(super) fn observe_with_cancel(data:&[u8],complete:bool,total:u64,cancelled:&impl Fn()->bool)->Result<super::control_flow::Observation,String>{if cancelled(){return Err("Inspection cancelled during ELF observations".into());}let value=observe_using(data,complete,total,cancelled);if cancelled(){return Err("Inspection cancelled during ELF observations".into());}Ok(value)}
+fn analyze_using(data:&[u8],complete:bool,total:u64,cancelled:&impl Fn()->bool)->String{observe_using(data,complete,total,cancelled).text}
+fn observe_using(data:&[u8],complete:bool,total:u64,cancelled:&impl Fn()->bool)->super::control_flow::Observation{
+ let mut flow=super::control_flow::Observation::default();
  let count=data.len().min(INPUT_LIMIT);let consistent=data.len() as u64<=total&&(!complete||data.len() as u64==total);let whole=consistent&&complete&&count==data.len();
  let mut out=format!("ELF structural observations\nReported source {total} bytes; supplied {}; examined {count} (cap {INPUT_LIMIT}). Scope: {}. Bounds: 64 headers/table, 4 symbol tables ×128 records, 4 dynamic tables ×128 records, 256-byte name scans.\n",data.len(),if whole{"complete supplied input"}else{"prefix only; unseen bytes unknown"});
  if !consistent{out.push_str("Supplied bytes/completion flag/total are inconsistent; whole-file extent comparisons withheld.\n");}
@@ -176,9 +187,9 @@ pub(super) fn analyze(data:&[u8],complete:bool,total:u64)->String{
  else if &bytes[..4]!=b"\x7fELF"{out.push_str("No ELF signature observed; other formats are not classified here.\n");}
  else if bytes.len()<16{out.push_str("ELF signature observed, but identification bytes are incomplete; no class/endian fields inferred.\n");}
  else if !matches!(bytes[4],1|2)||!matches!(bytes[5],1|2)||bytes[6]!=1{let _=writeln!(out,"Unsupported identification: class {}, data encoding {}, identification version {}; tables not guessed.",bytes[4],bytes[5],bytes[6]);}
- else{let _=writeln!(out,"Identification OS ABI byte {}; ABI version byte {}. No OS compatibility assertion.",bytes[7],bytes[8]);let reader=Reader{bytes,endian:if bytes[5]==1{Endian::Little}else{Endian::Big},total:if consistent{Some(total)}else{None}};contents(&reader,bytes[4]==2,&mut out);}
- out.push_str("Relocations, dependency locations, disassembly and resolved call relationships remain unobserved by this structural pass.\n");
- if out.len()>OUTPUT_LIMIT{let mut n=(OUTPUT_LIMIT-1400).min(out.len());while !out.is_char_boundary(n){n-=1;}let mut result=out[..n].to_string();result.push_str("\nReport abbreviated; middle inventory rows omitted. Final observations follow:\n");let mut tail=out.len().saturating_sub(1200);while !out.is_char_boundary(tail){tail+=1;}if let Some(line)=out[tail..].find('\n'){tail+=line+1;}result.push_str(&out[tail..]);result}else{out}
+ else{let _=writeln!(out,"Identification OS ABI byte {}; ABI version byte {}. No OS compatibility assertion.",bytes[7],bytes[8]);let reader=Reader{bytes,endian:if bytes[5]==1{Endian::Little}else{Endian::Big},total:if consistent{Some(total)}else{None}};contents(&reader,bytes[4]==2,&mut out,&mut flow,cancelled);}
+ out.push_str("Relocations, dependency locations and resolved call relationships remain unobserved by this structural pass; any separate instruction encoding observations follow below.\n");
+ let structural=if out.len()>OUTPUT_LIMIT{let mut n=(OUTPUT_LIMIT-1400).min(out.len());while !out.is_char_boundary(n){n-=1;}let mut result=out[..n].to_string();result.push_str("\nReport abbreviated; middle inventory rows omitted. Final observations follow:\n");let mut tail=out.len().saturating_sub(1200);while !out.is_char_boundary(tail){tail+=1;}if let Some(line)=out[tail..].find('\n'){tail+=line+1;}result.push_str(&out[tail..]);result}else{out};flow.text=format!("{structural}\n{}",flow.text);flow
 }
 
 #[cfg(test)]mod checks{

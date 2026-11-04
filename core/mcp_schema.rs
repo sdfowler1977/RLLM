@@ -1,5 +1,9 @@
 use super::{Json, Json::*, Result};
 
+pub(super) const VERSIONS: &[&str] = &["2025-03-26", "2025-06-18", "2025-11-25"];
+pub(super) const PREFERRED: &str = "2025-11-25";
+fn modern(version: &str) -> bool { matches!(version, "2025-06-18" | "2025-11-25") }
+
 const CATALOG_LIMIT: usize = 65536;
 
 // Android persistence quotes slashes and has short backspace/form-feed escapes.
@@ -145,9 +149,9 @@ pub(super) fn notification_params(value:&Json)->Result<()> {
     }
     Ok(())
 }
-// Known March/June notification shapes only; payloads remain discarded data.
+// Versioned notification shapes; payloads remain untrusted data.
 pub(super) fn notification(version:&str,value:&Json)->Result<()> {
-    if !["2025-03-26","2025-06-18"].contains(&version){return Err("Unsupported MCP notification revision".into());}
+    if !VERSIONS.contains(&version){return Err("Unsupported MCP notification revision".into());}
     notification_params(value)?;
     let method=value.get("method")?.text()?;
     if !["notifications/progress","notifications/message","notifications/cancelled","notifications/resources/updated"].contains(&method){return Ok(());}
@@ -185,13 +189,13 @@ fn annotations(version: &str, value: &Json) -> Result<()> {
     if let Some(value)=fields.get("priority") {
         if !matches!(value,Num(number) if unit_interval(number)) {return Err("MCP content priority must be a number between zero and one".into());}
     }
-    if version=="2025-06-18" {text_field(value,"lastModified",false)?;}
+    if modern(version) {text_field(value,"lastModified",false)?;}
     Ok(())
 }
 fn resource_contents(version: &str, value: &Json) -> Result<()> {
     if !matches!(value,Obj(_)) {return Err("MCP embedded resource contents must be an object".into());}
     text_field(value,"uri",true)?;text_field(value,"mimeType",false)?;
-    if version=="2025-06-18" {meta(value)?;}
+    if modern(version) {meta(value)?;}
     // The official alternatives are anyOf, not XOR. A valid text branch may
     // coexist with an unknown blob extension (and conversely).
     if !matches!(value.get("text"),Ok(Str(_))) && !matches!(value.get("blob"),Ok(Str(_))) {
@@ -202,12 +206,12 @@ fn resource_contents(version: &str, value: &Json) -> Result<()> {
 fn content(version: &str, value: &Json) -> Result<()> {
     if !matches!(value,Obj(_)) {return Err("MCP content member must be an object".into());}
     annotations(version,value)?;
-    if version=="2025-06-18" {meta(value)?;}
+    if modern(version) {meta(value)?;}
     match value.get("type")?.text()? {
         "text"=>text_field(value,"text",true)?,
         "image"|"audio"=>{text_field(value,"data",true)?;text_field(value,"mimeType",true)?;},
         "resource"=>resource_contents(version,value.get("resource")?)?,
-        "resource_link" if version=="2025-06-18"=>{
+        "resource_link" if modern(version)=>{
             text_field(value,"name",true)?;text_field(value,"uri",true)?;
             for key in ["title","description","mimeType"] {text_field(value,key,false)?;}
             if let Ok(value)=value.get("size") {if !matches!(value,Num(_)) {return Err("MCP resource link size must be a number".into());}}
@@ -219,9 +223,9 @@ fn content(version: &str, value: &Json) -> Result<()> {
 
 // Validate advertisements without retaining them as instructions or permissions.
 pub(super) fn initialization(version:&str,value:&Json)->Result<()> {
-    if !["2025-03-26","2025-06-18"].contains(&version){return Err("Unsupported MCP initialization revision".into());}
+    if !VERSIONS.contains(&version){return Err("Unsupported MCP initialization revision".into());}
     text_field(value,"instructions",false)?;
-    if version=="2025-06-18" {text_field(value.get("serverInfo")?,"title",false)?;}
+    if modern(version) {text_field(value.get("serverInfo")?,"title",false)?;}
     let capabilities=value.get("capabilities")?;
     if !matches!(capabilities,Obj(_)){return Err("MCP capabilities must be an object".into());}
     for key in ["logging","completions","prompts","resources","tools","experimental"] {
@@ -238,14 +242,14 @@ pub(super) fn initialization(version:&str,value:&Json)->Result<()> {
 
 pub(super) fn result(version: &str, value: &Json) -> Result<()> {
     let Obj(fields)=value else {return Err("MCP tool result must be an object".into());};
-    if !["2025-03-26","2025-06-18"].contains(&version) {return Err("MCP result revision was not negotiated".into());}
+    if !VERSIONS.contains(&version) {return Err("MCP result revision was not negotiated".into());}
     meta(value)?;
     let Arr(items)=value.get("content")? else {return Err("MCP tool result content must be an array".into());};
     for item in items {content(version,item)?;}
     if let Some(value)=fields.get("isError") {
         if !matches!(value,Bool(_)) {return Err("MCP tool result isError must be Boolean".into());}
     }
-    if version=="2025-06-18" {
+    if modern(version) {
         if let Some(value)=fields.get("structuredContent") {
             if !matches!(value,Obj(_)) {return Err("MCP structuredContent must be an object".into());}
         }
@@ -255,7 +259,7 @@ pub(super) fn result(version: &str, value: &Json) -> Result<()> {
 
 // Pure whole-page preflight. No partial catalog or cursor reaches application state.
 pub(super) fn catalog(version: &str, previous: &str, cursors: &[Json], result: &Json) -> Result<Catalog> {
-    if !["2025-03-26","2025-06-18"].contains(&version) {return Err("MCP catalog revision was not negotiated".into());}
+    if !VERSIONS.contains(&version) {return Err("MCP catalog revision was not negotiated".into());}
     let tools=match result.get("tools")? {Arr(v) if v.len()<=128=>v,_=>return Err("MCP tools page must contain at most 128 tools".into())};
     let next=match result.get("nextCursor") {Err(_)=>None,Ok(Str(v)) if v.is_empty()=>None,Ok(Str(v)) if v.len()<=2048=>Some(v.clone()),Ok(Str(_))=>return Err("MCP pagination cursor exceeds limit".into()),_=>return Err("Invalid MCP pagination cursor".into())};
     let mut staged_cursors=cursors.to_vec();
@@ -269,7 +273,7 @@ pub(super) fn catalog(version: &str, previous: &str, cursors: &[Json], result: &
         let name=tool.get("name")?.text()?;
         if name.is_empty() || name.len()>256 || name.chars().any(char::is_control) {return Err("Invalid MCP tool name".into());}
         if let Some(v)=fields.get("description") {if !matches!(v,Str(_)) {return Err("MCP tool description must be text".into());}}
-        if version=="2025-06-18" {if let Some(v)=fields.get("title") {if !matches!(v,Str(_)) {return Err("MCP tool title must be text".into());}}}
+        if modern(version) {if let Some(v)=fields.get("title") {if !matches!(v,Str(_)) {return Err("MCP tool title must be text".into());}}}
         if let Some(v)=fields.get("annotations") {
             let Obj(hints)=v else {return Err("MCP tool annotations must be an object".into());};
             if let Some(v)=hints.get("title") {if !matches!(v,Str(_)) {return Err("MCP annotation title must be text".into());}}
@@ -278,7 +282,7 @@ pub(super) fn catalog(version: &str, previous: &str, cursors: &[Json], result: &
             }
         }
         let input=tool.get("inputSchema")?;shape(input)?;
-        let output=if version=="2025-06-18" {fields.get("outputSchema")} else {None};
+        let output=if modern(version) {fields.get("outputSchema")} else {None};
         if let Some(output)=output {shape(output)?;}
         if i!=0 {out.push("\n\n")?;}out.push(name)?;out.push("\n")?;out.json(input,0)?;
         if let Some(output)=output {out.push("\nOutput schema (untrusted):\n")?;out.json(output,0)?;}

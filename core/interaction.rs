@@ -24,8 +24,18 @@ fn target(st:&Json,trash:bool)->Result<Json>{
     matches.into_iter().next().ok_or("Conversation no longer exists".into())
 }
 fn scoped(action:&str,id:&str)->String{format!("{action}:{id}")}
+fn trash_snapshot(st:&Json)->Result<Json>{
+    let mut identities=std::collections::BTreeSet::new();let mut entries=vec![];
+    for c in array(st,"trash"){
+        let id=text(&c,"id");
+        if id.is_empty()||!identities.insert(id.clone()){return Err("Trash contains ambiguous conversation identities; no items were changed".into());}
+        let mut hash=incremental_digest::Digest::new();hash.update(c.string().as_bytes())?;
+        entries.push(obj(vec![("id",s(&id)),("title",s(&text(&c,"title"))),("messages",Num(array(&c,"messages").len().to_string())),("identity",s(&hash.finish()))]));
+    }
+    Ok(Arr(entries))
+}
 
-pub(super) fn handles(a:&str)->bool {matches!(a,"chat_agents"|"trash"|"chat_delete_review"|"chat_delete"|"chat_restore"|"chat_purge_review"|"chat_purge"|"appearance_save"|"appearance_preview"|"appearance_reset"|"wallpaper_choose"|"wallpaper_result")||["chat_delete_choose:","chat_delete_review:","chat_delete:","chat_restore:","chat_purge_review:","chat_purge:"].iter().any(|p|a.starts_with(p))||a.starts_with("chat_agent:")||a.starts_with("chat_options:")||a.starts_with("trash_options:")}
+pub(super) fn handles(a:&str)->bool {matches!(a,"chat_agents"|"trash"|"trash_empty_review"|"trash_empty"|"chat_delete_review"|"chat_delete"|"chat_restore"|"chat_purge_review"|"chat_purge"|"appearance_save"|"appearance_preview"|"appearance_reset"|"wallpaper_choose"|"wallpaper_result")||["chat_delete_choose:","chat_delete_review:","chat_delete:","chat_restore:","chat_purge_review:","chat_purge:"].iter().any(|p|a.starts_with(p))||a.starts_with("chat_agent:")||a.starts_with("chat_options:")||a.starts_with("trash_options:")}
 pub(super) fn event(st:&mut Json,a:&str,inputs:&Json)->Result<Json>{
     if locked(st){return Err("Finish or cancel the current task or tool review first".into());}
     // A button's captured target must still match the current review. Old row
@@ -45,6 +55,20 @@ pub(super) fn event(st:&mut Json,a:&str,inputs:&Json)->Result<Json>{
     if let Some(raw)=a.strip_prefix("chat_agent:"){select_agent(st,raw.parse().map_err(|_|"Invalid agent")?)?;return Ok(Null);}
     for (prefix,deleted) in [("chat_options:",false),("trash_options:",true)] {if let Some(id)=a.strip_prefix(prefix){if !array(st,if deleted{"trash"}else{"chats"}).iter().any(|c|text(c,"id")==id){return Err("Conversation no longer exists".into());}put(st,"chat_target",s(id));put(st,"dialog",s(if deleted{"trash_options"}else{"chat_options"}));return Ok(Null);}}
     match a {
+        "trash_empty_review"=>{
+            if text(st,"dialog")!="trash"{return Err("Open Trash before reviewing permanent deletion".into());}
+            let items=array(st,"trash");
+            if items.is_empty(){return Err("Trash is already empty".into());}
+            let snapshot=trash_snapshot(st)?;
+            put(st,"trash_review",snapshot);put(st,"dialog",s("trash_empty_review"));
+        },
+        "trash_empty"=>{
+            if text(st,"dialog")!="trash_empty_review"{return Err("Review the listed conversations before emptying Trash".into());}
+            let reviewed=array(st,"trash_review");
+            if reviewed.is_empty()||get(st,"trash_review")!=&trash_snapshot(st)?{return Err("Trash changed after review. Open Trash and review the current conversations again".into());}
+            put(st,"trash",Arr(vec![]));put(st,"trash_review",Null);put(st,"chat_target",Null);put(st,"dialog",s("trash"));
+            put(st,"notice",s(&format!("Permanently deleted {} reviewed conversations from Trash",reviewed.len())));
+        },
         "chat_delete_review"=>{target(st,false)?;if text(st,"dialog")!="chat_options"{return Err("Choose a conversation first".into());}put(st,"dialog",s("chat_delete_review"));},
         "chat_delete"=>{
             if text(st,"dialog")!="chat_delete_review"{return Err("Confirm this conversation first".into());}
@@ -81,7 +105,8 @@ pub(super) fn theme(st:&Json)->String {if get(st,"appearance_preview")!=&Null{te
 pub(super) fn palette(st:&Json)->Json{let mut p=super::super::layout::palette(theme(st)=="dark");let c=appearance(st);for k in ["accent","ink","surface"]{let v=text(&c,k);if v.len()==7&&v.starts_with('#')&&v.as_bytes()[1..].iter().all(|b|b.is_ascii_hexdigit()){put(&mut p,k,s(&v));if k=="ink"{put(&mut p,"muted",s(&v));}if k=="surface"{for key in ["card","glass"]{put(&mut p,key,s(&format!("#E6{}",&v[1..])));}}}}p}
 pub(super) fn modal_for(st:&Json)->Json {match text(st,"dialog").as_str(){
     "chat_agents"=>{let mut b=vec![button("Create agent profile","agent_new")];for(i,a)in array(st,"agents").iter().enumerate(){b.push(button(&format!("{}{}",if i==agent_index(st){"Selected · "}else{""},text(a,"name")),&format!("chat_agent:{i}")));}menu("Main agent",b)},
-    "trash"=>{let mut b=vec![];for c in array(st,"trash"){b.push(button(&text(&c,"title"),&format!("trash_options:{}",text(&c,"id"))));}menu("Trash",b)},
+    "trash"=>{let mut b=vec![];if !array(st,"trash").is_empty(){b.push(button("Empty Trash…","trash_empty_review"));}for c in array(st,"trash"){b.push(button(&text(&c,"title"),&format!("trash_options:{}",text(&c,"id"))));}menu("Trash",b)},
+    "trash_empty_review"=>{let items=array(st,"trash_review");modal("Empty Trash permanently?",vec![field_ui("items","These conversations and their messages will be permanently deleted",&items.iter().map(|c|format!("{} · {} messages",text(c,"title"),number(c,"messages"))).collect::<Vec<_>>().join("\n"),"readonly")],vec![button(&format!("Permanently delete {} conversations",items.len()),"trash_empty"),button("Keep conversations","trash")])},
     "chat_options"=>menu(&target(st,false).map(|c|text(&c,"title")).unwrap_or("Conversation".into()),vec![button("Open conversation",&format!("history:{}",text(st,"chat_target"))),button("Move to Trash",&scoped("chat_delete_review",&text(st,"chat_target")))]),
     "trash_options"=>menu(&target(st,true).map(|c|text(&c,"title")).unwrap_or("Conversation".into()),vec![button("Restore conversation",&scoped("chat_restore",&text(st,"chat_target"))),button("Delete permanently",&scoped("chat_purge_review",&text(st,"chat_target")))]),
     "chat_delete_review"|"chat_purge_review"=>{let permanent=text(st,"dialog")=="chat_purge_review";modal(if permanent{"Delete permanently?"}else{"Move to Trash?"},vec![field_ui("target","Conversation",&target(st,permanent).map(|c|text(&c,"title")).unwrap_or_default(),"readonly")],vec![button(if permanent{"Delete permanently"}else{"Move to Trash"},&scoped(if permanent{"chat_purge"}else{"chat_delete"},&text(st,"chat_target")))])},

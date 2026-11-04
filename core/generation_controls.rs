@@ -16,6 +16,7 @@ fn canonical(p:&Json)->Json {
 pub(super) fn validate_bytes(p:&Json)->Result<()> {crate::generation::validate(&canonical(&migrated(p)),&text(p,"protocol"))}
 fn integer(v:&Json,key:&str,max:usize)->Result<usize>{let raw=match get(v,key){Null=>String::new(),Str(x)|Num(x)=>x.trim().into(),_=>return Err(format!("Invalid {key}"))};if raw.trim().is_empty(){return Ok(0);}let n=raw.parse::<usize>().map_err(|_|format!("{key}: enter a whole number"))?;if n>max{return Err(format!("{key} exceeds {max}"));}Ok(n)}
 pub(crate) fn validate(p:&Json)->Result<()> {
+    match get(p,"tool_format"){Null=>{},Str(v) if ["","json","structured"].contains(&v.as_str())=>{},_=>return Err("Choose JSON text or structured tool proposals".into())}
     if get(p,"thinking")==&Null {crate::generation::validate(p,&text(p,"protocol"))?;}
     let migrated=migrated(p);let p=&migrated;validate_bytes(p)?;
     let mode=text(p,"thinking");let protocol=text(p,"protocol");
@@ -48,6 +49,8 @@ pub(super) fn modal_for(st:&Json)->Json {
     if ["messages","content"].contains(&protocol.as_str()){fields.push(field_ui("thinking_tokens","Thinking token budget (manual budget mode)",&text(p,"thinking_tokens"),"text"));}
     fields.push(field_ui("context_bytes","Context budget (text + encoded image bytes; optional)",&text(p,"context_bytes"),"text"));
     fields.push(field_ui("compaction_bytes","Compaction reminder (text + encoded image bytes; optional)",&text(p,"compaction_bytes"),"text"));
+    fields.push(interaction::choice("tool_format","Tool proposal format",if text(p,"tool_format")=="structured"{"structured"}else{"json"},&[("JSON text","json"),("Structured function","structured")]));
+    fields.push(field_ui("tool_support","Tool format support","Structured function declares one workspace operation when this agent permits tools. Enable it only on models and servers that support function calling. All proposals still use the existing user review, rules and tool-result conversation; provider call objects are not replayed. Provider-hosted search uses its separate configured workflow.","readonly"));
     fields.push(field_ui("support","Provider support","Choose only settings supported by this model/server. Server default sends no thinking override. Estimated token budgets are approximate. Byte budgets count exact UTF-8 message content. Neither increases server capacity.","readonly"));
     fields.push(field_ui("model_metadata","Model-reported capabilities",&model_metadata::display(st),"readonly"));
     let mut buttons=vec![button("Apply to connection","generation_apply"),button("Reset overrides","profile_generation_reset")];

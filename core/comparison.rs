@@ -2,7 +2,12 @@
 use super::*;
 const LIMIT:usize=1024*1024;
 fn sample(path:&Path,cancelled:&impl Fn()->bool)->Result<(Vec<u8>,u64,bool)>{
- let mut f=fs::File::open(path).map_err(|e|e.to_string())?;let before=f.metadata().map_err(|e|e.to_string())?;
+ use std::os::unix::fs::OpenOptionsExt;
+ let f=fs::OpenOptions::new().read(true).custom_flags(0x20000|0x800).open(path).map_err(|e|e.to_string())?;
+ sample_file(f,cancelled)
+}
+fn sample_file(mut f:fs::File,cancelled:&impl Fn()->bool)->Result<(Vec<u8>,u64,bool)>{
+ let before=f.metadata().map_err(|e|e.to_string())?;
  if !before.is_file(){return Err("Comparison requires regular files".into());}
  let mut bytes=Vec::new();let mut block=[0u8;65536];
  while bytes.len()<=LIMIT {
@@ -17,6 +22,18 @@ fn sample(path:&Path,cancelled:&impl Fn()->bool)->Result<(Vec<u8>,u64,bool)>{
 pub(super) fn compare(left:&Path,right:&Path)->Result<String>{compare_using(left,right,&super::super::execution::cancelled)}
 pub(super) fn compare_using(left:&Path,right:&Path,cancelled:&impl Fn()->bool)->Result<String>{
  let (a,alen,ac)=sample(left,cancelled)?;let(b,blen,bc)=sample(right,cancelled)?;
+ describe(left,right,a,alen,ac,b,blen,bc,cancelled)
+}
+pub(super) fn compare_scoped(root:&Path,left:&Path,right:&Path,args:&Json,access:&operation::InspectionAccess)->Result<String>{
+ let a=file_evidence::Source::open(root,&text(args,"path"),"compare",args,access)?;
+ let b=file_evidence::Source::open(root,&text(args,"other"),"compare",args,access)?;
+ let cancelled=||access.cancelled();
+ let(av,alen,ac)=sample_file(a.file()?,&cancelled)?;a.check()?;b.check()?;
+ let(bv,blen,bc)=sample_file(b.file()?,&cancelled)?;a.check()?;b.check()?;
+ let output=describe(left,right,av,alen,ac,bv,blen,bc,&cancelled)?;
+ a.check()?;b.check()?;Ok(output)
+}
+fn describe(left:&Path,right:&Path,a:Vec<u8>,alen:u64,ac:bool,b:Vec<u8>,blen:u64,bc:bool,cancelled:&impl Fn()->bool)->Result<String>{
  let overlap=a.len().min(b.len());let mut changed=0;let mut locations=Vec::new();
  for i in 0..overlap {if i%65536==0&&cancelled(){return Err("Comparison cancelled".into());}if a[i]!=b[i]{changed+=1;if locations.len()<32{locations.push(format!("0x{i:x}"));}}}
  let conclusion=if alen!=blen||changed>0{"Different bytes observed"}else if ac&&bc{"Complete captured contents are byte-identical"}else{"Compared prefixes match; whole-file equality is unknown"};
