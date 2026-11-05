@@ -1,3 +1,11 @@
+# Foreground open-microphone update
+
+The user extended the previous manual voice scope to optional automatic conversation turns. Rust now segments direct microphone PCM and owns expiring capture, recognition, model, synthesis and playback transitions. Android bindings provide actual microphone permission/capture and decoder callbacks. Capture stops before recognition and remains stopped through playback. No platform speech recognizer or bundled neural transcription model is required; recognition and synthesis are independently configurable server capabilities.
+
+The current voice checks passed126 owner-executed cases across all four model formats, including actual local HTTP audio transfers, automatic next turns, quiet/noise suppression, stale/duplicate ownership, stopped/failed playback, foreground suspension, uncertain request failure and a missing recognition route that leaves primary text usable. These use controlled PCM, model replies and playback callbacks; physical Android hardware and live user endpoints are not certified. Broader fresh results are recorded in verification/RESULTS.json when the matching signed package is produced.
+
+The prior candidate audit below retains its original execution, counts and observations. It is not fresh execution for this update.
+
 # Optional voice and media upgrade audit
 
 This section describes the current signed candidate. The older audit below retains its original baseline scope and counts; it is not fresh execution for this upgrade.
