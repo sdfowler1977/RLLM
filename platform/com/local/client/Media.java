@@ -42,6 +42,7 @@ final class Media {
     private AudioFocusRequest focus;
     private AudioManager audio;
     private VideoView video;
+    private SceneView sceneView;
     private AlertDialog preview;
     private boolean closed,paused=true;
     private String context="";
@@ -210,6 +211,8 @@ final class Media {
             final VideoView shownVideo=new VideoView(activity);video=shownVideo;MediaController controls=new MediaController(activity);controls.setAnchorView(shownVideo);shownVideo.setMediaController(controls);shownVideo.setVideoPath(path);shownVideo.setOnPreparedListener(p->{if(video!=shownVideo)return;if(paused||closed||!activity.mediaCurrent(e)){stopPlayback();return;}shownVideo.start();});shownVideo.setOnErrorListener((p,what,extra)->{if(video!=shownVideo)return true;notice("Video decoder could not play this file");stopPlayback();return true;});preview=new AlertDialog.Builder(activity).setTitle("Video playback").setView(shownVideo).setPositiveButton("Close",(d,w)->{if(preview==d)stopPlayback();}).create();preview.setOnDismissListener(d->{if(preview==d)stopPlayback();});preview.show();
         }else if(kind.equals("image")){
             BitmapFactory.Options options=new BitmapFactory.Options();options.inJustDecodeBounds=true;BitmapFactory.decodeFile(path,options);int sample=1;while(Math.max(options.outWidth,options.outHeight)/sample>1600)sample*=2;options.inJustDecodeBounds=false;options.inSampleSize=sample;Bitmap bitmap=BitmapFactory.decodeFile(path,options);if(bitmap==null)throw new IOException("Image decoder could not open this file");ImageView image=new ImageView(activity);image.setAdjustViewBounds(true);image.setImageBitmap(bitmap);preview=new AlertDialog.Builder(activity).setTitle("Image").setView(image).setPositiveButton("Close",null).create();preview.setOnDismissListener(d->{image.setImageDrawable(null);bitmap.recycle();});preview.show();
+        }else if(kind.equals("scene")){
+            final SceneView shownScene=new SceneView(activity,e);sceneView=shownScene;android.widget.ScrollView sceneScroll=new android.widget.ScrollView(activity);sceneScroll.addView(shownScene);preview=new AlertDialog.Builder(activity).setTitle("3D geometry preview").setView(sceneScroll).setPositiveButton("Close",(d,w)->{if(preview==d)stopPlayback();}).create();preview.setOnDismissListener(d->{shownScene.close();if(sceneView==shownScene)sceneView=null;if(preview==d)preview=null;});preview.show();
         }else if(kind.equals("document")){
             ParcelFileDescriptor descriptor=ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY);PdfRenderer openedPdf;try{openedPdf=new PdfRenderer(descriptor);}catch(Exception error){descriptor.close();throw error;}final PdfRenderer pdf=openedPdf;ImageView image=new ImageView(activity);image.setAdjustViewBounds(true);final int[] page={0};final Bitmap[] shown={null};
             Runnable render=()->{try(PdfRenderer.Page p=pdf.openPage(page[0])){float scale=Math.min(1f,1600f/Math.max(p.getWidth(),p.getHeight()));Bitmap bitmap=Bitmap.createBitmap(Math.max(1,(int)(p.getWidth()*scale)),Math.max(1,(int)(p.getHeight()*scale)),Bitmap.Config.ARGB_8888);bitmap.eraseColor(android.graphics.Color.WHITE);p.render(bitmap,null,null,PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);image.setImageBitmap(bitmap);if(shown[0]!=null)shown[0].recycle();shown[0]=bitmap;}catch(Exception error){notice(error.getMessage());}};
@@ -218,6 +221,7 @@ final class Media {
     }
     void stopPlayback(){if(watching)stopListening();interruptionReady=false;previewVersion++;handler.removeCallbacks(playbackDeadline);
         JSONObject owner=playbackOwner;playbackOwner=null;
+        if(sceneView!=null){sceneView.close();sceneView=null;}
         if(player!=null){player.release();player=null;}if(video!=null){video.stopPlayback();video=null;}if(audio!=null&&focus!=null)audio.abandonAudioFocusRequest(focus);focus=null;restoreCommunicationMode();
         AlertDialog old=preview;preview=null;if(old!=null&&old.isShowing())old.dismiss();
         playbackEvent(owner,"voice_playback_result",false);
