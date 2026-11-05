@@ -7,7 +7,7 @@ verify(apk)
 build_inputs={}
 for line in (apk.parent/'build-inputs.sha256').read_text().splitlines():
  digest,name=line.split('  ',1);source=Path(name);relative=source.resolve().relative_to(root).as_posix();assert re.fullmatch('[0-9a-f]{64}',digest)and source.is_file()and hashlib.sha256(source.read_bytes()).hexdigest()==digest,relative;build_inputs[relative]=digest
-current={p.relative_to(root).as_posix()for directory in ['core','platform','res','notices']for p in(root/directory).rglob('*')if p.is_file()}|{'AndroidManifest.xml','package.sh'};assert set(build_inputs)==current,'Build input inventory changed after compilation'
+current={p.relative_to(root).as_posix()for directory in ['core','platform','res','notices']for p in(root/directory).rglob('*')if p.is_file()}|{'AndroidManifest.xml','package.sh','tools/alignment.py'};assert set(build_inputs)==current,'Build input inventory changed after compilation'
 
 badging=subprocess.check_output([str(tools/'aapt'),'dump','badging',str(apk)],text=True);assert "package: name='com.local.client.lab'"in badging and "versionCode='"+str(args.version)+"'"in badging and "application-label:'RLLM'"in badging and "sdkVersion:'26'"in badging
 subprocess.run([str(tools/'zipalign'),'-c','-P','16','-v','4',str(apk)],check=True,capture_output=True);native=[]
