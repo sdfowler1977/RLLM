@@ -1,6 +1,6 @@
 {
   "state": "in_progress; signed candidate",
-  "version": 1793886933,
+  "version": 1793889557,
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
   "signing_certificate_sha256": "ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5",
@@ -8,7 +8,7 @@
   "signed_apk": {
     "path": "release/RLLM.apk",
     "bytes": 6465554,
-    "sha256": "64aadea75c129f546f2d2ac712ac2233b721a7d3bab05f856d8425ab6e87b1b4"
+    "sha256": "fbcd856ae68ac9d318853aa8262747ddd092f626d961082b2660afc70dbcc9d9"
   },
   "build_inputs": {
     "AndroidManifest.xml": "f8b04737e17990b6d42516ab44cc5f49f07a9d2faac0302e0718617fc81da451",
@@ -76,12 +76,12 @@
     "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
     "core/media.rs": "311c71bd5ca7893dc5d4321eac91450086642e6525b5a096816fa67dfee2b4b5",
     "core/media_input.rs": "6d242e2df2f5d037bd82d6aed46942324af749a3ebef24e084e0da17a65f282e",
-    "core/media_stream.rs": "de0c081e27e146d3f87038462c546e81d2886bec46dc8e577d011a67174739d4",
-    "core/media_upload.rs": "34c4c347b1fef6fcfdd15e63fb05c849cc409b11ad419626a877c6ef04d09ec1",
+    "core/media_stream.rs": "c08439254e3f845f677e45b4d47e897c7d72940e48b251645eee3d8976adf2d7",
+    "core/media_upload.rs": "cd064446ab38584bc99d7907d682508d73bb6fe51d629e4aa1dfe89f7ab2d242",
     "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
     "core/model_metadata.rs": "b024330ac89f786670ae336f3855ee4b69a95898b1588e5ee16254c56d94e3e4",
     "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
-    "core/network.rs": "a772d8eca2394fb1988313c3933161f29813edd462e70a930137b4df191f866e",
+    "core/network.rs": "1daee2ab7b20977f916263860f69389a7962928f531566743f9ee8d35abc8e18",
     "core/oauth.rs": "5594507163dec6b36a7d3cd1d0fb3830f3433250974ad298e92652bae6742d3f",
     "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
     "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
@@ -107,7 +107,7 @@
     "core/resources.rs": "cfdebc1cc58e6b81f862c01a38734dc7ed6911a362a67c1e391fcafaec89100e",
     "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
     "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
-    "core/services.rs": "11c2d6e5200029c8c2357fabb4c8cca1ff5ecb06538db03fee277f384c8a54d6",
+    "core/services.rs": "637a1a26233a0592f0c92f29851bd27a0256640ad75136f230620c33916e1d1f",
     "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
     "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
     "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
@@ -431,12 +431,12 @@
       "sha256": "6d242e2df2f5d037bd82d6aed46942324af749a3ebef24e084e0da17a65f282e"
     },
     "core/media_stream.rs": {
-      "bytes": 4489,
-      "sha256": "de0c081e27e146d3f87038462c546e81d2886bec46dc8e577d011a67174739d4"
+      "bytes": 5321,
+      "sha256": "c08439254e3f845f677e45b4d47e897c7d72940e48b251645eee3d8976adf2d7"
     },
     "core/media_upload.rs": {
-      "bytes": 7897,
-      "sha256": "34c4c347b1fef6fcfdd15e63fb05c849cc409b11ad419626a877c6ef04d09ec1"
+      "bytes": 7935,
+      "sha256": "cd064446ab38584bc99d7907d682508d73bb6fe51d629e4aa1dfe89f7ab2d242"
     },
     "core/model_artifact.rs": {
       "bytes": 16721,
@@ -451,8 +451,8 @@
       "sha256": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c"
     },
     "core/network.rs": {
-      "bytes": 28727,
-      "sha256": "a772d8eca2394fb1988313c3933161f29813edd462e70a930137b4df191f866e"
+      "bytes": 28881,
+      "sha256": "1daee2ab7b20977f916263860f69389a7962928f531566743f9ee8d35abc8e18"
     },
     "core/oauth.rs": {
       "bytes": 24952,
@@ -555,8 +555,8 @@
       "sha256": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b"
     },
     "core/services.rs": {
-      "bytes": 32798,
-      "sha256": "11c2d6e5200029c8c2357fabb4c8cca1ff5ecb06538db03fee277f384c8a54d6"
+      "bytes": 33322,
+      "sha256": "637a1a26233a0592f0c92f29851bd27a0256640ad75136f230620c33916e1d1f"
     },
     "core/stdio.rs": {
       "bytes": 11663,
@@ -699,8 +699,8 @@
       "sha256": "ae79930ca16366f7f21d147fa0f5722694b334589c903a3871b89d4cc8ab2e9c"
     },
     "docs/SERVICES.md": {
-      "bytes": 13869,
-      "sha256": "a1bde5a65c8d1135330e1242c236df31e5b8c9d021371911f6f84c58a3e15a46"
+      "bytes": 14494,
+      "sha256": "a7400b81eaf859faeb2bef21b9e3aa615cd0679d0df895cf82c11c35831907f2"
     },
     "docs/SETUP.md": {
       "bytes": 7898,
@@ -711,8 +711,8 @@
       "sha256": "93f5a206d83ac2fd56bf4cb74b50960d6df33005a90b3679856e7e6ae04189f6"
     },
     "docs/STATUS.md": {
-      "bytes": 1926,
-      "sha256": "57c4ddc2a686e6c8f79e92cb05c671895851ba71f262358a58c3707b77e5216b"
+      "bytes": 2174,
+      "sha256": "42c688f61d18fad5460a5a423cdc67ec2bb3d768fa2c1d47385184caa3c96e5e"
     },
     "docs/TOOL-FEEDBACK.md": {
       "bytes": 4677,
@@ -823,20 +823,20 @@
       "sha256": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f"
     },
     "project-progress.md": {
-      "bytes": 26136,
-      "sha256": "81fff31f399bea221064ac7c7a562ee11a257d35720b580058857a954bd6c5b7"
+      "bytes": 31857,
+      "sha256": "5801dbe95876c705adf7ac4ab055789e9259f7f44dcf0d344d26364650303db3"
     },
     "release/NOTES.md": {
-      "bytes": 2011,
-      "sha256": "31211d6fedc45edfa97df960c1782c6288c6824c66a1b4a67be254f1f06ef996"
+      "bytes": 2259,
+      "sha256": "5744860786095575b64fe5783d418ffd984736b9d4f6e6054004cfb857c55f5b"
     },
     "release/RLLM.apk": {
       "bytes": 6465554,
-      "sha256": "64aadea75c129f546f2d2ac712ac2233b721a7d3bab05f856d8425ab6e87b1b4"
+      "sha256": "fbcd856ae68ac9d318853aa8262747ddd092f626d961082b2660afc70dbcc9d9"
     },
     "release/SHA256SUMS.txt": {
       "bytes": 75,
-      "sha256": "fa511e480d97d0f46c0beeeec16cf91e30943ca28b29fca8fa63b9fec8e5b141"
+      "sha256": "0dd86fa9996a02fc2be0403e3a9450fb60a7bfd04077f53c6d6fca810de4ba48"
     },
     "res/drawable/.gitkeep": {
       "bytes": 1,
@@ -923,8 +923,8 @@
       "sha256": "30607c8f0160843366cf48bbb318eafbf5a8793a35847732c77ebb564125e115"
     },
     "tools/apk.py": {
-      "bytes": 4319,
-      "sha256": "6697e43af423dc801cbe2e0388179d58298690738b67f27c0848f4244dc285b5"
+      "bytes": 4424,
+      "sha256": "96b1c3e8422c41b7cf23c1448c8e267dee43afc3d0f96d757d8d821a746bfe6b"
     },
     "tools/checkpoint.py": {
       "bytes": 1409,
@@ -935,8 +935,8 @@
       "sha256": "a7722286ff618000807d13a6adfe6a82af2101e4b4d1bed4b1eaed0dc245e584"
     },
     "tools/package.py": {
-      "bytes": 12435,
-      "sha256": "499e8b596720d4234644ffcb2edac7d8f3ab1ce6fc46bbe3bb86128fb2fdb881"
+      "bytes": 12683,
+      "sha256": "6af0e48aba89fe6cf69711c5c0e0acabc1db4a45f878c2e80911a08f94769fc7"
     },
     "tools/readback.py": {
       "bytes": 1485,
@@ -971,8 +971,8 @@
       "sha256": "ec335557689342d0b80dc75832ec065442c28215f8648088105c7fc98af465b4"
     },
     "verification/RESULTS.json": {
-      "bytes": 174305,
-      "sha256": "932da107217e75a43e2b9e7b2c7c0c6feedfde55c2dba1aa579ef0a48f993b89"
+      "bytes": 175701,
+      "sha256": "422701a3d269333b442029fd483613c423f314a5292670814a95f677bfb6d316"
     },
     "verification/UPGRADE-AUDIT.json": {
       "bytes": 20553,
@@ -1079,12 +1079,12 @@
       "sha256": "e55382043eef763c8f0f771d2fad8708aa972737202479365263d4b4a5b8eadd"
     },
     "verification/media.py": {
-      "bytes": 12375,
-      "sha256": "5ca70a2837a33b8252b7502d1c68491f17f22ad3a895ea0b40fce9cd2ed7b8c3"
+      "bytes": 12331,
+      "sha256": "143285ed6eea56c8c80f3c7c391751e5ed21b4d20eaa0ff6e2df7668ee4dc830"
     },
     "verification/media_stream.py": {
-      "bytes": 7993,
-      "sha256": "942a23a825e5c98936ac8d64f70d754526c17b120ccc7b328de48d31c8552535"
+      "bytes": 15858,
+      "sha256": "840633b626beb9bd214d9df4738a22bea6216f564f91a6dafe683c9afa841fbc"
     },
     "verification/media_upload.py": {
       "bytes": 13676,
@@ -1099,8 +1099,8 @@
       "sha256": "b612bf77051c7780af7b5c038dd8850e16822c905ded754d3ba270867732c9f0"
     },
     "verification/oauth.py": {
-      "bytes": 26700,
-      "sha256": "c4c19bfe08567f6a7fcec26d9de169ec1d44f1915efa243b1705015ef4e2cee7"
+      "bytes": 26659,
+      "sha256": "e85efdd7dc955231bc3ff6575818d5ecf1b4dc4e7418c513af75e20c9e528259"
     },
     "verification/pe_declarations.py": {
       "bytes": 7800,
@@ -1155,12 +1155,12 @@
       "sha256": "1adca344f81a9b15d068e102dda35b41c645343a2a2118745d92a5e14b995050"
     },
     "verification/transport.py": {
-      "bytes": 615,
-      "sha256": "ce6669b1ebecd8cb077dcde1749919f3c212f8a94c9836f5e7d2cd50f69995f7"
+      "bytes": 1198,
+      "sha256": "428c0a623469d3a27484453ff3570e8161dbab96dee1764efdbc33712896d8b7"
     },
     "verification/voice.py": {
-      "bytes": 20540,
-      "sha256": "72dc02ee6caa479ecf56403477ed9d7389aa88fda61b33641ffbcb8b73ad9ddf"
+      "bytes": 20501,
+      "sha256": "0f8fb4e1d5bc10a879d80c89312f7551509ceb595f912fcb7c3aefbbc82a0bcc"
     },
     "verification/workspace_navigation.py": {
       "bytes": 22966,
@@ -1204,12 +1204,12 @@
         "media": 33,
         "jobs": 18,
         "voice": 147,
-        "media_stream": 13,
+        "media_stream": 34,
         "media_upload": 49,
         "acp": 41,
         "oauth": 121
       },
-      "total_executed": 1730,
+      "total_executed": 1751,
       "groups_passed": 37,
       "groups": 38,
       "unavailable": [
@@ -1249,7 +1249,7 @@
       {
         "filter": "application::harness::",
         "code": 0,
-        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 442 filtered out; finished in 3.42s"
+        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 442 filtered out; finished in 3.27s"
       },
       {
         "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -1314,7 +1314,7 @@
       {
         "filter": "application::instruction::tests::",
         "code": 0,
-        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 444 filtered out; finished in 0.31s"
+        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 444 filtered out; finished in 0.29s"
       },
       {
         "filter": "application::binary_evidence::path_checks::",
@@ -1359,12 +1359,12 @@
       {
         "filter": "application::project_store::transfer::tests::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.78s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.70s"
       },
       {
         "filter": "application::monitor::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::request_metrics::",
@@ -1389,7 +1389,7 @@
       {
         "filter": "application::voice_audio::checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.27s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.24s"
       },
       {
         "filter": "application::oauth::checks::",
@@ -3103,7 +3103,7 @@
         "scope": "Owner HTTP/audio fixture orchestration through all four model formats. Capture callback is controlled; physical microphone and installed playback not exercised."
       },
       "media_stream": {
-        "passed": 13,
+        "passed": 34,
         "checks": [
           "artifact URL creates a separate bounded GET",
           "download credentials belong only to artifact host",
@@ -3117,7 +3117,28 @@
           "stream never follows redirects or replays generation",
           "configured file size bound is enforced",
           "same length disk mutation invalidates ready receipt",
-          "cancelled artifact callback is an exact state no-op"
+          "cancelled artifact callback is an exact state no-op",
+          "POST binary response has an owned streaming destination",
+          "POST created response retains complete media above inline limit",
+          "chunked POST created response preserves exact decoded file",
+          "PUT created response retains complete generated media",
+          "reviewed input reaches only the initial explicitly rejected endpoint",
+          "owned streamed input and output survive configured fallback",
+          "complete configured503 permits exactly one initial submission fallback",
+          "streamed fallback retains its own credentials and actual file",
+          "streamed status stays scoped without replay 401",
+          "streamed status stays scoped without replay 202",
+          "streamed status stays scoped without replay 302",
+          "streamed status stays scoped without replay 206",
+          "truncated status body cannot authorize fallback",
+          "truncated submission remains uncertain without replay",
+          "pre-send streamed fallback releases old reservation before allocating next",
+          "pre-send fallback completes actual remaining endpoint",
+          "uncertain initial binary submission never retries",
+          "large GET retrieval remains exact",
+          "created-file allowance stays scoped to initial submissions",
+          "expired stream read releases its unwritten reservation",
+          "new stream prunes abandoned expired reservations"
         ],
         "scope": "Owner public-core and real local HTTP checks; Android storage/decoder and live configured endpoints need device acceptance."
       },
@@ -3352,9 +3373,9 @@
       }
     },
     "apk": {
-      "version": 1793886933,
+      "version": 1793889557,
       "bytes": 6465554,
-      "sha256": "64aadea75c129f546f2d2ac712ac2233b721a7d3bab05f856d8425ab6e87b1b4",
+      "sha256": "fbcd856ae68ac9d318853aa8262747ddd092f626d961082b2660afc70dbcc9d9",
       "native": [
         {
           "abi": "arm64-v8a",
@@ -3365,7 +3386,7 @@
             16384,
             16384
           ],
-          "bytes": 4825128
+          "bytes": 4823736
         },
         {
           "abi": "x86_64",
@@ -3376,7 +3397,7 @@
             16384,
             16384
           ],
-          "bytes": 5926264
+          "bytes": 5927640
         }
       ],
       "label": "RLLM",
@@ -3449,12 +3470,12 @@
         "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
         "core/media.rs": "311c71bd5ca7893dc5d4321eac91450086642e6525b5a096816fa67dfee2b4b5",
         "core/media_input.rs": "6d242e2df2f5d037bd82d6aed46942324af749a3ebef24e084e0da17a65f282e",
-        "core/media_stream.rs": "de0c081e27e146d3f87038462c546e81d2886bec46dc8e577d011a67174739d4",
-        "core/media_upload.rs": "34c4c347b1fef6fcfdd15e63fb05c849cc409b11ad419626a877c6ef04d09ec1",
+        "core/media_stream.rs": "c08439254e3f845f677e45b4d47e897c7d72940e48b251645eee3d8976adf2d7",
+        "core/media_upload.rs": "cd064446ab38584bc99d7907d682508d73bb6fe51d629e4aa1dfe89f7ab2d242",
         "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
         "core/model_metadata.rs": "b024330ac89f786670ae336f3855ee4b69a95898b1588e5ee16254c56d94e3e4",
         "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
-        "core/network.rs": "a772d8eca2394fb1988313c3933161f29813edd462e70a930137b4df191f866e",
+        "core/network.rs": "1daee2ab7b20977f916263860f69389a7962928f531566743f9ee8d35abc8e18",
         "core/oauth.rs": "5594507163dec6b36a7d3cd1d0fb3830f3433250974ad298e92652bae6742d3f",
         "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
         "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
@@ -3480,7 +3501,7 @@
         "core/resources.rs": "cfdebc1cc58e6b81f862c01a38734dc7ed6911a362a67c1e391fcafaec89100e",
         "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
         "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
-        "core/services.rs": "11c2d6e5200029c8c2357fabb4c8cca1ff5ecb06538db03fee277f384c8a54d6",
+        "core/services.rs": "637a1a26233a0592f0c92f29851bd27a0256640ad75136f230620c33916e1d1f",
         "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
         "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
         "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
@@ -3546,8 +3567,8 @@
     },
     "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
     "published_comparator": {
-      "version": 1793846728,
-      "source_sha256": "6e1a15b9b73986b141733b7f878b89f77696e8098d164d05b71629c7b65abf49",
+      "version": 1793886933,
+      "source_sha256": "ed77ebd018754777538dce6f070f83cd12887ed4effeacf7e034d6260d52608c",
       "method": "Exact published shared core compiled locally; actual retained representations exercised through current query, native view and export"
     },
     "flow_comparator": {
@@ -3994,6 +4015,6 @@
       "scope": "Preserved earlier full-suite outcome only. Current execution is the selected Rust cases and connected groups; excluded historical fixture scopes were not reexecuted."
     }
   },
-  "checkpoint_utc": "2026-11-05T14:00:26.999335+00:00",
+  "checkpoint_utc": "2026-11-05T14:45:05.119064+00:00",
   "whole_project_complete": false
 }
