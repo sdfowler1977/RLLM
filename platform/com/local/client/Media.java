@@ -45,7 +45,17 @@ final class Media {
     private AlertDialog preview;
     private boolean closed,paused=true;
     private String context="";
-    void context(String value){if(!context.equals(value)){context=value;stopPlayback();}}
+    private volatile android.media.AudioRecord microphone;
+    private volatile int listenVersion;
+    private String audioTicket="",audioSession="";
+    private boolean pendingListen;
+    private long listenRequested;
+    boolean permissionPending(){return pendingListen;}
+    private JSONObject playbackOwner;
+    private final Runnable playbackDeadline=()->{if(playbackOwner!=null){notice("Speech playback timed out; microphone paused");stopPlayback();}};
+    private final ExecutorService microphoneWorker=new java.util.concurrent.ThreadPoolExecutor(1,1,0L,java.util.concurrent.TimeUnit.SECONDS,new java.util.concurrent.ArrayBlockingQueue<Runnable>(1));
+    void context(String value){if(!context.equals(value)){context=value;playbackOwner=null;stopPlayback();}}
+    void state(JSONObject value){JSONObject expected=value.optJSONObject("voice_audio_expected");if(!audioTicket.isEmpty()&&(!value.optBoolean("voice_open")||!(value.optString("voice_status").equals("listening")||value.optString("voice_status").equals("microphone_pending"))||expected==null||!audioTicket.equals(expected.optString("ticket"))||!audioSession.equals(value.optString("voice_consent"))))stopListening();if(playbackOwner!=null&&(!playbackOwner.optString("voice_session").equals(value.optString("voice_consent"))||!(value.optString("voice_status").equals("playback_pending")||value.optString("voice_status").equals("speaking")))){playbackOwner=null;stopPlayback();}}
     private volatile int previewVersion,captureVersion;
     private volatile String loadingTicket="";
     private long captureStarted;
@@ -59,6 +69,9 @@ final class Media {
     private void notice(String error){android.widget.Toast.makeText(activity,"Media: "+error,android.widget.Toast.LENGTH_LONG).show();}
     boolean handle(JSONObject e)throws Exception{
         switch(e.optString("kind")){
+            case "voice_listen":
+                stopListening();stopPlayback();audioTicket=e.getString("voice_audio_ticket");audioSession=e.getString("voice_session");listenRequested=android.os.SystemClock.elapsedRealtime();
+                if(activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){pendingListen=true;activity.requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},55);}else beginListening();return true;
             case "media_pick":
                 stopRecording(false);captureVersion++;captureStarted=android.os.SystemClock.elapsedRealtime();ticket=e.getString("media_ticket");
                 try{activity.startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE),53);}catch(Exception error){String owner=ticket;ticket="";deliver("media_input_failure",owner,new JSONObject().put("error",error.getMessage()));}return true;
@@ -66,12 +79,25 @@ final class Media {
                 stopPlayback();stopRecording(false);capturePath=e.getString("capture_path");captureLimit=e.getLong("capture_limit");captureVersion++;captureStarted=android.os.SystemClock.elapsedRealtime();ticket=e.getString("media_ticket");
                 if(activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){activity.requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},54);}else beginRecording();return true;
             case "media_record_stop":if(e.optString("media_ticket").equals(ticket))finishRecording();return true;
-            case "media_preview":if(paused){notice("File received; open the app to preview it");return true;}stopPlayback();final int version=previewVersion;queue(()->{try{Core.call(new JSONObject().put("op","media_verify").put("root",e.getString("root")).put("root_identity",e.getString("root_identity")).put("record",e.getJSONObject("record")));handler.post(()->{if(!closed&&!paused&&version==previewVersion&&activity.mediaCurrent(e))try{show(e);}catch(Exception error){notice(error.getMessage());}});}catch(Exception error){handler.post(()->{if(!closed&&version==previewVersion)notice(error.getMessage());});}});return true;
+            case "media_preview":if(paused){playbackEvent(e,"voice_playback_result",false);notice("File received; open the app to preview it");return true;}stopPlayback();final int version=previewVersion;queue(()->{try{Core.call(new JSONObject().put("op","media_verify").put("root",e.getString("root")).put("root_identity",e.getString("root_identity")).put("record",e.getJSONObject("record")));handler.post(()->{if(!closed&&!paused&&version==previewVersion&&activity.mediaCurrent(e))try{show(e);}catch(Exception error){stopPlayback();playbackEvent(e,"voice_playback_result",false);notice(error.getMessage());}});}catch(Exception error){handler.post(()->{if(!closed&&version==previewVersion){playbackEvent(e,"voice_playback_result",false);notice(error.getMessage());}});}});return true;
             case "media_playback_stop":stopPlayback();return true;
             default:return false;
         }
     }
-    void permission(int request,int[] grants){if(request!=54)return;if(grants.length>0&&grants[0]==PackageManager.PERMISSION_GRANTED&&!ticket.isEmpty())beginRecording();else{String owner=ticket;ticket="";deliver("media_input_failure",owner,new JSONObject());}}
+    void permission(int request,int[] grants){if(request==55){if(!pendingListen||audioTicket.isEmpty())return;if(grants.length>0&&grants[0]==PackageManager.PERMISSION_GRANTED){pendingListen=true;if(!paused)beginListening();}else{JSONObject owner=audioOwner();stopListening();voiceEvent("voice_audio_failure",owner);}return;}if(request!=54)return;if(grants.length>0&&grants[0]==PackageManager.PERMISSION_GRANTED&&!ticket.isEmpty())beginRecording();else{String owner=ticket;ticket="";deliver("media_input_failure",owner,new JSONObject());}}
+    private JSONObject audioOwner(){JSONObject out=new JSONObject();try{out.put("voice_session",audioSession).put("voice_audio_ticket",audioTicket);}catch(JSONException impossible){throw new IllegalStateException(impossible);}return out;}
+    private void voiceEvent(String action,JSONObject values){if(!closed)callback.result(action,values);}
+    private void beginListening(){
+        if(closed||audioTicket.isEmpty())return;if(android.os.SystemClock.elapsedRealtime()-listenRequested>60000){JSONObject owner=audioOwner();stopListening();voiceEvent("voice_audio_failure",owner);return;}if(paused){pendingListen=true;return;}pendingListen=false;final int version=listenVersion;final JSONObject owner=audioOwner();
+        try{microphoneWorker.execute(()->{android.media.AudioRecord input=null;JSONObject result=null;String action="voice_audio_failure";
+            try{if(closed||version!=listenVersion)return;Core.call(new JSONObject(owner.toString()).put("op","voice_audio_check"));int minimum=android.media.AudioRecord.getMinBufferSize(16000,android.media.AudioFormat.CHANNEL_IN_MONO,android.media.AudioFormat.ENCODING_PCM_16BIT);if(minimum<=0||minimum>65536)throw new IOException("Microphone format unavailable");input=new android.media.AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,16000,android.media.AudioFormat.CHANNEL_IN_MONO,android.media.AudioFormat.ENCODING_PCM_16BIT,Math.max(minimum,2560));if(input.getState()!=android.media.AudioRecord.STATE_INITIALIZED)throw new IOException("Microphone initialization failed");microphone=input;if(closed||version!=listenVersion)return;input.startRecording();if(input.getRecordingState()!=android.media.AudioRecord.RECORDSTATE_RECORDING)throw new IOException("Microphone did not start");handler.post(()->{if(!closed&&!paused&&version==listenVersion)voiceEvent("voice_audio_start",owner);});byte[] frame=new byte[640];
+                while(!closed&&version==listenVersion){int n=input.read(frame,0,frame.length);if(closed||version!=listenVersion)return;if(n<=0||n%2!=0)throw new IOException("Microphone read failed");JSONObject response=(JSONObject)Core.call(new JSONObject(owner.toString()).put("op","voice_audio_feed").put("data",Base64.encodeToString(java.util.Arrays.copyOf(frame,n),Base64.NO_WRAP)));if(response.getBoolean("ready")){result=new JSONObject(owner.toString()).put("receipt",response.getString("receipt"));action="voice_audio_result";break;}}
+            }catch(Exception error){result=owner;}finally{if(input!=null){try{input.stop();}catch(RuntimeException ignored){}try{input.release();}catch(RuntimeException error){result=owner;action="voice_audio_failure";}if(microphone==input)microphone=null;}}
+            final JSONObject delivered=result;final String outcome=action;if(delivered!=null)handler.post(()->{if(!closed&&!paused&&version==listenVersion){audioTicket="";audioSession="";voiceEvent(outcome,delivered);}});
+        });}catch(java.util.concurrent.RejectedExecutionException busy){JSONObject failureOwner=audioOwner();stopListening();voiceEvent("voice_audio_failure",failureOwner);}
+    }
+    private void stopListening(){listenVersion++;pendingListen=false;audioTicket="";audioSession="";android.media.AudioRecord input=microphone;if(input!=null)try{input.stop();}catch(RuntimeException ignored){}}
+    private void playbackEvent(JSONObject owner,String action,boolean completed){if(owner==null||owner.optString("voice_playback_ticket").isEmpty()||closed)return;try{voiceEvent(action,new JSONObject().put("voice_session",owner.getString("voice_session")).put("voice_playback_ticket",owner.getString("voice_playback_ticket")).put("completed",completed));}catch(JSONException error){notice(error.getMessage());}}
     private void beginRecording(){
         if(closed||ticket.isEmpty())return;
         if(android.os.SystemClock.elapsedRealtime()-captureStarted>60000){String owner=ticket;ticket="";pendingRecord=false;deliver("media_input_failure",owner,new JSONObject());return;}
@@ -127,7 +153,7 @@ final class Media {
         if(!file.isFile()||file.length()>256*1024*1024)throw new IOException("Media file unavailable or exceeds preview limit");
         if(kind.equals("audio")){
             if(!audioFocus())throw new IOException("Audio focus unavailable");
-            player=new MediaPlayer();player.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());player.setDataSource(path);player.setOnPreparedListener(p->p.start());player.setOnCompletionListener(p->stopPlayback());player.setOnErrorListener((p,what,extra)->{stopPlayback();notice("Audio decoder could not play this file");return true;});player.prepareAsync();
+            playbackOwner=e.optString("voice_playback_ticket").isEmpty()?null:e;player=new MediaPlayer();player.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());player.setDataSource(path);player.setOnPreparedListener(p->{if(player!=p||paused||closed||!activity.mediaCurrent(e)){stopPlayback();return;}try{p.start();handler.removeCallbacks(playbackDeadline);if(playbackOwner!=null)handler.postDelayed(playbackDeadline,600000);playbackEvent(e,"voice_playback_start",false);}catch(RuntimeException error){stopPlayback();notice(error.getMessage());}});player.setOnCompletionListener(p->{JSONObject owner=playbackOwner;playbackOwner=null;stopPlayback();playbackEvent(owner,"voice_playback_result",true);});player.setOnErrorListener((p,what,extra)->{stopPlayback();notice("Audio decoder could not play this file");return true;});if(playbackOwner!=null)handler.postDelayed(playbackDeadline,30000);player.prepareAsync();
             preview=new AlertDialog.Builder(activity).setTitle("Audio playback").setMessage("Playing returned audio").setPositiveButton("Stop",(d,w)->stopPlayback()).create();preview.setOnDismissListener(d->stopPlayback());preview.show();
         }else if(kind.equals("video")){
             video=new VideoView(activity);MediaController controls=new MediaController(activity);controls.setAnchorView(video);video.setMediaController(controls);video.setVideoPath(path);video.setOnPreparedListener(p->video.start());video.setOnErrorListener((p,what,extra)->{notice("Video decoder could not play this file");stopPlayback();return true;});preview=new AlertDialog.Builder(activity).setTitle("Video playback").setView(video).setPositiveButton("Close",(d,w)->stopPlayback()).create();preview.setOnDismissListener(d->stopPlayback());preview.show();
@@ -139,13 +165,15 @@ final class Media {
             if(pdf.getPageCount()==0){pdf.close();descriptor.close();throw new IOException("PDF has no pages");}render.run();preview=new AlertDialog.Builder(activity).setTitle("PDF pages").setView(image).setPositiveButton("Next",null).setNeutralButton("Previous",null).setNegativeButton("Close",null).create();preview.setOnDismissListener(d->{image.setImageDrawable(null);if(shown[0]!=null)shown[0].recycle();pdf.close();try{descriptor.close();}catch(IOException ignored){}});preview.show();preview.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{if(page[0]+1<pdf.getPageCount()){page[0]++;render.run();}});preview.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->{if(page[0]>0){page[0]--;render.run();}});
         }else throw new IOException("This artifact supports export; a decoder is not configured");
     }
-    void stopPlayback(){previewVersion++;
+    void stopPlayback(){previewVersion++;handler.removeCallbacks(playbackDeadline);
+        JSONObject owner=playbackOwner;playbackOwner=null;
         if(player!=null){player.release();player=null;}if(video!=null){video.stopPlayback();video=null;}if(audio!=null&&focus!=null)audio.abandonAudioFocusRequest(focus);focus=null;
         AlertDialog old=preview;preview=null;if(old!=null&&old.isShowing())old.dismiss();
+        playbackEvent(owner,"voice_playback_result",false);
     }
     private void cancelLoading(){captureVersion++;for(android.os.CancellationSignal signal:signals)signal.cancel();for(ParcelFileDescriptor fd:openFiles)try{fd.close();}catch(IOException ignored){}String owner=loadingTicket;loadingTicket="";if(!owner.isEmpty())deliver("media_input_failure",owner,new JSONObject());}
-    void cancel(){pendingRecord=false;cancelLoading();String owner=ticket;stopRecording(false);ticket="";if(!owner.isEmpty())deliver("media_input_cancel",owner,new JSONObject());stopPlayback();}
-    void resume(){paused=false;if(pendingRecord&&!ticket.isEmpty()&&activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED)beginRecording();}
-    void pause(){paused=true;stopPlayback();if(!loadingTicket.isEmpty())cancelLoading();if(recorder!=null){String owner=ticket;stopRecording(false);ticket="";deliver("media_input_failure",owner,new JSONObject());}}
-    void close(){closed=true;cancelLoading();workers.shutdownNow();stopRecording(false);stopPlayback();ticket="";handler.removeCallbacksAndMessages(null);}
+    void cancel(){stopListening();pendingRecord=false;cancelLoading();String owner=ticket;stopRecording(false);ticket="";if(!owner.isEmpty())deliver("media_input_cancel",owner,new JSONObject());stopPlayback();}
+    void resume(){paused=false;if(pendingListen&&!audioTicket.isEmpty()&&activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED)beginListening();if(pendingRecord&&!ticket.isEmpty()&&activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED)beginRecording();}
+    void pause(){paused=true;if(!pendingListen)stopListening();stopPlayback();if(!loadingTicket.isEmpty())cancelLoading();if(recorder!=null){String owner=ticket;stopRecording(false);ticket="";deliver("media_input_failure",owner,new JSONObject());}}
+    void close(){closed=true;stopListening();microphoneWorker.shutdownNow();cancelLoading();workers.shutdownNow();stopRecording(false);stopPlayback();ticket="";handler.removeCallbacksAndMessages(null);}
 }
