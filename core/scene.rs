@@ -12,7 +12,7 @@ const SPAN:usize=16*1024*1024;
 type Matrix=[f64;16];
 type Color=[f64;4];
 #[derive(Clone)]struct Triangle{points:[[f32;3];3],colors:[[f32;4];3]}
-struct Scene{triangles:Vec<Triangle>,owner:Json,cancel:AtomicBool,room:usize,_slot:Slot}
+struct Scene{triangles:Vec<Triangle>,owner:Json,cancel:AtomicBool,room:usize,workers:usize,_slot:Slot}
 static SLOTS:AtomicUsize=AtomicUsize::new(0);
 struct Slot;
 impl Drop for Slot{fn drop(&mut self){SLOTS.fetch_sub(1,Ordering::AcqRel);}}
@@ -94,21 +94,88 @@ fn glb(file:&mut fs::File,length:usize,room:usize)->Result<Vec<Triangle>>{
 fn owner(v:&Json)->Json{obj(vec![("root",get(v,"root").clone()),("root_identity",get(v,"root_identity").clone()),("chat",get(v,"chat").clone()),("record",get(v,"record").clone())])}
 fn stamp(m:&fs::Metadata)->(u64,u64,u64,i64,i64,i64,i64){(m.dev(),m.ino(),m.len(),m.mtime(),m.mtime_nsec(),m.ctime(),m.ctime_nsec())}
 fn check_owner(scene:&Scene,v:&Json)->Result<()>{if owner(v)!=scene.owner{return Err("Scene viewport ownership changed".into());}if scene.cancel.load(Ordering::Relaxed){return Err("Scene viewport was closed".into());}media::verification(v)?;Ok(())}
-fn frame(scene:&Scene,v:&Json)->Result<Json>{
- let preferred=(((scene.room/40)as f64).sqrt()as usize).clamp(128,384);let size=optional(v,"size",preferred)?;if !(128..=768).contains(&size){return Err("Scene viewport size must be128–768pixels".into());}if size*size*40>scene.room{return Err("Scene viewport exceeds its current memory budget; reduce frame size".into());}let yaw=if get(v,"yaw")==&Null{0.4}else{scalar(get(v,"yaw"))?};let pitch=if get(v,"pitch")==&Null{0.2}else{scalar(get(v,"pitch"))?};let zoom=if get(v,"zoom")==&Null{1.0}else{scalar(get(v,"zoom"))?};if yaw.abs()>10000.||pitch.abs()>10000.||!(0.25..=8.).contains(&zoom){return Err("Scene camera values exceed their finite range".into());}let(sy,cy)=yaw.sin_cos();let(sp,cp)=pitch.sin_cos();let scale=size as f64*0.24*zoom;let mut rgba=vec![0u8;size*size*4];for p in rgba.chunks_exact_mut(4){p.copy_from_slice(&[23,27,34,255]);}let mut depth=vec![f64::NEG_INFINITY;size*size];let mut work=0usize;let started=Instant::now();
- for t in &scene.triangles{if scene.cancel.load(Ordering::Relaxed){return Err("Scene viewport was closed".into());}if started.elapsed()>Duration::from_secs(3){return Err("Scene preview exceeded its frame time; reduce zoom or export the original".into());}let pts=t.points.map(|p|{let x=p[0]as f64*cy+p[2]as f64*sy;let z=p[2]as f64*cy-p[0]as f64*sy;let y=p[1]as f64*cp-z*sp;let z=p[1]as f64*sp+z*cp;[size as f64/2.+x*scale,size as f64/2.-y*scale,z]});let edge=|a:[f64;3],b:[f64;3],x:f64,y:f64|(x-a[0])*(b[1]-a[1])-(y-a[1])*(b[0]-a[0]);let area=edge(pts[0],pts[1],pts[2][0],pts[2][1]);if area.abs()<1e-10{continue;}
-  let xmin=pts.iter().map(|p|p[0]).fold(f64::INFINITY,f64::min).floor().max(0.).min(size as f64)as usize;let xmax=pts.iter().map(|p|p[0]).fold(f64::NEG_INFINITY,f64::max).ceil().max(0.).min(size as f64)as usize;let ymin=pts.iter().map(|p|p[1]).fold(f64::INFINITY,f64::min).floor().max(0.).min(size as f64)as usize;let ymax=pts.iter().map(|p|p[1]).fold(f64::NEG_INFINITY,f64::max).ceil().max(0.).min(size as f64)as usize;let pixels=xmax.saturating_sub(xmin)*ymax.saturating_sub(ymin);work=work.checked_add(pixels).ok_or("Scene pixel workload overflow")?;if work>24_000_000usize.min(scene.room.saturating_mul(2)){return Err("Scene preview exceeds its pixel workload; reduce zoom or export the original".into());}
-  let a=[pts[1][0]-pts[0][0],pts[1][1]-pts[0][1],(pts[1][2]-pts[0][2])*scale];let b=[pts[2][0]-pts[0][0],pts[2][1]-pts[0][1],(pts[2][2]-pts[0][2])*scale];let normal=[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];let norm=normal.iter().map(|n|n*n).sum::<f64>().sqrt();let light=if norm>0.{0.35+0.65*(normal[2]/norm).abs()}else{0.35};
-  for y in ymin..ymax{if scene.cancel.load(Ordering::Relaxed){return Err("Scene viewport was closed".into());}for x in xmin..xmax{let px=x as f64+0.5;let py=y as f64+0.5;let weights=[edge(pts[1],pts[2],px,py)/area,edge(pts[2],pts[0],px,py)/area,edge(pts[0],pts[1],px,py)/area];if weights.iter().any(|w|*w< -1e-9){continue;}let z=(0..3).map(|k|weights[k]*pts[k][2]).sum::<f64>();let at=y*size+x;if z<depth[at]{continue;}depth[at]=z;for c in 0..3{let linear=(0..3).map(|k|weights[k]*t.colors[k][c]as f64).sum::<f64>()*light;rgba[at*4+c]=(linear.clamp(0.,1.).powf(1./2.2)*255.).round()as u8;}}}
+// Across all viewports, running row bands share one bounded host CPU budget.
+// Reservations and borrowed output slices end before a frame is returned.
+const WORKER_STACK:usize=256*1024;
+static RENDER_SEATS:AtomicUsize=AtomicUsize::new(0);
+static RENDER_CAPACITY:OnceLock<usize>=OnceLock::new();
+fn capacity()->usize{*RENDER_CAPACITY.get_or_init(||resources::workers(&Null))}
+struct RenderSeats(usize);
+impl Drop for RenderSeats{fn drop(&mut self){RENDER_SEATS.fetch_sub(self.0,Ordering::AcqRel);}}
+fn reserve_workers(wanted:usize,cancel:&AtomicBool,started:Instant)->Result<RenderSeats>{
+ loop{if cancel.load(Ordering::Relaxed){return Err("Scene viewport was closed".into());}if started.elapsed()>Duration::from_secs(3){return Err("Scene preview exceeded its frame time; reduce zoom or export the original".into());}
+  let used=RENDER_SEATS.load(Ordering::Acquire);let take=wanted.min(capacity().saturating_sub(used));if take>0&&RENDER_SEATS.compare_exchange(used,used+take,Ordering::AcqRel,Ordering::Acquire).is_ok(){return Ok(RenderSeats(take));}
+  std::thread::park_timeout(Duration::from_millis(1));
  }
- Ok(obj(vec![("width",Num(size.to_string())),("height",Num(size.to_string())),("rgba",s(&network::b64(&rgba))),("triangles",Num(scene.triangles.len().to_string())),("source_sha256",get(get(&scene.owner,"record"),"sha256").clone()),("description",s("Static geometry preview · base and vertex colors · textures, animation and physical material effects are not displayed"))]))
+}
+#[derive(Clone,Copy)]struct Camera{size:usize,yaw:f64,pitch:f64,zoom:f64}
+struct Band<'a>{rgba:&'a mut[u8],depth:&'a mut[f64],first_row:usize}
+fn raster_band(scene:&Scene,camera:Camera,band:Band<'_>,work:&AtomicUsize,stop:&AtomicBool,started:Instant)->Result<()>{
+ let Camera{size,yaw,pitch,zoom}=camera;let Band{rgba,depth,first_row}=band;
+ let(sy,cy)=yaw.sin_cos();let(sp,cp)=pitch.sin_cos();let scale=size as f64*0.24*zoom;
+ for t in &scene.triangles{if scene.cancel.load(Ordering::Relaxed){return Err("Scene viewport was closed".into());}if stop.load(Ordering::Relaxed){return Ok(());}if started.elapsed()>Duration::from_secs(3){return Err("Scene preview exceeded its frame time; reduce zoom or export the original".into());}let pts=t.points.map(|p|{let x=p[0]as f64*cy+p[2]as f64*sy;let z=p[2]as f64*cy-p[0]as f64*sy;let y=p[1]as f64*cp-z*sp;let z=p[1]as f64*sp+z*cp;[size as f64/2.+x*scale,size as f64/2.-y*scale,z]});let edge=|a:[f64;3],b:[f64;3],x:f64,y:f64|(x-a[0])*(b[1]-a[1])-(y-a[1])*(b[0]-a[0]);let area=edge(pts[0],pts[1],pts[2][0],pts[2][1]);if area.abs()<1e-10{continue;}
+  let xmin=pts.iter().map(|p|p[0]).fold(f64::INFINITY,f64::min).floor().max(0.).min(size as f64)as usize;let xmax=pts.iter().map(|p|p[0]).fold(f64::NEG_INFINITY,f64::max).ceil().max(0.).min(size as f64)as usize;let ymin=pts.iter().map(|p|p[1]).fold(f64::INFINITY,f64::min).floor().max(0.).min(size as f64)as usize;let ymax=pts.iter().map(|p|p[1]).fold(f64::NEG_INFINITY,f64::max).ceil().max(0.).min(size as f64)as usize;let ymin=ymin.max(first_row);let ymax=ymax.min(first_row+depth.len()/size);let pixels=xmax.saturating_sub(xmin)*ymax.saturating_sub(ymin);let prior=work.fetch_add(pixels,Ordering::Relaxed);if prior.saturating_add(pixels)>24_000_000usize.min(scene.room.saturating_mul(2)){return Err("Scene preview exceeds its pixel workload; reduce zoom or export the original".into());}
+  let a=[pts[1][0]-pts[0][0],pts[1][1]-pts[0][1],(pts[1][2]-pts[0][2])*scale];let b=[pts[2][0]-pts[0][0],pts[2][1]-pts[0][1],(pts[2][2]-pts[0][2])*scale];let normal=[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];let norm=normal.iter().map(|n|n*n).sum::<f64>().sqrt();let light=if norm>0.{0.35+0.65*(normal[2]/norm).abs()}else{0.35};
+  for y in ymin..ymax{if stop.load(Ordering::Relaxed){return Ok(());}if started.elapsed()>Duration::from_secs(3){return Err("Scene preview exceeded its frame time; reduce zoom or export the original".into());}if scene.cancel.load(Ordering::Relaxed){return Err("Scene viewport was closed".into());}for x in xmin..xmax{let px=x as f64+0.5;let py=y as f64+0.5;let weights=[edge(pts[1],pts[2],px,py)/area,edge(pts[2],pts[0],px,py)/area,edge(pts[0],pts[1],px,py)/area];if weights.iter().any(|w|*w< -1e-9){continue;}let z=(0..3).map(|k|weights[k]*pts[k][2]).sum::<f64>();let at=(y-first_row)*size+x;if z<depth[at]{continue;}depth[at]=z;for c in 0..3{let linear=(0..3).map(|k|weights[k]*t.colors[k][c]as f64).sum::<f64>()*light;rgba[at*4+c]=(linear.clamp(0.,1.).powf(1./2.2)*255.).round()as u8;}}}
+ }
+ Ok(())
+}
+fn render(scene:&Scene,camera:Camera,wanted:usize)->Result<(Vec<u8>,usize)>{
+ let started=Instant::now();let size=camera.size;
+ let stack_room=scene.room.saturating_sub(size*size*40);let planned=wanted.min(1+stack_room/WORKER_STACK).clamp(1,4);
+ let seats=reserve_workers(planned,&scene.cancel,started)?;let workers=seats.0;
+ let mut rgba=vec![0u8;size*size*4];for p in rgba.chunks_exact_mut(4){p.copy_from_slice(&[23,27,34,255]);}let mut depth=vec![f64::NEG_INFINITY;size*size];
+ let mut jobs=Vec::with_capacity(workers);let mut color_left=rgba.as_mut_slice();let mut depth_left=depth.as_mut_slice();
+ for i in 0..workers{let first_row=size*i/workers;let rows=size*(i+1)/workers-first_row;let(c,rest)=color_left.split_at_mut(rows*size*4);color_left=rest;let(d,rest)=depth_left.split_at_mut(rows*size);depth_left=rest;jobs.push(Mutex::new(Some(Band{rgba:c,depth:d,first_row})));}
+ let work=AtomicUsize::new(0);let stop=AtomicBool::new(false);
+ let run=|job:&Mutex<Option<Band<'_>>>|->Result<()>{let band=job.lock().map_err(|_|"Scene worker unavailable")?.take().ok_or("Scene row band already rendered")?;let result=raster_band(scene,camera,band,&work,&stop,started);if result.is_err(){stop.store(true,Ordering::Relaxed);}result};
+ let (result,actual)=std::thread::scope(|scope|{
+  let mut handles=Vec::with_capacity(workers.saturating_sub(1));let mut failure=None;
+  for job in jobs.iter().skip(1){match std::thread::Builder::new().name("scene-row".into()).stack_size(WORKER_STACK).spawn_scoped(scope,||run(job)){Ok(h)=>handles.push(h),Err(_)=>{if let Err(e)=run(job){failure.get_or_insert(e);}}}}
+  let actual=1+handles.len();if let Err(e)=run(&jobs[0]){failure.get_or_insert(e);}
+  for h in handles{match h.join(){Ok(Ok(()))=>{},Ok(Err(e))=>{failure.get_or_insert(e);},Err(_)=>{stop.store(true,Ordering::Relaxed);failure.get_or_insert("Scene worker failed".into());}}}
+  (failure.map_or(Ok(()),Err),actual)
+ });
+ result?;if scene.cancel.load(Ordering::Relaxed){return Err("Scene viewport was closed".into());}Ok((rgba,actual))
+}
+fn frame(scene:&Scene,v:&Json)->Result<Json>{
+ let preferred=(((scene.room/40)as f64).sqrt()as usize).clamp(128,384);let size=optional(v,"size",preferred)?;if !(128..=768).contains(&size){return Err("Scene viewport size must be128–768pixels".into());}if size*size*40>scene.room{return Err("Scene viewport exceeds its current memory budget; reduce frame size".into());}let yaw=if get(v,"yaw")==&Null{0.4}else{scalar(get(v,"yaw"))?};let pitch=if get(v,"pitch")==&Null{0.2}else{scalar(get(v,"pitch"))?};let zoom=if get(v,"zoom")==&Null{1.0}else{scalar(get(v,"zoom"))?};if yaw.abs()>10000.||pitch.abs()>10000.||!(0.25..=8.).contains(&zoom){return Err("Scene camera values exceed their finite range".into());}let (rgba,actual)=render(scene,Camera{size,yaw,pitch,zoom},scene.workers)?;
+ Ok(obj(vec![("width",Num(size.to_string())),("height",Num(size.to_string())),("rgba",s(&network::b64(&rgba))),("cpu_workers",Num(actual.to_string())),("triangles",Num(scene.triangles.len().to_string())),("source_sha256",get(get(&scene.owner,"record"),"sha256").clone()),("description",s("Static geometry preview · base and vertex colors · textures, animation and physical material effects are not displayed"))]))
 }
 pub(super) fn operation(v:&Json)->Result<Json>{
  let op=field(v,"op")?;if op=="scene_open"{
   {let mut held=scenes().lock().map_err(|_|"Scene viewport registry unavailable")?;held.retain(|_,h|{if h.used.elapsed()>Duration::from_secs(600){h.scene.cancel.store(true,Ordering::Relaxed);false}else{true}});}let slot=slot()?;let policy=super::resources::policy(get(v,"device"),get(v,"resource_config"),0);let room=number(&policy,"budget_bytes")/4;if room<128*128*40{return Err("Current memory budget cannot admit a scene viewport; export remains available".into());}
   if text(get(v,"record"),"kind")!="scene"{return Err("Scene preview requires a returned scene file".into());}let verified=media::verification(v)?;let path=field(&verified,"path")?;let mut file=fs::OpenOptions::new().read(true).custom_flags(131072).open(path).map_err(|e|e.to_string())?;let before=file.metadata().map_err(|e|e.to_string())?;let length=before.len();if length>256*1024*1024||length as usize!=number(get(v,"record"),"bytes"){return Err("Scene source changed before loading".into());}
   let mut digest=incremental_digest::Digest::new();let mut chunk=[0;65536];let mut total=0usize;loop{let n=file.read(&mut chunk).map_err(|e|e.to_string())?;if n==0{break;}total=total.checked_add(n).ok_or("Scene source overflow")?;if total>length as usize{return Err("Scene source grew while loading".into());}digest.update(&chunk[..n])?;}if total!=length as usize||digest.finish()!=text(get(v,"record"),"sha256"){return Err("Scene source bytes changed while loading".into());}file.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;let triangles=glb(&mut file,total,room)?;if stamp(&before)!=stamp(&file.metadata().map_err(|e|e.to_string())?)||stamp(&before)!=stamp(&fs::symlink_metadata(path).map_err(|e|e.to_string())?){return Err("Scene source changed during geometry decoding".into());}media::verification(v)?;
-  let scene=Arc::new(Scene{triangles,owner:owner(v),cancel:AtomicBool::new(false),room,_slot:slot});let count=scene.triangles.len();let ticket=format!("scene:{}",now());let mut held=scenes().lock().map_err(|_|"Scene viewport registry unavailable")?;held.insert(ticket.clone(),Held{scene,used:Instant::now()});return Ok(obj(vec![("scene_ticket",s(&ticket)),("triangles",Num(count.to_string())),("max_size",Num((((room/40)as f64).sqrt()as usize).clamp(128,640).to_string()))]));
+  let scene=Arc::new(Scene{triangles,owner:owner(v),cancel:AtomicBool::new(false),room,workers:resources::workers(get(v,"device")).min(capacity()),_slot:slot});let count=scene.triangles.len();let ticket=format!("scene:{}",now());let mut held=scenes().lock().map_err(|_|"Scene viewport registry unavailable")?;held.insert(ticket.clone(),Held{scene,used:Instant::now()});return Ok(obj(vec![("scene_ticket",s(&ticket)),("triangles",Num(count.to_string())),("max_size",Num((((room/40)as f64).sqrt()as usize).clamp(128,640).to_string()))]));
  }
  let ticket=field(v,"scene_ticket")?;let scene={let mut held=scenes().lock().map_err(|_|"Scene viewport registry unavailable")?;let h=held.get_mut(ticket).ok_or("Scene viewport is closed or expired")?;if h.used.elapsed()>Duration::from_secs(600){h.scene.cancel.store(true,Ordering::Relaxed);held.remove(ticket);return Err("Scene viewport expired".into());}if owner(v)!=h.scene.owner{return Err("Scene viewport ownership changed".into());}if op=="scene_close"{h.scene.cancel.store(true,Ordering::Relaxed);held.remove(ticket);return Ok(Null);}h.used=Instant::now();h.scene.clone()};check_owner(&scene,v)?;let result=frame(&scene,v)?;check_owner(&scene,v)?;Ok(result)
+}
+
+#[cfg(test)]mod checks{
+ use super::*;
+ fn specimen()->Scene{
+  let red=Triangle{points:[[-1.,-1.,0.],[1.,-1.,0.],[0.,1.,0.]],colors:[[1.,0.,0.,1.];3]};
+  let mut blue=red.clone();blue.colors=[[0.,0.,1.,1.];3];for p in &mut blue.points{p[2]=0.25;}
+  let mut green=red.clone();green.colors=[[0.,1.,0.,1.];3];
+  Scene{triangles:vec![red,blue,green],owner:Null,cancel:AtomicBool::new(false),room:32*1024*1024,workers:capacity(),_slot:slot().unwrap()}
+ }
+ #[test]fn disjoint_workers_preserve_depth_ties_camera_and_uneven_rows(){
+  let scene=specimen();
+  for size in [128,193,384]{for(yaw,pitch,zoom)in [(0.,0.,1.),(0.7,-0.3,1.5),(-0.6,0.8,0.25),(1.8,1.1,3.)]{let c=Camera{size,yaw,pitch,zoom};let single=render(&scene,c,1).unwrap();let parallel=render(&scene,c,capacity()).unwrap();assert_eq!(single.0,parallel.0);assert_eq!(single.1,1);assert_eq!(parallel.1,capacity());}}
+ }
+ #[test]fn memory_room_reduces_stacks_without_losing_pixels(){
+  let mut scene=specimen();let c=Camera{size:128,yaw:0.4,pitch:0.2,zoom:1.};let normal=render(&scene,c,capacity()).unwrap();scene.room=128*128*40;let limited=render(&scene,c,capacity()).unwrap();assert_eq!(normal.0,limited.0);assert_eq!(limited.1,1);
+ }
+ #[test]fn queued_close_releases_admission_and_does_not_render(){
+  let all=reserve_workers(capacity(),&AtomicBool::new(false),Instant::now()).unwrap();assert_eq!(all.0,capacity());let cancelled=AtomicBool::new(false);
+  std::thread::scope(|scope|{let(t,r)=std::sync::mpsc::channel();let cancel_ref=&cancelled;let h=scope.spawn(move||{t.send(()).unwrap();reserve_workers(1,cancel_ref,Instant::now()).err().unwrap()});r.recv().unwrap();cancelled.store(true,Ordering::Relaxed);assert!(h.join().unwrap().contains("closed"));});
+  drop(all);let available=reserve_workers(capacity(),&AtomicBool::new(false),Instant::now()).unwrap();assert_eq!(available.0,capacity());
+ }
+ #[test]fn expired_and_closed_frames_refuse_without_consuming_worker_seats(){
+  let scene=specimen();let c=Camera{size:128,yaw:0.,pitch:0.,zoom:1.};scene.cancel.store(true,Ordering::Relaxed);assert!(render(&scene,c,capacity()).unwrap_err().contains("closed"));assert!(reserve_workers(1,&AtomicBool::new(false),Instant::now()-Duration::from_secs(4)).err().unwrap().contains("frame time"));assert_eq!(RENDER_SEATS.load(Ordering::Acquire),0);
+ }
+ #[test]fn shared_pixel_budget_stops_the_frame_without_partial_success(){
+  let scene=specimen();let mut colors=vec![0;128*128*4];let mut depth=vec![f64::NEG_INFINITY;128*128];let work=AtomicUsize::new(24_000_000);let stop=AtomicBool::new(false);let c=Camera{size:128,yaw:0.,pitch:0.,zoom:1.};let r=raster_band(&scene,c,Band{rgba:&mut colors,depth:&mut depth,first_row:0},&work,&stop,Instant::now());assert!(r.unwrap_err().contains("pixel workload"));assert!(colors.iter().all(|v|*v==0));assert!(render(&scene,c,capacity()).is_ok());
+ }
 }
