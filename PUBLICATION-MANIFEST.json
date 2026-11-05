@@ -1,14 +1,14 @@
 {
   "state": "in_progress; signed candidate",
-  "version": 1793846728,
+  "version": 1793886933,
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
   "signing_certificate_sha256": "ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5",
   "key_change_authorized": true,
   "signed_apk": {
     "path": "release/RLLM.apk",
-    "bytes": 6412306,
-    "sha256": "25731cfd0ed2288dfa4e53a18e774232318c6a444b6f0e5d9523aa77354e6bff"
+    "bytes": 6465554,
+    "sha256": "64aadea75c129f546f2d2ac712ac2233b721a7d3bab05f856d8425ab6e87b1b4"
   },
   "build_inputs": {
     "AndroidManifest.xml": "f8b04737e17990b6d42516ab44cc5f49f07a9d2faac0302e0718617fc81da451",
@@ -16,7 +16,7 @@
     "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
     "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
     "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-    "core/application.rs": "e216bf70616d46f70d96746952d8dea542cebf349b975a4971578ba495d6b169",
+    "core/application.rs": "b1080feef042ab57c33cce3eb013a3d08efee7980b0aee955c83524edfd218e6",
     "core/approval_rules.rs": "e7a5ceec21ecc960f28b87d9d00f4981eb6ba03cd4dc7c7ef32665f78766cc13",
     "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
     "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
@@ -70,12 +70,14 @@
     "core/investigation_claims.rs": "19ce0be47873fe7fbfde174f0acccffa494033208bc9a27531c308f9c72b2ddd",
     "core/jobs.rs": "e2e0cd6949e362fd87185e323b7fc19c5bf36a43bf538cf9325bfdbc6cd989c3",
     "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
-    "core/lib.rs": "1d658c37f9741aa57467b392512bf32e67876fc42533fd03727d74c7896356ca",
+    "core/lib.rs": "683fa60945a49410d7342f870ed10d257d191e950980de74d5b4a4f80e455607",
     "core/mcp_identity.rs": "8487fa1479ae947071be28ec4118d2becf56d2c32894adf47dbca3e8a0dcf4cb",
     "core/mcp_lifecycle.rs": "9b23677d24cca981362accf03bbc238dd90c022fce988d6c1fb46f19b335d7ca",
     "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
-    "core/media.rs": "5d90a8679342e9f0ff820801a044bf6d738155b2a9759b65723d6653459658e2",
-    "core/media_stream.rs": "2b886ac0f5358f0da8198755298f7f32b1e345f1f1197e449e20ab64bf70bcd6",
+    "core/media.rs": "311c71bd5ca7893dc5d4321eac91450086642e6525b5a096816fa67dfee2b4b5",
+    "core/media_input.rs": "6d242e2df2f5d037bd82d6aed46942324af749a3ebef24e084e0da17a65f282e",
+    "core/media_stream.rs": "de0c081e27e146d3f87038462c546e81d2886bec46dc8e577d011a67174739d4",
+    "core/media_upload.rs": "34c4c347b1fef6fcfdd15e63fb05c849cc409b11ad419626a877c6ef04d09ec1",
     "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
     "core/model_metadata.rs": "b024330ac89f786670ae336f3855ee4b69a95898b1588e5ee16254c56d94e3e4",
     "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
@@ -105,7 +107,7 @@
     "core/resources.rs": "cfdebc1cc58e6b81f862c01a38734dc7ed6911a362a67c1e391fcafaec89100e",
     "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
     "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
-    "core/services.rs": "8cf529d429b4c416b75d1b988ac6af15866a9599120206bef4f52ff38fa98f19",
+    "core/services.rs": "11c2d6e5200029c8c2357fabb4c8cca1ff5ecb06538db03fee277f384c8a54d6",
     "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
     "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
     "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
@@ -123,18 +125,18 @@
     "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
     "package.sh": "3dc631572a1aeb972fd53c0fcd8f939375eb942d5aa25f3147f693277c20052d",
     "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-    "platform/com/local/client/Activity.java": "7752d8d7031855331a4dfb799fa268321772fd337e55d598656bb8bcde3bdcf8",
+    "platform/com/local/client/Activity.java": "ef72a508e1c9a32aabc287fbd15d318e019c3b60ca32ec678c6279235f3abac4",
     "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
     "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
     "platform/com/local/client/Diagram.java": "5fcab9863eb6a1be85b7a7e841c11cd927a3d722f4a53d6ac19e722177c341ce",
     "platform/com/local/client/Execution.java": "6c51afe3a8fce5283af4d8039e43913369da1ca0d3c3e1a14346a1b9d85d90d4",
     "platform/com/local/client/ExportStore.java": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573",
     "platform/com/local/client/Gateway.java": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7",
-    "platform/com/local/client/Media.java": "2540b4b6cfa920bced9170f9cda4027625e67cc93b923ae1c6a2115214eb559f",
+    "platform/com/local/client/Media.java": "a082f071ec764192c38b1898efdee6f2ed1f00132a83d45ef605bcb2ca707b8d",
     "platform/com/local/client/Resolution.java": "9e706ecd3c199d7dee7f20ac312b4ba78d355e3eab8a534e07b4277216b3f068",
     "platform/com/local/client/TransferStore.java": "a164cf07e67e2ad8d98183c9dac5e367582f37c313fe01d8a99001eee61cd73b",
     "platform/com/local/client/Usage.java": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165",
-    "platform/com/local/client/Wire.java": "a8889e2d1d76afbfdfbd4d6cf1952bb6c85be2cc34f1423825de3094282556ff",
+    "platform/com/local/client/Wire.java": "44fd658c225cbd7c108ce842d24b6a5b14eb0500ff7e7f3f0e7c6a54a517e6fb",
     "platform/jni/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
     "platform/jni/bridge.c": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f",
     "res/drawable/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
@@ -189,8 +191,8 @@
       "sha256": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be"
     },
     "core/application.rs": {
-      "bytes": 337972,
-      "sha256": "e216bf70616d46f70d96746952d8dea542cebf349b975a4971578ba495d6b169"
+      "bytes": 338218,
+      "sha256": "b1080feef042ab57c33cce3eb013a3d08efee7980b0aee955c83524edfd218e6"
     },
     "core/approval_rules.rs": {
       "bytes": 17224,
@@ -405,8 +407,8 @@
       "sha256": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1"
     },
     "core/lib.rs": {
-      "bytes": 21022,
-      "sha256": "1d658c37f9741aa57467b392512bf32e67876fc42533fd03727d74c7896356ca"
+      "bytes": 21243,
+      "sha256": "683fa60945a49410d7342f870ed10d257d191e950980de74d5b4a4f80e455607"
     },
     "core/mcp_identity.rs": {
       "bytes": 4224,
@@ -421,12 +423,20 @@
       "sha256": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70"
     },
     "core/media.rs": {
-      "bytes": 26551,
-      "sha256": "5d90a8679342e9f0ff820801a044bf6d738155b2a9759b65723d6653459658e2"
+      "bytes": 30434,
+      "sha256": "311c71bd5ca7893dc5d4321eac91450086642e6525b5a096816fa67dfee2b4b5"
+    },
+    "core/media_input.rs": {
+      "bytes": 4463,
+      "sha256": "6d242e2df2f5d037bd82d6aed46942324af749a3ebef24e084e0da17a65f282e"
     },
     "core/media_stream.rs": {
-      "bytes": 4508,
-      "sha256": "2b886ac0f5358f0da8198755298f7f32b1e345f1f1197e449e20ab64bf70bcd6"
+      "bytes": 4489,
+      "sha256": "de0c081e27e146d3f87038462c546e81d2886bec46dc8e577d011a67174739d4"
+    },
+    "core/media_upload.rs": {
+      "bytes": 7897,
+      "sha256": "34c4c347b1fef6fcfdd15e63fb05c849cc409b11ad419626a877c6ef04d09ec1"
     },
     "core/model_artifact.rs": {
       "bytes": 16721,
@@ -545,8 +555,8 @@
       "sha256": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b"
     },
     "core/services.rs": {
-      "bytes": 31665,
-      "sha256": "8cf529d429b4c416b75d1b988ac6af15866a9599120206bef4f52ff38fa98f19"
+      "bytes": 32798,
+      "sha256": "11c2d6e5200029c8c2357fabb4c8cca1ff5ecb06538db03fee277f384c8a54d6"
     },
     "core/stdio.rs": {
       "bytes": 11663,
@@ -689,8 +699,8 @@
       "sha256": "ae79930ca16366f7f21d147fa0f5722694b334589c903a3871b89d4cc8ab2e9c"
     },
     "docs/SERVICES.md": {
-      "bytes": 12788,
-      "sha256": "19e212b16bd0edc0461ed65cc3ad76011263033fad19cffb9f4322ad3fa37b41"
+      "bytes": 13869,
+      "sha256": "a1bde5a65c8d1135330e1242c236df31e5b8c9d021371911f6f84c58a3e15a46"
     },
     "docs/SETUP.md": {
       "bytes": 7898,
@@ -701,8 +711,8 @@
       "sha256": "93f5a206d83ac2fd56bf4cb74b50960d6df33005a90b3679856e7e6ae04189f6"
     },
     "docs/STATUS.md": {
-      "bytes": 1720,
-      "sha256": "baa9403cf9765dd87748ef702786040a52aa3530f076fca326a6907549b13be5"
+      "bytes": 1926,
+      "sha256": "57c4ddc2a686e6c8f79e92cb05c671895851ba71f262358a58c3707b77e5216b"
     },
     "docs/TOOL-FEEDBACK.md": {
       "bytes": 4677,
@@ -757,8 +767,8 @@
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     "platform/com/local/client/Activity.java": {
-      "bytes": 165531,
-      "sha256": "7752d8d7031855331a4dfb799fa268321772fd337e55d598656bb8bcde3bdcf8"
+      "bytes": 165681,
+      "sha256": "ef72a508e1c9a32aabc287fbd15d318e019c3b60ca32ec678c6279235f3abac4"
     },
     "platform/com/local/client/Core.java": {
       "bytes": 646,
@@ -785,8 +795,8 @@
       "sha256": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7"
     },
     "platform/com/local/client/Media.java": {
-      "bytes": 24992,
-      "sha256": "2540b4b6cfa920bced9170f9cda4027625e67cc93b923ae1c6a2115214eb559f"
+      "bytes": 26147,
+      "sha256": "a082f071ec764192c38b1898efdee6f2ed1f00132a83d45ef605bcb2ca707b8d"
     },
     "platform/com/local/client/Resolution.java": {
       "bytes": 3979,
@@ -801,8 +811,8 @@
       "sha256": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165"
     },
     "platform/com/local/client/Wire.java": {
-      "bytes": 2773,
-      "sha256": "a8889e2d1d76afbfdfbd4d6cf1952bb6c85be2cc34f1423825de3094282556ff"
+      "bytes": 3834,
+      "sha256": "44fd658c225cbd7c108ce842d24b6a5b14eb0500ff7e7f3f0e7c6a54a517e6fb"
     },
     "platform/jni/.gitkeep": {
       "bytes": 1,
@@ -813,20 +823,20 @@
       "sha256": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f"
     },
     "project-progress.md": {
-      "bytes": 20290,
-      "sha256": "ab212ddcadcb6b1032732f3ace85d1307ea5e264627dad5924068a0f5c1e1555"
+      "bytes": 26136,
+      "sha256": "81fff31f399bea221064ac7c7a562ee11a257d35720b580058857a954bd6c5b7"
     },
     "release/NOTES.md": {
-      "bytes": 1805,
-      "sha256": "6d76d4afcd268c8476b2f24a33ba48d71e225c22d9cfd2181affaf2fce371e3c"
+      "bytes": 2011,
+      "sha256": "31211d6fedc45edfa97df960c1782c6288c6824c66a1b4a67be254f1f06ef996"
     },
     "release/RLLM.apk": {
-      "bytes": 6412306,
-      "sha256": "25731cfd0ed2288dfa4e53a18e774232318c6a444b6f0e5d9523aa77354e6bff"
+      "bytes": 6465554,
+      "sha256": "64aadea75c129f546f2d2ac712ac2233b721a7d3bab05f856d8425ab6e87b1b4"
     },
     "release/SHA256SUMS.txt": {
       "bytes": 75,
-      "sha256": "787e504987a2fe28a5cb359ad772957fe9baf890d096de83683a10cdfe087b53"
+      "sha256": "fa511e480d97d0f46c0beeeec16cf91e30943ca28b29fca8fa63b9fec8e5b141"
     },
     "res/drawable/.gitkeep": {
       "bytes": 1,
@@ -913,20 +923,20 @@
       "sha256": "30607c8f0160843366cf48bbb318eafbf5a8793a35847732c77ebb564125e115"
     },
     "tools/apk.py": {
-      "bytes": 3894,
-      "sha256": "9005a4f9af2805f201140c7b8eda6c29546903c692d614e9bc183a7eb27d9f52"
+      "bytes": 4319,
+      "sha256": "6697e43af423dc801cbe2e0388179d58298690738b67f27c0848f4244dc285b5"
     },
     "tools/checkpoint.py": {
       "bytes": 1409,
       "sha256": "7cc25c68497399f80d5d9ab7183687014a7d844f22a881b2a2fdf13bd59a783b"
     },
     "tools/checks.py": {
-      "bytes": 3655,
-      "sha256": "bfc033a721a52871bb81c1eb0540f2faf00c88ceee0ea07d39c8b6f35a1b0ad2"
+      "bytes": 3670,
+      "sha256": "a7722286ff618000807d13a6adfe6a82af2101e4b4d1bed4b1eaed0dc245e584"
     },
     "tools/package.py": {
-      "bytes": 12199,
-      "sha256": "0539822ff01e97106868790115a3ba86e07cb4ced32115cd5f3abd16f260aa80"
+      "bytes": 12435,
+      "sha256": "499e8b596720d4234644ffcb2edac7d8f3ab1ce6fc46bbe3bb86128fb2fdb881"
     },
     "tools/readback.py": {
       "bytes": 1485,
@@ -961,8 +971,8 @@
       "sha256": "ec335557689342d0b80dc75832ec065442c28215f8648088105c7fc98af465b4"
     },
     "verification/RESULTS.json": {
-      "bytes": 172085,
-      "sha256": "42b052f89435902501705d969e572a9427a3d9bbd51b9a261d20f3782c305a08"
+      "bytes": 174305,
+      "sha256": "932da107217e75a43e2b9e7b2c7c0c6feedfde55c2dba1aa579ef0a48f993b89"
     },
     "verification/UPGRADE-AUDIT.json": {
       "bytes": 20553,
@@ -1057,8 +1067,8 @@
       "sha256": "186b673d0505de53478e4db8af176085f159e5125c9c9a9a1b239b5f81b0a881"
     },
     "verification/jobs.py": {
-      "bytes": 9439,
-      "sha256": "72caa7968c724262b04156960950f6ebbbe2222f746682b31f1a8aa8dbf959c5"
+      "bytes": 9486,
+      "sha256": "bfa415ac74642790aad44f7e287106354400fb08ca86569b0ffd39a7f624cbe2"
     },
     "verification/live_web.py": {
       "bytes": 5871,
@@ -1069,12 +1079,16 @@
       "sha256": "e55382043eef763c8f0f771d2fad8708aa972737202479365263d4b4a5b8eadd"
     },
     "verification/media.py": {
-      "bytes": 10453,
-      "sha256": "a41efa716a7e509f2b08a6811a23c78f2d99bd96788b35be7c7406c31ec567a4"
+      "bytes": 12375,
+      "sha256": "5ca70a2837a33b8252b7502d1c68491f17f22ad3a895ea0b40fce9cd2ed7b8c3"
     },
     "verification/media_stream.py": {
       "bytes": 7993,
       "sha256": "942a23a825e5c98936ac8d64f70d754526c17b120ccc7b328de48d31c8552535"
+    },
+    "verification/media_upload.py": {
+      "bytes": 13676,
+      "sha256": "4fc3b352fcef19f437a9400e6f9f7297f7d1791af35c271e2dc35285190cd0f2"
     },
     "verification/network_drive.py": {
       "bytes": 13729,
@@ -1085,8 +1099,8 @@
       "sha256": "b612bf77051c7780af7b5c038dd8850e16822c905ded754d3ba270867732c9f0"
     },
     "verification/oauth.py": {
-      "bytes": 26511,
-      "sha256": "7381e75f70bee2fc429b27d3b40ec33c1c177ced7a052b226352377851b05cd7"
+      "bytes": 26700,
+      "sha256": "c4c19bfe08567f6a7fcec26d9de169ec1d44f1915efa243b1705015ef4e2cee7"
     },
     "verification/pe_declarations.py": {
       "bytes": 7800,
@@ -1133,16 +1147,20 @@
       "sha256": "45159549cd938fc2b2d9c614f0d7ccc9faacefc92f2ba7d0fa314130f9d3edc6"
     },
     "verification/services.py": {
-      "bytes": 14695,
-      "sha256": "69b9b7a980beb09fe3284caed341d38f1244013f9690853b24fada5a94abd165"
+      "bytes": 14764,
+      "sha256": "c32eae20ceb0b60dd10097b4e295349c92a12ed3a818ac9a95a09310888da1bf"
     },
     "verification/task_ownership.py": {
       "bytes": 13310,
       "sha256": "1adca344f81a9b15d068e102dda35b41c645343a2a2118745d92a5e14b995050"
     },
+    "verification/transport.py": {
+      "bytes": 615,
+      "sha256": "ce6669b1ebecd8cb077dcde1749919f3c212f8a94c9836f5e7d2cd50f69995f7"
+    },
     "verification/voice.py": {
-      "bytes": 20496,
-      "sha256": "a77946bcf9cf794f2bbe1f79aba9cb2a8188e68197013643370c3d82f070adc4"
+      "bytes": 20540,
+      "sha256": "72dc02ee6caa479ecf56403477ed9d7389aa88fda61b33641ffbcb8b73ad9ddf"
     },
     "verification/workspace_navigation.py": {
       "bytes": 22966,
@@ -1183,16 +1201,17 @@
         "product_flow": 30,
         "diagnostics": 31,
         "services": 69,
-        "media": 28,
+        "media": 33,
         "jobs": 18,
         "voice": 147,
         "media_stream": 13,
+        "media_upload": 49,
         "acp": 41,
         "oauth": 121
       },
-      "total_executed": 1676,
-      "groups_passed": 36,
-      "groups": 37,
+      "total_executed": 1730,
+      "groups_passed": 37,
+      "groups": 38,
       "unavailable": [
         {
           "name": "binary_flow",
@@ -1220,17 +1239,17 @@
       {
         "filter": "provider::",
         "code": 0,
-        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
       },
       {
         "filter": "stream::",
         "code": 0,
-        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 438 filtered out; finished in 0.32s"
+        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 438 filtered out; finished in 0.16s"
       },
       {
         "filter": "application::harness::",
         "code": 0,
-        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 442 filtered out; finished in 7.36s"
+        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 442 filtered out; finished in 3.42s"
       },
       {
         "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -1280,7 +1299,7 @@
       {
         "filter": "application::connection_migration::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 468 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 468 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::binary_declarations::",
@@ -1295,7 +1314,7 @@
       {
         "filter": "application::instruction::tests::",
         "code": 0,
-        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 444 filtered out; finished in 0.40s"
+        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 444 filtered out; finished in 0.31s"
       },
       {
         "filter": "application::binary_evidence::path_checks::",
@@ -1315,7 +1334,7 @@
       {
         "filter": "application::pe_observation::relocation_checks::",
         "code": 0,
-        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.02s"
+        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.01s"
       },
       {
         "filter": "resources::checks::",
@@ -1340,7 +1359,7 @@
       {
         "filter": "application::project_store::transfer::tests::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.71s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.78s"
       },
       {
         "filter": "application::monitor::checks::",
@@ -1370,7 +1389,7 @@
       {
         "filter": "application::voice_audio::checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.36s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.27s"
       },
       {
         "filter": "application::oauth::checks::",
@@ -2868,7 +2887,7 @@
         "scope": "Owner checks with actual local HTTP fixture peers and controlled model responses; no device or live configured provider acceptance."
       },
       "media": {
-        "passed": 28,
+        "passed": 33,
         "checks": [
           "selected audio stored as actual owned file",
           "input bytes excluded from saved conversation JSON",
@@ -2877,6 +2896,11 @@
           "multipart fields mapped from typed input",
           "actual mapped transcription returned",
           "raw transfer preserves all bytes",
+          "GET file request refuses before approval or transport",
+          "GET refusal retains selected file and local bytes",
+          "GET refusal preserves unrelated local operation",
+          "GET without file retains path variables and sends no body",
+          "PUT retains actual reviewed file upload",
           "explicit JSON file mapping preserves all bytes",
           "changed file is withheld before upload",
           "cancelled native input callback is exact state no-op",
@@ -3097,6 +3121,61 @@
         ],
         "scope": "Owner public-core and real local HTTP checks; Android storage/decoder and live configured endpoints need device acceptance."
       },
+      "media_upload": {
+        "passed": 49,
+        "checks": [
+          "PDF larger than inline limit imports exact bytes",
+          "large file bytes stay outside saved state",
+          "input completion is single-use exact no-op",
+          "file request envelope stays bounded 3",
+          "binary HTTP upload retains complete large PDF",
+          "file request envelope stays bounded 5",
+          "JSON streams repeated base64 and data URL without padding gaps",
+          "input data cannot acquire template file authority",
+          "file request envelope stays bounded 8",
+          "multipart streams actual file and mapped fields",
+          "file request envelope stays bounded 10",
+          "base64 chunk boundary 1",
+          "file request envelope stays bounded 12",
+          "base64 chunk boundary 2",
+          "file request envelope stays bounded 14",
+          "base64 chunk boundary 3",
+          "file request envelope stays bounded 16",
+          "base64 chunk boundary 8191",
+          "file request envelope stays bounded 18",
+          "base64 chunk boundary 8192",
+          "file request envelope stays bounded 20",
+          "base64 chunk boundary 8193",
+          "wrong import ticket cannot write",
+          "oversized import chunk is refused",
+          "cancelled import cannot finish and retains partial file",
+          "cancelled import callback cannot change state",
+          "wrong purpose cannot consume upload",
+          "upload first chunk is bounded actual data",
+          "same-size file mutation interrupts further upload",
+          "cancelled upload cannot resume",
+          "concurrent reservation 0",
+          "concurrent reservation 1",
+          "concurrent reservation 2",
+          "concurrent reservation 3",
+          "fifth stream cannot overbook shared storage",
+          "shared quota also refuses an independent process",
+          "cancellation releases only unwritten reservation",
+          "released quota can be used by next selection",
+          "recording reservation is respected 0",
+          "recording reservation is respected 1",
+          "recording reservation is respected 2",
+          "recording reservation is respected 3",
+          "native recording can fill its reserved bound without overbooking",
+          "recording cancellation retains recorded bytes",
+          "exact 64 MiB input is fully adopted",
+          "file request envelope stays bounded 45",
+          "maximum binary HTTP upload has exact length and digest",
+          "one byte beyond maximum cannot become a truncated success",
+          "artifact-free local operation survives scoped upload failure"
+        ],
+        "scope": "Owner checks using actual disk bytes, public shared-core events, chunk APIs and local HTTP sockets. Android SDK compilation is separate; physical picker/socket/lifecycle and live user servers remain unverified."
+      },
       "acp": {
         "passed": 41,
         "checks": [
@@ -3273,9 +3352,9 @@
       }
     },
     "apk": {
-      "version": 1793846728,
-      "bytes": 6412306,
-      "sha256": "25731cfd0ed2288dfa4e53a18e774232318c6a444b6f0e5d9523aa77354e6bff",
+      "version": 1793886933,
+      "bytes": 6465554,
+      "sha256": "64aadea75c129f546f2d2ac712ac2233b721a7d3bab05f856d8425ab6e87b1b4",
       "native": [
         {
           "abi": "arm64-v8a",
@@ -3286,7 +3365,7 @@
             16384,
             16384
           ],
-          "bytes": 4775128
+          "bytes": 4825128
         },
         {
           "abi": "x86_64",
@@ -3297,7 +3376,7 @@
             16384,
             16384
           ],
-          "bytes": 5860040
+          "bytes": 5926264
         }
       ],
       "label": "RLLM",
@@ -3310,7 +3389,7 @@
         "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
         "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
         "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-        "core/application.rs": "e216bf70616d46f70d96746952d8dea542cebf349b975a4971578ba495d6b169",
+        "core/application.rs": "b1080feef042ab57c33cce3eb013a3d08efee7980b0aee955c83524edfd218e6",
         "core/approval_rules.rs": "e7a5ceec21ecc960f28b87d9d00f4981eb6ba03cd4dc7c7ef32665f78766cc13",
         "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
         "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
@@ -3364,12 +3443,14 @@
         "core/investigation_claims.rs": "19ce0be47873fe7fbfde174f0acccffa494033208bc9a27531c308f9c72b2ddd",
         "core/jobs.rs": "e2e0cd6949e362fd87185e323b7fc19c5bf36a43bf538cf9325bfdbc6cd989c3",
         "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
-        "core/lib.rs": "1d658c37f9741aa57467b392512bf32e67876fc42533fd03727d74c7896356ca",
+        "core/lib.rs": "683fa60945a49410d7342f870ed10d257d191e950980de74d5b4a4f80e455607",
         "core/mcp_identity.rs": "8487fa1479ae947071be28ec4118d2becf56d2c32894adf47dbca3e8a0dcf4cb",
         "core/mcp_lifecycle.rs": "9b23677d24cca981362accf03bbc238dd90c022fce988d6c1fb46f19b335d7ca",
         "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
-        "core/media.rs": "5d90a8679342e9f0ff820801a044bf6d738155b2a9759b65723d6653459658e2",
-        "core/media_stream.rs": "2b886ac0f5358f0da8198755298f7f32b1e345f1f1197e449e20ab64bf70bcd6",
+        "core/media.rs": "311c71bd5ca7893dc5d4321eac91450086642e6525b5a096816fa67dfee2b4b5",
+        "core/media_input.rs": "6d242e2df2f5d037bd82d6aed46942324af749a3ebef24e084e0da17a65f282e",
+        "core/media_stream.rs": "de0c081e27e146d3f87038462c546e81d2886bec46dc8e577d011a67174739d4",
+        "core/media_upload.rs": "34c4c347b1fef6fcfdd15e63fb05c849cc409b11ad419626a877c6ef04d09ec1",
         "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
         "core/model_metadata.rs": "b024330ac89f786670ae336f3855ee4b69a95898b1588e5ee16254c56d94e3e4",
         "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
@@ -3399,7 +3480,7 @@
         "core/resources.rs": "cfdebc1cc58e6b81f862c01a38734dc7ed6911a362a67c1e391fcafaec89100e",
         "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
         "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
-        "core/services.rs": "8cf529d429b4c416b75d1b988ac6af15866a9599120206bef4f52ff38fa98f19",
+        "core/services.rs": "11c2d6e5200029c8c2357fabb4c8cca1ff5ecb06538db03fee277f384c8a54d6",
         "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
         "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
         "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
@@ -3417,18 +3498,18 @@
         "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
         "package.sh": "3dc631572a1aeb972fd53c0fcd8f939375eb942d5aa25f3147f693277c20052d",
         "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-        "platform/com/local/client/Activity.java": "7752d8d7031855331a4dfb799fa268321772fd337e55d598656bb8bcde3bdcf8",
+        "platform/com/local/client/Activity.java": "ef72a508e1c9a32aabc287fbd15d318e019c3b60ca32ec678c6279235f3abac4",
         "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
         "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
         "platform/com/local/client/Diagram.java": "5fcab9863eb6a1be85b7a7e841c11cd927a3d722f4a53d6ac19e722177c341ce",
         "platform/com/local/client/Execution.java": "6c51afe3a8fce5283af4d8039e43913369da1ca0d3c3e1a14346a1b9d85d90d4",
         "platform/com/local/client/ExportStore.java": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573",
         "platform/com/local/client/Gateway.java": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7",
-        "platform/com/local/client/Media.java": "2540b4b6cfa920bced9170f9cda4027625e67cc93b923ae1c6a2115214eb559f",
+        "platform/com/local/client/Media.java": "a082f071ec764192c38b1898efdee6f2ed1f00132a83d45ef605bcb2ca707b8d",
         "platform/com/local/client/Resolution.java": "9e706ecd3c199d7dee7f20ac312b4ba78d355e3eab8a534e07b4277216b3f068",
         "platform/com/local/client/TransferStore.java": "a164cf07e67e2ad8d98183c9dac5e367582f37c313fe01d8a99001eee61cd73b",
         "platform/com/local/client/Usage.java": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165",
-        "platform/com/local/client/Wire.java": "a8889e2d1d76afbfdfbd4d6cf1952bb6c85be2cc34f1423825de3094282556ff",
+        "platform/com/local/client/Wire.java": "44fd658c225cbd7c108ce842d24b6a5b14eb0500ff7e7f3f0e7c6a54a517e6fb",
         "platform/jni/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
         "platform/jni/bridge.c": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f",
         "res/drawable-nodpi/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
@@ -3465,8 +3546,8 @@
     },
     "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
     "published_comparator": {
-      "version": 1793844287,
-      "source_sha256": "88ae0310feda169e6f5799681fa8661ed176bde081f592d6dd0c6702f24f098b",
+      "version": 1793846728,
+      "source_sha256": "6e1a15b9b73986b141733b7f878b89f77696e8098d164d05b71629c7b65abf49",
       "method": "Exact published shared core compiled locally; actual retained representations exercised through current query, native view and export"
     },
     "flow_comparator": {
@@ -3911,29 +3992,8 @@
         "scope": "Fresh serial complete Rust sweeps in distinct clean working/temp directories with explicit font. Baseline is exact immediate published f78088a3 candidate core; historical fixtures are retained, not relabeled as passes."
       },
       "scope": "Preserved earlier full-suite outcome only. Current execution is the selected Rust cases and connected groups; excluded historical fixture scopes were not reexecuted."
-    },
-    "live_public_web": {
-      "passed": [
-        "intrinsic command process is present with optional guidance off",
-        "child selection enters review",
-        "approved child uses its assigned model",
-        "child search enters its own review",
-        "actual live search evidence returns to the assigned child",
-        "retained results include source URLs and actual snippets",
-        "live returned evidence reaches the integrated journal",
-        "actual child completion returns to the captured parent",
-        "parent completes the ordinary command"
-      ],
-      "transport_observations": [
-        {
-          "url": "https://api.mwmbl.org/api/v2/search/?q=Rust%20programming%20language",
-          "bytes": 47644,
-          "sha256": "9b24c4aa62dd4d82ef5aef689067cd99685d0fcd05c6a94cb94ebb5a2af6fdc6"
-        }
-      ],
-      "scope": "Live public HTTPS search responses transported by curl through actual core review, owned callbacks, evidence retention and child/parent continuation. Model replies are controlled protocol fixtures; configured model inference and installed Android transport require their own execution."
     }
   },
-  "checkpoint_utc": "2026-11-05T02:50:19.237876+00:00",
+  "checkpoint_utc": "2026-11-05T14:00:26.999335+00:00",
   "whole_project_complete": false
 }
