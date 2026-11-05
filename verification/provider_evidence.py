@@ -8,7 +8,7 @@ with tempfile.TemporaryDirectory(prefix='provider-evidence-',dir=PROJECT/'output
   p.stdin.write(json.dumps(v)+'\n');p.stdin.flush();r=json.loads(p.stdout.readline());assert 'value'in r,r;return r['value']
  def event(st,a,i=None):return op(dict(op='event',state=st,action=a,inputs=i or {},root=str(root)))
  def state(tools='read,hypotheses,web_search'):
-  st=event(None,'resume')['state'];st['profiles']=[dict(name='Controlled',endpoint='http://provider.test/v1/messages?private=ENDPOINT_SECRET',key='PROFILE_SECRET',protocol='messages',model='controlled',plain=True,stream=False,hosted_search='minimax_messages_v1',tool_format='structured')];st['agents']=[dict(name='General',tools=tools)];return st
+  st=event(None,'resume')['state'];st['profiles']=[dict(name='Controlled',endpoint='http://provider.test/v1/messages?private=ENDPOINT_SECRET',key='PROFILE_SECRET',protocol='messages',model='controlled',plain=True,stream=False,hosted_search='messages_search_v1',tool_format='structured')];st['agents']=[dict(name='General',tools=tools)];return st
  def wire(blocks,stop='end_turn'):
   b=json.dumps(dict(role='assistant',content=blocks,stop_reason=stop,private_envelope='ENVELOPE_SECRET')).encode();return base64.b64encode(b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(b)).encode()+b'\r\n\r\n'+b).decode()
  def reply(d,blocks,stop='end_turn',ticket=None):

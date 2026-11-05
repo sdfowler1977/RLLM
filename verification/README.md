@@ -9,6 +9,8 @@ python3 verification/drive_ownership.py
 python3 verification/question_process.py
 python3 verification/history.py
 python3 verification/a2a.py
+python3 verification/acp.py
+python3 verification/oauth.py
 python3 verification/binary_flow.py
 python3 verification/pe_declarations.py
 python3 verification/commands.py
