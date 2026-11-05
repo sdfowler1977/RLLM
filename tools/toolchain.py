@@ -26,7 +26,11 @@ def extract(t,p):
      target=z.read(i).decode();resolved=posixpath.normpath(posixpath.join(str(pp.parent),target));name(resolved);links.append((pp,target,False));continue
     target=dest.joinpath(*pp.parts)
     if i.is_dir():target.mkdir(parents=True,exist_ok=True)
-    else:target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(z.read(i));target.chmod(0o755 if i.external_attr>>16&0o111 else 0o644)
+    else:
+     target.parent.mkdir(parents=True,exist_ok=True)
+     with z.open(i)as src,target.open('wb')as dst:shutil.copyfileobj(src,dst,1024*1024)
+     assert target.stat().st_size==i.file_size,(target,'incomplete extraction')
+     target.chmod(0o755 if i.external_attr>>16&0o111 else 0o644)
  else:
   with tarfile.open(p)as z:
    entries=z.getmembers();assert len(entries)<30000
@@ -35,7 +39,11 @@ def extract(t,p):
     if i.issym()or i.islnk():resolved=posixpath.normpath(posixpath.join(str(pp.parent),i.linkname))if i.issym()else i.linkname;name(resolved);links.append((pp,i.linkname,i.islnk()));continue
     target=dest.joinpath(*pp.parts)
     if i.isdir():target.mkdir(parents=True,exist_ok=True)
-    else:target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(z.extractfile(i).read());target.chmod(0o755 if i.mode&0o111 else 0o644)
+    else:
+     target.parent.mkdir(parents=True,exist_ok=True)
+     with z.extractfile(i)as src,target.open('wb')as dst:shutil.copyfileobj(src,dst,1024*1024)
+     assert target.stat().st_size==i.size,(target,'incomplete extraction')
+     target.chmod(0o755 if i.mode&0o111 else 0o644)
  for pp,target,hard in links:
   path=dest.joinpath(*pp.parts);path.parent.mkdir(parents=True,exist_ok=True)
   if path.is_symlink()or path.exists():assert path.is_symlink()and os.readlink(path)==target;continue
