@@ -175,12 +175,12 @@ fn dispatch(st:&mut Json,mut expected:Json)->Result<Json>{
     let mut effect=network::wire(&address,boolean(h,"plain"),&method,"",headers)?;
     if method!="GET"{let length=upload.as_ref().map(media_upload::length).unwrap_or(body.len());let wire=text(&effect,"wire").replacen("Content-Length: 0\r\n",&format!("Content-Length: {length}\r\n"),1);if upload.is_some(){put(&mut effect,"wire",s(&wire));put(&mut effect,"upload_bytes",Num(length.to_string()));}else{let mut bytes=wire.into_bytes();bytes.extend_from_slice(&body);if let Obj(fields)=&mut effect{fields.remove("wire");}put(&mut effect,"wire_base64",s(&network::b64(&bytes)));}}
     let ticket=format!("service_request:{}",now());put(&mut expected,"ticket",s(&ticket));
-    let mut held=owners().lock().map_err(|_|"Service request owner unavailable")?;held.retain(|_,v|v.created.elapsed()<Duration::from_secs(600));if held.len()>=64{return Err("Too many pending service requests".into());}
-    let streaming=download||(text(r,"response")=="binary"&&method=="GET");put(&mut expected,"streaming",Bool(streaming));let timeout=if number(r,"timeout_seconds")==0{120}else{number(r,"timeout_seconds")}.clamp(5,600);
+    let mut held=owners().lock().map_err(|_|"Service request owner unavailable")?;held.retain(|_,v|v.created.elapsed()<Duration::from_secs(v.timeout));if held.len()>=64{return Err("Too many pending service requests".into());}
+    let streaming=download||text(r,"response")=="binary";put(&mut expected,"streaming",Bool(streaming));let timeout=if number(r,"timeout_seconds")==0{120}else{number(r,"timeout_seconds")}.clamp(5,600);
     held.insert(ticket.clone(),Owner{expected:harness_rules::digest(&expected),created:Instant::now(),timeout:timeout as u64});drop(held);
     if let Some(plan)=upload{match media_upload::register(&ticket,plan){Ok(stream)=>put(&mut effect,"media_upload",s(&stream)),Err(error)=>{if let Ok(mut held)=owners().lock(){held.remove(&ticket);}return Err(error);}}}
     put(&mut effect,"endpoint",s(&address));put(&mut effect,"purpose",s(&ticket));put(&mut effect,"timeout_ms",Num((timeout*1000).to_string()));
-    if streaming{match media_stream::open(st,&ticket,r){Ok((stream,limit))=>{put(&mut effect,"media_download",s(&stream));put(&mut effect,"limit",Num((limit+65536).to_string()));},Err(error)=>{if let Ok(mut held)=owners().lock(){held.remove(&ticket);}return Err(error);}}}else{put(&mut effect,"limit",Num((BODY_LIMIT+65536).to_string()));}
+    if streaming{match media_stream::open(st,&ticket,r,!download&&method!="GET"){Ok((stream,limit))=>{put(&mut effect,"media_download",s(&stream));put(&mut effect,"limit",Num((limit+65536).to_string()));},Err(error)=>{if let Ok(mut held)=owners().lock(){held.remove(&ticket);}return Err(error);}}}else{put(&mut effect,"limit",Num((BODY_LIMIT+65536).to_string()));}
     put(st,"service_expected",expected);put(st,"busy",Bool(true));Ok(effect)
 }
 pub(super) fn start(st:&mut Json,p:&Json)->Result<Json>{
@@ -205,7 +205,13 @@ pub(super) fn result(st:&mut Json,action:&str,input:&Json)->Result<Json>{
         if boolean(&expected,"expired"){return Err("Service callback expired; no result was adopted or replayed".into());}
         if text(&expected,"binding")!=fingerprint(st){return Err("Service context changed; returned bytes were withheld".into());}
         if action=="failure"{return Err(if get(input,"sent")==&Bool(false){"Service connection failed before send".into()}else{"Service transport interrupted after possible submission; inspect server state before retrying".into()});}
-        if boolean(&expected,"streaming"){let value=media_stream::take(st,&text(&expected,"ticket"),&text(input,"media_receipt"))?;let rid=get(&expected,"routes").array()?.get(number(&expected,"position")).ok_or("Missing artifact route")?.text()?;let r=route(config(st),rid)?.clone();jobs::adopt(st,&expected,&r,200,&Null,&value)?;return Ok(obj(vec![("status",s("response_received")),("http_status",Num("200".into())),("route",s(rid)),("value",value)]));}
+        if boolean(&expected,"streaming"){
+            let rid=get(&expected,"routes").array()?.get(number(&expected,"position")).ok_or("Missing artifact route")?.text()?;let r=route(config(st),rid)?.clone();
+            let response=media_stream::take(st,&text(&expected,"ticket"),&text(input,"media_receipt"))?;
+            let code=match &response{media_stream::Response::Artifact(_,code)|media_stream::Response::Status(code)=>*code};observed_code=code;observed_acceptance=get(&r,"job")!=&Null&&jobs::acceptance(&r,code);
+            let value=match response{media_stream::Response::Artifact(value,_)=>value,media_stream::Response::Status(_)=>return Err(format!("HTTP {code}: Service response did not contain a complete generated artifact"))};
+            jobs::adopt(st,&expected,&r,code,&Null,&value)?;return Ok(obj(vec![("status",s("response_received")),("http_status",Num(code.to_string())),("route",s(rid)),("value",value)]));
+        }
         let raw=network::unbase64(&text(input,"data"))?;if raw.len()>BODY_LIMIT+65536{return Err("Service response exceeds limit".into());}
         let(code,bytes)=network::decoded_bytes(&raw)?;observed_code=code;if bytes.len()>BODY_LIMIT{return Err("Service body exceeds limit".into());}
         let rid=get(&expected,"routes").array()?.get(number(&expected,"position")).ok_or("Missing service route")?.text()?;let r=route(config(st),rid)?.clone();
@@ -225,9 +231,9 @@ pub(super) fn result(st:&mut Json,action:&str,input:&Json)->Result<Json>{
     if let Err(error)=&result{
         let cap=text(&expected,"capability");let defaults=get(get(config(st),"defaults"),&cap);
         let http=error.strip_prefix("HTTP ").and_then(|v|v.split(|c:char|!c.is_ascii_digit()).next()).and_then(|v|v.parse::<usize>().ok());
-        let retry=(!boolean(&expected,"streaming"))&&text(&expected,"phase")!="download"&&(!boolean(&expected,"expired"))&&(!cap.is_empty())&&text(&expected,"binding")==fingerprint(st)&&((action=="failure"&&get(input,"sent")==&Bool(false)&&boolean(defaults,"connect_fallback"))||http.is_some_and(|n|array(defaults,"fallback_codes").iter().any(|v|matches!(v,Num(x)if x==&n.to_string()))));
+        let retry=text(&expected,"phase")!="download"&&(!boolean(&expected,"expired"))&&(!cap.is_empty())&&text(&expected,"binding")==fingerprint(st)&&((action=="failure"&&get(input,"sent")==&Bool(false)&&boolean(defaults,"connect_fallback"))||http.is_some_and(|n|array(defaults,"fallback_codes").iter().any(|v|matches!(v,Num(x)if x==&n.to_string()))));
         let next=number(&expected,"position")+1;
-        if retry&&next<array(&expected,"routes").len(){put(&mut expected,"position",Num(next.to_string()));return dispatch(st,expected);}
+        if retry&&next<array(&expected,"routes").len(){media_stream::cancel_purpose(&text(&expected,"ticket"));put(&mut expected,"position",Num(next.to_string()));return dispatch(st,expected);}
     }
     let output=match result{Ok(value)=>value,Err(error)=>{media_stream::cancel_purpose(&text(&expected,"ticket"));jobs::failed(st,&expected,&error);obj(vec![("status",s(if observed_code==202||observed_acceptance{"accepted_unconfirmed"}else{"failed"})),("http_status",Num(observed_code.to_string())),("error",s(&error))])}};
     if get(get(&output,"value"),"sha256")!=&Null{put(st,"service_artifact",get(&output,"value").clone());if let Err(reason)=media::retain_artifact(st,get(&output,"value")){put(st,"notice",s(&reason));}}

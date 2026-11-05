@@ -50,7 +50,7 @@ pub(super) fn prepare(st:&Json,route:&Json,input:&Json)->Result<(Plan,String)>{
  if inline>4*1024*1024||total>384*1024*1024||parts.len()>4096{return Err("Mapped request exceeds its inline or streamed bound".into());}file.current()?;Ok((Plan{parts,file,size,total,index:0,offset:0,created:Instant::now()},mime))
 }
 pub(super) fn length(plan:&Plan)->usize{plan.total}
-pub(super) fn register(purpose:&str,plan:Plan)->Result<String>{let mut held=uploads().lock().map_err(|_|"Upload registry unavailable")?;held.retain(|_,v|v.plan.created.elapsed()<Duration::from_secs(600));if held.len()>=4{return Err("Four file uploads are active".into());}let ticket=format!("media-upload:{}",now());held.insert(ticket.clone(),Upload{purpose:purpose.into(),plan});Ok(ticket)}
+pub(super) fn register(purpose:&str,plan:Plan)->Result<String>{let mut held=uploads().lock().map_err(|_|"Upload registry unavailable")?;held.retain(|_,v|v.plan.created.elapsed()<Duration::from_secs(600)&&services::stream_allowed(&v.purpose));if held.len()>=4{return Err("Four file uploads are active".into());}let ticket=format!("media-upload:{}",now());held.insert(ticket.clone(),Upload{purpose:purpose.into(),plan});Ok(ticket)}
 pub(super) fn cancel(purpose:&str){if let Ok(mut held)=uploads().lock(){held.retain(|_,v|v.purpose!=purpose);}}
 pub(super) fn operation(v:&Json)->Result<Json>{
  let ticket=field(v,"ticket")?;let purpose=field(v,"purpose")?;let action=field(v,"op")?;let mut held=uploads().lock().map_err(|_|"Upload registry unavailable")?;

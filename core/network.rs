@@ -522,8 +522,9 @@ pub fn page_wire(address:&str,plain:bool,headers:Vec<(&str,String)>)->Result<Jso
 
 const FRAME_CHUNK:usize=65536;
 const FRAME_MAX:u64=256*1024*1024;
-#[derive(Default)]pub(super) struct ResponseFrame{buf:Vec<u8>,pub(super) status:u16,mode:u8,left:u64,total:u64,interim:u8,trailers:usize,pub(super) done:bool,wire_only:bool,head_only:bool}
+#[derive(Default)]pub(super) struct ResponseFrame{buf:Vec<u8>,pub(super) status:u16,mode:u8,left:u64,total:u64,interim:u8,trailers:usize,pub(super) done:bool,wire_only:bool,head_only:bool,created_body:bool}
 impl ResponseFrame{
+ pub(super) fn artifact(submission:bool)->Self{Self{created_body:submission,..Self::default()}}
  #[cfg(test)]pub(super) fn buffered(&self)->usize{self.buf.len()}
  pub(super) fn feed(&mut self,bytes:&[u8])->Result<Vec<u8>>{
   if bytes.len()>FRAME_CHUNK||self.buf.len()+bytes.len()>FRAME_CHUNK*2{return Err("HTTP frame exceeds bound".into());}if self.done&&!bytes.is_empty(){return Err("Bytes after framed response".into());}self.buf.extend_from_slice(bytes);let mut body=Vec::new();
@@ -547,7 +548,7 @@ impl ResponseFrame{
    _=>return Err("Invalid HTTP stream".into())
   }if body.len()>FRAME_CHUNK{break;}
   }
-  self.total=self.total.checked_add(body.len()as u64).ok_or("Body overflow")?;if self.total>FRAME_MAX||(!self.wire_only&&self.status!=200&&self.total>FRAME_CHUNK as u64){return Err("Response body exceeds bound".into());}Ok(body)
+  self.total=self.total.checked_add(body.len()as u64).ok_or("Body overflow")?;if self.total>FRAME_MAX||(!self.wire_only&&self.status!=200&&!(self.created_body&&self.status==201)&&self.total>FRAME_CHUNK as u64){return Err("Response body exceeds bound".into());}Ok(body)
  }
  pub(super) fn finish(&self)->Result<()>{if self.status==0||(!self.done&&self.mode!=2)||!self.buf.is_empty(){Err("HTTP response framing is incomplete".into())}else{Ok(())}}
 }
