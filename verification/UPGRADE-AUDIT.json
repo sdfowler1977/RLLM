@@ -372,5 +372,12 @@
     "observed_host_workers": 4,
     "checks": 72,
     "scope": "Actual independent128MiB complete-file scans, excess-task refusal, scoped cancellation and exact source/output digests; CPU fallback with missing platform metadata."
+  },
+  "spoken_interruption_toolchain_repair": {
+    "scope": "Current owner execution; initial LLVM-dependent checks failed before repaired NDK extraction, then reran. Product runtime does not read this report.",
+    "official_ndk_sha256": "dfb20d396df28ca02a8c708314b814a4d961dc9074f9a161932746f815aa552f",
+    "regular_files_checked": 8414,
+    "bytes_crc_sizes_modes": "passed",
+    "repaired_large_members": 4
   }
 }
