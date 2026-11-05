@@ -74,3 +74,5 @@ verification/carry_flow.py assembles original ADC/ADCS/SBC/SBCS32-bit and64-bit 
 The same assembled flow checks identical-register SUB/SUBS/SBC/BIC/ORN/EON/BICS and flag-driven selection. The unit oracle also verifies coordinate/unknown inputs,32-bit widths, zero-register meanings, unchanged flags and distinct-register controls.
 
 The signing step explicitly emits v2/v3 signatures into a staging APK, verifies it, then writes the completed bytes sequentially with fsync into the delivery APK and compares both files. The actual persisted delivery APK is verified again before publication; later raw-download verification checks the same exact bytes. This preserves the complete signed ZIP and central directory across build-output storage.
+
+Before signing, the build uses Python3 tools/alignment.py to stream and hash every original and aligned APK member, verify lengths/CRC and check official ZIP alignment. A truncated or changed alignment output is retained for inspection and retried once. A second failure stops this build before signing. The helper is included in the frozen build-input inventory. This build-time protection adds no application runtime dependency.
