@@ -1,3 +1,4 @@
+from transport import upload
 """Owned public-client authorization through actual HTTP peers and model requests."""
 import base64,copy,hashlib,http.client,io,json,pathlib,secrets,socket,subprocess,time,tempfile,threading,urllib.parse,wave
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -36,6 +37,8 @@ class Peer(BaseHTTPRequestHandler):
 server=ThreadingHTTPServer(('127.0.0.1',0),Peer);threading.Thread(target=server.serve_forever,daemon=True).start();origin=f'http://127.0.0.1:{server.server_port}'
 with tempfile.TemporaryDirectory(prefix='oauth-',dir=PROJECT/'output')as directory:
     root=pathlib.Path(directory);p=subprocess.Popen([str(PROJECT/'output/headless/RLLM'),'--jsonl'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+    def op(v):
+        p.stdin.write(json.dumps(v)+'\n');p.stdin.flush();r=json.loads(p.stdout.readline());assert'value'in r,r;return r['value']
     def event(st,a,i=None):
         p.stdin.write(json.dumps(dict(op='event',state=st,action=a,inputs=i or{},root=str(root)))+'\n');p.stdin.flush();r=json.loads(p.stdout.readline());assert'value'in r,r;return r['value']
     def setup(fmt='chat'):
@@ -45,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix='oauth-',dir=PROJECT/'output')as directo
     def exchange(d):
         e=d['effect'];assert e and e['kind']=='network',d['state'].get('notice');assert not e['tls'];wire=base64.b64decode(e['wire_base64'])if'wire_base64'in e else e['wire'].encode()
         with socket.create_connection((e['host'],e['port']),timeout=5)as s:
-            s.sendall(wire);raw=b''
+            s.sendall(wire);upload(op,e,s);raw=b''
             while chunk:=s.recv(8192):raw+=chunk
         fields=dict(purpose=e['purpose'],data=base64.b64encode(raw).decode());fields.update({k:e[k]for k in ['model_ticket','child_ticket','child_owner']if k in e});return event(d['state'],'network_result',fields),fields
     try:

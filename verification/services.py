@@ -1,3 +1,4 @@
+from transport import upload
 """Owner checks: shared Rust UI/harness plus real local HTTP fixture peers."""
 import base64, copy, json, pathlib, socket, subprocess, tempfile, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix='services-',dir=PROJECT/'output') as tem
         e=d['effect'];assert e and e['kind']=='network',d['state'].get('notice')
         wire=base64.b64decode(e['wire_base64']) if 'wire_base64'in e else e['wire'].encode()
         with socket.create_connection((e['host'],e['port']),timeout=5) as sock:
-            sock.sendall(wire);out=b''
+            sock.sendall(wire);upload(lambda v:raw(v)['value'],e,sock);out=b''
             while data:=sock.recv(8192):out+=data
         fields={k:e[k] for k in ['purpose','child_ticket','child_owner'] if k in e};fields['data']=base64.b64encode(out).decode()
         return event(d['state'],'network_result',fields),fields

@@ -1,3 +1,4 @@
+from transport import upload
 """Actual file bytes and local HTTP transfers through public shared-core events."""
 import base64,copy,hashlib,io,json,pathlib,socket,struct,subprocess,tempfile,threading,wave,zlib
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -8,10 +9,14 @@ with wave.open(buffer,'wb')as out:out.setnchannels(1);out.setsampwidth(2);out.se
 audio=buffer.getvalue()
 class Peer(BaseHTTPRequestHandler):
     def log_message(self,*a):pass
+    def do_GET(self):
+        payload=self.rfile.read(int(self.headers.get('Content-Length','0')));received.append((self.path,dict(self.headers),payload))
+        body=json.dumps({'text':'fixture transcription'}).encode();self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
     def do_POST(self):
         payload=self.rfile.read(int(self.headers.get('Content-Length','0')));received.append((self.path,dict(self.headers),payload))
         body=audio if self.path=='/audio' else json.dumps({'text':'fixture transcription','length':len(payload)}).encode()
         self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+    do_PUT=do_POST
 server=ThreadingHTTPServer(('127.0.0.1',0),Peer);threading.Thread(target=server.serve_forever,daemon=True).start()
 with tempfile.TemporaryDirectory(prefix='media-',dir=PROJECT/'output')as temp:
     root=pathlib.Path(temp);p=subprocess.Popen([str(PROJECT/'output/headless/RLLM'),'--jsonl'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
@@ -28,13 +33,20 @@ with tempfile.TemporaryDirectory(prefix='media-',dir=PROJECT/'output')as temp:
     def complete(d):
         e=d['effect'];assert e,d['state'].get('notice');wire=base64.b64decode(e['wire_base64'])if'wire_base64'in e else e['wire'].encode()
         with socket.create_connection((e['host'],e['port']),timeout=5)as s:
-            s.sendall(wire);body=b''
+            s.sendall(wire);upload(op,e,s);body=b''
             while chunk:=s.recv(8192):body+=chunk
         return event(d['state'],'network_result',dict(purpose=e['purpose'],data=base64.b64encode(body).decode()))
     try:
         d=pick(configure(),audio,'recording.wav');record=d['state']['media_input'];file=root/record['path'];check('selected audio stored as actual owned file',file.read_bytes()==audio and record['sha256']==hashlib.sha256(audio).hexdigest());check('input bytes excluded from saved conversation JSON',base64.b64encode(audio).decode()not in json.dumps(d['state']))
         pending=review(d['state']);check('file disclosure is explicit before dispatch',pending['state']['pending']['file_disclosure']['sha256']==record['sha256']);done=complete(event(pending['state'],'approve'));headers,body=received[-1][1:];check('multipart transfer contains exact selected bytes',audio in body and 'multipart/form-data; boundary='in headers['Content-Type']);check('multipart fields mapped from typed input',b'name="language"\r\n\r\nen'in body and b'name="audio"'in body);check('actual mapped transcription returned',done['state']['service_result']['value']=='fixture transcription')
         d=pick(configure('binary'),audio,'recording.wav');done=complete(event(review(d['state'])['state'],'approve'));check('raw transfer preserves all bytes',received[-1][2]==audio)
+        st=pick(configure('binary'),audio,'get-source.wav')['state'];st['service_connections']['routes'][0]['method']='GET';path=root/st['media_input']['path'];before=len(received)
+        d=event(st,'service_request');refused=event(d['state'],'service_review',dict(service_route='media',service_file=True,service_input='{"language":"en"}'))
+        check('GET file request refuses before approval or transport',refused['effect']is None and refused['state'].get('notice_error') and not refused['state'].get('pending'))
+        check('GET refusal retains selected file and local bytes',refused['state']['media_input']==st['media_input'] and path.read_bytes()==audio and len(received)==before)
+        (root/'local.txt').write_text('local operation retained');local=op(dict(op='tool',tool='read',root=str(root),args={'path':'local.txt'}));check('GET refusal preserves unrelated local operation',local=='local operation retained')
+        st['service_connections']['routes'][0].update(request_format='json',path='/status/{language}');done=complete(event(review(st,file=False)['state'],'approve'));check('GET without file retains path variables and sends no body',received[-1][0]=='/status/en' and received[-1][2]==b'' and done['state']['service_result']['value']=='fixture transcription')
+        st['service_connections']['routes'][0].update(method='PUT',request_format='binary',path='/transcribe');done=complete(event(review(st)['state'],'approve'));check('PUT retains actual reviewed file upload',received[-1][2]==audio)
         d=pick(configure('json',request={'audio':{'$file':'base64'},'name':{'$file':'name'}}),audio,'selected.wav');done=complete(event(review(d['state'])['state'],'approve'));data=json.loads(received[-1][2]);check('explicit JSON file mapping preserves all bytes',base64.b64decode(data['audio'])==audio and data['name']=='selected.wav')
         d=pick(configure(),audio,'original.wav');pending=review(d['state']);(root/d['state']['media_input']['path']).write_bytes(b'changed');refused=event(pending['state'],'approve');check('changed file is withheld before upload',refused['effect']is None and refused['state'].get('notice_error'))
         d=event(configure(),'media_pick');cancelled=event(d['state'],'cancel');late=event(cancelled['state'],'media_input_result',dict(media_ticket=d['effect']['media_ticket'],data=base64.b64encode(audio).decode(),name='late.wav',draft='late injected draft'));check('cancelled native input callback is exact state no-op',late['state']==cancelled['state'])

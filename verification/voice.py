@@ -1,3 +1,4 @@
+from transport import upload
 """Foreground voice orchestration with actual HTTP and audio fixture bytes."""
 import base64,io,json,pathlib,socket,subprocess,tempfile,threading,wave,struct
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -21,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix='voice-',dir=PROJECT/'output')as temp:
     def transport(d):
         e=d['effect'];assert e,d['state'].get('notice');wire=base64.b64decode(e['wire_base64'])if'wire_base64'in e else e['wire'].encode()
         with socket.create_connection((e['host'],e['port']),timeout=5)as s:
-            s.sendall(wire);out=b''
+            s.sendall(wire);upload(op,e,s);out=b''
             while part:=s.recv(8192):out+=part
         return event(d['state'],'network_result',dict(purpose=e['purpose'],data=base64.b64encode(out).decode()))
     def reply(d,fmt,answer):

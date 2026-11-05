@@ -1,3 +1,4 @@
+from transport import upload
 """Real asynchronous fixture server, tracked status and validated artifact result."""
 import base64,copy,hashlib,io,json,pathlib,socket,subprocess,tempfile,threading,wave
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -23,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix='jobs-',dir=PROJECT/'output')as temp:
     def transport(d):
         e=d['effect'];assert e,d['state'].get('notice');wire=base64.b64decode(e['wire_base64'])if'wire_base64'in e else e['wire'].encode()
         with socket.create_connection((e['host'],e['port']),timeout=5)as sock:
-            sock.sendall(wire);out=b''
+            sock.sendall(wire);upload(op,e,sock);out=b''
             if e.get('media_download'):
                 owner=dict(purpose=e['purpose'],ticket=e['media_download']);op(dict(owner,op='media_stream_cancel',ticket='wrong-ticket'));ready=False
                 while part:=sock.recv(8192):
