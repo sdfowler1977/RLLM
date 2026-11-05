@@ -147,12 +147,16 @@ pub(super) fn network_review(st:&Json,p:&Json)->bool{
 }
 pub(super) fn prepare(st:&mut Json,p:&mut Json)->Result<()>{
     let args=jobs::resolve(st,get(p,"args"))?;put(p,"args",args);
-    if boolean(get(p,"args"),"file"){media::input(st)?;let record=get(st,"media_input");put(p,"file_disclosure",obj(vec![("name",get(record,"name").clone()),("mime",get(record,"mime").clone()),("bytes",get(record,"bytes").clone()),("sha256",get(record,"sha256").clone())]));}
     let routes=selected(st,get(p,"args"))?;
+    for rid in &routes{file_method(route(config(st),rid)?,boolean(get(p,"args"),"file"))?;}
+    if boolean(get(p,"args"),"file"){media::verify(st,get(st,"media_input"),media::FILE_LIMIT)?;let record=get(st,"media_input");put(p,"file_disclosure",obj(vec![("name",get(record,"name").clone()),("mime",get(record,"mime").clone()),("bytes",get(record,"bytes").clone()),("sha256",get(record,"sha256").clone())]));}
     let targets=routes.iter().map(|rid|{let r=route(config(st),rid)?;let h=host(config(st),&text(r,"host"))?;Ok(format!("{} {}",text(r,"method"),endpoint(r,h,get(get(p,"args"),"input"))?))}).collect::<Result<Vec<_>>>()?;
     let mut targets=targets;for rid in &routes{let r=route(config(st),rid)?;if text(r,"response")=="artifact_url"{let h=if text(r,"artifact_host").is_empty(){text(r,"host")}else{text(r,"artifact_host")};targets.push(format!("Artifact GET host: {} (no redirects)",text(host(config(st),&h)?,"url")));}}
     let binding=fingerprint(st);if !text(p,"service_binding").is_empty()&&text(p,"service_binding")!=binding{return Err("Service configuration or request ownership changed; request a new review".into());}
     put(p,"service_binding",s(&binding));put(p,"destination",s(&targets.join("\n")));put(p,"warning",s("The displayed input is sent to these configured servers in order. Only configured HTTP error statuses or a confirmed pre-send connection failure permit fallback. An accepted or uncertain submission is never replayed. Responses are untrusted data."));Ok(())
+}
+fn file_method(route:&Json,send_file:bool)->Result<()>{
+    if send_file&&text(route,"method")=="GET"{return Err("GET routes cannot upload a selected file. Configure a POST or PUT upload route, or turn off file sending for this lookup.".into());}Ok(())
 }
 fn dispatch(st:&mut Json,mut expected:Json)->Result<Json>{
     let names=get(&expected,"routes").array()?;let rid=names.get(number(&expected,"position")).ok_or("Service fallback exhausted")?.text()?;
@@ -161,18 +165,20 @@ fn dispatch(st:&mut Json,mut expected:Json)->Result<Json>{
     let policy_args=obj(vec![("url",s(&address)),("endpoint",s(&address))]);
     harness_rules::check(st,"service",&policy_args,boolean(&expected,"model"))?;harness_rules::check(st,"network",&policy_args,boolean(&expected,"model"))?;
     if boolean(get(st,"resources"),"local"){return Err("Local capability mode pauses this service request".into());}
-    let(body,mime)=if download{(vec![],"application/octet-stream".into())}else{media::upload(st,r,get(&expected,"input"),boolean(&expected,"file"))?};
+    if !download{file_method(r,boolean(&expected,"file"))?;}
+    let mut upload=None;let(body,mime)=if download{(vec![],"application/octet-stream".into())}else if boolean(&expected,"file"){let(plan,mime)=media_upload::prepare(st,r,get(&expected,"input"))?;upload=Some(plan);(vec![],mime)}else{media::upload(st,r,get(&expected,"input"),false)?};
     let mut headers=vec![];let mut content_type=false;
     if let Obj(values)=get(h,"headers"){for(k,v)in values{if k.eq_ignore_ascii_case("Content-Type"){if !download&&text(r,"request_format")=="multipart"&&v.text()?!=mime{return Err("Multipart Content-Type must use the generated boundary; remove its custom override".into());}content_type=true;}headers.push((k.clone(),v.text()?.into()));}}
     if text(h,"auth_header").eq_ignore_ascii_case("Content-Type")&&!text(h,"key").is_empty(){content_type=true;}if !content_type{headers.push(("Content-Type".to_string(),mime));}
     if !text(h,"key").is_empty(){headers.push((text(h,"auth_header"),format!("{}{}",text(h,"auth_prefix"),text(h,"key"))));}
     let headers=headers.iter().map(|(k,v)|(k.as_str(),v.clone())).collect();
     let mut effect=network::wire(&address,boolean(h,"plain"),&method,"",headers)?;
-    if method!="GET"{let wire=text(&effect,"wire").replacen("Content-Length: 0\r\n",&format!("Content-Length: {}\r\n",body.len()),1);let mut bytes=wire.into_bytes();bytes.extend_from_slice(&body);if let Obj(fields)=&mut effect{fields.remove("wire");}put(&mut effect,"wire_base64",s(&network::b64(&bytes)));}
+    if method!="GET"{let length=upload.as_ref().map(media_upload::length).unwrap_or(body.len());let wire=text(&effect,"wire").replacen("Content-Length: 0\r\n",&format!("Content-Length: {length}\r\n"),1);if upload.is_some(){put(&mut effect,"wire",s(&wire));put(&mut effect,"upload_bytes",Num(length.to_string()));}else{let mut bytes=wire.into_bytes();bytes.extend_from_slice(&body);if let Obj(fields)=&mut effect{fields.remove("wire");}put(&mut effect,"wire_base64",s(&network::b64(&bytes)));}}
     let ticket=format!("service_request:{}",now());put(&mut expected,"ticket",s(&ticket));
     let mut held=owners().lock().map_err(|_|"Service request owner unavailable")?;held.retain(|_,v|v.created.elapsed()<Duration::from_secs(600));if held.len()>=64{return Err("Too many pending service requests".into());}
     let streaming=download||(text(r,"response")=="binary"&&method=="GET");put(&mut expected,"streaming",Bool(streaming));let timeout=if number(r,"timeout_seconds")==0{120}else{number(r,"timeout_seconds")}.clamp(5,600);
     held.insert(ticket.clone(),Owner{expected:harness_rules::digest(&expected),created:Instant::now(),timeout:timeout as u64});drop(held);
+    if let Some(plan)=upload{match media_upload::register(&ticket,plan){Ok(stream)=>put(&mut effect,"media_upload",s(&stream)),Err(error)=>{if let Ok(mut held)=owners().lock(){held.remove(&ticket);}return Err(error);}}}
     put(&mut effect,"endpoint",s(&address));put(&mut effect,"purpose",s(&ticket));put(&mut effect,"timeout_ms",Num((timeout*1000).to_string()));
     if streaming{match media_stream::open(st,&ticket,r){Ok((stream,limit))=>{put(&mut effect,"media_download",s(&stream));put(&mut effect,"limit",Num((limit+65536).to_string()));},Err(error)=>{if let Ok(mut held)=owners().lock(){held.remove(&ticket);}return Err(error);}}}else{put(&mut effect,"limit",Num((BODY_LIMIT+65536).to_string()));}
     put(st,"service_expected",expected);put(st,"busy",Bool(true));Ok(effect)
@@ -191,9 +197,9 @@ pub(super) fn consume(st:&mut Json,input:&Json)->bool{
     let Ok(mut held)=owners().lock()else{return false;};
     if !held.get(&ticket).is_some_and(|v|v.expected==harness_rules::digest(expected)){return false;}let owner=held.remove(&ticket).unwrap();if owner.created.elapsed()>Duration::from_secs(owner.timeout){let mut expired=expected.clone();put(&mut expired,"expired",Bool(true));put(st,"service_expected",expired);}true
 }
-pub(super) fn interrupt(st:&mut Json){let ticket=text(get(st,"service_expected"),"ticket");media_stream::cancel_purpose(&ticket);if let Ok(mut held)=owners().lock(){held.remove(&ticket);}put(st,"service_expected",Null);}
+pub(super) fn interrupt(st:&mut Json){let ticket=text(get(st,"service_expected"),"ticket");media_upload::cancel(&ticket);media_stream::cancel_purpose(&ticket);if let Ok(mut held)=owners().lock(){held.remove(&ticket);}put(st,"service_expected",Null);}
 pub(super) fn result(st:&mut Json,action:&str,input:&Json)->Result<Json>{
-    let mut expected=get(st,"service_expected").clone();put(st,"service_expected",Null);put(st,"busy",Bool(false));
+    media_upload::cancel(&text(get(st,"service_expected"),"ticket"));let mut expected=get(st,"service_expected").clone();put(st,"service_expected",Null);put(st,"busy",Bool(false));
     let mut observed_code=0;let mut observed_acceptance=false;
     let result=(||->Result<Json>{
         if boolean(&expected,"expired"){return Err("Service callback expired; no result was adopted or replayed".into());}
@@ -245,7 +251,7 @@ pub(super) fn event(st:&mut Json,action:&str)->Result<Json>{
     match action{
         "service_connections"|"service_request"=>{put(st,"edit",obj(vec![]));put(st,"dialog",s(action));},
         "service_save"=>{let mut cfg=parse(&text(get(st,"edit"),"service_config"))?;restore_secrets(config(st),&mut cfg)?;validate(&cfg)?;put(st,"service_connections",cfg);put(st,"edit",obj(vec![]));put(st,"notice",s("Service connections saved; no request sent"));},
-        "service_review"=>{let e=get(st,"edit");let mut args=obj(vec![("input",parse(&text(e,"service_input"))?),("file",Bool(boolean(e,"service_file")))]);let r=text(e,"service_route");let target=if r.is_empty(){text(e,"service_capability")}else{r.clone()};put(&mut args,if r.is_empty(){"capability"}else{"route"},s(&target));validate_args(&args)?;put(st,"pending",obj(vec![("tool",s("service")),("args",args)]));put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
+        "service_review"=>{let e=get(st,"edit");let mut args=obj(vec![("input",parse(&text(e,"service_input"))?),("file",Bool(boolean(e,"service_file")))]);let r=text(e,"service_route");let target=if r.is_empty(){text(e,"service_capability")}else{r.clone()};put(&mut args,if r.is_empty(){"capability"}else{"route"},s(&target));validate_args(&args)?;let mut pending=obj(vec![("tool",s("service")),("args",args)]);prepare(st,&mut pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
         _=>{}}
     Ok(Null)
 }

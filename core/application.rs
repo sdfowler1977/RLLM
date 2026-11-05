@@ -7,6 +7,8 @@ use super::*;
 #[path="voice_audio.rs"] mod voice_audio;
 #[path="oauth.rs"] pub(super) mod oauth;
 #[path="media_stream.rs"] mod media_stream;
+#[path="media_input.rs"] mod media_input;
+#[path="media_upload.rs"] mod media_upload;
 #[path="connection_migration.rs"] mod connection_migration;
 #[path="approval_rules.rs"] mod approval_rules;
 #[path="harness_rules.rs"] mod harness_rules;
@@ -3220,6 +3222,8 @@ fn read_file(p: &Path) -> Result<String> {
     String::from_utf8(bytes).map_err(|_| "File is not UTF-8 text".into())
 }
 pub fn media_stream_operation(v:&Json)->Result<Json>{media_stream::operation(v)}
+pub fn media_upload_operation(v:&Json)->Result<Json>{media_upload::operation(v)}
+pub fn media_input_operation(v:&Json)->Result<Json>{media_input::operation(v)}
 pub fn voice_audio_operation(v:&Json)->Result<Json>{voice_audio::operation(v)}
 pub fn media_verification(v:&Json)->Result<Json>{media::verification(v)}
 pub fn capture_document(v:&Json)->Result<Json>{capture_job::run(v)}
