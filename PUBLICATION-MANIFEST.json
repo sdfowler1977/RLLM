@@ -1,19 +1,19 @@
 {
   "state": "in_progress; signed candidate",
-  "version": 1793844287,
+  "version": 1793846728,
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
   "signing_certificate_sha256": "ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5",
   "key_change_authorized": true,
   "signed_apk": {
     "path": "release/RLLM.apk",
-    "bytes": 6408210,
-    "sha256": "c6121280df156d1e1584679252b8c28cf328101f65e3a86122c2cedd0826e8be"
+    "bytes": 6412306,
+    "sha256": "25731cfd0ed2288dfa4e53a18e774232318c6a444b6f0e5d9523aa77354e6bff"
   },
   "build_inputs": {
     "AndroidManifest.xml": "f8b04737e17990b6d42516ab44cc5f49f07a9d2faac0302e0718617fc81da451",
     "core/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-    "core/a2a.rs": "185871b70cf5515d178806ff408842da5a4a416f1669f7b110979f6aabc142b2",
+    "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
     "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
     "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
     "core/application.rs": "e216bf70616d46f70d96746952d8dea542cebf349b975a4971578ba495d6b169",
@@ -102,7 +102,7 @@
     "core/resource_plan.rs": "e9d01d96656ce040381050630d3f9b2395b05ffac6dfdceda2acd0256b1de143",
     "core/resource_session.rs": "55a6369ba8628ce7a7d5cb99b5392c612c0e90851156175615ab555b326b7dff",
     "core/resource_url.rs": "a8ff45f4d5022413a2516d89ef296093b2a3d89a58c3404a67ea33c954ce1e73",
-    "core/resources.rs": "1af0d186ff5af9e53d424df216712489abc1efe4cf065be7efcbf14f5cb92f50",
+    "core/resources.rs": "cfdebc1cc58e6b81f862c01a38734dc7ed6911a362a67c1e391fcafaec89100e",
     "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
     "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
     "core/services.rs": "8cf529d429b4c416b75d1b988ac6af15866a9599120206bef4f52ff38fa98f19",
@@ -112,7 +112,7 @@
     "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
     "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
     "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
-    "core/voice.rs": "46c87b3ed5722c91542c001fdaeb0b9d86ec219079590cd80338b0755c23ceb9",
+    "core/voice.rs": "1dd0ba11177c4067a2be8853d0d218d471f1b630829c3bf25725803df5dc64db",
     "core/voice_audio.rs": "9c0ddc0bb3acf979655ffb9d53855f0000ba61649bf2b6b039d57d902633d649",
     "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
     "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
@@ -130,7 +130,7 @@
     "platform/com/local/client/Execution.java": "6c51afe3a8fce5283af4d8039e43913369da1ca0d3c3e1a14346a1b9d85d90d4",
     "platform/com/local/client/ExportStore.java": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573",
     "platform/com/local/client/Gateway.java": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7",
-    "platform/com/local/client/Media.java": "2c2ba8f2f4bd6392db09ff6082fdabdad9763c229895ae1f06f8d085fe7990f6",
+    "platform/com/local/client/Media.java": "2540b4b6cfa920bced9170f9cda4027625e67cc93b923ae1c6a2115214eb559f",
     "platform/com/local/client/Resolution.java": "9e706ecd3c199d7dee7f20ac312b4ba78d355e3eab8a534e07b4277216b3f068",
     "platform/com/local/client/TransferStore.java": "a164cf07e67e2ad8d98183c9dac5e367582f37c313fe01d8a99001eee61cd73b",
     "platform/com/local/client/Usage.java": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165",
@@ -169,16 +169,16 @@
       "sha256": "f8b04737e17990b6d42516ab44cc5f49f07a9d2faac0302e0718617fc81da451"
     },
     "README.md": {
-      "bytes": 1585,
-      "sha256": "88e8db3b3ad012b84db0f302bd23adbc6b884b9eca1ec0f6c252f961c65335d3"
+      "bytes": 1705,
+      "sha256": "9d550b56f2095ed89d567a873abc91edbc8a50da5da23c950e832df45ef4697d"
     },
     "core/.gitkeep": {
       "bytes": 1,
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     "core/a2a.rs": {
-      "bytes": 35625,
-      "sha256": "185871b70cf5515d178806ff408842da5a4a416f1669f7b110979f6aabc142b2"
+      "bytes": 35649,
+      "sha256": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee"
     },
     "core/acp.rs": {
       "bytes": 16771,
@@ -533,8 +533,8 @@
       "sha256": "a8ff45f4d5022413a2516d89ef296093b2a3d89a58c3404a67ea33c954ce1e73"
     },
     "core/resources.rs": {
-      "bytes": 2724,
-      "sha256": "1af0d186ff5af9e53d424df216712489abc1efe4cf065be7efcbf14f5cb92f50"
+      "bytes": 3693,
+      "sha256": "cfdebc1cc58e6b81f862c01a38734dc7ed6911a362a67c1e391fcafaec89100e"
     },
     "core/rust_source_observation.rs": {
       "bytes": 18555,
@@ -573,8 +573,8 @@
       "sha256": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065"
     },
     "core/voice.rs": {
-      "bytes": 18694,
-      "sha256": "46c87b3ed5722c91542c001fdaeb0b9d86ec219079590cd80338b0755c23ceb9"
+      "bytes": 19363,
+      "sha256": "1dd0ba11177c4067a2be8853d0d218d471f1b630829c3bf25725803df5dc64db"
     },
     "core/voice_audio.rs": {
       "bytes": 7166,
@@ -601,8 +601,8 @@
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     "docs/A2A.md": {
-      "bytes": 6422,
-      "sha256": "6f7b9e956d21ea32535d4e726c27ce2a78543e1cdd95824011f26ef771a42c1a"
+      "bytes": 6626,
+      "sha256": "ec97a3fddcfa6554adf101dd109ced6c2d910c29f03d311041a0b44a63ed96fc"
     },
     "docs/ACCESS-AND-DATA.md": {
       "bytes": 7000,
@@ -685,12 +685,12 @@
       "sha256": "5c2f13bfc406eb77908b7b24d0e53e89fa222cf3206f85827f62109da18428c2"
     },
     "docs/ROADMAP.md": {
-      "bytes": 4227,
-      "sha256": "0aa71cba9fa85bb627c48a6072a7aba857368969d01a40bd5234528e87b76f83"
+      "bytes": 4301,
+      "sha256": "ae79930ca16366f7f21d147fa0f5722694b334589c903a3871b89d4cc8ab2e9c"
     },
     "docs/SERVICES.md": {
-      "bytes": 12448,
-      "sha256": "f6ec311b6bea2ffe758b71cdb9c7c84d0e2a123fcff1bfa357656069ce8c06a2"
+      "bytes": 12788,
+      "sha256": "19e212b16bd0edc0461ed65cc3ad76011263033fad19cffb9f4322ad3fa37b41"
     },
     "docs/SETUP.md": {
       "bytes": 7898,
@@ -701,8 +701,8 @@
       "sha256": "93f5a206d83ac2fd56bf4cb74b50960d6df33005a90b3679856e7e6ae04189f6"
     },
     "docs/STATUS.md": {
-      "bytes": 1894,
-      "sha256": "b94b3a79f0fe3d55b91a2623d8962cfdcbfa666df21d653581218b64800e9a82"
+      "bytes": 1720,
+      "sha256": "baa9403cf9765dd87748ef702786040a52aa3530f076fca326a6907549b13be5"
     },
     "docs/TOOL-FEEDBACK.md": {
       "bytes": 4677,
@@ -785,8 +785,8 @@
       "sha256": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7"
     },
     "platform/com/local/client/Media.java": {
-      "bytes": 24411,
-      "sha256": "2c2ba8f2f4bd6392db09ff6082fdabdad9763c229895ae1f06f8d085fe7990f6"
+      "bytes": 24992,
+      "sha256": "2540b4b6cfa920bced9170f9cda4027625e67cc93b923ae1c6a2115214eb559f"
     },
     "platform/com/local/client/Resolution.java": {
       "bytes": 3979,
@@ -813,20 +813,20 @@
       "sha256": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f"
     },
     "project-progress.md": {
-      "bytes": 12723,
-      "sha256": "508bd8668762a77d5f054003e03da849c5072c17e4c9d6d3de38beae23e6b5cb"
+      "bytes": 20290,
+      "sha256": "ab212ddcadcb6b1032732f3ace85d1307ea5e264627dad5924068a0f5c1e1555"
     },
     "release/NOTES.md": {
-      "bytes": 1979,
-      "sha256": "14d189db135ebcf82c4fb90fea9fe4a5bcb6c647005e9a796e7375a58240d333"
+      "bytes": 1805,
+      "sha256": "6d76d4afcd268c8476b2f24a33ba48d71e225c22d9cfd2181affaf2fce371e3c"
     },
     "release/RLLM.apk": {
-      "bytes": 6408210,
-      "sha256": "c6121280df156d1e1584679252b8c28cf328101f65e3a86122c2cedd0826e8be"
+      "bytes": 6412306,
+      "sha256": "25731cfd0ed2288dfa4e53a18e774232318c6a444b6f0e5d9523aa77354e6bff"
     },
     "release/SHA256SUMS.txt": {
       "bytes": 75,
-      "sha256": "1c869ae975c809edf38d09cd1f00431fa6ecc6d407a7af518bbd5036f9f4e354"
+      "sha256": "787e504987a2fe28a5cb359ad772957fe9baf890d096de83683a10cdfe087b53"
     },
     "res/drawable/.gitkeep": {
       "bytes": 1,
@@ -925,8 +925,8 @@
       "sha256": "bfc033a721a52871bb81c1eb0540f2faf00c88ceee0ea07d39c8b6f35a1b0ad2"
     },
     "tools/package.py": {
-      "bytes": 12373,
-      "sha256": "604b751272b4ebb3f1ebc3e6fb8c44a9374d8e1161c35ce1d82d6c5b53b6401e"
+      "bytes": 12199,
+      "sha256": "0539822ff01e97106868790115a3ba86e07cb4ced32115cd5f3abd16f260aa80"
     },
     "tools/readback.py": {
       "bytes": 1485,
@@ -961,16 +961,16 @@
       "sha256": "ec335557689342d0b80dc75832ec065442c28215f8648088105c7fc98af465b4"
     },
     "verification/RESULTS.json": {
-      "bytes": 169618,
-      "sha256": "f2e93c0a2fda1f3d7a9f7c1a78283f4fce4a00a4bac3de28edf41886475bc3eb"
+      "bytes": 172085,
+      "sha256": "42b052f89435902501705d969e572a9427a3d9bbd51b9a261d20f3782c305a08"
     },
     "verification/UPGRADE-AUDIT.json": {
-      "bytes": 20152,
-      "sha256": "78414e2ac7444da5b6311192b118a0978973d553079a9a551cbabe3886d640e0"
+      "bytes": 20553,
+      "sha256": "60f930bd991cac87d49b348245e476d8a2d8988c5382d3e6ab89c61879a63bd5"
     },
     "verification/VOICE-SESSION-CHECKS.json": {
-      "bytes": 8089,
-      "sha256": "6aa03a975d76555d9203c43f4d9e44c65260e36065e1fa2ad3a766811a74ec82"
+      "bytes": 9615,
+      "sha256": "c83a062f65ee5f55ba89ee2efe0d1be2edcfefe626c89ec3d49586c895b935cb"
     },
     "verification/VOICE-SESSION-CURRENT-UNITS.log": {
       "bytes": 50299,
@@ -985,8 +985,8 @@
       "sha256": "9a60d9c8b3f782e818a9840083eebd3b9fea2f98e380fac995f2bd4f568b54e0"
     },
     "verification/a2a.py": {
-      "bytes": 16499,
-      "sha256": "2c5b0bdfe522306ee77c7c1d723232fb1ecc2e8fd000faae65584bb8d16454c0"
+      "bytes": 19406,
+      "sha256": "90f45f8b27c582268050101d3c02d62725224fc7ec049053d53daa0973deb249"
     },
     "verification/acp.py": {
       "bytes": 10194,
@@ -1141,8 +1141,8 @@
       "sha256": "1adca344f81a9b15d068e102dda35b41c645343a2a2118745d92a5e14b995050"
     },
     "verification/voice.py": {
-      "bytes": 15719,
-      "sha256": "1fbe6b62f28940a9a1618891bc5dc0b7059b6dfae9a696dac1ff044f5f787734"
+      "bytes": 20496,
+      "sha256": "a77946bcf9cf794f2bbe1f79aba9cb2a8188e68197013643370c3d82f070adc4"
     },
     "verification/workspace_navigation.py": {
       "bytes": 22966,
@@ -1157,7 +1157,7 @@
         "drive_ownership": 38,
         "question_process": 14,
         "history": 6,
-        "a2a": 66,
+        "a2a": 72,
         "binary_flow": 94,
         "commands": 79,
         "history_migration": 7,
@@ -1185,12 +1185,12 @@
         "services": 69,
         "media": 28,
         "jobs": 18,
-        "voice": 126,
+        "voice": 147,
         "media_stream": 13,
         "acp": 41,
         "oauth": 121
       },
-      "total_executed": 1649,
+      "total_executed": 1676,
       "groups_passed": 36,
       "groups": 37,
       "unavailable": [
@@ -1200,182 +1200,182 @@
         }
       ]
     },
-    "selected_rust_cases": 198,
+    "selected_rust_cases": 199,
     "selected_rust_runs": [
       {
         "filter": "a2a::tests::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 468 filtered out; finished in 0.00s"
       },
       {
         "filter": "execution::scope_tests::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::binary_flow::tests::",
         "code": 0,
-        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 465 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 0.01s"
       },
       {
         "filter": "provider::",
         "code": 0,
-        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.01s"
       },
       {
         "filter": "stream::",
         "code": 0,
-        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 437 filtered out; finished in 0.18s"
+        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 438 filtered out; finished in 0.32s"
       },
       {
         "filter": "application::harness::",
         "code": 0,
-        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 441 filtered out; finished in 4.70s"
+        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 442 filtered out; finished in 7.36s"
       },
       {
         "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::checks::scoped_drive_listing",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::file_evidence::checks::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::investigation::directory_observation::checks::cancellation_and_deadline_remain_scoped",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::elf_observation::",
         "code": 0,
-        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 465 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::binary_observation::",
         "code": 0,
-        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::observation_graph::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::claim_records::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 468 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::investigation::cancellation_scope_checks::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::connection_migration::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 468 filtered out; finished in 0.01s"
       },
       {
         "filter": "application::binary_declarations::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 467 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 468 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::checks::settings_menus_are_short_separate_and_preserve_the_thread",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::instruction::tests::",
         "code": 0,
-        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 443 filtered out; finished in 0.33s"
+        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 444 filtered out; finished in 0.40s"
       },
       {
         "filter": "application::binary_evidence::path_checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.01s"
       },
       {
         "filter": "application::operation::drive_checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 468 filtered out; finished in 0.09s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.02s"
       },
       {
         "filter": "hosted_search::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 468 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.01s"
       },
       {
         "filter": "application::pe_observation::relocation_checks::",
         "code": 0,
-        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 463 filtered out; finished in 0.05s"
+        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 464 filtered out; finished in 0.02s"
       },
       {
         "filter": "resources::checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.00s"
       },
       {
         "filter": "network::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 468 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.00s"
       },
       {
         "filter": "network::binary_checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.00s"
       },
       {
         "filter": "network::binary_response_checks::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::project_store::transfer::tests::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 1.69s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.71s"
       },
       {
         "filter": "application::monitor::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 468 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.01s"
       },
       {
         "filter": "application::request_metrics::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::throughput::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::checks::live_rate_opens_analytics_without_losing_stream_or_draft",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.01s"
       },
       {
         "filter": "application::checks::tls_guidance_preserves_explicit_endpoint",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::voice_audio::checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.24s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.36s"
       },
       {
         "filter": "application::oauth::checks::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
       }
     ],
     "checks": {
@@ -1613,6 +1613,12 @@
           "actual HTTP shared inspection completes",
           "actual HTTP legacy binding works",
           "actual HTTP card advertised local URL",
+          "absent device metadata discovers bounded host workers",
+          "discovered default admits independent actual scans concurrently",
+          "global task capacity refuses only the excess request",
+          "one concurrent scan can be cancelled independently",
+          "other concurrent scans complete after scoped cancellation",
+          "concurrent task results retain exact source and output identity",
           "nonblocking task returns before large scan completes",
           "active HTTP task cancellation accepted",
           "v1 cancellation is idempotent",
@@ -1627,7 +1633,8 @@
           "duplicate JSON fields rejected on wire",
           "SIGTERM stops local listener cleanly",
           "publicly readable token file refused"
-        ]
+        ],
+        "observed_host_workers": 4
       },
       "binary_flow": {
         "passed": [
@@ -2919,7 +2926,7 @@
         "scope": "Owner asynchronous HTTP fixture tests. Explicit polling; no background scheduler or live user generation service acceptance."
       },
       "voice": {
-        "passed": 126,
+        "passed": 147,
         "checks": [
           "chat consent review discloses destinations without capturing",
           "chat enabling voice alone never opens microphone",
@@ -3046,7 +3053,28 @@
           "microphone failure pauses only the voice session",
           "text remains usable after microphone failure",
           "opening connection settings retires microphone ownership",
-          "uncertain recognition failure pauses without replay or microphone restart"
+          "uncertain recognition failure pauses without replay or microphone restart",
+          "explicit listening during speech starts one new microphone owner",
+          "old speech completion cannot replace an explicitly resumed microphone",
+          "old speech interruption cannot pause an explicitly resumed microphone",
+          "playback_pending unowned interruption is an exact state no-op",
+          "playback_pending owned Speak now starts exactly one microphone",
+          "playback_pending repeated Speak now cannot create another listener",
+          "playback_pending interrupted speech completion cannot change the new listener",
+          "playback_pending interrupted conversation accepts actual new speech",
+          "playback_pending interrupted conversation can synthesize its next reply",
+          "speaking unowned interruption is an exact state no-op",
+          "speaking owned Speak now starts exactly one microphone",
+          "speaking repeated Speak now cannot create another listener",
+          "speaking interrupted speech completion cannot change the new listener",
+          "speaking interrupted conversation accepts actual new speech",
+          "speaking interrupted conversation can synthesize its next reply",
+          "Stop playback settles pending speech even before native player creation",
+          "stopped pending player cannot announce late playback",
+          "explicit microphone resume remains available after stopping pending playback",
+          "Speak now preserves an unsent draft and pauses without capturing",
+          "Stop playback during model work preserves the primary request owner",
+          "Stop playback during model work preserves configured speech output"
         ],
         "scope": "Owner HTTP/audio fixture orchestration through all four model formats. Capture callback is controlled; physical microphone and installed playback not exercised."
       },
@@ -3222,7 +3250,7 @@
           "browser proof remains out of UI and authorization URL",
           "recovery restores only the pending browser flow without network replay",
           "matching return after activity recovery completes actual code exchange",
-          "new process recovers encrypted-state browser ownership without reopening browser",
+          "new process recovers saved-state browser ownership without reopening browser",
           "recovered flow still refuses wrong state exactly",
           "proof is retired from saved state before code submission",
           "new process exchanges original server code with the original S256 verifier",
@@ -3245,9 +3273,9 @@
       }
     },
     "apk": {
-      "version": 1793844287,
-      "bytes": 6408210,
-      "sha256": "c6121280df156d1e1584679252b8c28cf328101f65e3a86122c2cedd0826e8be",
+      "version": 1793846728,
+      "bytes": 6412306,
+      "sha256": "25731cfd0ed2288dfa4e53a18e774232318c6a444b6f0e5d9523aa77354e6bff",
       "native": [
         {
           "abi": "arm64-v8a",
@@ -3258,7 +3286,7 @@
             16384,
             16384
           ],
-          "bytes": 4772728
+          "bytes": 4775128
         },
         {
           "abi": "x86_64",
@@ -3269,7 +3297,7 @@
             16384,
             16384
           ],
-          "bytes": 5856824
+          "bytes": 5860040
         }
       ],
       "label": "RLLM",
@@ -3279,7 +3307,7 @@
       "build_inputs": {
         "AndroidManifest.xml": "f8b04737e17990b6d42516ab44cc5f49f07a9d2faac0302e0718617fc81da451",
         "core/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-        "core/a2a.rs": "185871b70cf5515d178806ff408842da5a4a416f1669f7b110979f6aabc142b2",
+        "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
         "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
         "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
         "core/application.rs": "e216bf70616d46f70d96746952d8dea542cebf349b975a4971578ba495d6b169",
@@ -3368,7 +3396,7 @@
         "core/resource_plan.rs": "e9d01d96656ce040381050630d3f9b2395b05ffac6dfdceda2acd0256b1de143",
         "core/resource_session.rs": "55a6369ba8628ce7a7d5cb99b5392c612c0e90851156175615ab555b326b7dff",
         "core/resource_url.rs": "a8ff45f4d5022413a2516d89ef296093b2a3d89a58c3404a67ea33c954ce1e73",
-        "core/resources.rs": "1af0d186ff5af9e53d424df216712489abc1efe4cf065be7efcbf14f5cb92f50",
+        "core/resources.rs": "cfdebc1cc58e6b81f862c01a38734dc7ed6911a362a67c1e391fcafaec89100e",
         "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
         "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
         "core/services.rs": "8cf529d429b4c416b75d1b988ac6af15866a9599120206bef4f52ff38fa98f19",
@@ -3378,7 +3406,7 @@
         "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
         "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
         "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
-        "core/voice.rs": "46c87b3ed5722c91542c001fdaeb0b9d86ec219079590cd80338b0755c23ceb9",
+        "core/voice.rs": "1dd0ba11177c4067a2be8853d0d218d471f1b630829c3bf25725803df5dc64db",
         "core/voice_audio.rs": "9c0ddc0bb3acf979655ffb9d53855f0000ba61649bf2b6b039d57d902633d649",
         "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
         "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
@@ -3396,7 +3424,7 @@
         "platform/com/local/client/Execution.java": "6c51afe3a8fce5283af4d8039e43913369da1ca0d3c3e1a14346a1b9d85d90d4",
         "platform/com/local/client/ExportStore.java": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573",
         "platform/com/local/client/Gateway.java": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7",
-        "platform/com/local/client/Media.java": "2c2ba8f2f4bd6392db09ff6082fdabdad9763c229895ae1f06f8d085fe7990f6",
+        "platform/com/local/client/Media.java": "2540b4b6cfa920bced9170f9cda4027625e67cc93b923ae1c6a2115214eb559f",
         "platform/com/local/client/Resolution.java": "9e706ecd3c199d7dee7f20ac312b4ba78d355e3eab8a534e07b4277216b3f068",
         "platform/com/local/client/TransferStore.java": "a164cf07e67e2ad8d98183c9dac5e367582f37c313fe01d8a99001eee61cd73b",
         "platform/com/local/client/Usage.java": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165",
@@ -3437,8 +3465,8 @@
     },
     "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
     "published_comparator": {
-      "version": 1793837555,
-      "source_sha256": "6a24fa55a6cd10e299c49655858772866fa849c3c37aa99bfd34772b49eabfdb",
+      "version": 1793844287,
+      "source_sha256": "88ae0310feda169e6f5799681fa8661ed176bde081f592d6dd0c6702f24f098b",
       "method": "Exact published shared core compiled locally; actual retained representations exercised through current query, native view and export"
     },
     "flow_comparator": {
@@ -3458,7 +3486,7 @@
     "live_model_NAS_tested": false,
     "upgrade_audit": {
       "foreground_voice": {
-        "passed": 126,
+        "passed": 147,
         "scope": "Actual local HTTP/WAVE with controlled PCM, model and playback callbacks across all four primary formats; device and user endpoint acceptance pending.",
         "implemented": [
           "foreground half-duplex automatic turns",
@@ -3466,7 +3494,9 @@
           "expiring consent and capture/playback ownership",
           "lifecycle and changed settings retirement",
           "failure pause and explicit resume",
-          "separate generic recognition and synthesis defaults"
+          "separate generic recognition and synthesis defaults",
+          "explicit owned Speak now interruption",
+          "pending playback stop and stale callback isolation"
         ],
         "not_implemented": [
           "background listening",
@@ -3816,12 +3846,18 @@
         ],
         "scope": "Owner checks through actual ACP standard streams and shared production workspace engine; no model, external server, developer report or journal in the selected workspace. Read-only ACP v1 capability scope, not full coding-agent or Android ACP client acceptance."
       },
-      "current_selected_rust_cases": 198,
+      "current_selected_rust_cases": 199,
       "current_connected_groups": {
         "passed": 36,
         "total": 37,
-        "executed_checks": 1649,
+        "executed_checks": 1676,
         "unavailable_historical_checks": 3
+      },
+      "resource_concurrency": {
+        "observed_usable_cpus": 9,
+        "observed_host_workers": 4,
+        "checks": 72,
+        "scope": "Actual independent128MiB complete-file scans, excess-task refusal, scoped cancellation and exact source/output digests; CPU fallback with missing platform metadata."
       }
     },
     "historical_full_rust_suite": {
@@ -3892,12 +3928,12 @@
         {
           "url": "https://api.mwmbl.org/api/v2/search/?q=Rust%20programming%20language",
           "bytes": 47644,
-          "sha256": "0936fb971c48c153bf219970ad62a497b585b4c284dfaf9d0e114ce1a80e8af1"
+          "sha256": "9b24c4aa62dd4d82ef5aef689067cd99685d0fcd05c6a94cb94ebb5a2af6fdc6"
         }
       ],
       "scope": "Live public HTTPS search responses transported by curl through actual core review, owned callbacks, evidence retention and child/parent continuation. Model replies are controlled protocol fixtures; configured model inference and installed Android transport require their own execution."
     }
   },
-  "checkpoint_utc": "2026-11-05T02:10:32.181279+00:00",
+  "checkpoint_utc": "2026-11-05T02:50:19.237876+00:00",
   "whole_project_complete": false
 }
