@@ -2,6 +2,7 @@ use super::*;
 #[path="harness.rs"] mod harness;
 #[path="services.rs"] mod services;
 #[path="media.rs"] mod media;
+#[path="scene.rs"] mod scene;
 #[path="jobs.rs"] mod jobs;
 #[path="voice.rs"] mod voice;
 #[path="voice_audio.rs"] mod voice_audio;
@@ -3227,6 +3228,7 @@ pub fn media_upload_operation(v:&Json)->Result<Json>{media_upload::operation(v)}
 pub fn media_input_operation(v:&Json)->Result<Json>{media_input::operation(v)}
 pub fn voice_audio_operation(v:&Json)->Result<Json>{voice_audio::operation(v)}
 pub fn media_verification(v:&Json)->Result<Json>{media::verification(v)}
+pub fn scene_operation(v:&Json)->Result<Json>{scene::operation(v)}
 pub fn capture_document(v:&Json)->Result<Json>{capture_job::run(v)}
 pub fn capture_document_cancel(v:&Json)->Result<Json>{capture_job::cancel(field(v,"ticket")?);Ok(Null)}
 pub fn local_tool_start(v:&Json)->Result<Json>{operation::authorize(v)?;Ok(Null)}

@@ -418,6 +418,7 @@ fn operation(input: &str) -> Result<Json> {
         "voice_audio_feed"|"voice_audio_cancel"|"voice_audio_check"=>application::voice_audio_operation(&v),
         "media_upload_read"|"media_upload_cancel"=>application::media_upload_operation(&v),
         "media_verify"=>application::media_verification(&v),
+        "scene_open"|"scene_frame"|"scene_close"=>application::scene_operation(&v),
         "capture_document" => application::capture_document(&v),
         "capture_document_cancel" => application::capture_document_cancel(&v),
         "request" => request(&v),
