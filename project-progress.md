@@ -1,10 +1,10 @@
-# RLLM checkpoint — 2026-11-04__20-44-12Z
+# RLLM checkpoint — 2026-11-05__00-12-35Z
 
-Build 1793825052; signed candidate. Optional generic server hosts, routes, credentials, request/response mappings and ordered fallbacks now connect foreground voice, file uploads, generation jobs and streamed artifacts to the existing primary/child workflow. Local work and the primary model remain usable when extra services are absent or unavailable.
+Build 1793837555; signed candidate. Optional foreground open-microphone conversation now captures and segments speech, uses configured recognition and the primary model, plays configured synthesized audio, then listens again after playback completes. Generic server hosts, credentials, mappings and ordered fallbacks remain configurable. Manual recording, uploads, generation jobs, streamed artifacts and the primary/child workflow are retained. Missing speech services leave text and local work available.
 
-Validation: 34/35 connected groups, 1415 executed checks, 194 selected current Rust cases. APK 6273042 bytes, SHA256 abb9e47a403c1eb537a2efdf8a248f119c62453bea6ed9f0d5a2207129e6d25f. Retained signer ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5. Exactly one matching signed APK is included.
+Validation: 34/35 connected groups, 1484 executed checks, 197 selected current Rust cases. APK 6330386 bytes, SHA256 347505ab623e35063c0ee7cd09c9b07069068082bf44781876988dcb36b07ce2. Retained signer ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5. Exactly one matching signed APK is included.
 
-Installed Android microphone/playback/UI/lifecycle acceptance, real user server endpoints and independent review remain unverified. Open microphone and a separate medical application are not implemented. The historical revision-two comparator is unavailable; its three compatibility checks remain open. Full Rust sweeps retain 14 failing historical fixtures also failing on the preserved baseline; no new fixture failures were found. Current operation equivalents are covered separately.
+Installed Android microphone/playback/UI/lifecycle acceptance, real user server endpoints and independent review remain unverified. Simultaneous interruption while speaking, background listening, bundled neural speech recognition and a separate medical application are not implemented. The historical revision-two comparator is unavailable; its three compatibility checks remain open. Full Rust sweeps retain 14 failing historical fixtures also failing on the preserved baseline; no new fixture failures were found. Current operation equivalents are covered separately.
 
 Protected baseline: version1793750802, immutable source SHA2562676d5476035cc32db9b85f652c94ecc5e21ca09f925ac2dc983cce932e94917, baseline commit36a5075caa58110ba33ef58990d91c1a102ae970. Immutable baseline source Drive1pBK9HP49rMqBuftLOhH_IMfgWIs0gIdB, APK1mFRkR3ubuMLrVE0Y0iDroRlWivpChtqi. Do not overwrite those baseline copies.
 
