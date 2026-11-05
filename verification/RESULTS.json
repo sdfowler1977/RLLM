@@ -35,12 +35,12 @@
       "media": 33,
       "jobs": 18,
       "voice": 147,
-      "media_stream": 13,
+      "media_stream": 34,
       "media_upload": 49,
       "acp": 41,
       "oauth": 121
     },
-    "total_executed": 1730,
+    "total_executed": 1751,
     "groups_passed": 37,
     "groups": 38,
     "unavailable": [
@@ -80,7 +80,7 @@
     {
       "filter": "application::harness::",
       "code": 0,
-      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 442 filtered out; finished in 3.42s"
+      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 442 filtered out; finished in 3.27s"
     },
     {
       "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -145,7 +145,7 @@
     {
       "filter": "application::instruction::tests::",
       "code": 0,
-      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 444 filtered out; finished in 0.31s"
+      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 444 filtered out; finished in 0.29s"
     },
     {
       "filter": "application::binary_evidence::path_checks::",
@@ -190,12 +190,12 @@
     {
       "filter": "application::project_store::transfer::tests::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.78s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.70s"
     },
     {
       "filter": "application::monitor::checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.01s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::request_metrics::",
@@ -220,7 +220,7 @@
     {
       "filter": "application::voice_audio::checks::",
       "code": 0,
-      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.27s"
+      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 470 filtered out; finished in 0.24s"
     },
     {
       "filter": "application::oauth::checks::",
@@ -1934,7 +1934,7 @@
       "scope": "Owner HTTP/audio fixture orchestration through all four model formats. Capture callback is controlled; physical microphone and installed playback not exercised."
     },
     "media_stream": {
-      "passed": 13,
+      "passed": 34,
       "checks": [
         "artifact URL creates a separate bounded GET",
         "download credentials belong only to artifact host",
@@ -1948,7 +1948,28 @@
         "stream never follows redirects or replays generation",
         "configured file size bound is enforced",
         "same length disk mutation invalidates ready receipt",
-        "cancelled artifact callback is an exact state no-op"
+        "cancelled artifact callback is an exact state no-op",
+        "POST binary response has an owned streaming destination",
+        "POST created response retains complete media above inline limit",
+        "chunked POST created response preserves exact decoded file",
+        "PUT created response retains complete generated media",
+        "reviewed input reaches only the initial explicitly rejected endpoint",
+        "owned streamed input and output survive configured fallback",
+        "complete configured503 permits exactly one initial submission fallback",
+        "streamed fallback retains its own credentials and actual file",
+        "streamed status stays scoped without replay 401",
+        "streamed status stays scoped without replay 202",
+        "streamed status stays scoped without replay 302",
+        "streamed status stays scoped without replay 206",
+        "truncated status body cannot authorize fallback",
+        "truncated submission remains uncertain without replay",
+        "pre-send streamed fallback releases old reservation before allocating next",
+        "pre-send fallback completes actual remaining endpoint",
+        "uncertain initial binary submission never retries",
+        "large GET retrieval remains exact",
+        "created-file allowance stays scoped to initial submissions",
+        "expired stream read releases its unwritten reservation",
+        "new stream prunes abandoned expired reservations"
       ],
       "scope": "Owner public-core and real local HTTP checks; Android storage/decoder and live configured endpoints need device acceptance."
     },
@@ -2183,9 +2204,9 @@
     }
   },
   "apk": {
-    "version": 1793886933,
+    "version": 1793889557,
     "bytes": 6465554,
-    "sha256": "64aadea75c129f546f2d2ac712ac2233b721a7d3bab05f856d8425ab6e87b1b4",
+    "sha256": "fbcd856ae68ac9d318853aa8262747ddd092f626d961082b2660afc70dbcc9d9",
     "native": [
       {
         "abi": "arm64-v8a",
@@ -2196,7 +2217,7 @@
           16384,
           16384
         ],
-        "bytes": 4825128
+        "bytes": 4823736
       },
       {
         "abi": "x86_64",
@@ -2207,7 +2228,7 @@
           16384,
           16384
         ],
-        "bytes": 5926264
+        "bytes": 5927640
       }
     ],
     "label": "RLLM",
@@ -2280,12 +2301,12 @@
       "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
       "core/media.rs": "311c71bd5ca7893dc5d4321eac91450086642e6525b5a096816fa67dfee2b4b5",
       "core/media_input.rs": "6d242e2df2f5d037bd82d6aed46942324af749a3ebef24e084e0da17a65f282e",
-      "core/media_stream.rs": "de0c081e27e146d3f87038462c546e81d2886bec46dc8e577d011a67174739d4",
-      "core/media_upload.rs": "34c4c347b1fef6fcfdd15e63fb05c849cc409b11ad419626a877c6ef04d09ec1",
+      "core/media_stream.rs": "c08439254e3f845f677e45b4d47e897c7d72940e48b251645eee3d8976adf2d7",
+      "core/media_upload.rs": "cd064446ab38584bc99d7907d682508d73bb6fe51d629e4aa1dfe89f7ab2d242",
       "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
       "core/model_metadata.rs": "b024330ac89f786670ae336f3855ee4b69a95898b1588e5ee16254c56d94e3e4",
       "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
-      "core/network.rs": "a772d8eca2394fb1988313c3933161f29813edd462e70a930137b4df191f866e",
+      "core/network.rs": "1daee2ab7b20977f916263860f69389a7962928f531566743f9ee8d35abc8e18",
       "core/oauth.rs": "5594507163dec6b36a7d3cd1d0fb3830f3433250974ad298e92652bae6742d3f",
       "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
       "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
@@ -2311,7 +2332,7 @@
       "core/resources.rs": "cfdebc1cc58e6b81f862c01a38734dc7ed6911a362a67c1e391fcafaec89100e",
       "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
       "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
-      "core/services.rs": "11c2d6e5200029c8c2357fabb4c8cca1ff5ecb06538db03fee277f384c8a54d6",
+      "core/services.rs": "637a1a26233a0592f0c92f29851bd27a0256640ad75136f230620c33916e1d1f",
       "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
       "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
       "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
@@ -2377,8 +2398,8 @@
   },
   "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
   "published_comparator": {
-    "version": 1793846728,
-    "source_sha256": "6e1a15b9b73986b141733b7f878b89f77696e8098d164d05b71629c7b65abf49",
+    "version": 1793886933,
+    "source_sha256": "ed77ebd018754777538dce6f070f83cd12887ed4effeacf7e034d6260d52608c",
     "method": "Exact published shared core compiled locally; actual retained representations exercised through current query, native view and export"
   },
   "flow_comparator": {

@@ -1,4 +1,4 @@
-from transport import upload
+from transport import upload,response
 """Foreground voice orchestration with actual HTTP and audio fixture bytes."""
 import base64,io,json,pathlib,socket,subprocess,tempfile,threading,wave,struct
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -22,9 +22,8 @@ with tempfile.TemporaryDirectory(prefix='voice-',dir=PROJECT/'output')as temp:
     def transport(d):
         e=d['effect'];assert e,d['state'].get('notice');wire=base64.b64decode(e['wire_base64'])if'wire_base64'in e else e['wire'].encode()
         with socket.create_connection((e['host'],e['port']),timeout=5)as s:
-            s.sendall(wire);upload(op,e,s);out=b''
-            while part:=s.recv(8192):out+=part
-        return event(d['state'],'network_result',dict(purpose=e['purpose'],data=base64.b64encode(out).decode()))
+            s.sendall(wire);upload(op,e,s);reply_fields=response(op,e,s)
+        return event(d['state'],'network_result',dict(reply_fields,purpose=e['purpose']))
     def reply(d,fmt,answer):
         value={'chat':{'choices':[{'message':{'content':answer},'finish_reason':'stop'}]},'local':{'message':{'content':answer},'done':True},'messages':{'content':[{'type':'text','text':answer}],'stop_reason':'end_turn'},'content':{'candidates':[{'content':{'parts':[{'text':answer}]},'finishReason':'STOP'}]}}[fmt];data=json.dumps(value).encode();wire=b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(data)).encode()+b'\r\n\r\n'+data;return event(d['state'],'network_result',dict(purpose='model',model_ticket=d['state']['model_expected'],data=base64.b64encode(wire).decode()))
     def configured(fmt):

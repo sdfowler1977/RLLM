@@ -1,4 +1,4 @@
-from transport import upload
+from transport import upload,response
 """Owned public-client authorization through actual HTTP peers and model requests."""
 import base64,copy,hashlib,http.client,io,json,pathlib,secrets,socket,subprocess,time,tempfile,threading,urllib.parse,wave
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -48,9 +48,8 @@ with tempfile.TemporaryDirectory(prefix='oauth-',dir=PROJECT/'output')as directo
     def exchange(d):
         e=d['effect'];assert e and e['kind']=='network',d['state'].get('notice');assert not e['tls'];wire=base64.b64decode(e['wire_base64'])if'wire_base64'in e else e['wire'].encode()
         with socket.create_connection((e['host'],e['port']),timeout=5)as s:
-            s.sendall(wire);upload(op,e,s);raw=b''
-            while chunk:=s.recv(8192):raw+=chunk
-        fields=dict(purpose=e['purpose'],data=base64.b64encode(raw).decode());fields.update({k:e[k]for k in ['model_ticket','child_ticket','child_owner']if k in e});return event(d['state'],'network_result',fields),fields
+            s.sendall(wire);upload(op,e,s);reply_fields=response(op,e,s)
+        fields=dict(reply_fields,purpose=e['purpose']);fields.update({k:e[k]for k in ['model_ticket','child_ticket','child_owner']if k in e});return event(d['state'],'network_result',fields),fields
     try:
         for fmt in ['chat','local','messages','content']:
             d=setup(fmt);started,uri=browser(d);q=urllib.parse.parse_qs(urllib.parse.urlsplit(started['effect']['url']).query);check(fmt+' uses random S256 transaction proof',len(q['state'][0])>=43 and len(q['code_challenge'][0])==43 and'code_verifier'not in q);check(fmt+' sign-in preserves existing key and text availability',started['state']['profiles'][0]['key']=='retained-api-key'and not started['state']['busy'])

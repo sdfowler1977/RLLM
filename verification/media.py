@@ -1,4 +1,4 @@
-from transport import upload
+from transport import upload,response
 """Actual file bytes and local HTTP transfers through public shared-core events."""
 import base64,copy,hashlib,io,json,pathlib,socket,struct,subprocess,tempfile,threading,wave,zlib
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -33,9 +33,8 @@ with tempfile.TemporaryDirectory(prefix='media-',dir=PROJECT/'output')as temp:
     def complete(d):
         e=d['effect'];assert e,d['state'].get('notice');wire=base64.b64decode(e['wire_base64'])if'wire_base64'in e else e['wire'].encode()
         with socket.create_connection((e['host'],e['port']),timeout=5)as s:
-            s.sendall(wire);upload(op,e,s);body=b''
-            while chunk:=s.recv(8192):body+=chunk
-        return event(d['state'],'network_result',dict(purpose=e['purpose'],data=base64.b64encode(body).decode()))
+            s.sendall(wire);upload(op,e,s);reply_fields=response(op,e,s)
+        return event(d['state'],'network_result',dict(reply_fields,purpose=e['purpose']))
     try:
         d=pick(configure(),audio,'recording.wav');record=d['state']['media_input'];file=root/record['path'];check('selected audio stored as actual owned file',file.read_bytes()==audio and record['sha256']==hashlib.sha256(audio).hexdigest());check('input bytes excluded from saved conversation JSON',base64.b64encode(audio).decode()not in json.dumps(d['state']))
         pending=review(d['state']);check('file disclosure is explicit before dispatch',pending['state']['pending']['file_disclosure']['sha256']==record['sha256']);done=complete(event(pending['state'],'approve'));headers,body=received[-1][1:];check('multipart transfer contains exact selected bytes',audio in body and 'multipart/form-data; boundary='in headers['Content-Type']);check('multipart fields mapped from typed input',b'name="language"\r\n\r\nen'in body and b'name="audio"'in body);check('actual mapped transcription returned',done['state']['service_result']['value']=='fixture transcription')
