@@ -19,7 +19,7 @@ with zipfile.ZipFile(apk)as z:
  for abi,machine in [('arm64-v8a',183),('x86_64',62)]:
   raw=z.read('lib/'+abi+'/libclient.so');assert raw[:6]==b'\x7fELF\x02\x01'and struct.unpack_from('<H',raw,18)[0]==machine;phoff=struct.unpack_from('<Q',raw,32)[0];ents,count=struct.unpack_from('<HH',raw,54);aligns=[struct.unpack_from('<Q',raw,phoff+i*ents+48)[0]for i in range(count)if struct.unpack_from('<I',raw,phoff+i*ents)[0]==1];assert aligns and all(x>=16384 for x in aligns)
   for marker in [b'Investigation is intrinsic',b'MODEL AND DELEGATION CONFIGURATION',b'Delegation result: blocked before start.',b'PE base-relocation declarations',b'Returning the operation error to the requesting model']:assert marker in raw,(abi,marker)
-  for marker in [b'GET routes cannot upload a selected file',b'Input selection is no longer owned',b'File upload is no longer owned',b'Media storage reservation exceeded']:assert marker in raw,(abi,marker)
+  for marker in [b'GET routes cannot upload a selected file',b'Input selection is no longer owned',b'File upload is no longer owned',b'Media storage reservation exceeded',b'Artifact or status response exceeds',b'Service response did not contain a complete generated artifact']:assert marker in raw,(abi,marker)
   for marker in [b'RLLM Workspace',b'ReverseEngineerAnything',b'reverse_engineer_anything']:assert marker not in raw,(abi,marker)
   native.append(dict(abi=abi,machine=machine,load_alignments=aligns,bytes=len(raw)))
 with zipfile.ZipFile(apk)as z:
