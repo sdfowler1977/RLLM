@@ -379,5 +379,28 @@
     "regular_files_checked": 8414,
     "bytes_crc_sizes_modes": "passed",
     "repaired_large_members": 4
+  },
+  "scene_preview": {
+    "owner_scene_checks": 60,
+    "delivery_connected_groups": 40,
+    "delivery_groups_passed": 39,
+    "binary_actual_checks": 94,
+    "binary_unavailable": 3,
+    "selected_rust_cases": 199,
+    "live_public_checks": 9,
+    "physical_device": false,
+    "live_user_services": false,
+    "independent_review": false,
+    "software_visual_reference": {
+      "scope": "Actual Rust software renderer on controlled cube geometry through owned file capture; not Android UI acceptance",
+      "source_sha256": "b6b9af52c32b68f5147a85722ea93b8cadb9c10b756d8319d6b9f1a3d718294b",
+      "rgba_sha256": "46a4b16504182a1056ff3674f946976d6085b024560dca0905e84333aad7306c",
+      "triangles": 12,
+      "width": 384,
+      "height": 384
+    },
+    "resource_repair": "Preallocation estimate for GLB JSON outside strings; measured/default geometry, span and frame admission. Core checks include exact refusal, usable small-memory frames and punctuation inside strings.",
+    "build_repair": "Initial optimized build refused changed inputs before signing. Clean151-input dual-ABI compilation completed; its first aligned output was truncated to2048000bytes and apksigner rejected it. One fresh zipalign output has6525642bytes, all25payloads identical to complete input, CRC/alignment passed and151frozen inputs remain exact. Signing resumed from those same frozen outputs; actual APK1793904514has6535186bytes,SHA2563d9def995670eb2db7cf52990260fdb746f9310cb3af41c4d81f67daf56104d0, pinned v2/v3 signature, both ABIs, compiled scene/voice bindings and16KiB alignment verified. No truncated APK was delivered.",
+    "scope": "Static triangle geometry with base/vertex colors; textures, animation and physical material effects explicitly omitted; unsupported features preserve export. Prior preliminary runs are not substituted for final-source execution."
   }
 }
