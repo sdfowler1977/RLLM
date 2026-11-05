@@ -53,6 +53,7 @@ case "$CLIENT_VARIANT" in
       -e 's/android:name="\./android:name="com.local.client./g' \
       -e 's/android:targetActivity="\./android:targetActivity="com.local.client./g' \
       -e 's/android:parentActivityName="\./android:parentActivityName="com.local.client./g' \
+      -e "s/android:scheme=\"com.local.client.oauth\"/android:scheme=\"com.local.client.$variant.oauth\"/" \
       -e "s/android:versionCode=\"[^\"]*\"/android:versionCode=\"$CLIENT_VERSION_CODE\"/" \
       -e "s/android:versionName=\"[^\"]*\"/android:versionName=\"0.1-$variant.$CLIENT_VERSION_CODE\"/" \
       "$manifest" > "$out/AndroidManifest.xml"

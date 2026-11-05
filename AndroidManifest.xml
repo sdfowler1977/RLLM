@@ -16,6 +16,7 @@
     <service android:name=".Gateway" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-started local model API gateway for authorized phone and LAN clients" /></service>
     <activity android:name=".Activity" android:exported="true" android:launchMode="singleTask" android:configChanges="orientation|screenSize|keyboardHidden" android:windowSoftInputMode="adjustResize">
       <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+      <intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="com.local.client.oauth" android:path="/callback"/></intent-filter>
     </activity>
   </application>
 </manifest>

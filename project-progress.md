@@ -1,3 +1,53 @@
+# RLLM checkpoint — 2026-11-05__02-04-47Z
+
+Build 1793844287; signed candidate. Read-only ACP v1 standard-stream sessions now share actual workspace operations, owned cancellation and session lifecycle. Optional public-client authorization adds browser S256 sign-in, owned automatic refresh/rotation, browser-flow process recovery and destination-bound bearer credentials while retaining existing API-key settings. Optional foreground open-microphone conversation now captures and segments speech, uses configured recognition and the primary model, plays configured synthesized audio, then listens again after playback completes. Generic server hosts, credentials, mappings and ordered fallbacks remain configurable. Manual recording, uploads, generation jobs, streamed artifacts and the primary/child workflow are retained. Missing speech services leave text and local work available.
+
+Validation: 36/37 connected groups, 1649 executed checks, 198 selected current Rust cases. APK 6408210 bytes, SHA256 c6121280df156d1e1584679252b8c28cf328101f65e3a86122c2cedd0826e8be. Retained signer ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5. Exactly one matching signed APK is included.
+
+Installed Android microphone/playback/UI/lifecycle acceptance, real user server endpoints and independent review remain unverified. Simultaneous interruption while speaking, background listening, bundled neural speech recognition and a separate medical application are not implemented. The historical revision-two comparator is unavailable; its three compatibility checks remain open. The preserved earlier full Rust sweep had14 failing historical fixtures on both then-current and baseline sources. That full sweep was not rerun for this candidate because its historical fixture exclusions remain in force; it is not claimed as fresh current acceptance. Current selected cases and operation equivalents are reported separately.
+
+Protected baseline: version1793750802, immutable source SHA2562676d5476035cc32db9b85f652c94ecc5e21ca09f925ac2dc983cce932e94917, baseline commit36a5075caa58110ba33ef58990d91c1a102ae970. Immutable baseline source Drive1pBK9HP49rMqBuftLOhH_IMfgWIs0gIdB, APK1mFRkR3ubuMLrVE0Y0iDroRlWivpChtqi. Do not overwrite those baseline copies.
+
+Next: preserve/upload this exact signed candidate and read back bytes; update the already-authorized existing project publication. Recover genuine revision-two source through the selected stable source's revision history if browser authentication becomes available; run all three historical checks without changing the reader fingerprint or current decoder. Complete current-device/live-endpoint and independent acceptance separately. Earlier broader accepted roadmap remains in the canonical cumulative engineering record, not cancelled by this upgrade: https://docs.google.com/document/d/1jyJ1ma1juoWacfJFpei5MdzPS05i7EiNy-FyWs9UPRI/edit . This build does not claim whole-project closure. No scheduled/background continuation is active. Signing custody remains in the separate protected archive.
+
+---
+
+Preserved prior checkpoints:
+
+# Authorization refresh and recovery
+
+Status: in-progress. Production Rust now renews known-expiring connection credentials before original model submission, with owned single continuation across all four formats, reviewed children, captured parents, paused server-search and voice turns. Rotating refresh uncertainty survives restart and cannot replay. Verified same-account renewal preserves voice consent; an unowned token change revokes it. Browser-only pending proof is kept in existing encrypted app state, revalidated against age, connection, root and redirect on recovery, and retired before code submission. Network exchanges, model requests and microphone sessions are not replayed.
+
+121 actual local HTTP/process authorization checks pass, including original S256 verification after a new controller process, expiry/future/destination/proof rejection, child success/failure, exact private hosted continuation and recognition → refreshed model → synthesized audio.126 existing voice checks and198 selected Rust cases pass. Fresh37-group connected execution passes36groups; the remaining binary group passes94current checks and explicitly lacks3genuine historical comparator cases. An initial migration/prompt comparison was pointed at the immediately published source instead of their original reference; the two were rerun successfully against the genuine original f9d0dac9 source, without changing their assertions. Current exact published6a24 source is separately exercised by binary capture/query/export comparison.
+
+Earlier full sweeps and14historical failing fixtures remain historical evidence only, not current acceptance. Protected archive/compression and specific historical fixture exclusions remain in force. Installed Android, actual configured user endpoints and a non-owner reviewer remain unavailable. Whole-product closure does not pass. Current signed Android build is running against frozen production inputs; never serve the old release APK as matching these source changes. No schedule/background continuation is active.
+
+Next: inspect the actual new signed APK, validate package/signer/ABIs/redirect/build inputs, save and read back matching source/application/checksums, update the canonical cumulative record and existing authorized publication. Then continue the next eligible required roadmap capability, keeping all broader areas in docs/ROADMAP.md active. Last remotely verified source-only checkpoint: Drive1D6Jmb7y6KhJuuc6aNRdQfnLv6KkcgjKJ, SHA256bc8dcd53cd00ffcee7661b78e55380d92a37b5d6570285b329a64d31429e2a8e; actual5101726downloaded bytes and ZIP CRC matched, but it predates automatic refresh/recovery.
+
+---
+
+# Authorization and protocol implementation
+
+Status: in-progress; whole-product completion remains open. New production Rust public-client authorization now performs actual S256 browser sign-in, owned code exchange, explicit refresh/rotation and destination-bound bearer requests across all four API formats. Existing API-key credentials remain retained and usable. Android has the system-browser effect, application-specific guarded return and encrypted-state persistence.72actual local HTTP authorization/model checks pass, including account-context separation and unsaved-destination refusal. SDK35 Java/resource compilation passed.198 selected Rust cases passed, including the published proof-key vector and URI parameter safety. Installed Android browser return/Keystore/live-server acceptance remains unavailable.
+
+Read-only ACP v1 standard-stream sessions pass41actual subprocess/file checks. Existing primary/child/service/voice transports passed the focused current regressions. Server-search setup now uses neutral labels, accepts arbitrary compatible proxy paths, and migrates saved legacy mode/paused-context data in place;27hosted-phase checks pass. An authorization refresh keeps its own account identity; fresh sign-in cannot replay private context from a previous identity. Configuration exports omit both credential kinds. No external runtime SDK, mandatory extra service, report gate, user-data deletion, signer change or new branch was introduced.
+
+Current whole37-group connected check is running against genuine immediately published and original migration cores. Three genuine revision-two comparison cases still lack their source comparator. Protected historical archive/phone/reconstruction/HTML fixture exclusions remain; do not silently treat old14fixture failures as resolved or fabricate fresh full-suite acceptance. No new signed APK matches these edits yet; source/release APK remains the preserved1793837555candidate. Pinned toolchain and retained private signing custody are restored outside the product tree.
+
+Exact next actions: complete the current37-group check, repair any product failure, save/read back the complete source checkpoint and record it in the canonical document. Then implement automatic authorization refresh across captured primary/child flows and the next eligible required storage/voice/resource capability. Keep every area of docs/ROADMAP.md active. No background worker or schedule is running.
+
+# Active product completion
+
+Status: in-progress. The user requested all agreed work and open items be implemented in the actual product, with no mockups or scaffolding. The published build1793837555 and its protected original baseline are preserved. Current working tree includes a new ACP v1 standard-stream adapter over actual shared-engine workspace observations, session lifecycle and cancellation.41actual subprocess/file checks passed. The adapter is read-only and does not claim to be a general coding model or Android ACP client.
+
+The complete accepted scope remains in docs/ROADMAP.md and the cumulative engineering record. Broad protocol/provider authorization, storage, analysis/reconstruction, resources/accelerators/recursive scheduling, remaining voice/media work and installed-device/live-service/non-owner acceptance remain open. No requirement is silently dropped. No permanent user data deletion, new signer, app split or runtime report gate is authorized by this checkpoint.
+
+Recovery: current source restored from SHA2566a24fa55a6cd10e299c49655858772866fa849c3c37aa99bfd34772b49eabfdb. Pinned toolchain restored under tooling/ after retrying a truncated archive. Compile console.rs with Rust1.99.1, host linker-features=-lld. New ACP checks run as python3 verification/acp.py; production adapter itself is original Rust. Current host executable is output/headless/RLLM. No matching new signed Android APK has yet been built for these edits; release/RLLM.apk remains the preserved preceding candidate.
+
+Next: complete expanded ACP lifecycle/security validation and current transport regression, checkpoint actual source, then implement the next required provider/storage/voice gap. Update packaging for the new connected group before any new candidate. Physical Android runtime and actual configured user endpoints have not been exercised. No scheduled or resident background worker is running.
+
+## Preserved preceding candidate record
+
 # RLLM checkpoint — 2026-11-05__00-12-35Z
 
 Build 1793837555; signed candidate. Optional foreground open-microphone conversation now captures and segments speech, uses configured recognition and the primary model, plays configured synthesized audio, then listens again after playback completes. Generic server hosts, credentials, mappings and ordered fallbacks remain configurable. Manual recording, uploads, generation jobs, streamed artifacts and the primary/child workflow are retained. Missing speech services leave text and local work available.
