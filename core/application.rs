@@ -5,6 +5,7 @@ use super::*;
 #[path="jobs.rs"] mod jobs;
 #[path="voice.rs"] mod voice;
 #[path="voice_audio.rs"] mod voice_audio;
+#[path="oauth.rs"] pub(super) mod oauth;
 #[path="media_stream.rs"] mod media_stream;
 #[path="connection_migration.rs"] mod connection_migration;
 #[path="approval_rules.rs"] mod approval_rules;
@@ -498,7 +499,7 @@ fn ui(st: &Json) -> Json {
     let dialog = text(st, "dialog");
     if page=="diagnostics" {put(&mut out,"monitor",monitor::dashboard(st));}
     let edit = get(st, "edit");
-    let mut pop=if let Some(value)=voice::dialog(st){value}else if let Some(value)=jobs::dialog(st){value}else if let Some(value)=media::dialog(st){value}else if let Some(value)=services::dialog(st){value}else if let Some(value)=workspace::modal_for(st){value}else{match dialog.as_str(){
+    let mut pop=if let Some(value)=oauth::dialog(st){value}else if let Some(value)=voice::dialog(st){value}else if let Some(value)=jobs::dialog(st){value}else if let Some(value)=media::dialog(st){value}else if let Some(value)=services::dialog(st){value}else if let Some(value)=workspace::modal_for(st){value}else{match dialog.as_str(){
  "chat_actions"=>modal("Conversation actions",vec![],{
     let mut actions=vec![button("Main agent profile","chat_agents"),button("Agent task / compact context","task"),button("New conversation","new"),button("Attach image or text file","phone_file"),button("Generation jobs","jobs_menu"),button("Voice and media","media_menu"),button("Service request","service_request"),button("Save conversation to default storage","save_drive"),button("Export conversation","conversation_export"),button(if get(st,"pending")!=&Null {"Review proposed operation"}else{"Retry last request"},if get(st,"pending")!=&Null {"review"}else{"retry"})];
     if array(&current,"messages").last().map(|m|text(m,"role")=="assistant").unwrap_or(false){actions.push(button("Regenerate reply in new branch","regenerate"));}if boolean(get(st,"hosted_request"),"paused"){actions.push(button("Continue hosted search","hosted_continue"));}if !array(&current,"hosted_responses").is_empty(){actions.push(button("Inspect hosted search responses","hosted_details"));}if tool_format::available(st){actions.push(button("Request format correction","format_correction"));}actions
@@ -511,7 +512,7 @@ fn ui(st: &Json) -> Json {
  "agent_settings"=>agent_settings_menu(),
  "storage_settings"=>workspace::modal_for(&{let mut current=st.clone();put(&mut current,"dialog",s("workspace_setup"));current}).unwrap_or(Null),
  "instruction_settings"=>menu("Instructions and preferences",vec![button("Global instructions","instructions"),button("Investigation preferences","investigation_preferences"),button("Saved refinement","refinement_review")]),
- "connections"=>menu("LLM connections",vec![button("Choose or add an LLM","chat_models"),button("Edit current connection","profile_edit"),button("Optional model-list check","connection_test"),button("Connection details","configuration"),button("Export configuration","configuration_export")]),
+ "connections"=>menu("LLM connections",vec![button("Choose or add an LLM","chat_models"),button("Edit current connection","profile_edit"),button("Connection authorization","oauth_settings"),button("Optional model-list check","connection_test"),button("Connection details","configuration"),button("Export configuration","configuration_export")]),
  "services"=>menu("Network services",vec![button("Service connections","service_connections"),button("MCP server connection","mcp_client_settings"),button("Web access","web_settings"),button("Phone API gateway","gateway_edit")]),
  "observability"=>menu("Diagnostics",vec![button("Phone observations","diagnostics"),button("App inspection","apps_view"),button("Server monitor","server_monitor"),button("Features","capabilities")]),
  "configuration"=>modal("Configuration",vec![field_ui("server","Model server address",&endpoint_summary(&text(&p,"endpoint")),"readonly"),field_ui("detail","Current configuration",&text(&out,"detail"),"readonly"),field_ui("notice","Operation status",&text(st,"notice"),"readonly"),field_ui("fields","Profile fields",if p==Null {"0"}else{"9"},"readonly"),field_ui("budget","Configured memory budget",&format!("{} bytes; measured resource inputs: {}",number(get(st,"policy"),"budget_bytes"),boolean(get(st,"policy"),"measured")),"readonly"),field_ui("rate","Last reply measurements",&telemetry_summary(get(st,"telemetry")),"readonly")],{let mut buttons=vec![button("Apply profile settings","profile_edit"),button("Export configuration","configuration_export")];if get(st,"export_pending")!=&Null{buttons.push(button("Review saved export","export_review"));}buttons}),
@@ -556,7 +557,7 @@ fn ui(st: &Json) -> Json {
  "conversation_review"=>modal("Review conversation import",vec![field_ui("summary","Separate history entry",&format!("{} · {} messages\nExisting conversations will be preserved.",text(get(st,"conversation_candidate"),"title"),array(get(st,"conversation_candidate"),"messages").len()),"readonly")],vec![button("Import conversation","conversation_accept"),button("Cancel","conversation_reject")]),
  "generation"=>generation::modal_for(st),
  "appearance"|"chat_agents"|"chat_options"|"chat_delete_review"|"trash"|"trash_options"|"chat_purge_review"|"trash_empty_review"=>interaction::modal_for(st),
- "capabilities"=>modal("Capabilities",vec![field_ui("native_investigation","Investigation","Question and design journals connect plans, evidence, hypotheses, original design notes, finite checks and item assessments. Workspace inspection and comparison support selected files and directories, complete-file digests, source/data/media/binary observations, retained evidence graphs, reviewed experiments and reconstruction. Ordinary, recursive, delegated, manual and headless workflows share the Rust engine.","readonly"),field_ui("status","Current capabilities","Server profiles; four text API formats with incremental replies and partial-reply retention; child-agent result returns; MCP discovery, calls, session controls and March/June/November 2025 negotiation; encrypted local history and conversation branching; workspace file tools; reviewed agent operations; phone PNG/JPEG attachments and text-document import; WebDAV browsing, reading, snapshots, reviewed file creation, revision-aware text updates, folder creation and network-to-project copy; shell syntax checking and execution in an isolated Android service; authenticated local JSON API gateway; standalone JSON-lines controller, read-only MCP stdio and opt-in local A2A workspace tasks (1.0/0.3).","readonly")],vec![]),_=>harness::modal_for(st)}};
+ "capabilities"=>modal("Capabilities",vec![field_ui("native_investigation","Investigation","Question and design journals connect plans, evidence, hypotheses, original design notes, finite checks and item assessments. Workspace inspection and comparison support selected files and directories, complete-file digests, source/data/media/binary observations, retained evidence graphs, reviewed experiments and reconstruction. Ordinary, recursive, delegated, manual and headless workflows share the Rust engine.","readonly"),field_ui("status","Current capabilities","Server profiles; four text API formats with incremental replies and partial-reply retention; child-agent result returns; MCP discovery, calls, session controls and March/June/November 2025 negotiation; encrypted local history and conversation branching; workspace file tools; reviewed agent operations; phone PNG/JPEG attachments and text-document import; WebDAV browsing, reading, snapshots, reviewed file creation, revision-aware text updates, folder creation and network-to-project copy; shell syntax checking and execution in an isolated Android service; authenticated local JSON API gateway; standalone JSON-lines controller, read-only MCP and ACP v1 workspace sessions over standard streams, and opt-in local A2A workspace tasks (1.0/0.3).","readonly")],vec![]),_=>harness::modal_for(st)}};
     if dialog=="profile" && !text(st,"profile_error").is_empty() {let mut fields=array(&pop,"fields");fields.insert(0,field_ui("profile_error","Profile could not be saved",&text(st,"profile_error"),"readonly"));put(&mut pop,"fields",Arr(fields));}
     if pop != Null && text(st,"form_dialog")==dialog {
         let mut definitions=array(&pop,"fields");
@@ -703,7 +704,8 @@ fn hosted_budget(p:&Json,body:&Json,bytes:usize)->Result<()> {
  let context=read("context_tokens")?;let output=read("output_tokens")?;let estimated=body.string().len().checked_add(3).ok_or("Hosted context size overflow")?/4;
  if context>0 && estimated.checked_add(output).ok_or("Hosted context size overflow")?>context{return Err(format!("Estimated context budget exceeded ({estimated} input + {output} reserved output). Raw results remain saved."));}Ok(())
 }
-fn hosted_continue(st:&mut Json)->Result<Json>{
+fn hosted_continue(st:&mut Json)->Result<Json>{hosted_continue_request(st,false)}
+fn hosted_continue_request(st:&mut Json,refreshed:bool)->Result<Json>{
  harness_rules::refresh(st);
  if text(st,"capability_mode")=="local"{return Err("Remote model requests are paused in Resources and operating mode.".into());}
  let snapshot=get(st,"hosted_request").clone();if !boolean(&snapshot,"paused")||get(&snapshot,"owner")!=&hosted_owner(st){return Err("This hosted continuation is no longer current".into());}
@@ -711,6 +713,7 @@ fn hosted_continue(st:&mut Json)->Result<Json>{
  let index=number(&snapshot,"index");if harness_rules::model_route(st,index)?!=index{return Err("Harness model rules changed; no hosted continuation sent".into());}let p=get(&snapshot,"profile").clone();harness_rules::check(st,"model",&obj(vec![("endpoint",get(&snapshot,"endpoint").clone())]),false)?;harness_rules::check(st,"web_search",&obj(vec![]),true)?;if array(st,"profiles").get(index)!=Some(&p){return Err("The hosted connection changed; no continuation was sent".into());}
  let mut body=get(&snapshot,"body").clone();let mut messages=array(&body,"messages");let content=get(get(st,"hosted_received"),"content").clone();super::hosted_search::blocks(&content)?;messages.push(obj(vec![("role",s("assistant")),("content",content)]));put(&mut body,"messages",Arr(messages));super::hosted_search::bound_body(&body)?;
  let bytes=number(&snapshot,"context_bytes").checked_add(get(get(st,"hosted_received"),"content").string().len()).ok_or("Hosted context size overflow")?;hosted_budget(&p,&body,bytes)?;
+ if !refreshed{if let Some(effect)=oauth::model_refresh(st,number(&snapshot,"index"),true)?{return Ok(effect);}}
  let authentication=super::provider::authorization(&p)?;let mut headers=vec![("Content-Type","application/json; charset=utf-8".into()),("anthropic-version","2023-06-01".into())];if let Some((name,value))=&authentication{headers.push((name.as_str(),value.clone()));}
  let endpoint=text(&snapshot,"endpoint");let mut effect=network::wire(&endpoint,boolean(&p,"plain"),"POST",&body.string(),headers)?;
  let mut next=st.clone();let mut saved=snapshot;put(&mut saved,"body",body);put(&mut saved,"context_bytes",Num(bytes.to_string()));put(&mut saved,"paused",Bool(false));put(&mut next,"hosted_request",saved);put(&mut next,"hosted_received",Null);hosted_preflight(&next)?;
@@ -726,11 +729,13 @@ fn retain_interruption(st:&mut Json,reply:&str,reason:&str)->Result<()> {
     put(&mut current,"messages",Arr(messages));replace_chat(&mut next,current);put(&mut next,"stream_text",Null);
     *st=next;Ok(())
 }
-fn model_effect_at(st: &mut Json, index: usize) -> Result<Json> {
+fn model_effect_at(st: &mut Json, index: usize) -> Result<Json> {model_request_at(st,index,false)}
+fn model_request_at(st: &mut Json, index: usize, refreshed: bool) -> Result<Json> {
     harness_rules::refresh(st);inquiry::ensure_task(st);let index=harness_rules::model_route(st,index)?;let selected=array(st,"profiles").get(index).cloned().ok_or("Server profile unavailable")?;harness_rules::check(st,"model",&obj(vec![("endpoint",get(&selected,"endpoint").clone())]),false)?;
     if text(st, "capability_mode") == "local" {
         return Err("Remote model requests are paused. Resume them in Settings → Resources and operating mode, or save a server profile.".into());
     }
+    if !refreshed{if let Some(effect)=oauth::model_refresh(st,index,false)?{return Ok(effect);}}
     let mut p = array(st, "profiles")
         .get(index)
         .cloned()
@@ -1395,10 +1400,12 @@ fn event_inner(v: &Json) -> Result<Json> {
     let requested_action = field(v, "action")?;
     let action = if matches!(requested_action,"back"|"close")&&get(&st,"media_expected")!=&Null{"cancel"}else if matches!(requested_action,"approve_session"|"approve_always"|"approve_matching_rule"){"approve"}else{requested_action};
     let voice_callback=voice::callback(action);
+    let oauth_callback=oauth::callback(action,inputs);
+    if oauth_callback&&!oauth::expected(&st,action,inputs){let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));}
     if voice_callback&&!voice::consume(&st,action,inputs){let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));}
     let media_callback=media::callback(action);
     if media_callback&&!media::consume(&mut st,inputs){let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));}
-    if matches!(action,"cancel"|"resume"){voice::interrupt(&mut st);media::interrupt(&mut st);}
+    if matches!(action,"cancel"|"resume"){voice::interrupt(&mut st);media::interrupt(&mut st);if action=="resume"{oauth::prepare_resume(&mut st);}else{oauth::interrupt(&mut st);}}
     let service_callback=services::callback(action,inputs);
     if matches!(action,"cancel"|"resume"){services::interrupt(&mut st);}
     if workspace::cloud_callback(action)&&!workspace::cloud_expected(&st,action,inputs){let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));}
@@ -1508,7 +1515,7 @@ fn event_inner(v: &Json) -> Result<Json> {
     if get(inputs,"phone_access_granted")!=&Null {put(&mut st,"phone_access_granted",Bool(boolean(inputs,"phone_access_granted")));}
     if get(inputs,"device")!=&Null {put(&mut st,"device",get(inputs,"device").clone());}
     if get(inputs,"gateway_status")!=&Null {put(&mut st,"gateway_status",s(&text(inputs,"gateway_status")));}
-    if voice_callback || media_callback || service_callback || workspace::cloud_callback(action) || metadata_callback || mcp_client_callback || web_callback || matches!(action,"apps_result"|"model_progress"|"rate_tick"|"resume"|"archive_built"|"artifact_built"|"artifact_failed"|"project_cleared"|"project_recovered") || (matches!(action,"network_result"|"project_phone_result"|"failure") && (remote_monitor::is_result(inputs)||project_store::is_result(inputs))) {
+    if oauth_callback || voice_callback || media_callback || service_callback || workspace::cloud_callback(action) || metadata_callback || mcp_client_callback || web_callback || matches!(action,"apps_result"|"model_progress"|"rate_tick"|"resume"|"archive_built"|"artifact_built"|"artifact_failed"|"project_cleared"|"project_recovered") || (matches!(action,"network_result"|"project_phone_result"|"failure") && (remote_monitor::is_result(inputs)||project_store::is_result(inputs))) {
         // Android includes the current draft/form with asynchronous callbacks.
         // Keep those edits, but never persist transport payloads as form data.
         let form=ui(&st);
@@ -1556,7 +1563,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     | "archive_done"
                     | "archive_reject"
                     | "failure"
-                    | "cancel"
+                    | "cancel" | "oauth_cancel"
                     | "resume"
                     | "capture" | "viewport" | "status" | "configuration" | "back"
                     | "compose" | "compose_done" | "close"
@@ -1587,6 +1594,7 @@ fn event_inner(v: &Json) -> Result<Json> {
         if remote_monitor::handles(action) {effect=remote_monitor::event(&mut st,action,inputs)?;return Ok(());}
         if ["project_transfer","project_transfer_retry","project_transfer_verify","project_transfer_discard_review","project_transfer_discard"].contains(&action){effect=project_store::event(&mut st,action)?;return Ok(());}
         if interaction::handles(action){effect=interaction::event(&mut st,action,inputs)?;return Ok(());}
+        if oauth::handles(action,inputs){effect=oauth::event(&mut st,action,inputs)?;return Ok(());}
         if get(&st,"task_run")!=&Null && (matches!(action,"new"|"regenerate"|"branch_accept"|"conversation_accept") || action.starts_with("history:")) {
             return Err("Current task stays in this conversation. Finish or cancel it before opening another.".into());
         }
@@ -1698,6 +1706,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     put(&mut st,"phone_access_requested",Bool(true));
                 }
                 if ["settings","config"].contains(&text(&st,"page").as_str()){put(&mut st,"page",s("chat"));put(&mut st,"dialog",s("app_settings"));}
+                oauth::recover(&mut st);
             }
             "settings" | "config" => {
                 if ["settings","config"].contains(&text(&st,"page").as_str()){put(&mut st,"page",s("chat"));}
@@ -2996,6 +3005,7 @@ fn event_inner(v: &Json) -> Result<Json> {
             put(&mut st, "notice", s(&e));
         }
     }
+    oauth::reconcile(&mut st,action);
     voice::reconcile(&mut st,action,inputs);
     if action=="network_result"&&text(inputs,"purpose")=="model"&&boolean(&st,"voice_turn")&&!boolean(&st,"busy")&&effect==Null&&get(&st,"pending")==&Null&&array(&st,"delegation_stack").is_empty()&&!boolean(&st,"notice_error"){
         match voice::answer(&mut st){Ok(next)=>effect=next,Err(reason)=>{put(&mut st,"voice_turn",Bool(false));put(&mut st,"voice_phase",Null);put(&mut st,"notice",s(&format!("Text reply retained; speech unavailable: {reason}")));}}

@@ -94,7 +94,7 @@ pub fn normalized(p: &Json) -> Result<Json> {
     if let Some(suffix) = suffix {
         endpoint = endpoint.trim_end_matches('/').to_string() + suffix;
     }
-    if protocol=="chat" && (endpoint.ends_with("/api/chat") || endpoint.ends_with("/api/generate") || (endpoint.ends_with("/completions") && !endpoint.ends_with("/chat/completions"))) {return Err("This URL uses a different API. For OpenAI chat, enter the base URL ending /v1 or the complete /v1/chat/completions URL.".into());}
+    if protocol=="chat" && (endpoint.ends_with("/api/chat") || endpoint.ends_with("/api/generate") || (endpoint.ends_with("/completions") && !endpoint.ends_with("/chat/completions"))) {return Err("This URL uses a different API. For chat completions, enter the base URL ending /v1 or the complete /v1/chat/completions URL.".into());}
     let mut out = p.clone();
     if let Obj(fields) = &mut out {
         fields.insert("plain".into(),Bool(plain));
@@ -102,7 +102,8 @@ pub fn normalized(p: &Json) -> Result<Json> {
         fields.insert("model".into(), s(model));
         fields.insert("name".into(),s(text(p,"name").trim()));
     }
-    hosted_search::validate(&out)?;authorization(&out)?;
+    hosted_search::validate(&out)?;
+    if out.get("oauth_enabled")==Ok(&Bool(true)){application::oauth::validate_profile(&out)?;}else{authorization(&out)?;}
     application::generation::validate(&out)?;
     Ok(out)
 }
@@ -128,6 +129,7 @@ pub fn content_endpoint(endpoint:&str, streaming:bool)->Result<String> {
     Ok(if fields.is_empty(){path}else{format!("{path}?{}",fields.join("&"))})
 }
 pub fn authorization(p: &Json) -> Result<Option<(String, String)>> {
+    if p.get("oauth_enabled")==Ok(&Bool(true)){return application::oauth::authorization(p);}
     let key = text(p, "key");
     if key.is_empty() {
         return Ok(None);

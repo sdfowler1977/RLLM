@@ -9,7 +9,7 @@ fn identity(edit:&Json)->Result<Json>{
     // Metadata can help a user correct an unsupported generation setting, so
     // normalize connection identity without validating their generation draft.
     let mut connection=obj(vec![]);
-    for key in ["protocol","endpoint","model","name","key","auth_header","auth_prefix","plain"] {
+    for key in ["protocol","endpoint","model","name","key","auth_header","auth_prefix","plain","oauth","oauth_tokens","oauth_enabled"] {
         if get(edit,key)!=&Null {put(&mut connection,key,get(edit,key).clone());}
     }
     super::super::provider::normalized(&connection)

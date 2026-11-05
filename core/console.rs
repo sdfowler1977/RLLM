@@ -2,6 +2,7 @@
 include!("lib.rs");
 mod stdio;
 mod http;
+mod acp;
 
 fn main() {
     if let Err(error) = stdio::run() {

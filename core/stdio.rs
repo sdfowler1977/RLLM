@@ -10,6 +10,9 @@ const VERSIONS: &[&str] = super::mcp_schema::VERSIONS;
 // Oversized lines are drained without retaining their tail, so the next frame
 // remains usable. A short read and UTF-8 error cannot dispatch a partial call.
 fn line(reader: &mut impl BufRead) -> std::io::Result<Option<Result<String>>> {
+    line_limited(reader, LIMIT)
+}
+pub(super) fn line_limited(reader: &mut impl BufRead, limit: usize) -> std::io::Result<Option<Result<String>>> {
     let mut bytes = Vec::new();
     let mut oversized = false;
     let mut observed = false;
@@ -23,7 +26,7 @@ fn line(reader: &mut impl BufRead) -> std::io::Result<Option<Result<String>>> {
         let newline = chunk.iter().position(|b| *b == b'\n');
         let take = newline.map_or(chunk.len(), |n| n + 1);
         let payload = newline.unwrap_or(chunk.len());
-        if !oversized && bytes.len().saturating_add(payload) <= LIMIT {
+        if !oversized && bytes.len().saturating_add(payload) <= limit {
             bytes.extend_from_slice(&chunk[..payload]);
         } else {
             oversized = true;
@@ -32,7 +35,7 @@ fn line(reader: &mut impl BufRead) -> std::io::Result<Option<Result<String>>> {
         reader.consume(take);
         if newline.is_some() { break; }
     }
-    if oversized { return Ok(Some(Err("Input line exceeds 8 MiB".into()))); }
+    if oversized { return Ok(Some(Err(if limit == LIMIT { "Input line exceeds 8 MiB".into() } else { format!("Input line exceeds {limit} bytes") }))); }
     if bytes.last() == Some(&b'\r') { bytes.pop(); }
     Ok(Some(String::from_utf8(bytes).map_err(|_| "Invalid UTF-8".into())))
 }
@@ -176,16 +179,19 @@ impl Server {
 
 pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [mode, flag, root] = args.as_slice() {
+        if mode == "--acp" && flag == "--root" { return super::acp::run(root); }
+    }
     if args.first().is_some_and(|v|v=="--a2a"){return super::http::run(&args[1..]);}
     if args == ["--help"] {
-        println!("RLLM --jsonl\nRLLM --mcp --root DIRECTORY\nRLLM --a2a --root DIRECTORY --token-file PRIVATE_FILE [--port PORT]\nJSON-lines uses the shared C-ABI operation envelope. MCP and A2A expose local read-only inspect/compare. EOF ends stdio; SIGINT/SIGTERM stops A2A.");
+        println!("RLLM --jsonl\nRLLM --mcp --root DIRECTORY\nRLLM --acp --root DIRECTORY\nRLLM --a2a --root DIRECTORY --token-file PRIVATE_FILE [--port PORT]\nJSON-lines uses the shared C-ABI operation envelope. MCP, ACP and A2A expose local read-only inspect/compare. EOF ends stdio; SIGINT/SIGTERM stops A2A.");
         return Ok(());
     }
     let mut server = match args.as_slice() {
         [] => None,
         [mode] if mode == "--jsonl" => None,
         [mode, flag, root] if mode == "--mcp" && flag == "--root" => Some(Server::new(root)?),
-        _ => return Err("Usage: RLLM --jsonl | RLLM --mcp --root DIRECTORY".into()),
+        _ => return Err("Usage: RLLM --jsonl | RLLM --mcp --root DIRECTORY | RLLM --acp --root DIRECTORY".into()),
     };
     let mut reader = std::io::BufReader::new(std::io::stdin().lock());
     let mut writer = std::io::BufWriter::new(std::io::stdout().lock());

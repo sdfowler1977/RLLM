@@ -38,7 +38,15 @@ fn binding(v:&mut Json,old:&str,prior:&Json,current:&Json){
   if m.get("harness")==Some(prior){m.insert("harness".into(),current.clone());}
  }
 }
+fn hosted_mode(v:&mut Json){
+ if let Obj(fields)=v{if fields.get("hosted_search")==Some(&s("minimax_messages_v1")){fields.insert("hosted_search".into(),s("messages_search_v1"));}}
+}
 pub(super) fn apply(st:&mut Json){
+ if let Obj(fields)=st{
+  if let Some(Arr(profiles))=fields.get_mut("profiles"){for profile in profiles{hosted_mode(profile);}}
+  if let Some(edit)=fields.get_mut("edit"){hosted_mode(edit);}
+  if let Some(Obj(pending))=fields.get_mut("hosted_request"){if let Some(profile)=pending.get_mut("profile"){hosted_mode(profile);}}
+ }
  let old=previous();let prefix=format!("{old}_");
  if !needed(st,&old,&prefix,0){return;}
  // Derive old provenance from the actual imported policy. Only a matching
