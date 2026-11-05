@@ -1,5 +1,5 @@
 {
-  "passed": 126,
+  "passed": 147,
   "checks": [
     "chat consent review discloses destinations without capturing",
     "chat enabling voice alone never opens microphone",
@@ -126,7 +126,28 @@
     "microphone failure pauses only the voice session",
     "text remains usable after microphone failure",
     "opening connection settings retires microphone ownership",
-    "uncertain recognition failure pauses without replay or microphone restart"
+    "uncertain recognition failure pauses without replay or microphone restart",
+    "explicit listening during speech starts one new microphone owner",
+    "old speech completion cannot replace an explicitly resumed microphone",
+    "old speech interruption cannot pause an explicitly resumed microphone",
+    "playback_pending unowned interruption is an exact state no-op",
+    "playback_pending owned Speak now starts exactly one microphone",
+    "playback_pending repeated Speak now cannot create another listener",
+    "playback_pending interrupted speech completion cannot change the new listener",
+    "playback_pending interrupted conversation accepts actual new speech",
+    "playback_pending interrupted conversation can synthesize its next reply",
+    "speaking unowned interruption is an exact state no-op",
+    "speaking owned Speak now starts exactly one microphone",
+    "speaking repeated Speak now cannot create another listener",
+    "speaking interrupted speech completion cannot change the new listener",
+    "speaking interrupted conversation accepts actual new speech",
+    "speaking interrupted conversation can synthesize its next reply",
+    "Stop playback settles pending speech even before native player creation",
+    "stopped pending player cannot announce late playback",
+    "explicit microphone resume remains available after stopping pending playback",
+    "Speak now preserves an unsent draft and pauses without capturing",
+    "Stop playback during model work preserves the primary request owner",
+    "Stop playback during model work preserves configured speech output"
   ],
   "scope": "Owner HTTP/audio fixture orchestration through all four model formats. Capture callback is controlled; physical microphone and installed playback not exercised."
 }

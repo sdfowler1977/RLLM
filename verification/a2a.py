@@ -103,6 +103,29 @@ with tempfile.TemporaryDirectory(prefix='a2a-',dir=PROJECT/'output') as temp:
   check('actual HTTP card advertised local URL',request_http(None,path='/.well-known/agent-card.json',method='GET')[1]['supportedInterfaces'][0]['url']==f'http://127.0.0.1:{port}/a2a')
   large=root.with_name('held')/'large.bin'
   with large.open('wb') as f:f.truncate(128*1024*1024)
+  # Actual independent file work must overlap under the discovered host default.
+  # Query the shared controller policy rather than assuming host CPU inventory.
+  probe=subprocess.Popen([BIN,'--jsonl'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+  probe.stdin.write(json.dumps(dict(op='event',root=str(root.with_name('held')),state=None,action='resume',inputs={}))+'\n');probe.stdin.flush();policy=json.loads(probe.stdout.readline())['value']['state']['policy'];probe.stdin.close();probe.wait(timeout=10)
+  count=policy['workers'];check('absent device metadata discovers bounded host workers',1<=count<=4)
+  jobs=[]
+  for n in range(count):
+   item=request_http(command(mid='parallel-'+str(n),args={'path':'large.bin','content':'complete_digest'},config={'returnImmediately':True}))[1];assert 'result'in item,item;jobs.append(item['result']['task'])
+  states=[request_http({'jsonrpc':'2.0','id':300+n,'method':'GetTask','params':{'id':job['id']}})[1]['result']for n,job in enumerate(jobs)]
+  check('discovered default admits independent actual scans concurrently',all(job['status']['state']in ['TASK_STATE_SUBMITTED','TASK_STATE_WORKING']for job in states)and len({job['id']for job in states})==count)
+  overload=request_http(command(mid='parallel-overload',args={'path':'large.bin','content':'complete_digest'},config={'returnImmediately':True}))[1];check('global task capacity refuses only the excess request','error'in overload and overload['error']['code']==-32000)
+  cancel=request_http({'jsonrpc':'2.0','id':310,'method':'CancelTask','params':{'id':jobs[0]['id']}})[1]['result'];check('one concurrent scan can be cancelled independently',cancel['status']['state']=='TASK_STATE_CANCELED'and not cancel['artifacts'])
+  deadline=time.monotonic()+35;finished=[]
+  while len(finished)<len(jobs)-1:
+   finished=[request_http({'jsonrpc':'2.0','id':320+n,'method':'GetTask','params':{'id':job['id']}})[1]['result']for n,job in enumerate(jobs[1:])]
+   assert all(x['status']['state']not in ['TASK_STATE_FAILED','TASK_STATE_CANCELED']for x in finished),finished
+   if all(x['status']['state']=='TASK_STATE_COMPLETED'for x in finished):break
+   assert time.monotonic()<deadline;finished=[];time.sleep(.05)
+  check('other concurrent scans complete after scoped cancellation',len(finished)==count-1 and all(x['status']['state']=='TASK_STATE_COMPLETED'for x in finished))
+  source_digest=hashlib.sha256()
+  with large.open('rb')as stream:
+   while chunk:=stream.read(1024*1024):source_digest.update(chunk)
+  expected=source_digest.hexdigest();check('concurrent task results retain exact source and output identity',all(expected in x['artifacts'][0]['parts'][0]['data']['output']and x['artifacts'][0]['parts'][0]['data']['returnedSha256']==hashlib.sha256(x['artifacts'][0]['parts'][0]['data']['output'].encode()).hexdigest()for x in finished))
   running=request_http(command(mid='cancel-running',args={'path':'large.bin','content':'complete_digest'},config={'returnImmediately':True}))[1]['result']['task']
   check('nonblocking task returns before large scan completes',running['status']['state'] in ['TASK_STATE_SUBMITTED','TASK_STATE_WORKING'])
   cancelled=request_http({'jsonrpc':'2.0','id':200,'method':'CancelTask','params':{'id':running['id']}})[1]['result']
@@ -139,6 +162,6 @@ with tempfile.TemporaryDirectory(prefix='a2a-',dir=PROJECT/'output') as temp:
  check('SIGTERM stops local listener cleanly',server.returncode==0)
  secret.chmod(0o644);failed=subprocess.run([BIN,'--a2a','--root',str(root),'--token-file',str(secret),'--port','0'],capture_output=True,text=True,timeout=10)
  check('publicly readable token file refused',failed.returncode!=0 and 'private regular file' in failed.stderr)
-print(json.dumps({'passed':len(passed),'checks':passed,'scope':'Owner connected checks: actual host sockets, controller operations, bounded task lifecycle and file observations.'},indent=2))
+print(json.dumps({'passed':len(passed),'checks':passed,'observed_host_workers':count,'scope':'Owner connected checks: actual host sockets, controller operations, bounded task lifecycle and file observations.'},indent=2))
 (PROJECT/'output/checks').mkdir(exist_ok=True)
-(PROJECT/'output/checks/a2a.json').write_text(json.dumps({'passed':passed},indent=2)+'\n')
+(PROJECT/'output/checks/a2a.json').write_text(json.dumps({'passed':passed,'observed_host_workers':count},indent=2)+'\n')

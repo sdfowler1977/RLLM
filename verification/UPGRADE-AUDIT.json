@@ -1,6 +1,6 @@
 {
   "foreground_voice": {
-    "passed": 126,
+    "passed": 147,
     "scope": "Actual local HTTP/WAVE with controlled PCM, model and playback callbacks across all four primary formats; device and user endpoint acceptance pending.",
     "implemented": [
       "foreground half-duplex automatic turns",
@@ -8,7 +8,9 @@
       "expiring consent and capture/playback ownership",
       "lifecycle and changed settings retirement",
       "failure pause and explicit resume",
-      "separate generic recognition and synthesis defaults"
+      "separate generic recognition and synthesis defaults",
+      "explicit owned Speak now interruption",
+      "pending playback stop and stale callback isolation"
     ],
     "not_implemented": [
       "background listening",
@@ -358,11 +360,17 @@
     ],
     "scope": "Owner checks through actual ACP standard streams and shared production workspace engine; no model, external server, developer report or journal in the selected workspace. Read-only ACP v1 capability scope, not full coding-agent or Android ACP client acceptance."
   },
-  "current_selected_rust_cases": 198,
+  "current_selected_rust_cases": 199,
   "current_connected_groups": {
     "passed": 36,
     "total": 37,
-    "executed_checks": 1649,
+    "executed_checks": 1676,
     "unavailable_historical_checks": 3
+  },
+  "resource_concurrency": {
+    "observed_usable_cpus": 9,
+    "observed_host_workers": 4,
+    "checks": 72,
+    "scope": "Actual independent128MiB complete-file scans, excess-task refusal, scoped cancellation and exact source/output digests; CPU fallback with missing platform metadata."
   }
 }
