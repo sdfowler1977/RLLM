@@ -146,7 +146,7 @@ fn realm(config:&Json)->Result<Arc<Realm>>{
  all.retain(|_,entry|{if entry.realm.closed.load(Ordering::SeqCst){return entry.touched.elapsed()<Duration::from_secs(300);}if entry.touched.elapsed()<Duration::from_secs(1800){return true;}entry.realm.store.lock().map(|s|s.tasks.values().any(|t|t.data.lock().map(|d|!d.state.terminal()).unwrap_or(true))).unwrap_or(true)});
  if let Some(e)=all.get_mut(&key){e.touched=Instant::now();check_root(&e.realm)?;return Ok(e.realm.clone());}
  if all.values().filter(|e|!e.realm.closed.load(Ordering::SeqCst)).count()>=REALMS||all.len()>=64{return Err("Local workspace service capacity reached; stop an old interface first".into());}
- let budget=integer(config,"limit",1024*1024,4*1024*1024)?.min(1024*1024);let workers=integer(config,"workers",1,64)?.clamp(1,4);
+ let budget=integer(config,"limit",1024*1024,4*1024*1024)?.min(1024*1024);let workers=integer(config,"workers",resources::workers(&Null),64)?.clamp(1,4);
  let realm=Arc::new(Realm{root,identity,budget,workers,closed:AtomicBool::new(false),store:Mutex::new(Store{tasks:BTreeMap::new(),cursors:vec![]})});check_root(&realm)?;
  all.insert(key,RealmEntry{realm:realm.clone(),touched:Instant::now()});Ok(realm)
 }

@@ -5,6 +5,13 @@ fn integer(j: &Json, k: &str) -> u64 {
         _ => 0,
     }
 }
+/// Current platform measurement takes precedence; absent metadata discovers the
+/// usable host topology rather than silently selecting a single CPU.
+pub(crate) fn workers(device:&Json)->usize{
+    let measured=integer(device,"cores");
+    let cores=if measured>0{measured}else{std::thread::available_parallelism().map(|n|n.get()as u64).unwrap_or(1)};
+    cores.clamp(1,4)as usize
+}
 pub fn policy(device: &Json, config: &Json, state_bytes: usize) -> Json {
     let measured_heap = integer(device, "heap_bytes");
     let measured_system = integer(device, "memory_bytes");
@@ -46,7 +53,7 @@ pub fn policy(device: &Json, config: &Json, state_bytes: usize) -> Json {
         ("percent", Num(percent.to_string())),
         ("budget_bytes", Num(budget.to_string())),
         ("response_bytes", Num(response.to_string())),
-        ("workers", Num(cores.clamp(1, 4).to_string())),
+        ("workers", Num(workers(device).to_string())),
         (
             "measured",
             Bool(measured_heap > 0 && measured_system > 0 && cores > 0),
@@ -73,6 +80,16 @@ mod checks {
         let p = policy(&Null, &Null, 0);
         assert!(integer(&p, "response_bytes") > 0);
         assert_eq!(p.get("measured"), Ok(&Bool(false)));
+    }
+    #[test]
+    fn missing_cpu_metadata_uses_host_capacity_and_retains_captured_limits() {
+        let host=std::thread::available_parallelism().map(|n|n.get()).unwrap_or(1).clamp(1,4);
+        let discovered=policy(&Null,&Null,0);
+        assert_eq!(integer(&discovered,"workers")as usize,host);
+        assert_eq!(discovered.get("measured"),Ok(&Bool(false)));
+        let captured=policy(&obj(vec![("cores",Num("1".into()))]),&Null,0);
+        assert_eq!(integer(&captured,"workers"),1);
+        assert_eq!(integer(&discovered,"budget_bytes"),integer(&captured,"budget_bytes"));
     }
     #[test]
     fn envelope_limit() {
