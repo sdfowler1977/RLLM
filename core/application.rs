@@ -593,6 +593,7 @@ fn capture(st: &mut Json, inputs: &Json) {
     if [
         "service_connections",
         "service_request",
+        "voice_review",
         "profile",
         "workspace_new",
         "workspace_permissions",
