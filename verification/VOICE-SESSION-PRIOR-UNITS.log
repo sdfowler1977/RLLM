@@ -1,0 +1,583 @@
+
+running 468 tests
+test a2a::tests::blocking_wait_admission_preserves_a_control_worker ... ok
+test a2a::tests::stopped_realm_does_not_publish_or_restart_work ... ok
+test a2a::tests::task_representation_preserves_wire_version_and_history_limit ... ok
+test a2a::tests::timestamps_round_trip_and_reject_invalid_dates ... ok
+test a2a::tests::version_negotiation_ignores_patch_only ... ok
+test application::binary_declarations::tests::omission_and_cancellation_remain_explicit_and_local ... ok
+test application::binary_declarations::tests::optional_metadata_and_its_note_cannot_displace_a_fitting_export ... ok
+test application::binary_declarations::tests::overflow_does_not_wrap_into_a_valid_mapping ... ok
+test application::binary_declarations::tests::prefix_coverage_does_not_become_complete_mapping_coverage ... ok
+test application::binary_declarations::tests::relocation_addends_and_unknown_implementations_are_not_invented ... ok
+test application::binary_evidence::path_checks::cancelled_path_projection_is_withheld ... ok
+test application::binary_evidence::path_checks::optional_path_projection_cannot_evict_existing_evidence ... ok
+test application::binary_evidence::path_checks::projected_path_is_covered_by_its_exact_representation ... ok
+test application::binary_flow::tests::authenticated_reserved_encodings_and_older_revisions_stay_unclassified ... ok
+test application::binary_flow::tests::conditional_rows_keep_operands_and_do_not_invent_unknown_fallthrough ... ok
+test application::binary_flow::tests::decoder_versions_preserve_conditional_history ... ok
+test application::binary_flow::tests::duplicate_coordinates_and_constant_zero_registers_remain_explicit ... ok
+test application::binary_flow::tests::forward_backward_indirect_and_link_addresses_are_distinct ... ok
+test application::binary_flow::tests::missing_targets_and_width_overflow_are_not_resolved ... ok
+test application::binary_flow::tests::row_bounds_and_cancellation_preserve_explicit_omissions ... ok
+test application::binary_observation::checks::header_input_and_output_work_bounds ... ok
+test application::binary_observation::checks::wasm_leb_and_custom_bounds_are_checked ... ok
+test application::binary_observation::checks::wasm_sample_total_and_version_limits_are_honest ... ok
+test application::binary_observation::checks::wasm_sections_custom_name_and_unknown_are_inventory ... ok
+test application::binary_observation::checks::wave_fields_and_prefix_have_distinct_scope ... ok
+test application::binary_observation::checks::wave_malformed_and_other_forms_are_not_inferred ... ok
+test application::capture_job::resource_checks::resources_cancel_stale_and_default_inline ... ok
+test application::capture_job::resource_checks::resources_produce_actual_css_ordered_png_pixels ... ok
+test application::capture_job::resource_plan::checks::exact_occurrences_spans_and_style_order ... ok
+test application::capture_job::resource_plan::checks::final_retrieval_and_first_base ... ok
+test application::capture_job::resource_plan::checks::hard_counts_and_incomplete_input ... ok
+test application::capture_job::resource_plan::checks::inline_png_is_not_a_network_fetch_and_shares_bound ... ok
+test application::capture_job::resource_plan::checks::relative_queries_network_path_and_fragments ... ok
+test application::capture_job::resource_plan::checks::unsupported_and_disabled_are_explicit ... ok
+test application::capture_job::resource_session::checks::base_order_and_credential_free_targets ... ok
+test application::capture_job::resource_session::checks::input_memory_limits_and_one_response_consumption ... ok
+test application::capture_job::resource_session::checks::redirect_origin_loop_and_typed_refusal ... ok
+test application::capture_job::resource_session::checks::representation_framing_charset_and_trailers ... ok
+test application::capture_job::resource_url::checks::bounds_and_canonical_ipv6 ... ok
+test application::capture_job::resource_url::checks::credentials_unsupported_and_invalid_syntax_refuse ... ok
+test application::capture_job::resource_url::checks::generated_inputs_never_panic_and_successes_roundtrip ... ok
+test application::capture_job::resource_url::checks::origins_hosts_ports_and_private_routes ... ok
+test application::capture_job::resource_url::checks::percent_dot_does_not_decode_slashes_or_query ... ok
+test application::capture_job::resource_url::checks::rfc_relative_reference_examples ... ok
+test application::capture_job::resource_url::checks::utf8_encoding_empty_suffixes_and_roundtrip ... ok
+test application::checks::add_llm_and_reopen_existing_conversation ... ok
+test application::checks::appearance_is_saved_without_changing_conversations ... ok
+test application::checks::archive_ui_completion_and_import_approval_are_wired ... ok
+test application::checks::branch_preserves_source_and_truncates_at_selected_message ... ok
+test application::checks::cancelled_archive_callback_does_not_finish_new_model_work ... ok
+test application::checks::configuration_export_omits_credentials_and_keeps_conversation_export ... ok
+test application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity ... FAILED
+test application::checks::conversation_roundtrip ... ok
+test application::checks::conversation_webdav_save_is_pending_until_exact_readback ... FAILED
+test application::checks::default_project_network_does_not_fall_back_to_phone ... ok
+test application::checks::disconnected_provider_preserves_tools ... FAILED
+test application::checks::drive_tools_reject_ambiguous_or_escaping_paths ... ok
+test application::checks::export_cancellation_and_discard_suppress_late_picker_replay ... ok
+test application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit ... FAILED
+test application::checks::fallback_only_before_sending_to_compatible_server ... ok
+test application::checks::full_profile_list_preserves_inputs_and_exposes_inline_recovery ... ok
+test application::checks::home_server_configuration_and_probe_are_separate_from_phone_gateway ... ok
+test application::checks::interrupted_phone_creation_warns_without_replay ... FAILED
+test application::checks::late_analysis_callbacks_cannot_change_another_request_or_form ... ok
+test application::checks::legacy_compose_recovery_preserves_draft_in_inline_chat ... ok
+test application::checks::live_rate_opens_analytics_without_losing_stream_or_draft ... ok
+test application::checks::measured_token_rate_uses_phone_clock_and_marks_missing_counts ... ok
+test application::checks::metrics_callbacks_preserve_visible_edits_without_saving_transport_payloads ... ok
+test application::checks::mid_chat_model_choice_preserves_history_draft_and_routes ... ok
+test application::checks::network_conversation_requires_review ... FAILED
+test application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path ... FAILED
+test application::checks::network_project_zip_routes_to_review_without_text_decoding ... ok
+test application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files ... FAILED
+test application::checks::parallel_search_preserves_results_and_excludes_symlinks ... ok
+test application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel ... FAILED
+test application::checks::phone_approval_without_grant_has_no_effect ... ok
+test application::checks::phone_back_returns_to_chat_without_cancelling_work_or_losing_draft ... ok
+test application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped ... FAILED
+test application::checks::project_default_phone_pins_destination_and_verifies_binary ... ok
+test application::checks::project_drive_backup_routes_binary_without_changing_history ... ok
+test application::checks::rate_history_is_scoped_and_ignores_provider_usage ... ok
+test application::checks::regeneration_branches_without_replacing_prior_answer ... ok
+test application::checks::reopened_branch_and_inherited_routes_use_chat_model ... ok
+test application::checks::reply_speaker_uses_request_model_without_relabeling_old_history ... ok
+test application::checks::retry_verifies_first_and_creates_only_after_framed_not_found ... FAILED
+test application::checks::reviewed_conversation_import_preserves_history ... ok
+test application::checks::reviewed_drive_create_is_conditional_and_failure_stops ... ok
+test application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status ... FAILED
+test application::checks::reviewed_network_update_preserves_revision_before_conditional_write ... FAILED
+test application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name ... FAILED
+test application::checks::reviewed_phone_update_verifies_each_stage_and_preserves_history ... ok
+test application::checks::reviewed_write_preserves_original ... ok
+test application::checks::saved_export_recovery_is_explicit_scoped_and_immutable ... ok
+test application::checks::scoped_drive_listing ... ok
+test application::checks::settings_menus_are_short_separate_and_preserve_the_thread ... ok
+test application::checks::stream_opt_out_preserves_nonstreaming_server_compatibility ... ok
+test application::checks::streamed_partial_is_provisional_and_interruption_preserves_it_without_tools ... ok
+test application::checks::tls_guidance_preserves_explicit_endpoint ... ok
+test application::checks::traversal_rejected ... ok
+test application::checks::viewport_and_capture_preserve_drafts_forms_and_active_work ... ok
+test application::claim_records::claims::tests::malformed_saved_revision_order_and_scope_refuse ... ok
+test application::claim_records::claims::tests::prefixes_never_establish_whole_file_equality ... ok
+test application::claim_records::claims::tests::refusal_is_transactional_and_no_authority_is_inferred ... ok
+test application::claim_records::claims::tests::revisions_keep_origin_and_prior_text ... ok
+test application::claim_records::claims::tests::unknown_and_changed_are_unresolved_not_contradictions ... ok
+test application::comparison::checks::positional_comparison_distinguishes_full_and_prefix ... ok
+test application::connection_migration::tests::existing_current_connection_is_not_overwritten ... ok
+test application::connection_migration::tests::import_preserves_settings_tools_and_user_text_without_active_aliases ... ok
+test application::connection_migration::tests::old_owners_cannot_resume_and_unrelated_work_is_preserved ... ok
+test application::connection_migration::tests::optional_preferences_are_imported_without_turning_off_the_core_method ... ok
+test application::connection_migration::tests::rule_meaning_and_revoked_provenance_do_not_change ... ok
+test application::css_cascade::checks::cascade_specificity_inline_important_and_inheritance ... ok
+test application::css_cascade::checks::incomplete_source_never_applies_provisional_author_style ... ok
+test application::css_cascade::checks::unsupported_and_invalid_values_do_not_override_valid ... ok
+test application::css_selectors::checks::attributes_case_empty_and_partial_tree ... ok
+test application::css_selectors::checks::compounds_combinators_and_specificity ... ok
+test application::css_selectors::checks::operator_spacing_and_shared_work_bound ... ok
+test application::css_selectors::checks::unsupported_is_error_not_broadened ... ok
+test application::css_stylesheet::checks::errors_are_preserved_and_recover_at_semicolon ... ok
+test application::css_stylesheet::checks::generated_components_have_bounded_valid_spans ... ok
+test application::css_stylesheet::checks::inline_exact_spans_and_prefix_no_commit ... ok
+test application::css_stylesheet::checks::nested_rule_recovery_and_top_level_bang ... ok
+test application::css_stylesheet::checks::rules_declarations_nested_components_and_importance ... ok
+test application::css_stylesheet::checks::stylesheet_semicolon_remains_in_qualified_prelude ... ok
+test application::css_syntax::checks::bounds_and_original_unicode_spans ... ok
+test application::css_syntax::checks::generated_token_sequences_and_underflow ... ok
+test application::css_syntax::checks::identifiers_escapes_functions_and_hash_flags ... ok
+test application::css_syntax::checks::numeric_values_flags_units_and_overflow ... ok
+test application::css_syntax::checks::partial_input_requires_rescanning_every_token ... ok
+test application::css_syntax::checks::punctuation_comments_and_complete_vs_prefix ... ok
+test application::css_syntax::checks::quoted_and_unquoted_urls_are_not_confused ... ok
+test application::css_syntax::checks::strings_bad_strings_preprocessing_and_comments ... ok
+test application::elf_observation::checks::compressed_conflicting_and_class_width_metadata ... ok
+test application::elf_observation::checks::elf32_big_endian_load_fields ... ok
+test application::elf_observation::checks::elf64_headers_mapping_names_and_candidates ... ok
+test application::elf_observation::checks::extended_counts_and_sectionless_dynamic ... ok
+test application::elf_observation::checks::input_output_and_unknown_bounds ... ok
+test application::elf_observation::checks::sampled_and_malformed_extents_never_infer_names ... ok
+test application::elf_observation::checks::string_symbol_and_dynamic_bounds_refuse_candidates ... ok
+test application::exploration::checks::delimited_quotes_multiline_and_partial_tail ... ok
+test application::exploration::checks::json_structure_omits_scalar_contents_and_escapes_paths ... ok
+test application::exploration::checks::malformed_depth_and_sample_are_not_complete_claims ... ok
+test application::exploration::checks::resource_bounds_are_visible ... ok
+test application::exploration::checks::unicode_crlf_empty_and_heading_counts ... ok
+test application::file_evidence::checks::complete_graph_declared_length_and_shape_are_checked ... ok
+test application::file_evidence::checks::deadline_precedes_reads_and_is_not_reset ... ok
+test application::font_outline::checks::composite_offsets_point_alignment_and_metric_selection ... ok
+test application::font_outline::checks::malformed_ranges_and_short_inputs_refuse ... ok
+test application::font_outline::checks::packed_flags_curves_and_instruction_skipping ... ok
+test application::font_outline::checks::phantom_origin_and_composite_metrics ... ok
+test application::font_outline::checks::short_locations_and_relative_cmap_arrays ... ok
+test application::font_outline::checks::simple_mapping_metrics_and_blank_glyphs ... ok
+test application::font_outline::checks::transformed_composite_and_explicit_unsupported ... ok
+test application::harness::checks::adoption_is_single_use_and_requires_completed_review ... ok
+test application::harness::checks::agent_discovery_returns_catalog_to_model_after_review ... ok
+test application::harness::checks::capacity_failure_retains_candidate_and_profiles ... ok
+test application::harness::checks::direct_editor_manual_models_and_independent_routes ... ok
+test application::harness::checks::empty_instruction_response_does_not_make_unusable_saved_candidate ... ok
+test application::harness::checks::fallback_keeps_failed_attempt ... ok
+test application::harness::checks::image_task_snapshot_and_compaction_keep_typed_evidence ... ok
+test application::harness::checks::investigation_guidance_is_shared_configurable_and_permission_bounded ... ok
+test application::harness::checks::legacy_review_migrates_before_retry ... ok
+test application::harness::checks::lesson_context_is_frozen_bounded_and_phase_scoped ... ok
+test application::harness::checks::lesson_optout_and_legacy_are_nonblocking ... ok
+test application::harness::checks::pending_candidate_cannot_be_overwritten_and_discard_is_reviewed ... ok
+test application::harness::checks::probe_replaces_editable_prompt_and_preserves_tools ... ok
+test application::harness::checks::saved_candidate_adoption_preserves_paused_task_and_original_agent ... ok
+test application::harness::checks::saved_candidate_survives_chat_retry_cancel_resume_and_failure ... ok
+test application::harness::checks::task_cancel_is_terminal_and_records_attempt ... ok
+test application::harness::checks::task_tool_review_resumes_assigned_model_with_evidence ... ok
+test application::harness::checks::web_credentials_never_follow_model_connection ... ok
+test application::harness::command_process_tests::catalogs_follow_existing_operation_and_depth_allowances ... ok
+test application::harness::command_process_tests::child_guidance_requires_current_delegate_permission ... ok
+test application::harness::command_process_tests::normal_and_recursive_phases_share_the_intrinsic_command_method ... ok
+test application::harness::command_process_tests::refinement_catalog_uses_the_executor_phase_restrictions ... ok
+test application::harness::negotiation_checks::mcp_catalog_and_result_capacity_preflight_preserves_exact_state ... ok
+test application::harness::negotiation_checks::mcp_failure_notice_fits_serialized_room_without_draft_loss ... ok
+test application::harness::negotiation_checks::mcp_initialization_preflight_is_transactional ... ok
+test application::harness::negotiation_checks::mcp_negotiation_accepts_only_implemented_counteroffers ... ok
+test application::harness::negotiation_checks::mcp_purpose_identity_and_dispatch_are_current_operation_only ... ok
+test application::harness::negotiation_checks::mcp_tools_and_session_fields_are_typed_and_bounded ... ok
+test application::harness::negotiation_checks::outgoing_identity_is_captured_per_page_and_notification_has_none ... ok
+test application::harness::negotiation_checks::refused_initialization_cleanup_uses_only_final_header_and_pinned_connection ... ok
+test application::harness::source_checks::mcp_client_display_source_is_bounded_utf8_without_changing_identity ... ok
+test application::harness_rules::hierarchy_tests::digest_vectors ... ok
+test application::harness_rules::hierarchy_tests::target_boundaries ... ok
+test application::harness_rules::intent_tests::actual_native_storage_and_revision_intents ... ok
+test application::history_view::checks::empty_history_and_bounded_unicode_preview ... ok
+test application::history_view::checks::rows_bind_exact_ids_and_preserve_stored_text ... ok
+test application::html_document::checks::all_prefixes_are_bounded_and_source_spans_remain_valid ... ok
+test application::html_document::checks::comments_quotes_duplicates_and_self_closing ... ok
+test application::html_document::checks::generated_token_inputs_remain_bounded_and_relationships_match ... ok
+test application::html_document::checks::incomplete_tokens_and_prefix_are_explicit ... ok
+test application::html_document::checks::raw_text_and_rcdata_do_not_create_fake_elements ... ok
+test application::html_document::checks::resource_and_depth_bounds ... ok
+test application::html_document::checks::structured_tree_attributes_and_resources ... ok
+test application::html_document::checks::unicode_entities_and_invalid_input ... ok
+test application::incremental_digest::checks::empty_abc_and_boundaries ... ok
+test application::incremental_digest::checks::encoded_length_refuses_overflow ... ok
+test application::instruction::tests::arithmetic_known_bits_cover_concrete_operands_and_flags ... ok
+test application::instruction::tests::authenticated_targets_require_runtime_context ... ok
+test application::instruction::tests::bitfield_known_bits_cover_each_encoded_mask ... ok
+test application::instruction::tests::call_unknown_and_exception_never_transfer_state ... ok
+test application::instruction::tests::captured_entry_annotations_keep_priority_under_shared_budget ... ok
+test application::instruction::tests::captured_entry_common_facts_feed_successor_instructions ... ok
+test application::instruction::tests::captured_entry_join_preserves_bits_coordinates_and_unknowns ... ok
+test application::instruction::tests::carry_registers_flags_and_coordinate_types_are_preserved ... ok
+test application::instruction::tests::carry_results_and_flags_match_integer_oracle ... ok
+test application::instruction::tests::conditional_path_cancellation_is_cooperative ... ok
+test application::instruction::tests::conditional_selection_retains_only_common_value_bits ... ok
+test application::instruction::tests::extraction_retains_each_selected_known_bit ... ok
+test application::instruction::tests::field_transfers_preserve_identity_types_width_and_flags ... ok
+test application::instruction::tests::flag_joins_keep_only_independently_agreeing_facts ... ok
+test application::instruction::tests::identical_register_operands_retain_algebraic_identities ... ok
+test application::instruction::tests::locally_known_condition_selects_only_its_successor ... ok
+test application::instruction::tests::logical_coordinates_and_partial_flags_preserve_meaning ... ok
+test application::instruction::tests::logical_known_bits_cover_concrete_operands ... ok
+test application::instruction::tests::no_iterative_loop_or_unavailable_target_is_invented ... ok
+test application::instruction::tests::partial_carry_results_cover_concrete_operands ... ok
+test application::instruction::tests::partial_flag_conditions_match_every_concrete_completion ... ok
+test application::instruction::tests::partial_flags_drive_transfers_without_guessing_unknown_conditions ... ok
+test application::instruction::tests::path_work_and_annotation_storage_are_bounded ... ok
+test application::instruction::tests::predecessor_alternatives_preserve_unknown_entry ... ok
+test application::instruction::tests::product_accumulation_retains_partial_addend_facts ... ok
+test application::instruction::tests::product_bits_cover_concrete_wrapping_operands ... ok
+test application::instruction::tests::product_identities_preserve_types_registers_and_flags ... ok
+test application::instruction::tests::shifted_known_bits_cover_concrete_operands ... ok
+test application::instruction::tests::source_coordinates_remain_distinct_from_integer_values ... ok
+test application::investigation::cancellation_scope_checks::old_owner_refuses_file_folder_and_comparison_after_reset ... ok
+test application::investigation::checks::free_search_default_needs_no_url_or_credentials ... ok
+test application::investigation::checks::remote_arguments_have_distinct_validation ... ok
+test application::investigation::checks::static_page_excludes_active_content ... ok
+test application::investigation::checks::static_page_inert_nested_and_attribute_identity ... ok
+test application::investigation::checks::static_page_resource_and_partial_report_bounds ... ok
+test application::investigation::checks::static_page_skips_long_attributes_and_preserves_readable_tail ... ok
+test application::investigation::checks::verification_pages_do_not_become_search_evidence ... ok
+test application::investigation::dex::checks::dex_bad_indices_counts_map_and_names_refuse ... ok
+test application::investigation::dex::checks::dex_experimental_container_and_descriptor_context ... ok
+test application::investigation::dex::checks::dex_identifiers_and_definitions_are_distinct ... ok
+test application::investigation::dex::checks::dex_mutf8_preserves_zero_and_surrogates ... ok
+test application::investigation::dex::checks::dex_prefix_and_work_bounds_never_claim_full_scan ... ok
+test application::investigation::directory_observation::checks::actual_tree_raw_names_samples_and_stable_queries ... ok
+test application::investigation::directory_observation::checks::ancestor_rebinding_never_reads_replacement_subtree ... ok
+test application::investigation::directory_observation::checks::approved_root_identity_is_checked_before_any_policy_or_listing ... ok
+test application::investigation::directory_observation::checks::ask_and_deny_do_not_become_access ... ok
+test application::investigation::directory_observation::checks::bounded_prefix_and_entry_depth_budgets_are_honest ... ok
+test application::investigation::directory_observation::checks::cancellation_and_deadline_remain_scoped ... ok
+test application::investigation::directory_observation::checks::current_policy_is_checked_again_after_read ... ok
+test application::investigation::directory_observation::checks::discarded_reads_still_consume_the_total_byte_budget ... ok
+test application::investigation::directory_observation::checks::pending_name_allocations_share_the_retained_memory_limit ... ok
+test application::investigation::directory_observation::checks::replacement_during_policy_callback_invalidates_sample ... ok
+test application::investigation::directory_observation::checks::selected_directory_does_not_scan_siblings ... ok
+test application::investigation::directory_observation::checks::symbolic_links_are_not_followed ... ok
+test application::investigation::model_artifact::checks::gguf_bounds_and_incomplete_are_scoped ... ok
+test application::investigation::model_artifact::checks::gguf_two_orders_scalar_quantized_and_versions ... ok
+test application::investigation::model_artifact::checks::tensors_header_shape_ranges_and_scalar_empty ... ok
+test application::investigation::model_artifact::checks::tensors_malformed_duplicate_overflow_holes ... ok
+test application::investigation::model_artifact::checks::tensors_prefix_can_certify_header_not_values ... ok
+test application::model_metadata::checks::local_metadata_derivation_pins_query_auth_and_model ... ok
+test application::model_metadata::checks::local_metadata_observation_never_changes_generation ... ok
+test application::model_metadata::checks::local_metadata_whitelist_and_thinking_types ... ok
+test application::model_metadata::checks::local_server_version_is_separate_information_and_bound_to_purpose ... ok
+test application::model_metadata::checks::metadata_bounds_and_unknowns_do_not_infer_support ... ok
+test application::model_metadata::checks::metadata_identity_url_and_draft_are_separate ... ok
+test application::model_metadata::checks::metadata_start_capacity_refuses_transactionally ... ok
+test application::monitor::checks::exact_range_filter_persistence_missing_samples_and_scoped_errors ... ok
+test application::monitor::checks::missing_observations_are_gaps_not_zeroes ... ok
+test application::monitor::checks::request_window_is_bounded_and_cancellation_is_not_an_error ... ok
+test application::monitor::checks::selected_means_and_weighted_rate_use_measured_successful_runs ... ok
+test application::observation_graph::graph_tests::escaped_envelope_budget_preserves_raw_result ... ok
+test application::observation_graph::graph_tests::missing_graph_keeps_display ... ok
+test application::operation::drive_checks::drive_callback_requires_the_exact_single_use_owner ... ok
+test application::operation::drive_checks::full_network_ownership_does_not_block_local_work ... ok
+test application::operation::drive_checks::network_owner_preserves_current_source_and_revocation ... ok
+test application::operation::drive_checks::unrelated_network_operations_keep_their_own_protocol_owners ... ok
+test application::page_layout::checks::block_box_model_and_background_precede_text ... ok
+test application::page_layout::checks::deterministic_geometry_remains_finite_bounded_and_node_scoped ... ok
+test application::page_layout::checks::font_cache_and_aggregate_point_limits_refuse_instead_of_guessing ... ok
+test application::page_layout::checks::font_failures_and_hidden_zero_glyphs_never_substitute_shapes ... ok
+test application::page_layout::checks::font_ink_overhang_and_long_repeated_glyphs_are_bounded ... ok
+test application::page_layout::checks::held_font_advances_baselines_and_cache_are_actual ... ok
+test application::page_layout::checks::hidden_content_and_explicit_overflow ... ok
+test application::page_layout::checks::inline_whitespace_wrap_unicode_and_breaks ... ok
+test application::page_layout::checks::invalid_inputs_and_tree_refuse_without_partial_geometry ... ok
+test application::page_layout::checks::replaced_raw_contents_are_not_painted_and_coordinate_overflow_refuses ... ok
+test application::page_layout::checks::source_and_work_bounds_are_explicit ... ok
+test application::page_layout::checks::zero_font_and_zero_line_height_do_not_divide_or_paint ... ok
+test application::pe_observation::relocation_checks::ambiguous_virtual_tail_and_uncaptured_targets_never_invent_bytes ... ok
+test application::pe_observation::relocation_checks::captured_dir64_and_padding_are_declarations_not_loaded_values ... ok
+test application::pe_observation::relocation_checks::highadj_consumes_its_adjustment_word_not_another_type ... ok
+test application::pe_observation::relocation_checks::invalid_block_sizes_do_not_become_complete_empty_inventory ... ok
+test application::pe_observation::relocation_checks::machine_specific_and_misaligned_declarations_stay_uninterpreted ... ok
+test application::pe_observation::relocation_checks::missing_pair_and_prefix_keep_observed_record_and_unknown_remainder ... ok
+test application::pe_observation::relocation_checks::non_arm64_metadata_does_not_create_instruction_claims_and_cancellation_propagates ... ok
+test application::pe_observation::relocation_checks::slot_and_block_bounds_remain_explicit ... ok
+test application::pe_observation::relocation_checks::typed_projection_preserves_bounds_and_rejects_invented_target ... ok
+test application::png_inflate::checks::declared_window_is_enforced_across_block_boundaries ... ok
+test application::png_inflate::checks::dynamic_literal_only_empty_distance_and_repeat_errors ... ok
+test application::png_inflate::checks::fixed_overlap_reserved_symbols_and_history_refuse ... ok
+test application::png_inflate::checks::framing_checksums_and_exact_length_refuse ... ok
+test application::png_inflate::checks::shared_work_is_debited_on_success_and_failure ... ok
+test application::png_inflate::checks::stored_exact_split_every_boundary_and_empty_parts ... ok
+test application::png_inflate::checks::tree_validity_and_reserved_blocks ... ok
+test application::project_store::tests::artifact_binary_snapshot_rejects_escape_links_and_large_files ... ok
+test application::project_store::tests::artifact_pending_pins_bytes_type_and_target_without_replacing_another ... ok
+test application::project_store::tests::encrypted_pending_metadata_does_not_consume_history_capacity ... ok
+test application::project_store::tests::pending_recovery_tombstones_and_receipts_are_identity_scoped ... ok
+test application::project_store::transfer::tests::http_stream_framing_preserves_binary_and_rejects_truncation ... ok
+test application::project_store::transfer::tests::source_stream_large_binary_rewind_and_change_refusal ... ok
+test application::raster_surface::checks::aggregate_work_refuses_without_partial_glyph_pixels ... ok
+test application::raster_surface::checks::coverage_clipping_and_source_over ... ok
+test application::raster_surface::checks::nonzero_hole_and_quadratic_coverage ... ok
+test application::raster_surface::checks::png_signature_chunks_and_checksums ... ok
+test application::reasoning_text::checks::every_stream_boundary ... ok
+test application::reasoning_text::checks::leading_blocks_and_unicode ... ok
+test application::reasoning_text::checks::literal_examples_and_prose_are_not_guessed ... ok
+test application::reasoning_text::checks::no_tool_extraction_and_bounded_work ... ok
+test application::reconstruction::cancellation_scope_checks::old_reconstruction_owner_stays_cancelled_after_reset ... ok
+test application::remote_monitor::checks::credentials_and_callback_purpose_are_isolated ... ok
+test application::remote_monitor::checks::exact_source_success_retention_and_manual_history_limit ... ok
+test application::remote_monitor::checks::missing_and_invalid_measurements_are_not_zero ... ok
+test application::remote_monitor::checks::shape_and_history_inputs_are_bounded ... ok
+test application::remote_monitor::checks::unrelated_cancellation_does_not_change_sample_status ... ok
+test application::request_metrics::checks::grouping_uses_historical_model_and_endpoint_with_fixed_limits ... ok
+test application::request_metrics::checks::nearest_rank_missing_values_and_first_text_bounds ... ok
+test application::request_metrics::checks::rates_use_summed_count_and_time_excluding_errors_and_cancellations ... ok
+test application::rust_source_observation::checks::chars_lifetimes_raw_identifiers_and_unicode ... ok
+test application::rust_source_observation::checks::comments_and_strings_do_not_create_declarations ... ok
+test application::rust_source_observation::checks::imports_modules_and_impl_are_unresolved ... ok
+test application::rust_source_observation::checks::malformed_and_sample_tokens_are_not_rescanned ... ok
+test application::rust_source_observation::checks::positions_utf8_and_crlf_are_explicit ... ok
+test application::rust_source_observation::checks::work_and_output_bounds_are_disclosed ... ok
+test application::search::checks::finite_same_query_alternatives ... ok
+test application::search::checks::html_only_result_wrappers_and_encoded_links ... ok
+test application::search::checks::saved_builtin_has_alternative_in_both_orders ... ok
+test application::search::checks::structured_results_empty_and_invalid ... ok
+test application::throughput::checks::local_estimate_uses_characters_and_clock_only ... ok
+test application::tool_format::tests::strict_envelope_and_data_examples ... ok
+test application::web_document::classification_checks::current_memory_and_response_failures_are_typed ... ok
+test application::web_document::classification_checks::declared_text_resource_and_input_errors_are_typed ... ok
+test application::web_document::text_encoding::checks::complete_byte_domain_and_mapping ... ok
+test application::web_document::text_encoding::checks::html_bom_precedence_without_plaintext_guessing ... ok
+test application::web_document::text_encoding::checks::labels_bounds_and_strict_prior_encodings ... ok
+test application::web_document::text_encoding::checks::utf16_expansion_and_cancellation ... ok
+test application::web_document::text_encoding::checks::utf16_html_replacement_keeps_following_syntax ... ok
+test application::web_document::text_encoding::checks::utf16_no_unlabelled_plaintext_or_json_guess ... ok
+test application::web_document::text_encoding::checks::utf16_orders_surrogates_and_actual_bom ... ok
+test application::web_operation::redirect::checks::framing_and_location ... ok
+test application::web_operation::redirect::checks::uri_reference_resolution ... ok
+test archive::checks::archive_captures_project_and_rejects_symlinks ... ok
+test archive::checks::compressed_archive_checks_descriptors_and_preserves_imports ... ok
+test archive::checks::descriptor_collection_rejects_swaps_and_live_mutation ... ok
+test archive::checks::descriptor_collection_retains_root_aliases_and_empty_directories ... ok
+test archive::checks::destination_descriptors_preserve_aliases_empty_dirs_and_create_only_files ... ok
+test archive::checks::destination_descriptors_refuse_parent_swaps_without_following_links ... ok
+test archive::checks::directory_metadata_and_path_conflicts_are_checked ... ok
+test archive::checks::directory_roundtrip_preserves_empty_folders_and_existing_data ... ok
+test archive::checks::import_preflight_preserves_existing_files ... ok
+test archive::checks::incremental_crc_matches_known_vector_at_all_boundaries ... ok
+test archive::checks::incremental_source_matches_legacy_zip_and_rejects_chunk_mutation ... ok
+test archive::checks::zip64_footer_requires_consistent_single_disk_directory ... ok
+test archive::checks::zip64_metadata_is_ordered_bounded_and_unambiguous ... ok
+test attachments::checks::attachment_context_admission_counts_encoded_bytes ... ok
+test attachments::checks::attachment_integrity_and_metadata ... ok
+test attachments::checks::attachment_jpeg_original_bytes ... ok
+test attachments::checks::attachment_provider_refusal_is_transactional ... ok
+test attachments::checks::attachment_provider_wire_shapes ... ok
+test attachments::checks::attachment_public_cabi_tcp_wire ... ok
+test attachments::checks::attachment_role_and_count_bounds ... ok
+test checks::bad_json ... ok
+test checks::binary_network_zip_reaches_import_preview ... ok
+test checks::depth_limit ... ok
+test checks::formats ... ok
+test checks::json_roundtrip ... ok
+test checks::outputs ... ok
+test checks::scoped_failure ... ok
+test compression::checks::compressed_block_processing_is_bounded ... ok
+test compression::checks::compressed_input_bounds_and_structure ... ok
+test document::checks::altered_backups_and_unverified_updates_never_report_success ... ok
+test document::checks::invalid_paths_binary_originals_and_oversize_contents_are_refused ... ok
+test document::checks::revision_must_verify_before_the_original_can_change ... ok
+test execution::cancellation_ownership_checks::reset_preserves_old_operation_cancellation ... ok
+test execution::checks::continuously_ready_output_cannot_starve_deadline ... ok
+test execution::scope_tests::cancellation_is_per_owner_and_retired_tokens_stay_cancelled ... ok
+test gateway::checks::protected_routes ... ok
+test gateway::checks::request_limits ... ok
+test generation::checks::budgets_use_bytes_and_never_mutate_messages ... ok
+test generation::checks::capability_defaults_and_exact_mappings ... ok
+test hosted_search::checks::hosted_explicit_mode_and_no_inference ... ok
+test hosted_search::checks::hosted_pause_and_error_null_are_not_text_completion ... ok
+test hosted_search::checks::hosted_typed_context_is_bound_and_not_cross_identity ... ok
+test hosted_search::checks::hosted_unknown_blocks_and_exact_limits ... ok
+test layout::checks::landscape_keyboard_prioritizes_composer_over_chrome ... ok
+test layout::checks::phone_and_tablet_controls_fit_measured_text ... ok
+test mcp_identity::checks::allocation_is_unique_and_exhaustion_does_not_wrap ... ok
+test mcp_identity::checks::binding_is_typed_explicit_and_directional ... ok
+test mcp_lifecycle::checks::bounded_acknowledgments_are_advertisements_not_completion ... ok
+test mcp_lifecycle::checks::cancellation_direction_initialize_and_session_binding ... ok
+test mcp_schema::checks::catalog_output_revision_hints_and_atomic_last_member ... ok
+test mcp_schema::checks::catalog_rendering_and_pagination_are_bounded_without_partial_state ... ok
+test mcp_schema::checks::catalog_shapes_are_typed_and_extensions_stay_data ... ok
+test mcp_schema::checks::common_error_envelopes_require_exact_integer_codes_and_text_messages ... ok
+test mcp_schema::checks::common_result_metadata_direction_and_presence_remain_separate ... ok
+test mcp_schema::checks::content_envelopes_preserve_untrusted_data_and_revision_boundaries ... ok
+test mcp_schema::checks::content_fields_use_existing_response_bounds_not_catalog_limit ... ok
+test mcp_schema::checks::content_metadata_annotations_and_priority_are_exact_and_versioned ... ok
+test mcp_schema::checks::embedded_resource_anyof_branches_are_not_exclusive ... ok
+test mcp_schema::checks::initialization_advertisements_are_versioned_and_extensions_untrusted ... ok
+test mcp_schema::checks::initialization_known_shapes_refuse_null_and_wrong_types ... ok
+test mcp_schema::checks::malformed_content_whole_result_refuses_without_partial_adoption ... ok
+test mcp_schema::checks::notification_parameters_are_optional_objects_with_untrusted_metadata ... ok
+test mcp_schema::checks::numeric_reply_identity_is_exact_bounded_and_not_a_string ... ok
+test mcp_schema::checks::persistence_budget_counts_platform_string_quoting_and_numeric_room ... ok
+test mcp_schema::checks::tool_result_flags_are_typed_before_evidence ... ok
+test mcp_schema::notification_checks::known_notification_shapes_preserve_untrusted_payloads_and_exact_numbers ... ok
+test mcp_schema::notification_checks::missing_known_fields_and_wrong_types_refuse_before_side_effects ... ok
+test network::binary_checks::binary_request_has_exact_length_and_preserves_payload ... ok
+test network::binary_checks::informational_response_chain_is_bounded ... ok
+test network::binary_checks::update_validator_is_strong_single_header_from_final_response ... ok
+test network::binary_response_checks::preserves_binary_response ... ok
+test network::checks::addresses ... ok
+test network::checks::bodyless_representation_metadata_retains_its_actual_status ... ok
+test network::checks::encoding ... ok
+test network::checks::framing ... ok
+test provider::checks::bare_local_address ... ok
+test provider::checks::custom_authentication ... ok
+test provider::checks::http_requires_visible_explicit_profile_consent ... ok
+test provider::checks::local_scheme_inference_preserves_explicit_transport ... ok
+test provider::checks::remote_hosts_and_probe_paths_preserve_user_destination ... ok
+test provider::content_checks::content_transport_preserves_configuration ... ok
+test resources::checks::default_budget ... ok
+test resources::checks::envelope_limit ... ok
+test resources::checks::no_measurement_is_not_a_gate ... ok
+test stream::batch_checks::batch_bounds_count_individual_pending_ids_and_preserve_single_paths ... ok
+test stream::batch_checks::integer_numeric_batch_ids_and_correlated_response_spellings_preserve_identity ... ok
+test stream::batch_checks::json_response_batches_require_media_framing_eof_and_correlation ... ok
+test stream::batch_checks::numeric_pending_comparison_is_exact_and_input_spelling_is_preserved ... ok
+test stream::batch_checks::request_batch_one_reply_group_and_cursor_ack_barrier ... ok
+test stream::batch_checks::whole_event_atomicity_direction_and_all_response_validation ... ok
+test stream::checks::fragmented_unicode_records_and_http_chunks ... ok
+test stream::checks::informational_headers_and_complete_framing ... ok
+test stream::checks::session_cleanup_is_scoped_and_reusable ... ok
+test stream::checks::single_json_fallback_and_unterminated_final_record ... ok
+test stream::checks::sse_completion_requires_terminated_done_and_complete_choice ... ok
+test stream::checks::sse_empty_terminal_trailers_preserve_text_and_usage ... ok
+test stream::checks::sse_fragmentation_bom_line_endings_multiline_and_usage ... ok
+test stream::checks::sse_ignores_other_choices_and_does_not_commit_tool_only_output ... ok
+test stream::checks::sse_terminal_trailers_cannot_change_choice_data ... ok
+test stream::checks::truncated_error_and_oversized_streams_are_not_completed ... ok
+test stream::content_checks::content_errors_are_scoped_and_no_false_completion ... ok
+test stream::content_checks::content_json_fallback_and_bounds ... ok
+test stream::content_checks::content_sse_split_utf8_usage_and_hidden_parts ... ok
+test stream::control_checks::control_limits_and_invalid_envelopes_refuse_without_authority ... ok
+test stream::control_checks::current_session_is_bound_and_completion_waits_for_ack ... ok
+test stream::control_checks::notification_envelope_validation_preserves_request_error_replies ... ok
+test stream::control_checks::server_id_direction_and_bounded_untrusted_requests ... ok
+test stream::mcp_checks::persistent_sse_waits_for_matching_result_and_preserves_session ... ok
+test stream::mcp_checks::wrong_id_and_ambiguous_framing_are_not_success ... ok
+test stream::messages_checks::messages_error_keeps_same_read_partial_and_poisoned_session ... ok
+test stream::messages_checks::messages_stream_extensions_fallback_and_wrong_block_identity ... ok
+test stream::messages_checks::messages_stream_fragmented_text_hidden_blocks_usage_and_terminal ... ok
+test stream::messages_checks::messages_stream_scoped_errors_missing_terminal_and_http_integrity ... ok
+test stream::resume_checks::cursor_bounds_and_get_direction_are_unchanged ... ok
+test stream::resume_checks::cursor_waits_for_controls_and_empty_id_clears ... ok
+test stream::resume_checks::suspend_requires_owner_ack_cursor_and_original_lifetime ... ok
+test stream::server_stream_checks::standalone_server_stream_counts_only_messages_and_waits_ack ... ok
+test stream::server_stream_checks::standalone_server_stream_notifications_and_message_bytes_are_bounded ... ok
+test stream::server_stream_checks::standalone_server_stream_rejects_responses_changed_sessions_and_non_sse ... ok
+
+failures:
+
+---- application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity stdout ----
+
+thread 'application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity' (998) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:3937:13:
+assertion failed: text(state, "notice").contains("History is too large")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- application::checks::conversation_webdav_save_is_pending_until_exact_readback stdout ----
+
+thread 'application::checks::conversation_webdav_save_is_pending_until_exact_readback' (1000) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:4955:9:
+assertion `left == right` failed
+  left: "writing"
+ right: "verifying"
+
+---- application::checks::disconnected_provider_preserves_tools stdout ----
+
+thread 'application::checks::disconnected_provider_preserves_tools' (1002) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:4071:9:
+assertion `left == right` failed
+  left: ""
+ right: "list"
+
+---- application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit stdout ----
+
+thread 'application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit' (1005) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:4978:9:
+assertion `left == right` failed
+  left: "writing"
+ right: "interrupted"
+
+---- application::checks::interrupted_phone_creation_warns_without_replay stdout ----
+
+thread 'application::checks::interrupted_phone_creation_warns_without_replay' (1009) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:4289:9:
+assertion `left == right` failed
+  left: ""
+ right: "phone_create"
+
+---- application::checks::network_conversation_requires_review stdout ----
+
+thread 'application::checks::network_conversation_requires_review' (1016) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:3966:9:
+assertion `left == right` failed
+  left: ""
+ right: "conversation_review"
+
+---- application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path stdout ----
+
+thread 'application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path' (1017) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:3703:9:
+assertion `left == right` failed
+  left: ""
+ right: "192.168.8.21"
+
+---- application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files stdout ----
+
+thread 'application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files' (1019) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:4721:9:
+assertion failed: text(get(&fetching, "effect"),
+        "wire").starts_with("GET /share/notes/source.txt HTTP/1.1")
+
+---- application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel stdout ----
+
+thread 'application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel' (1025) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:4913:9:
+assertion `left == right` failed
+  left: ""
+ right: "original.test"
+
+---- application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped stdout ----
+
+thread 'application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped' (1029) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:4328:9:
+assertion `left == right` failed
+  left: ""
+ right: "phone_update_editor"
+
+---- application::checks::retry_verifies_first_and_creates_only_after_framed_not_found stdout ----
+
+thread 'application::checks::retry_verifies_first_and_creates_only_after_framed_not_found' (1036) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:4931:9:
+assertion failed: text(get(&retry, "effect"), "wire").starts_with("GET ")
+
+---- application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status stdout ----
+
+thread 'application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status' (1039) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:4450:9:
+assertion failed: wire.starts_with("MKCOL /share/notes/October%202026/ HTTP/1.1\r\n")
+
+---- application::checks::reviewed_network_update_preserves_revision_before_conditional_write stdout ----
+
+thread 'application::checks::reviewed_network_update_preserves_revision_before_conditional_write' (1040) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:4509:9:
+assertion failed: text(get(&load, "effect"),
+        "wire").starts_with("GET /share/notes/plan.txt HTTP/1.1")
+
+---- application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name stdout ----
+
+thread 'application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name' (1041) panicked at /workspace/scratch/a2daaf6f3159/recovery/published/RLLM/core/application.rs:4271:9:
+assertion `left == right` failed
+  left: ""
+ right: "phone_create"
+
+
+failures:
+    application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity
+    application::checks::conversation_webdav_save_is_pending_until_exact_readback
+    application::checks::disconnected_provider_preserves_tools
+    application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit
+    application::checks::interrupted_phone_creation_warns_without_replay
+    application::checks::network_conversation_requires_review
+    application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path
+    application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files
+    application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel
+    application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped
+    application::checks::retry_verifies_first_and_creates_only_after_framed_not_found
+    application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status
+    application::checks::reviewed_network_update_preserves_revision_before_conditional_write
+    application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name
+
+test result: FAILED. 454 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.81s
+

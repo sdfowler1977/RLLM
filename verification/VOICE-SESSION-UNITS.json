@@ -1,0 +1,46 @@
+{
+  "current": {
+    "source": "current",
+    "code": 101,
+    "summary": "test result: FAILED. 457 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.13s",
+    "failures": [
+      "application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity",
+      "application::checks::conversation_webdav_save_is_pending_until_exact_readback",
+      "application::checks::disconnected_provider_preserves_tools",
+      "application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+      "application::checks::interrupted_phone_creation_warns_without_replay",
+      "application::checks::network_conversation_requires_review",
+      "application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path",
+      "application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files",
+      "application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+      "application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped",
+      "application::checks::retry_verifies_first_and_creates_only_after_framed_not_found",
+      "application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+      "application::checks::reviewed_network_update_preserves_revision_before_conditional_write",
+      "application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name"
+    ]
+  },
+  "baseline": {
+    "source": "baseline",
+    "code": 101,
+    "summary": "test result: FAILED. 454 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.81s",
+    "failures": [
+      "application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity",
+      "application::checks::conversation_webdav_save_is_pending_until_exact_readback",
+      "application::checks::disconnected_provider_preserves_tools",
+      "application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+      "application::checks::interrupted_phone_creation_warns_without_replay",
+      "application::checks::network_conversation_requires_review",
+      "application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path",
+      "application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files",
+      "application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+      "application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped",
+      "application::checks::retry_verifies_first_and_creates_only_after_framed_not_found",
+      "application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+      "application::checks::reviewed_network_update_preserves_revision_before_conditional_write",
+      "application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name"
+    ]
+  },
+  "new_failures": [],
+  "scope": "Fresh serial complete Rust sweeps in distinct clean working/temp directories with explicit font. Baseline is exact immediate published f78088a3 candidate core; historical fixtures are retained, not relabeled as passes."
+}
