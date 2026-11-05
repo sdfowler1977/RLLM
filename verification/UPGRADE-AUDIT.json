@@ -402,5 +402,30 @@
     "resource_repair": "Preallocation estimate for GLB JSON outside strings; measured/default geometry, span and frame admission. Core checks include exact refusal, usable small-memory frames and punctuation inside strings.",
     "build_repair": "Initial optimized build refused changed inputs before signing. Clean151-input dual-ABI compilation completed; its first aligned output was truncated to2048000bytes and apksigner rejected it. One fresh zipalign output has6525642bytes, all25payloads identical to complete input, CRC/alignment passed and151frozen inputs remain exact. Signing resumed from those same frozen outputs; actual APK1793904514has6535186bytes,SHA2563d9def995670eb2db7cf52990260fdb746f9310cb3af41c4d81f67daf56104d0, pinned v2/v3 signature, both ABIs, compiled scene/voice bindings and16KiB alignment verified. No truncated APK was delivered.",
     "scope": "Static triangle geometry with base/vertex colors; textures, animation and physical material effects explicitly omitted; unsupported features preserve export. Prior preliminary runs are not substituted for final-source execution."
+  },
+  "multicore_scene_continuation": {
+    "date": "2026-11-05",
+    "version": 1793921544,
+    "implementation": "Shared bounded host CPU row-band rasterization; exact draw order, measured CPU and worker-stack fallback, joined cancellation, scoped time/workload refusal. Full aligned ZIP payload hashes/lengths/CRC and official alignment verified before signing, retained rejected output and at most one retry.",
+    "validation": {
+      "scene_cases": 66,
+      "new_rust_worker_cases": 5,
+      "selected_rust_cases": 204,
+      "alignment_cases": 8,
+      "connected_groups_passed": 40,
+      "connected_groups": 41,
+      "live_public_web_cases": 9,
+      "compiled_input_files": 152,
+      "actual_alignment_attempts": 1
+    },
+    "saved_source_checkpoint": "Drive1k4G_lU_lTLGalRf4CtAdQSUDlH_ehhDJ; downloaded255file hashes and CRC verified",
+    "original_comparator": "Actual saved1793904514 controller; four real before/after scene pixel comparisons",
+    "limits": [
+      "Transient OS thread-start and alignment-retry failures were not forced.",
+      "Installed Android/UI/gesture/audio/echo/lifecycle and actual user service endpoints remain unverified.",
+      "Independent acceptance and three genuine historical revision-two comparisons remain open.",
+      "Textures/animation/GPU/wider scene formats and full cumulative roadmap remain open."
+    ],
+    "prior_publication": "All256original1793904514source files match mainb5f29ae551a44786a9b3c34dcee4edbe92f99c7a. Its release draft435871828 retains all3assets; two Publish attempts returned GitHub500. No public release claimed for that draft."
   }
 }

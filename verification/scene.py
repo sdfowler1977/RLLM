@@ -1,7 +1,8 @@
 """Actual returned GLB files, Rust geometry/rasterization and owned viewport lifetime."""
-import base64,copy,hashlib,json,pathlib,socket,struct,subprocess,tempfile,threading
+import base64,copy,hashlib,json,pathlib,socket,struct,subprocess,tempfile,threading,argparse
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from transport import upload,response
+parser=argparse.ArgumentParser();parser.add_argument('--previous-scene-controller',type=pathlib.Path);args=parser.parse_args()
 PROJECT=pathlib.Path(__file__).resolve().parents[1];passed=[];returned=b'';requests=[]
 def check(name,value):assert value,name;passed.append(name)
 def glb(doc,binary):
@@ -26,7 +27,7 @@ with tempfile.TemporaryDirectory(prefix='scene-',dir=PROJECT/'output')as tmp:
         d=event(None,'resume');d=event(d['state'],'service_connections');d=event(d['state'],'service_save',dict(service_config=json.dumps(cfg)));d=event(d['state'],'service_request');d=event(d['state'],'service_review',dict(service_capability='scene_generation',service_input='{"prompt":"A triangle"}',service_file=False));assert d['state']['dialog']=='approval',d['state'].get('notice');d=event(d['state'],'approve');e=d['effect'];wire=base64.b64decode(e['wire_base64'])if'wire_base64'in e else e['wire'].encode()
         with socket.create_connection((e['host'],e['port']),timeout=5)as sock:sock.sendall(wire);upload(op,e,sock);fields=response(op,e,sock)
         d=event(d['state'],'network_result',dict(fields,purpose=e['purpose']));assert d['state'].get('service_artifact'),d['state'].get('notice');preview=event(d['state'],'media_preview');assert preview['effect']['media_kind']=='scene';return d,{k:preview['effect'][k]for k in ['root','root_identity','chat','record']}
-    def open_scene(owner):return op(dict(owner,op='scene_open'))['scene_ticket']
+    def open_scene(owner,**metadata):return op(dict(owner,op='scene_open',**metadata))['scene_ticket']
     def close_scene(owner,ticket):return op(dict(owner,op='scene_close',scene_ticket=ticket))
     def frame(owner,ticket,**camera):
         values=dict(owner,op='scene_frame',scene_ticket=ticket,size=128,yaw=0,pitch=0,zoom=1);values.update(camera);return op(values)
@@ -38,6 +39,17 @@ with tempfile.TemporaryDirectory(prefix='scene-',dir=PROJECT/'output')as tmp:
         d,owner=received();check('actual HTTP scene bytes retain their returned digest',hashlib.sha256(returned).hexdigest()==owner['record']['sha256']and(root/owner['record']['path']).read_bytes()==returned)
         menu=event(d['state'],'media_menu');check('returned scene has a real preview action in the media menu',any(b['event']=='media_preview'for b in menu['ui']['modal']['buttons']))
         ticket=open_scene(owner);f=frame(owner,ticket);check('Rust renders actual indexed geometry into complete RGBA pixels',f['width']==128 and f['height']==128 and len(pixels(f))==128*128*4 and f['triangles']==1 and red_count(f)>1000);check('frame retains exact source provenance and explicit geometry limits',f['source_sha256']==owner['record']['sha256']and'textures'in f['description']and'animation'in f['description']);check('software frame is deterministic for the same source and camera',frame(owner,ticket)['rgba']==f['rgba'])
+        check('default frame uses bounded actual host workers',1<=f['cpu_workers']<=4)
+        one=open_scene(owner,device={'cores':1});check('measured single-core route retains identical actual pixels',frame(owner,one)['rgba']==f['rgba']and frame(owner,one)['cpu_workers']==1);close_scene(owner,one)
+        if args.previous_scene_controller:
+            previous=subprocess.Popen([str(args.previous_scene_controller.resolve()),'--jsonl'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+            def old(v):previous.stdin.write(json.dumps(v)+'\n');previous.stdin.flush();r=json.loads(previous.stdout.readline());assert'value'in r,r;return r['value']
+            try:
+                prior=old(dict(owner,op='scene_open'))['scene_ticket']
+                for size,yaw,pitch,zoom in [(128,0,0,1),(193,.7,-.3,1.5),(384,-.6,.8,.25),(128,1.8,1.1,3)]:
+                    camera=dict(size=size,yaw=yaw,pitch=pitch,zoom=zoom);baseline=old(dict(owner,op='scene_frame',scene_ticket=prior,**camera));current=frame(owner,ticket,**camera);check('actual published renderer pixels match at '+str(camera),baseline['rgba']==current['rgba']and baseline['triangles']==current['triangles']and baseline['source_sha256']==current['source_sha256'])
+                old(dict(owner,op='scene_close',scene_ticket=prior))
+            finally:previous.stdin.close();previous.wait(timeout=15)
         rotated=op(dict(owner,op='scene_frame',scene_ticket=ticket,size=128,yaw=0.7,pitch=0,zoom=1));zoomed=op(dict(owner,op='scene_frame',scene_ticket=ticket,size=128,yaw=0,pitch=0,zoom=1.5));check('orbit changes the actual scene pixels',rotated['rgba']!=f['rgba']);check('zoom enlarges actual geometry coverage',red_count(zoomed)>red_count(f));check('background is rendered outside the geometry',pixels(f)[:4]==bytes([23,27,34,255]))
         wrong=dict(owner,chat='different');check('another conversation cannot render or close this viewport','error'in raw(dict(wrong,op='scene_frame',scene_ticket=ticket))and'error'in raw(dict(wrong,op='scene_close',scene_ticket=ticket)));check('failed ownership leaves the actual viewport available',frame(owner,ticket)['rgba']==f['rgba'])
         for values in [dict(size=127),dict(size=769),dict(zoom=0),dict(zoom=9),dict(yaw=10001),dict(pitch=-10001)]:check('invalid camera is scoped '+json.dumps(values,sort_keys=True),'error'in raw(dict(owner,op='scene_frame',scene_ticket=ticket,**values)))
@@ -67,4 +79,4 @@ with tempfile.TemporaryDirectory(prefix='scene-',dir=PROJECT/'output')as tmp:
         d,owner=received();held=open_scene(owner);path=root/owner['record']['path'];saved=path.read_bytes();path.unlink();other=root/'outside.glb';other.write_bytes(saved);path.symlink_to(other);check('source symlink substitution cannot enter a new viewport','error'in raw(dict(owner,op='scene_open')));close_scene(owner,held)
         d,owner=received();held=open_scene(owner);check('refusals release decode admission for a later valid scene',frame(owner,held)['triangles']==1);close_scene(owner,held);(root/'local.txt').write_text('local work');check('scene failures leave model-free local operations working',op(dict(op='tool',tool='read',root=tmp,args={'path':'local.txt'}))=='local work')
     finally:p.stdin.close();p.wait(timeout=15)
-server.shutdown();server.server_close();report=dict(passed=len(passed),checks=passed,scope='Owner execution with actual HTTP-returned GLB files, Rust accessor/node/material validation and software rasterization, owned frame/close operations and filesystem mutations. Installed Android controls, gesture/coalescing/lifecycle and display acceptance remain unverified. Static triangle geometry only; textures, animation and physical materials are explicitly not displayed.');(PROJECT/'output/checks/scene.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))
+server.shutdown();server.server_close();report=dict(passed=len(passed),checks=passed,scope='Owner execution with actual HTTP-returned GLB files, Rust accessor/node/material validation and software rasterization, owned frame/close operations and filesystem mutations. Installed Android controls, gesture/coalescing/lifecycle and display acceptance remain unverified. Static triangle geometry only; textures, animation and physical materials are explicitly not displayed.');(PROJECT/'output/checks').mkdir(parents=True,exist_ok=True);(PROJECT/'output/checks/scene.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))
