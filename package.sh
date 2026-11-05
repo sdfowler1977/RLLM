@@ -34,7 +34,7 @@ artifact="RLLM"
 resource_package=()
 source_fingerprint() {
  find "$project_dir/core" "$project_dir/platform" "$project_dir/res" "$project_dir/notices" \
-      "$project_dir/AndroidManifest.xml" "$project_dir/package.sh" -type f -print0 |
+      "$project_dir/AndroidManifest.xml" "$project_dir/package.sh" "$project_dir/tools/alignment.py" -type f -print0 |
   LC_ALL=C sort -z | xargs -0 sha256sum
 }
 build_source=$(source_fingerprint)
@@ -98,7 +98,7 @@ for payload in classes.dex lib/arm64-v8a/libclient.so lib/x86_64/libclient.so; d
  test -s "$out/stage/$payload" || { printf 'Missing APK payload: %s\n' "$payload" >&2; exit 1; }
 done
 (cd "$out/stage" && zip -q "$out/package.apk" classes.dex lib/arm64-v8a/libclient.so lib/x86_64/libclient.so)
-"$CLIENT_TOOLS/zipalign" -P 16 -f 4 "$out/package.apk" "$out/aligned.apk"
+python3 "$project_dir/tools/alignment.py" --tool "$CLIENT_TOOLS/zipalign" "$out/package.apk" "$out/aligned.apk"
 if [[ "$build_source" != "$(source_fingerprint)" ]]; then
  printf '%s\n' 'Build inputs changed during compilation; restart from the current source before signing or delivering this APK.' >&2
  exit 2
