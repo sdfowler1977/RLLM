@@ -2,7 +2,7 @@
 
 Build the Rust executable with `CLIENT_RUST=/path/to/toolchain bash headless.sh`. The executable uses the application core and operation envelope shared with the Android JNI entry point. The standalone target is Linux x86-64; the Android package contains ARM64 and x86-64 libraries.
 
-`output/headless/RLLM --jsonl` reads one UTF-8 JSON operation per line and writes one JSON envelope per line. Validation, current process-held user rules, worker ownership and results are shared with `client_process`. UI events return state, UI descriptions and platform effects. Trusted controllers handle these effects, persist state securely and return authentic callbacks. WebDAV network effects carry drive_ticket in addition to purpose; return that exact ticket on network_result and failure, together with any child_ticket. Tickets are single-use process-held ownership, not permission grants. Missing/old/replayed owners are inert. Resume/cancel revokes pending ownership; restoring a saved state does not resume network work.
+`output/headless/RLLM --jsonl` reads one UTF-8 JSON operation per line and writes one JSON envelope per line. Validation, current process-held user rules, worker ownership and results are shared with `client_process`. UI events return state, UI descriptions and platform effects. Trusted controllers handle these effects, persist state securely and return authentic callbacks. WebDAV network effects carry drive_ticket in addition to purpose; return that exact ticket on network_result and failure, together with any child_ticket. Tickets are single-use process-held ownership, not permission grants. Missing/old/replayed owners are inert. Resume/cancel revokes pending network ownership; restoring a saved state does not resume network work. Optional authorization can restore only its pending browser proof and wait for the matching return, without replaying an exchange or model request. Controllers must encrypt saved application state, including credentials and pending browser proof.
 
 ```json
 {"op":"tool","root":"/path/to/workspace","tool":"inspect","args":{"path":"sample.txt"}}
@@ -33,3 +33,7 @@ Server listening reports received notification/request counts. Empty SSE data ev
 # A2A local HTTP
 
 The same executable now provides versioned read-only A2A tasks with --a2a, a selected root and a private bearer-token file. See [Local A2A access](A2A.md) for Android controls, protocol examples, bounds and shutdown behavior.
+
+# Workspace agent sessions
+
+`output/headless/RLLM --acp --root /absolute/workspace` provides stable ACP v1 standard streams with actual shared-engine inspection/comparison, session updates, list/resume/close and scoped cancellation. It does not launch another agent or require a model. See [workspace agent protocol](ACP.md) for the supported commands, capabilities, safety boundaries and resource limits.
