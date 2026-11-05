@@ -414,6 +414,7 @@ fn operation(input: &str) -> Result<Json> {
         "event" => application::event(&v),
         "tool" => application::tool(&v),
         "media_stream_feed"|"media_stream_finish"|"media_stream_cancel"=>application::media_stream_operation(&v),
+        "voice_audio_feed"|"voice_audio_cancel"|"voice_audio_check"=>application::voice_audio_operation(&v),
         "media_verify"=>application::media_verification(&v),
         "capture_document" => application::capture_document(&v),
         "capture_document_cancel" => application::capture_document_cancel(&v),

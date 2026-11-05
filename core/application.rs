@@ -4,6 +4,7 @@ use super::*;
 #[path="media.rs"] mod media;
 #[path="jobs.rs"] mod jobs;
 #[path="voice.rs"] mod voice;
+#[path="voice_audio.rs"] mod voice_audio;
 #[path="media_stream.rs"] mod media_stream;
 #[path="connection_migration.rs"] mod connection_migration;
 #[path="approval_rules.rs"] mod approval_rules;
@@ -485,6 +486,7 @@ fn ui(st: &Json) -> Json {
         ("draft", s(&text(st, "draft"))),
         ("service_artifacts",get(&current,"service_artifacts").clone()),
         ("capture_active",Bool(get(st,"media_expected")!=&Null)),
+        ("voice_status",voice::status(st)),
         ("draft_attachments",Arr(array(&current,"draft_attachments").iter().filter_map(|v|crate::attachments::metadata(v).ok()).collect())),
         (
             "profile_fields",
@@ -1392,6 +1394,8 @@ fn event_inner(v: &Json) -> Result<Json> {
     approval_rules::namespace(&mut st,&text(v,"root"));harness_rules::identity_refresh(&mut st);
     let requested_action = field(v, "action")?;
     let action = if matches!(requested_action,"back"|"close")&&get(&st,"media_expected")!=&Null{"cancel"}else if matches!(requested_action,"approve_session"|"approve_always"|"approve_matching_rule"){"approve"}else{requested_action};
+    let voice_callback=voice::callback(action);
+    if voice_callback&&!voice::consume(&st,action,inputs){let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));}
     let media_callback=media::callback(action);
     if media_callback&&!media::consume(&mut st,inputs){let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));}
     if matches!(action,"cancel"|"resume"){voice::interrupt(&mut st);media::interrupt(&mut st);}
@@ -1504,7 +1508,7 @@ fn event_inner(v: &Json) -> Result<Json> {
     if get(inputs,"phone_access_granted")!=&Null {put(&mut st,"phone_access_granted",Bool(boolean(inputs,"phone_access_granted")));}
     if get(inputs,"device")!=&Null {put(&mut st,"device",get(inputs,"device").clone());}
     if get(inputs,"gateway_status")!=&Null {put(&mut st,"gateway_status",s(&text(inputs,"gateway_status")));}
-    if media_callback || service_callback || workspace::cloud_callback(action) || metadata_callback || mcp_client_callback || web_callback || matches!(action,"apps_result"|"model_progress"|"rate_tick"|"resume"|"archive_built"|"artifact_built"|"artifact_failed"|"project_cleared"|"project_recovered") || (matches!(action,"network_result"|"project_phone_result"|"failure") && (remote_monitor::is_result(inputs)||project_store::is_result(inputs))) {
+    if voice_callback || media_callback || service_callback || workspace::cloud_callback(action) || metadata_callback || mcp_client_callback || web_callback || matches!(action,"apps_result"|"model_progress"|"rate_tick"|"resume"|"archive_built"|"artifact_built"|"artifact_failed"|"project_cleared"|"project_recovered") || (matches!(action,"network_result"|"project_phone_result"|"failure") && (remote_monitor::is_result(inputs)||project_store::is_result(inputs))) {
         // Android includes the current draft/form with asynchronous callbacks.
         // Keep those edits, but never persist transport payloads as form data.
         let form=ui(&st);
@@ -1525,8 +1529,8 @@ fn event_inner(v: &Json) -> Result<Json> {
     let mut effect = if metadata_cancel || app_navigation_cancel {obj(vec![("kind",s("cancel"))])}else{Null};
     let mut format_error_received=false;
     let result = (|| -> Result<()> {
-        if get(&st,"media_expected")!=&Null&&!media_callback&&!matches!(action,"media_record_stop"|"voice_stop"|"cancel"|"resume"|"capture"|"viewport"|"status"|"phone_access_status"){return Err("Finish or cancel the current media capture first".into());}
-        if voice::handles(action){effect=voice::event(&mut st,action)?;return Ok(());}
+        if get(&st,"media_expected")!=&Null&&!media_callback&&!matches!(action,"media_record_stop"|"voice_stop"|"voice_suspend"|"cancel"|"resume"|"capture"|"viewport"|"status"|"phone_access_status"){return Err("Finish or cancel the current media capture first".into());}
+        if voice::handles(action){effect=voice::event(&mut st,action,inputs)?;return Ok(());}
         if jobs::handles(action){effect=jobs::event(&mut st,action)?;return Ok(());}
         if media::handles(action){effect=media::event(&mut st,action,inputs)?;return Ok(());}
         if service_callback {effect=services::result(&mut st,action,inputs)?;return Ok(());}
@@ -2992,6 +2996,7 @@ fn event_inner(v: &Json) -> Result<Json> {
             put(&mut st, "notice", s(&e));
         }
     }
+    voice::reconcile(&mut st,action,inputs);
     if action=="network_result"&&text(inputs,"purpose")=="model"&&boolean(&st,"voice_turn")&&!boolean(&st,"busy")&&effect==Null&&get(&st,"pending")==&Null&&array(&st,"delegation_stack").is_empty()&&!boolean(&st,"notice_error"){
         match voice::answer(&mut st){Ok(next)=>effect=next,Err(reason)=>{put(&mut st,"voice_turn",Bool(false));put(&mut st,"voice_phase",Null);put(&mut st,"notice",s(&format!("Text reply retained; speech unavailable: {reason}")));}}
     }
@@ -3205,6 +3210,7 @@ fn read_file(p: &Path) -> Result<String> {
     String::from_utf8(bytes).map_err(|_| "File is not UTF-8 text".into())
 }
 pub fn media_stream_operation(v:&Json)->Result<Json>{media_stream::operation(v)}
+pub fn voice_audio_operation(v:&Json)->Result<Json>{voice_audio::operation(v)}
 pub fn media_verification(v:&Json)->Result<Json>{media::verification(v)}
 pub fn capture_document(v:&Json)->Result<Json>{capture_job::run(v)}
 pub fn capture_document_cancel(v:&Json)->Result<Json>{capture_job::cancel(field(v,"ticket")?);Ok(Null)}
