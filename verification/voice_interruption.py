@@ -17,10 +17,10 @@ with tempfile.TemporaryDirectory(prefix='interruption-',dir=PROJECT/'output')as 
     def raw(v):p.stdin.write(json.dumps(v)+'\n');p.stdin.flush();return json.loads(p.stdout.readline())
     def op(v):r=raw(v);assert'value'in r,r;return r['value']
     def event(st,a,i=None):return op(dict(op='event',state=st,action=a,inputs=i or {},root=temp))
-    def transport(d):
+    def transport(d,delay_callback=False):
         e=d['effect'];assert e,d['state'].get('notice');wire=base64.b64decode(e['wire_base64'])if'wire_base64'in e else e['wire'].encode()
         with socket.create_connection((e['host'],e['port']),timeout=5)as sock:sock.sendall(wire);upload(op,e,sock);fields=response(op,e,sock)
-        return event(d['state'],'network_result',dict(fields,purpose=e['purpose']))
+        values=dict(fields,purpose=e['purpose']);return values if delay_callback else event(d['state'],'network_result',values)
     def reply(d,fmt,answer):
         value={'chat':{'choices':[{'message':{'content':answer},'finish_reason':'stop'}]},'local':{'message':{'content':answer},'done':True},'messages':{'content':[{'type':'text','text':answer}],'stop_reason':'end_turn'},'content':{'candidates':[{'content':{'parts':[{'text':answer}]},'finishReason':'STOP'}]}}[fmt];b=json.dumps(value).encode();wire=b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(b)).encode()+b'\r\n\r\n'+b;return event(d['state'],'network_result',dict(purpose='model',model_ticket=d['state']['model_expected'],data=base64.b64encode(wire).decode()))
     def configured(fmt='chat'):
@@ -80,6 +80,23 @@ with tempfile.TemporaryDirectory(prefix='interruption-',dir=PROJECT/'output')as 
             d,owner,play=watched();notice=onset(d,owner);stopped=event(d['state'],action);late=event(stopped['state'],'voice_watch_onset',dict(notice,draft='injected'));check(action+' revokes the watch and ignores late onset',not stopped['state'].get('voice_consent')and late['state']==stopped['state']);check(action+' retires microphone PCM ownership','value'not in raw(dict(owner,op='voice_audio_feed',data=base64.b64encode(tone).decode())))
         d,owner,play=watched();notice=onset(d,owner);sent=event(d['state'],'send',dict(draft='Typed primary request.'));late=event(sent['state'],'voice_watch_onset',notice);check('new typed primary owner survives a late spoken interruption',sent['effect']['purpose']=='model'and late['state']==sent['state']);reply(sent,'chat','Typed result retained.')
         d,owner,play=watched();done=event(d['state'],'voice_playback_result',dict(play,completed=True));check('normal playback completion replaces watch with a normal listener',done['effect']['kind']=='voice_listen'and done['effect']['voice_audio_ticket']!=owner['voice_audio_ticket']and not done['state'].get('voice_watch_expected'));event(done['state'],'voice_stop')
+        for phase in ['listening','recognizing','thinking','synthesizing','speaking']:
+            d=event(configured(),'voice_open_review');d=event(d['state'],'voice_consent',dict(voice_interruption=True));session=d['state']['voice_consent']
+            if phase!='listening':d=spoken(d)
+            if phase in ['thinking','synthesizing','speaking']:d=transport(d)
+            if phase in ['synthesizing','speaking']:d=reply(d,'chat','Retained route test reply.')
+            if phase=='speaking':
+                d=transport(d);play=dict(voice_session=session,voice_playback_ticket=d['effect']['voice_playback_ticket']);d=event(d['state'],'voice_playback_start',play)
+            delayed=transport(d,True)if phase in ['recognizing','synthesizing']else None
+            before=len(requests);wrong=event(d['state'],'voice_route_lost',dict(voice_session='retired-session',draft='injected'));check(phase+' wrong route owner cannot alter the conversation',wrong['state']==d['state'])
+            stopped=event(d['state'],'voice_route_lost',dict(voice_session=session));check(phase+' route loss retires consent and capture without replay',not stopped['state'].get('voice_consent')and not stopped['state'].get('voice_open')and not stopped['state'].get('voice_audio_expected')and not stopped['state'].get('voice_watch_expected')and not stopped['state'].get('voice_playback_expected')and len(requests)==before)
+            again=event(stopped['state'],'voice_route_lost',dict(voice_session=session,draft='injected'));check(phase+' late route callback is an exact no-op',again['state']==stopped['state'])
+            if phase=='thinking':
+                done=reply(stopped,'chat','Primary answer retained after route loss.');check('route loss preserves an in-flight primary answer without speaking or rearming',done['effect']is None and not done['state'].get('voice_open')and'Primary answer retained after route loss.'in json.dumps(done['state'])and len(requests)==before)
+            elif phase in ['recognizing','synthesizing']:
+                late=event(stopped['state'],'network_result',delayed);check(phase+' late actual HTTP result stays retired',late['state']==stopped['state']and late['effect']is None and len(requests)==before)
+            else:
+                fresh=event(stopped['state'],'voice_open_review');fresh=event(fresh['state'],'voice_consent');old=event(fresh['state'],'voice_route_lost',dict(voice_session=session));check(phase+' previous route owner cannot stop a newly reviewed microphone',old['state']==fresh['state']and fresh['effect']['kind']=='voice_listen');event(fresh['state'],'voice_stop')
         (pathlib.Path(temp)/'local.txt').write_text('local operation retained');check('local work remains usable without voice or service availability',op(dict(op='tool',tool='read',root=temp,args={'path':'local.txt'}))=='local operation retained')
     finally:p.stdin.close();p.wait(timeout=10)
 server.shutdown();server.server_close()

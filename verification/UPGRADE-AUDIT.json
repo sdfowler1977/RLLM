@@ -427,5 +427,32 @@
       "Textures/animation/GPU/wider scene formats and full cumulative roadmap remain open."
     ],
     "prior_publication": "All256original1793904514source files match mainb5f29ae551a44786a9b3c34dcee4edbe92f99c7a. Its release draft435871828 retains all3assets; two Publish attempts returned GitHub500. No public release claimed for that draft."
+  },
+  "audio_route_continuation": {
+    "version": 1793922659,
+    "implementation": "Scoped protected-system audio route receiver and per-registration identity; pause-on-duck speech focus with main-thread and preview ownership; current-session Rust voice_route_lost cleanup; no automatic microphone restart or request replay; in-flight primary answers preserved.",
+    "validation": {
+      "connected_groups_passed": 41,
+      "connected_groups": 42,
+      "voice_pcm_http_cases": 104,
+      "platform_callback_cases": 23,
+      "selected_rust_cases": 204,
+      "scene_cases": 66,
+      "alignment_cases": 8,
+      "live_public_web_cases": 9,
+      "compiled_inputs": 153
+    },
+    "saved_source": "Drive1Vcl0KAH2Asb9LVn7j0IDY3ClJqCdo6Fu;257file hashes and ZIP CRC read back",
+    "repairs_during_validation": [
+      "Initial SDK invocation lacked the genuine generated R.java; reused the unchanged actual generated resource binding.",
+      "Corrected a newly introduced local-variable name collision before final SDK compilation.",
+      "Canceled-upload ownership correctly refused a late send; the race check now delays only an actual already-received HTTP callback."
+    ],
+    "limits": [
+      "Current owner host/SDK execution is not physical Android wired/Bluetooth/call/audio-focus or lifecycle acceptance.",
+      "Actual user-configured services and independent acceptance remain unverified.",
+      "Three genuine historical revision-two comparisons remain unavailable.",
+      "Protected scopes, original baseline, optional behavior and full broader roadmap preserved."
+    ]
   }
 }
