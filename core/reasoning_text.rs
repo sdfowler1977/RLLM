@@ -1,5 +1,5 @@
 //! Display projection for explicit leading reasoning blocks. Raw model output is
-//! retained by the caller and remains the sole input to proposal recognition.
+//! retained by the caller and remains the input to automatic proposal recognition.
 //! This is deliberately not a prose classifier or an HTML/Markdown parser.
 #[derive(Debug,PartialEq,Eq)]
 pub(super) struct Projection<'a> {

@@ -8,7 +8,10 @@ pub(super) fn binding(st:&Json)->Json{
  let mut value=obj(vec![("route",Num(route.to_string())),("route_profile",array(st,"profiles").get(route).cloned().unwrap_or(Null)),("index",Num(index.to_string())),("profile",array(st,"profiles").get(index).cloned().unwrap_or(Null)),("instructions",get(st,"instructions").clone()),("web",get(st,"web").clone()),("revision",get(st,"web_settings_revision").clone()),("mode",get(st,"capability_mode").clone())]);if !builtin(st)&&known(st){put(&mut value,"source_plan",s("selected-built-in-then-alternative-v1"));}value
 }
 pub(super) fn known(st:&Json)->bool{builtin(st)||SOURCES.iter().any(|(_,url)|*url==text(get(st,"web"),"search_url").trim())}
-pub(super) fn begin(st:&Json,p:&Json)->Json{let index=if text(get(st,"web"),"search_url").trim()==SOURCES[1].1{1}else{0};obj(vec![("last",Num("1".into())),("remaining",Arr(vec![Num((1-index).to_string())])),("query",get(get(p,"args"),"query").clone()),("index",Num(index.to_string())),("attempts",Arr(vec![])),("binding",binding(st))])}
+pub(super) fn alternative(p:&Json)->Result<bool>{match get(get(p,"args"),"source"){Null=>Ok(false),Str(v)if v.is_empty()||v=="default"=>Ok(false),Str(v)if v=="alternative"=>Ok(true),_=>Err("Search source must be default or alternative".into())}}
+fn primary(st:&Json)->usize{if text(get(st,"web"),"search_url").trim()==SOURCES[1].1{1}else{0}}
+pub(super) fn template(st:&Json,p:&Json)->Result<String>{if alternative(p)?{if !known(st){return Err("Alternative search is available only for the built-in sources; the custom endpoint was retained".into());}Ok(SOURCES[1-primary(st)].1.into())}else{Ok(investigation::search_template(st))}}
+pub(super) fn begin(st:&Json,p:&Json)->Result<Json>{template(st,p)?;let alternative=alternative(p)?;let index=if alternative{1-primary(st)}else{primary(st)};Ok(obj(vec![("last",Num("1".into())),("remaining",Arr(if alternative{vec![]}else{vec![Num((1-index).to_string())]})),("query",get(get(p,"args"),"query").clone()),("index",Num(index.to_string())),("attempts",Arr(vec![])),("binding",binding(st))]))}
 fn source(chain:&Json)->Result<(&'static str,&'static str)>{SOURCES.get(number(chain,"index")).copied().ok_or_else(||"Search alternatives exhausted".into())}
 pub(super) fn effect(chain:&Json)->Result<Json>{
  let(_,template)=source(chain)?;
@@ -87,6 +90,14 @@ pub(super) fn result_data(chain:&Json,body:&str)->Result<(String,bool,Json)>{
   assert!(percent("%é").is_none());assert!(percent("%FF").is_none());
  }
 
- #[test]fn saved_builtin_has_alternative_in_both_orders(){for (i,(_,url))in SOURCES.iter().enumerate(){let st=obj(vec![("web",obj(vec![("search_url",s(url)),("key",s("dormant-secret"))]))]);let c=begin(&st,&obj(vec![("args",obj(vec![("query",s("Query"))]))]));assert_eq!(number(&c,"index"),i);let next=advance(&c,"source unavailable").unwrap();assert_eq!(number(&next,"index"),1-i);assert_eq!(text(&next,"query"),"Query");assert!(advance(&next,"unavailable").is_err());assert_eq!(array(&next,"attempts").len(),1);}}
+ #[test]fn saved_builtin_has_alternative_in_both_orders(){for (i,(_,url))in SOURCES.iter().enumerate(){let st=obj(vec![("web",obj(vec![("search_url",s(url)),("key",s("dormant-secret"))]))]);let c=begin(&st,&obj(vec![("args",obj(vec![("query",s("Query"))]))])).unwrap();assert_eq!(number(&c,"index"),i);let next=advance(&c,"source unavailable").unwrap();assert_eq!(number(&next,"index"),1-i);assert_eq!(text(&next,"query"),"Query");assert!(advance(&next,"unavailable").is_err());assert_eq!(array(&next,"attempts").len(),1);}}
  #[test]fn finite_same_query_alternatives(){let c=chain(0);let next=advance(&c,"HTTP 403").unwrap();assert_eq!(text(&next,"query"),"Query");assert_eq!(number(&next,"index"),1);assert!(trail(&next).contains("HTTP 403"));assert!(advance(&next,"blocked").is_err());}
+ #[test]fn explicit_alternative_is_one_source_with_exact_query(){
+  for(i,(_,url))in SOURCES.iter().enumerate(){let st=obj(vec![("web",obj(vec![("search_url",s(url))]))]);let p=obj(vec![("args",obj(vec![("query",s("Tampa, Florida current weather")),("source",s("alternative"))]))]);let c=begin(&st,&p).unwrap();assert_eq!(number(&c,"index"),1-i);assert_eq!(text(&c,"query"),"Tampa, Florida current weather");assert_eq!(template(&st,&p).unwrap(),SOURCES[1-i].1);assert!(advance(&c,"unavailable").is_err());}
+ }
+ #[test]fn custom_or_unknown_source_cannot_silently_switch(){
+  let st=obj(vec![("web",obj(vec![("search_url",s("https://custom.test/search?q={query}")),("key",s("private"))]))]);
+  for source in [s("alternative"),s("other"),Bool(true)]{let p=obj(vec![("args",obj(vec![("query",s("Query")),("source",source)]))]);assert!(template(&st,&p).is_err());assert!(begin(&st,&p).is_err());}
+  let p=obj(vec![("args",obj(vec![("query",s("Query"))]))]);assert_eq!(template(&st,&p).unwrap(),"https://custom.test/search?q={query}");
+ }
 }

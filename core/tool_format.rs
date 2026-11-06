@@ -8,7 +8,8 @@ fn envelope(value: &Json) -> bool {
     matches!(value,Obj(o) if o.len()==2 && matches!(o.get("tool"),Some(Str(name)) if harness::known_tool(name)) && matches!(o.get("args"),Some(Obj(_))))
 }
 // Scan balanced data as a single unit. Nested config examples cannot become
-// proposals. This scanner only identifies an error; it never returns arguments.
+// proposals. A single candidate is data for an explicit user review action;
+// neither this scanner nor reply ingestion dispatches recovered arguments.
 fn object_end(b:&[u8], start:usize)->usize {
     let mut stack=Vec::new();let mut quoted=false;let mut escaped=false;
     for i in start..b.len().min(start.saturating_add(65536)) {
@@ -24,9 +25,11 @@ fn object_end(b:&[u8], start:usize)->usize {
     b.len()
 }
 pub(super) fn proposal_phase(st:&Json)->bool {let run=get(st,"task_run");run==&Null||matches!(text(run,"phase").as_str(),"baseline"|"probe"|"delegate")}
-pub(super) fn embedded(reply:&str)->bool {
-    if reply.len()>1024*1024 || parse(reply.trim()).is_ok(){return false;}
-    let b=reply.as_bytes();let mut i=0;let mut candidates=0;let mut fenced:Option<(u8,usize)>=None;
+fn scan(reply:&str)->(bool,Option<Json>) {
+    if reply.len()>1024*1024 || parse(reply.trim()).is_ok(){return(false,None);}
+    let mut found=false;let mut single=None;
+    let projection=reasoning_text::project(reply,false);if projection.pending{return(false,None);}
+    let b=reply.as_bytes();let mut i=if projection.hidden{reply.len()-projection.text.len()}else{0};let mut candidates=0;let mut fenced:Option<(u8,usize)>=None;
     while i<b.len(){
         if i==0||b[i-1]==b'\n' {
             let end=b[i..].iter().position(|c|*c==b'\n').map(|v|i+v).unwrap_or(b.len());
@@ -44,14 +47,15 @@ pub(super) fn embedded(reply:&str)->bool {
             let end_quote=if reply[i..].starts_with('“'){'”'}else{'’'};i+=3;
             i=reply[i..].find(end_quote).map(|p|i+p+3).unwrap_or(b.len());continue;
         }
-        if matches!(b[i],b'{'|b'['){let end=object_end(b,i);candidates+=1;if candidates>32{return false;}if end-i<=65536&&reply.is_char_boundary(end){if let Ok(value)=parse(&reply[i..end]){if envelope(&value){return true;}}}i=end;continue;}
+        if matches!(b[i],b'{'|b'['){let end=object_end(b,i);candidates+=1;if candidates>32{return(found,None);}if end-i<=65536&&reply.is_char_boundary(end){if let Ok(value)=parse(&reply[i..end]){if envelope(&value){single=if found{None}else{Some(value)};found=true;}}}i=end;continue;}
         i+=1;
     }
-    false
+    (found,single)
 }
+pub(super) fn embedded(reply:&str)->bool{scan(reply).0}
 
 pub(super) fn display(message:&Json)->String {
-    if boolean(message,"embedded_tool_json") {"Tool-shaped JSON inside text was not registered as a proposal. No local proposal was executed. Tap this message to inspect the raw response. Any corrected proposal still requires approval.".into()}else{"The model returned unsupported tool-call markup. This markup does not execute a tool. Tap this message to inspect the raw response. Use Conversation actions → Regenerate reply in new branch to retry.".into()}
+    if boolean(message,"embedded_tool_json") {format!("{}\n\nRequest not submitted. Open this message or Conversation actions to review the request or ask for a format correction.",assistant_display(&text(message,"content"),false))}else{"The model returned unsupported tool-call markup. This markup does not execute a tool. Tap this message to inspect the raw response. Use Conversation actions → Regenerate reply in new branch to retry.".into()}
 }
 pub(super) fn request_context(st:&mut Json,profile:&Json,agent:&Json){
     put(st,"format_request_profile",profile.clone());put(st,"format_request_agent",agent.clone());
@@ -63,6 +67,37 @@ pub(super) fn clear(st:&mut Json){put(st,"format_pending",Null);put(st,"format_r
 pub(super) fn available(st:&Json)->bool {
     let p=get(st,"format_pending");let messages=array(&chat(st),"messages");
     p!=&Null&&!boolean(st,"busy")&&text(p,"chat")==text(st,"active")&&number(p,"messages")==messages.len()&&messages.last().map(|m|boolean(m,"embedded_tool_json")&&!boolean(m,"format_retry_used")).unwrap_or(false)
+}
+fn origin(st:&Json)->Result<Json>{
+    if !available(st){return Err("No current reply is eligible for request recovery".into());}
+    let p=get(st,"format_pending").clone();let index=number(&p,"index");
+    let agent=if get(st,"task_run")==&Null{harness::active_agent(st)}else{get(get(st,"task_run"),"agent").clone()};
+    if array(st,"profiles").get(index)!=Some(get(&p,"profile"))||get(st,"task_run")!=get(&p,"task")||agent!=*get(&p,"agent"){return Err("The original connection or task changed; no request was recovered".into());}
+    Ok(p)
+}
+fn candidate(st:&Json)->Result<Json>{
+    origin(st)?;
+    if get(st,"pending")!=&Null||!proposal_phase(st)||!harness::has_operation_room(st){return Err("Finish the current review or task before recovering another request".into());}
+    let messages=array(&chat(st),"messages");let message=messages.last().ok_or("No response is available")?;
+    let p=scan(&text(message,"content")).1.ok_or("The reply does not contain exactly one unquoted, unfenced request; ask for a format correction")?;
+    harness::allowed_tool(st,&p)?;validate_tool(&p)?;Ok(p)
+}
+pub(super) fn review_available(st:&Json)->bool{candidate(st).is_ok()}
+pub(super) fn review(st:&mut Json)->Result<()>{
+    let mut p=candidate(st)?;let mut next=st.clone();
+    if get(&next,"task_run")!=&Null{
+        if harness::model_reply(&mut next,&p.string())?!=Some(Null){return Err("The current task could not prepare a request review".into());}
+    }else{
+        if text(&p,"tool")=="delegate"{delegation::unreviewed(&mut p);}
+        if web_operation::is_web(&p){web_operation::own_model(&next,&mut p);}
+        claim_records::own(&next,&mut p)?;experiment_records::own(&next,&mut p)?;
+        put(&mut next,"pending",p);put(&mut next,"agent_pending",Bool(true));put(&mut next,"dialog",s("approval"));
+    }
+    let mut pending=get(&next,"pending").clone();put(&mut pending,"format_review",Bool(true));put(&mut next,"pending",pending);
+    put(&mut next,"format_pending",Null);put(&mut next,"branch_source",Null);put(&mut next,"branch_index",Null);
+    put(&mut next,"notice",s("Review the recovered request and its exact arguments. Nothing has been submitted; this request requires explicit approval."));
+    if super::super::mcp_schema::state_bytes(&next)>6*1024*1024-8192{return Err("The recovered review does not fit current saved state; raw reply and current work retained".into());}
+    *st=next;Ok(())
 }
 pub(super) fn record(st:&mut Json,reply:&str,inputs:&Json)->Result<()> {
     let retried=boolean(st,"format_retry_request");
@@ -111,5 +146,13 @@ pub(super) fn messages(st:&Json,messages:&mut Vec<Json>){
   assert!(embedded(&format!("I will read this.\n{j}")));
   for t in [j.to_string(),format!("Example: `{j}`"),format!("Example:\n```json\n{j}\n```"),format!("Example:\n~~~json\n{j}\n~~~"),format!("Quoted: '{j}'"),format!("Quoted: “{j}”"),format!("> {j}"),format!("    {j}"),format!("Config: {{\"example\":{j}}}"),format!("Data: [{j}]"),r#"data {"tool":"other","args":{}}"#.into(),r#"data {"tool":"web_read","args":[]}"#.into(),r#"schema {"tool":"web_read","args":{},"description":"example"}"#.into()]{assert!(!embedded(&t),"{t}");}
   assert!(embedded(&format!("That's the issue. Re-proposing:\n{j}")));
+ }
+ #[test]fn single_review_candidate_preserves_data_boundaries(){
+  let j=r#"{"tool":"web_read","args":{"url":"https://example.test"}}"#;
+  assert!(scan(&format!("Observation retained.\n{j}")).1.is_some());
+  assert!(scan(&format!("First:\n{j}\nSecond:\n{j}")).1.is_none());
+  assert!(!embedded(&format!("<think>Consider {j}</think>Ordinary answer.")));
+  assert!(scan(&format!("<think>Consider {j}</think>Proposal:\n{j}")).1.is_some());
+  assert!(!embedded(&format!("<think>Unfinished {j}")));
  }
 }

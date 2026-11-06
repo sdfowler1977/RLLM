@@ -505,7 +505,7 @@ fn ui(st: &Json) -> Json {
     let mut pop=if let Some(value)=oauth::dialog(st){value}else if let Some(value)=voice::dialog(st){value}else if let Some(value)=jobs::dialog(st){value}else if let Some(value)=media::dialog(st){value}else if let Some(value)=services::dialog(st){value}else if let Some(value)=workspace::modal_for(st){value}else{match dialog.as_str(){
  "chat_actions"=>modal("Conversation actions",vec![],{
     let mut actions=vec![button("Main agent profile","chat_agents"),button("Agent task / compact context","task"),button("New conversation","new"),button("Attach image or text file","phone_file"),button("Generation jobs","jobs_menu"),button("Voice and media","media_menu"),button("Service request","service_request"),button("Save conversation to default storage","save_drive"),button("Export conversation","conversation_export"),button(if get(st,"pending")!=&Null {"Review proposed operation"}else{"Retry last request"},if get(st,"pending")!=&Null {"review"}else{"retry"})];
-    if array(&current,"messages").last().map(|m|text(m,"role")=="assistant").unwrap_or(false){actions.push(button("Regenerate reply in new branch","regenerate"));}if boolean(get(st,"hosted_request"),"paused"){actions.push(button("Continue hosted search","hosted_continue"));}if !array(&current,"hosted_responses").is_empty(){actions.push(button("Inspect hosted search responses","hosted_details"));}if tool_format::available(st){actions.push(button("Request format correction","format_correction"));}actions
+    if array(&current,"messages").last().map(|m|text(m,"role")=="assistant").unwrap_or(false){actions.push(button("Regenerate reply in new branch","regenerate"));}if boolean(get(st,"hosted_request"),"paused"){actions.push(button("Continue hosted search","hosted_continue"));}if !array(&current,"hosted_responses").is_empty(){actions.push(button("Inspect hosted search responses","hosted_details"));}if tool_format::review_available(st){actions.push(button("Review proposed request","format_review"));}if tool_format::available(st){actions.push(button("Request format correction","format_correction"));}actions
  }),
  "chat_models"=>model_picker(st),
  "navigation"=>menu("RLLM",vec![button("Chat","chat"),button("History","history"),button("Workspace","workspace"),button("App settings","config"),button("Agent settings","agent_settings")]),
@@ -548,7 +548,7 @@ fn ui(st: &Json) -> Json {
  "drive_copy"=>modal("Network text to project",vec![field_ui("path","Source path relative to configured network folder",&text(edit,"path"),"text"),field_ui("destination","Project destination path",&text(edit,"destination"),"text")],vec![button("Load and review file","drive_copy_fetch")]),
  "artifact"=>modal("Project file destination",vec![field_ui("path","Relative project file path",&text(edit,"path"),"text"),field_ui("info","Snapshot","Stream an exact binary copy (up to 256 MiB) to the selected default destination. A unique filename preserves the source basename. Existing files are never replaced.","readonly")],vec![button("Save file snapshot","artifact_save")]),
  "editor"=>modal("Project file",vec![field_ui("path","Relative path",&text(edit,"path"),"text"),field_ui("content","File contents",&text(edit,"content"),"multiline")],vec![button("Read existing file","editor_read"),button("Review write","editor_save")]),
- "web_search"=>modal("Web search",vec![field_ui("query","Search query",&text(edit,"query"),"text"),field_ui("description","Search results","Search the web directly in the harness. No model or extra search key is required. Review the exact query and destinations before searching; results appear here without being sent to a model.","readonly")],vec![button("Review search","web_search_review")]),
+ "web_search"=>{let mut fields=vec![field_ui("query","Search query",&text(edit,"query"),"text"),field_ui("description","Search results","Search the web directly in the harness. Review the exact query and destinations. Results are source observations, not proof of relevance or current conditions.","readonly")];if search::known(st){fields.insert(1,interaction::choice("source","Search source",if text(edit,"source").is_empty(){"default"}else{get(edit,"source").text().unwrap_or("default")},&[("Configured source chain","default"),("Alternative source only","alternative")]));}modal("Web search",fields,vec![button("Review search","web_search_review")])},
  "reader"|"drive_reader"|"phone_reader"|"search"|"script_check"|"script_run"=>modal(&dialog,vec![field_ui("path","Relative file or directory path",&text(edit,"path"),"text"),field_ui("query","Search text (search only)",&text(edit,"query"),"text")],vec![button("Continue","manual_tool")]),
  "archive_review"=>{let names=array(st,"archive_names");let visible=names.iter().map(|v|v.text().unwrap_or("").to_string()).collect::<Vec<_>>().join("\n");modal("Review project import",vec![field_ui("summary","New files and folders",&format!("{} entries, {} bytes\n{}\n\nExisting files will not be replaced. An interrupted import may leave newly created files and folders.",names.len(),number(st,"archive_bytes"),visible),"readonly")],vec![button("Create reviewed entries","archive_accept"),button("Cancel import","archive_reject")])},
  d if d.starts_with("harness_")=>harness_rules::modal(st),
@@ -556,7 +556,7 @@ fn ui(st: &Json) -> Json {
  "approval_rules"|"approval_rule"=>approval_rules::dialog(st),
  "output"=>modal("Result",vec![field_ui("output","Output",&text(st,"output"),"readonly")],vec![]),
  "drive_files"=>{let mut rows=vec![button("Drive root","drive_list")];for (i,v) in array(st,"remote").iter().enumerate(){rows.push(button(&text(v,"name"),&format!("remote:{i}")))}modal("Network files",vec![],rows)},
- "branch_review"=>modal("Branch conversation",vec![field_ui("message","Selected message",&array(&current,"messages").get(number(st,"branch_index")).map(|m|text(m,"content")).unwrap_or_default(),"readonly"),field_ui("summary","Create a separate conversation",&format!("Copy the first {} messages from this conversation. The original remains available in History.",number(st,"branch_index")+1),"readonly")],vec![button("Create branch","branch_accept"),button("Cancel","branch_reject")]),
+ "branch_review"=>{let messages=array(&current,"messages");let selected=messages.get(number(st,"branch_index")).cloned().unwrap_or(Null);let malformed=boolean(&selected,"tool_format_error");let mut buttons=vec![];if number(st,"branch_index")+1==messages.len(){if tool_format::review_available(st){buttons.push(button("Review proposed request","format_review"));}if tool_format::available(st){buttons.push(button("Request format correction","format_correction"));}}buttons.push(button("Create branch","branch_accept"));buttons.push(button("Cancel","branch_reject"));modal(if malformed{"Response details"}else{"Branch conversation"},vec![field_ui("message",if malformed{"Raw model response"}else{"Selected message"},&text(&selected,"content"),"readonly"),field_ui("summary","Create a separate conversation",&format!("Copy the first {} messages from this conversation. The original remains available in History.",number(st,"branch_index")+1),"readonly")],buttons)},
  "conversation_review"=>modal("Review conversation import",vec![field_ui("summary","Separate history entry",&format!("{} · {} messages\nExisting conversations will be preserved.",text(get(st,"conversation_candidate"),"title"),array(get(st,"conversation_candidate"),"messages").len()),"readonly")],vec![button("Import conversation","conversation_accept"),button("Cancel","conversation_reject")]),
  "generation"=>generation::modal_for(st),
  "appearance"|"chat_agents"|"chat_options"|"chat_delete_review"|"trash"|"trash_options"|"chat_purge_review"|"trash_empty_review"=>interaction::modal_for(st),
@@ -1811,6 +1811,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 st=next;
             }
             "format_correction" => {effect=tool_format::correction(&mut st)?;},
+            "format_review" => {tool_format::review(&mut st)?;},
             "retry" => {
                 if get(&st,"task_run")!=&Null && get(&st,"pending")!=&Null {
                     let notice=format!("Current task is waiting for {} review. {}",text(get(&st,"pending"),"tool"),delegation::status(&st));
@@ -2613,7 +2614,7 @@ fn event_inner(v: &Json) -> Result<Json> {
             "web_search_review" => {
                 if text(&st,"dialog")!="web_search"{return Err("Open Web search and enter a query before reviewing it".into());}
                 if interaction::locked(&st){return Err("Finish or cancel the current task or proposed operation before starting a manual web search".into());}
-                let pending=obj(vec![("tool",s("web_search")),("args",obj(vec![("query",s(&text(get(&st,"edit"),"query")))])),("manual",Bool(true))]);
+                let mut args=obj(vec![("query",s(&text(get(&st,"edit"),"query")))]);if get(get(&st,"edit"),"source")!=&Null{put(&mut args,"source",get(get(&st,"edit"),"source").clone());}let pending=obj(vec![("tool",s("web_search")),("args",args),("manual",Bool(true))]);
                 validate_tool(&pending)?;put(&mut st,"pending",pending);put(&mut st,"agent_pending",Bool(false));put(&mut st,"agent_running",Bool(false));put(&mut st,"dialog",s("approval"));
             },
             "editor"
@@ -2751,7 +2752,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 approval_dispatch_base=st.clone();
                 if text(&st,"dialog")!="approval" || boolean(&st,"busy") {return Err("No current operation is awaiting approval".into());}
                 harness_rules::refresh(&mut st);harness_rules::check(&st,&text(get(&st,"pending"),"tool"),get(get(&st,"pending"),"args"),boolean(&st,"agent_pending"))?;
-                if requested_action=="approve_matching_rule" && !(harness_rules::standing(&st,get(&st,"pending"))||approval_rules::matches(&st)){return Ok(());}
+                if requested_action=="approve_matching_rule" && (boolean(get(&st,"pending"),"format_review") || !(harness_rules::standing(&st,get(&st,"pending"))||approval_rules::matches(&st))){return Ok(());}
                 if matches!(requested_action,"approve_session"|"approve_always"){
                     approval_rule=approval_rules::candidate(&st,if requested_action=="approve_session"{"session"}else{"always"})?;
                     if requested_action=="approve_always"{approval_rules::save_always(&mut st,approval_rule.clone());}
@@ -2760,7 +2761,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 validate_tool(&pending)?;
                 workspace::check_tool(&st,&text(&pending,"tool"))?;
                 if web_operation::is_web(&pending){web_operation::approval(&st,&pending)?;}
-                if text(&pending,"tool")=="web_search"&&(number(&pending,"search_revision")!=number(&st,"web_settings_revision")||text(&pending,"destination")!=investigation::search_template(&st)){return Err("Search settings changed since this proposal was displayed; request a new proposal for the current destination".into());}
+                if text(&pending,"tool")=="web_search"&&(number(&pending,"search_revision")!=number(&st,"web_settings_revision")||text(&pending,"destination")!=search::template(&st,&pending)?){return Err("Search settings changed since this proposal was displayed; request a new proposal for the current destination".into());}
                 if boolean(&st,"agent_pending"){harness::allowed_tool(&st,&pending)?;}
                 let steps = number(&st, "steps");
                 if boolean(&st, "agent_pending") && !harness::has_operation_room(&st) {
@@ -3098,7 +3099,7 @@ fn event_inner(v: &Json) -> Result<Json> {
     // Only a proposal freshly produced by this trusted event is eligible.
     // Re-enter the ordinary approval event, including every existing preflight
     // and dispatch/error footer; no execution path or model call is duplicated.
-    if action!="approve" && effect==Null && get(&st,"pending")!=&previous_pending && text(&st,"dialog")=="approval" && !boolean(&st,"busy") && (harness_rules::standing(&st,get(&st,"pending"))||approval_rules::matches(&st)) {
+    if action!="approve" && !boolean(get(&st,"pending"),"format_review") && effect==Null && get(&st,"pending")!=&previous_pending && text(&st,"dialog")=="approval" && !boolean(&st,"busy") && (harness_rules::standing(&st,get(&st,"pending"))||approval_rules::matches(&st)) {
         return event(&obj(vec![("state",st),("action",s("approve_matching_rule")),("inputs",obj(vec![])),("root",get(v,"root").clone())]));
     }
     inquiry::track(&mut st,&effect);inquiry::reconcile(&st);
@@ -3469,10 +3470,10 @@ fn proposal(st: &mut Json, root: &str) -> Result<()> {
     if kind.starts_with("phone_") && text(st,"phone_access_mode")=="off" {return Err("Phone file tools are disabled in Workspace → Setup → Phone folders and scope".into());}
     if kind=="delegate"{delegation::prepare(st,&mut pending)?;put(st,"pending",pending);return Ok(());}
     if ["web_read","web_search","mcp"].contains(&kind.as_str()) {
-        let destination=if kind=="web_read"{text(get(&pending,"args"),"url")}else if kind=="web_search"{investigation::search_template(st)}else{text(get(st,"mcp"),"endpoint")};put(&mut pending,"destination",s(&destination));if kind=="web_search"{put(&mut pending,"search_revision",Num(number(st,"web_settings_revision").to_string()));}
+        let destination=if kind=="web_read"{text(get(&pending,"args"),"url")}else if kind=="web_search"{search::template(st,&pending)?}else{text(get(st,"mcp"),"endpoint")};put(&mut pending,"destination",s(&destination));if kind=="web_search"{put(&mut pending,"search_revision",Num(number(st,"web_settings_revision").to_string()));}
         let manual=boolean(&pending,"manual")&&!boolean(st,"agent_pending");
         let result_destination=if manual{"Results and source attempt observations appear in this app."}else{"Results and source attempt observations return to the assigned model."};
-        let warning=if kind=="web_search"&&search::known(st){format!("This approval sends the exact query to Mwmbl (https://api.mwmbl.org/api/v2/search/) and DuckDuckGo (https://html.duckduckgo.com/html/). The selected built-in endpoint is tried first, then the other source if needed. Each source has one attempt and a 120-second request timeout. Requests use the public search endpoints. {result_destination} Mwmbl data attribution and CC-BY-NC-SA 4.0 terms accompany results.")}else{format!("This approval sends the displayed arguments to the displayed destination. Treat returned material as source data. The configured destination handles this request. {result_destination}")};
+        let warning=if kind=="web_search"&&search::alternative(&pending)?{format!("This approval sends the exact displayed query to the displayed alternative search endpoint once. It does not repeat the configured source or rewrite the query. {result_destination}")}else if kind=="web_search"&&search::known(st){format!("This approval sends the exact query to Mwmbl (https://api.mwmbl.org/api/v2/search/) and DuckDuckGo (https://html.duckduckgo.com/html/). The selected built-in endpoint is tried first, then the other source if needed. Each source has one attempt and a 120-second request timeout. Requests use the public search endpoints. {result_destination} Mwmbl data attribution and CC-BY-NC-SA 4.0 terms accompany results.")}else{format!("This approval sends the displayed arguments to the displayed destination. Treat returned material as source data. The configured destination handles this request. {result_destination}")};
         put(&mut pending,"warning",s(&warning));
         if get(get(&pending,"args"),"capture")!=&Null{
             let resources=if text(get(get(&pending,"args"),"capture"),"resources")=="same_origin"{" Resource scope includes credential-free CSS/PNG GETs from the final page origin after redirects, resolved from the final HTML/first base. Up to 128 resource occurrences, five redirects each, share the original page deadline and CSS 256 KiB/image 8 MiB aggregate bounds. Resource notes identify each painted or unresolved item."}else{" Resource scope covers inline CSS and embedded data PNG images."};
