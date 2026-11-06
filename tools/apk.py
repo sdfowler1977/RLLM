@@ -25,6 +25,7 @@ with zipfile.ZipFile(apk)as z:
   # need not retain a contiguous callback-name literal in either native image.
   for marker in [b'voice-onset:',b'voice_interrupt_listen',b'voice_interruption',b'voice_watch_expected',b'Spoken interruption ownership changed',b'Interrupt replies by speaking']:assert marker in raw,(abi,marker)
   for marker in [b'Voice conversation stopped after an audio route or focus interruption; review voice to start again']:assert marker in raw,(abi,marker)
+  for marker in [b'Waiting for voice request approval',b'resume_available',b'Voice request was not started; resume the microphone when ready']:assert marker in raw,(abi,marker)
   for marker in [b'scene_ticket',b'Static geometry preview',b'Scene viewport ownership changed',b'Scene source bytes changed while loading']:assert marker in raw,(abi,marker)
   for marker in [b'RLLM Workspace',b'ReverseEngineerAnything',b'reverse_engineer_anything']:assert marker not in raw,(abi,marker)
   native.append(dict(abi=abi,machine=machine,load_alignments=aligns,bytes=len(raw)))
@@ -32,6 +33,6 @@ with zipfile.ZipFile(apk)as z:
  dex=z.read('classes.dex')
  for marker in [b'media_input_open',b'media_input_feed',b'media_input_finish',b'media_upload_read',b'upload_bytes',b'media_receipt']:assert marker in dex,marker
  for marker in [b'voice_watch',b'voice_watch_start',b'voice_watch_unavailable',b'voice_interrupt_listen',b'Landroid/media/audiofx/AcousticEchoCanceler;',b'echo_active']:assert marker in dex,marker
- for marker in [b'Lcom/local/client/AudioRoute;',b'setWillPauseWhenDucked',b'voice_route_lost',b'android.media.AUDIO_BECOMING_NOISY']:assert marker in dex,marker
+ for marker in [b'Lcom/local/client/AudioRoute;',b'setWillPauseWhenDucked',b'voice_route_lost',b'android.media.AUDIO_BECOMING_NOISY',b'resume_available']:assert marker in dex,marker
  for marker in [b'Lcom/local/client/SceneView;',b'scene_frame',b'scene_close',b'Rotate left',b'Reset view']:assert marker in dex,marker
 record=dict(version=args.version,path=str(apk),bytes=apk.stat().st_size,sha256=hashlib.sha256(apk.read_bytes()).hexdigest(),native=native,label='RLLM',package='com.local.client.lab',signature='v2/v3; one pinned current signer',zip_crc='passed',build_inputs=build_inputs,network_security=dict(path='res/xml/network.xml',resource_id=resource_id,trust_anchors=['system','user'],pin_overrides=False));out=root/'output/checks';out.mkdir(parents=True,exist_ok=True);(out/'apk.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record,indent=2))

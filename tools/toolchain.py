@@ -7,14 +7,54 @@ def digest(path):
  with path.open('rb')as f:
   while data:=f.read(8*1024*1024):h.update(data)
  return h.hexdigest()
+def verified(path,t):
+ return path.is_file()and path.stat().st_size==t.get('bytes',t.get('size'))and digest(path)==t['sha256']
+def preserve(path):
+ if not path.exists():return
+ number=1
+ while path.with_name(path.name+f'.rejected-{number}').exists():number+=1
+ path.rename(path.with_name(path.name+f'.rejected-{number}'))
+def durable_download(t,path):
+ # The parent owns and flushes the complete sequential write. A downloader's
+ # process exit alone previously preceded truncated persisted cache files.
+ partial=path.with_name(path.name+'.partial');preserve(partial)
+ process=subprocess.Popen(['curl','--fail','--silent','--show-error','--location','--connect-timeout','15','--max-time','600',t['url']],stdout=subprocess.PIPE)
+ size=0;expected=t.get('bytes',t.get('size'))
+ try:
+  with partial.open('xb')as out:
+   while chunk:=process.stdout.read(1024*1024):
+    size+=len(chunk)
+    if size>expected:raise ValueError('Official tool download exceeds its pinned size: '+t['component'])
+    out.write(chunk)
+   out.flush();os.fsync(out.fileno())
+  if process.wait()!=0:raise ValueError('Official tool download failed: '+t['component'])
+  if size!=expected or not verified(partial,t):raise ValueError('Persisted official tool bytes differ: '+t['component'])
+  preserve(path);partial.rename(path)
+  descriptor=os.open(path.parent,os.O_RDONLY)
+  try:os.fsync(descriptor)
+  finally:os.close(descriptor)
+  if not verified(path,t):raise ValueError('Renamed official tool bytes differ: '+t['component'])
+ finally:
+  process.stdout.close()
+  if process.poll()is None:process.kill();process.wait()
 def download(t):
  suffix='.zip'if t['url'].endswith('.zip')else'.tar.gz'if t['url'].endswith('.tar.gz')else'.tar.xz';p=downloads/(t['component']+'-'+t.get('target','host')+suffix)
- if not p.exists()or digest(p)!=t['sha256']:subprocess.run(['curl','--fail','--silent','--show-error','--location',t['url'],'--output',str(p)],check=True)
- assert p.stat().st_size==t.get('bytes',t.get('size')),p.name;assert digest(p)==t['sha256'],p.name;print('Verified official',t['component'],t.get('target',''),flush=True);return t,p
+ for attempt in range(2):
+  if verified(p,t):print('Verified persisted official',t['component'],t.get('target',''),flush=True);return t,p
+  preserve(p)
+  try:durable_download(t,p)
+  except (OSError,ValueError)as failure:
+   if attempt:raise
+   print('Retrying rejected official download once:',t['component'],str(failure),flush=True)
+ if not verified(p,t):raise ValueError('Official tool download could not be persisted: '+t['component'])
+ print('Verified persisted official',t['component'],t.get('target',''),flush=True);return t,p
 with ThreadPoolExecutor(max_workers=4)as pool:items=list(pool.map(download,tools))
 def name(n):
  p=PurePosixPath(n);assert n and not p.is_absolute()and'\\'not in n and all(x not in ['..','']for x in p.parts),n;return p
 def extract(t,p):
+ # Recheck the persisted cache immediately before consuming it, including cache
+ # entries downloaded concurrently with other components.
+ if not verified(p,t):_,p=download(t)
  dest=base/'tooling'/('components'if t['component'].startswith('rust')else t['component']);dest.mkdir(parents=True,exist_ok=True);seen=set();links=[];total=0
  if zipfile.is_zipfile(p):
   with zipfile.ZipFile(p)as z:
