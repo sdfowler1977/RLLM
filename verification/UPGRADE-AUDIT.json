@@ -454,5 +454,44 @@
       "Three genuine historical revision-two comparisons remain unavailable.",
       "Protected scopes, original baseline, optional behavior and full broader roadmap preserved."
     ]
+  },
+  "voice_review_continuation": {
+    "version": 1793979944,
+    "implementation": "Distinct review waiting status; real service dispatch starts recognition/synthesis status; rejection or removal of the owned review pauses capture; explicit resume gets a new owner; shared Rust start conditions drive native Resume enabled state. Manual transcript remains in the composer.",
+    "baseline_reproduction": {
+      "version": 1793922659,
+      "source_sha256": "c506100631f916806f5b007808311abe1dd95ff93c5b512fc0c42a48c43acd82",
+      "observation": {
+        "before_phase": "synthesizing",
+        "after_reject_phase": "synthesizing",
+        "voice_phase": "synthesis",
+        "pending": null,
+        "effect": null
+      },
+      "method": "Actual saved core compiled opaquely; real PCM/HTTP/controlled model/review operation before repair."
+    },
+    "validation": {
+      "selected_rust_cases": 204,
+      "voice_cases": 199,
+      "interruption_cases": 104,
+      "scene_cases": 66,
+      "platform_route_cases": 23,
+      "connected_groups_passed": 41,
+      "connected_groups": 42,
+      "live_public_web_cases": 9,
+      "compiled_inputs": 153
+    },
+    "toolchain_recovery": {
+      "observed": "Two official Rust target archive files persisted truncated at20172800and26451968bytes after an earlier verification message.",
+      "repair": "Parent-owned bounded sequential writes with file/directory fsync,post-close/post-rename size/hash verification,pre-extraction verification and at most one retry; rejected bytes preserved.",
+      "verified_archives": 8,
+      "verified_large_extracted_or_installed_payloads": 287
+    },
+    "limits": [
+      "Owner execution is not independent acceptance.",
+      "No physical Android UI/IME/audio/headset/Bluetooth/call/lifecycle acceptance or actual configured user-service execution.",
+      "Three genuine historical revision-two comparisons remain unavailable; fingerprints and protected historical scopes preserved.",
+      "Original baseline,optional services and full cumulative roadmap preserved."
+    ]
   }
 }
