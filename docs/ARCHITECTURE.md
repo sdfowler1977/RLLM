@@ -30,6 +30,10 @@ Each model operation gets a ticket. Late callbacks cannot simply attach to the n
 
 Profiles specify permitted tools, reusable skills and callable subagents. The app reviews proposed operations and executes the accepted operation through the appropriate owned core/platform implementation. A model's prose, tool result or saved lesson is not a permission grant. Current refinement uses bounded baseline/proposal/probe/composition/adoption stages, while delegation captures parent and child context separately. Explicit refinement can snapshot up to four recent global adopted lessons as bounded, untrusted proposal/composition examples. The user can opt out; historical examples never grant tools or override protected instructions.
 
+Malformed response recovery keeps raw commentary visible. A single unquoted, unfenced, top-level request in the current reply is data for an explicit Review proposed request action. That action verifies current originating profile, agent/task, permissions, operation limits and arguments, then stages the ordinary review without dispatch. Its one-time approval marker prevents saved-rule and matching-rule execution. Example/nested/ambiguous requests and hidden reasoning cannot acquire authority through this path. Response details retains the raw text and original branch action.
+
+Built-in search may explicitly select the alternative endpoint for one newly reviewed exact-query attempt. That selection is captured in the operation arguments and displayed destination. It does not repeat the primary source, rewrite a query, change saved settings or borrow custom credentials. Custom endpoints refuse this built-in-only selection.
+
 ## Platform boundaries
 
 The Rust core offers reusable domain logic, not an already portable end-user application. Android services, Keystore, document URIs, UI lifecycle and platform network bindings need replacements on another operating system. The archive implementation includes Linux/Android-specific descriptor bindings. See [the iOS assessment](IOS.md).
