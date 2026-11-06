@@ -1,4 +1,27 @@
 {
+  "proposal_recovery": {
+    "version": 1793985689,
+    "reported_behavior": "Installed screenshots showed useful commentary plus one web_search JSON request replaced by a generic warning. Raw text was exposed only through Branch conversation. Actual search records were irrelevant to current weather.",
+    "baseline_reproduction": {
+      "version": 1793982425,
+      "source_sha256": "6bc9f7d834a6d77ad8c52fae511a7145bd47e7f9e1b76fdfc6a63e85cbcc3d21",
+      "method": "Exact saved core compiled before edits; public model completion with commentary plus one bare JSON object reproduced hidden commentary, no proposal and no operation."
+    },
+    "implementation": "Useful commentary retained in chat; Response details and explicit single-request review; current originating profile/agent/task/permission checks; separate one-time approval that cannot use matching saved rules; examples, ambiguity and hidden reasoning excluded; explicit built-in alternative-source-only search with exact query and custom-credential isolation.",
+    "validation": {
+      "recovery_cases": 128,
+      "selected_rust_cases": 212,
+      "connected_groups_passed": 42,
+      "connected_groups": 43,
+      "scope": "Four model formats through actual shared public events; actual matching session grants, real local HTTP and controlled model continuation. Installed Android screenshots diagnose the old failure; they do not certify the repaired APK."
+    },
+    "source_checkpoint": "Drive1qGkg82ZyexX7iIPH0m1qaR_gTMPZbSN-;258source-only files,all member hashes and ZIP CRC verified on actual download;SHA256b01d183e49e0da1c6f56cc222671475679100ad1e855160adb3c3d5ddee17a49",
+    "limits": [
+      "Actual user's private model server, current weather, physical repaired-device UI and independent acceptance remain unverified.",
+      "Three genuine historical comparisons remain unavailable; reader fingerprints and protected archive/compression/fixture scopes preserved.",
+      "Original baseline,optional voice/media/local services and full cumulative roadmap retained."
+    ]
+  },
   "foreground_voice": {
     "passed": 147,
     "scope": "Actual local HTTP/WAVE with controlled PCM, model and playback callbacks across all four primary formats; device and user endpoint acceptance pending.",
@@ -360,11 +383,11 @@
     ],
     "scope": "Owner checks through actual ACP standard streams and shared production workspace engine; no model, external server, developer report or journal in the selected workspace. Read-only ACP v1 capability scope, not full coding-agent or Android ACP client acceptance."
   },
-  "current_selected_rust_cases": 199,
+  "current_selected_rust_cases": 212,
   "current_connected_groups": {
-    "passed": 36,
-    "total": 37,
-    "executed_checks": 1676,
+    "passed": 42,
+    "total": 43,
+    "executed_checks": 2308,
     "unavailable_historical_checks": 3
   },
   "resource_concurrency": {
