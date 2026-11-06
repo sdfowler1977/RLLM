@@ -1,3 +1,13 @@
+# Current audit scope
+
+The current signed candidate, executed counts and acceptance limits are recorded in [RESULTS.json](../verification/RESULTS.json), [STATUS.md](STATUS.md) and [release notes](../release/NOTES.md). The dated checkpoints in project-progress.md preserve actual before/after observations. Owner checks are not independent or physical-device acceptance.
+
+The audit records below describe their original source versions and retain their historical counts and wording. Their uses of “current” refer to those original versions. Later foreground spoken interruption, audio-route/focus ownership, bounded scene workers and voice-review lifecycle repairs are described by the current files above. Older broad scope remains preserved.
+
+---
+
+# Historical audit records
+
 # Foreground open-microphone update
 
 The user extended the previous manual voice scope to optional automatic conversation turns. Rust now segments direct microphone PCM and owns expiring capture, recognition, model, synthesis and playback transitions. Android bindings provide actual microphone permission/capture and decoder callbacks. Capture stops before recognition and remains stopped through playback. No platform speech recognizer or bundled neural transcription model is required; recognition and synthesis are independently configurable server capabilities.

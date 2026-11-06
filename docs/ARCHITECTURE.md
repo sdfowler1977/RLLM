@@ -1,6 +1,6 @@
 ## Question process
 
-The current complete source contains137 build inputs/96 Rust modules. `core/inquiry.rs` is owned by the existing engine; application dispatch, the existing hypotheses operation and task/provider lifecycle use it directly. All four existing provider formats share process guidance and owned tool completions. Without a model, use Investigation → Question and design process. No added runtime dependency. See [process guide](QUESTION-PROCESS.md), [current scope](STATUS.md) and [release notes](../release/NOTES.md). Earlier instructions below remain preserved; latest release facts govern this version.
+The exact current source/build-input inventory is recorded in PUBLICATION-MANIFEST.json. `core/inquiry.rs` is owned by the existing engine; application dispatch, the existing hypotheses operation and task/provider lifecycle use it directly. All four existing provider formats share process guidance and owned tool completions. Without a model, use Investigation → Question and design process. No added runtime dependency. See [process guide](QUESTION-PROCESS.md), [current scope](STATUS.md) and [release notes](../release/NOTES.md). Earlier instructions below remain preserved; latest release facts govern this version.
 
 ## Current access and inspection controls
 
@@ -43,3 +43,7 @@ The Rust core offers reusable domain logic, not an already portable end-user app
 network.rs owns incremental HTTP response framing and bounded, owned response sessions. transfer.rs reuses it for verified snapshot streams. The Wire.java platform binding supplies Android InputStream bytes and cancellation/deadline checks; all HTTP completion, framing validation, byte limits and session identity checks execute in Rust. The original complete wire response follows the existing model, storage or gateway decoder and owned callback.
 
 Activity model/snapshot/MCP transports and Gateway upstream I/O share Resolution.java for bounded Android DNS lookup. The original operation supplies its owner/deadline checks, while Rust retains destinations, messages, permissions and callback ownership. The service closes its resolver owner during teardown; completed late system lookups carry no application callback.
+
+## Voice review state
+
+Rust owns a distinct pending-review phase. The displayed operation changes to recognition or synthesis only when services admits its current owned dispatch. Losing or rejecting the held review pauses automatic capture; hiding the review preserves its proposal. The Resume microphone control uses the same current consent, pending-operation and draft checks as the actual capture-start operation.
