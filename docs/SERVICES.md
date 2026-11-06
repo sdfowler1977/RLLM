@@ -121,4 +121,8 @@ Voice request review now has an explicit waiting state. Dismissing or going back
 
 Resume microphone is enabled only when the same Rust checks used to start capture allow it: the reviewed session is live, no operation or proposal is pending, and the composer is empty. A retained transcript can be edited or sent without opening the microphone; clearing it enables explicit resume.
 
-If current memory admission refuses a recognition or speech request, its owned transfer is retired and the voice loop shows Paused. The abandoned voice phase is cleared, the primary text answer remains available, and nothing is submitted or automatically replayed. Explicit resume opens a fresh microphone while the reviewed session remains valid. Cleanup of a separate service request does not retire an unrelated microphone capture.
+If current memory admission refuses a recognition or speech request, its owned transfer is retired and the voice loop shows Paused. The abandoned voice phase is cleared, the primary text answer remains available, and nothing is submitted or automatically replayed. Explicit resume opens a fresh microphone while the reviewed session remains valid. Service cleanup changes only its matching voice phase.
+
+Starting a separate request review, operation or task pauses the current microphone. A completed utterance arriving afterward cannot replace that proposal or running request, submit recognition or change the conversation. The separate request can still be approved and completed normally. Resume microphone stays unavailable while work is pending and starts a fresh capture only when explicitly chosen afterward.
+
+If an otherwise completed answer cannot enter speech preparation, including the speech-text size bound or full local media storage, the loop also shows Paused with its specific explanation. The complete primary text remains in the conversation. It is not truncated for speech or automatically sent again.
