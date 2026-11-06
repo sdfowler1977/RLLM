@@ -1,14 +1,14 @@
 {
   "state": "in_progress; signed candidate",
-  "version": 1793922659,
+  "version": 1793979944,
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
   "signing_certificate_sha256": "ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5",
   "key_change_authorized": true,
   "signed_apk": {
     "path": "release/RLLM.apk",
-    "bytes": 6543378,
-    "sha256": "b87d77c345e070398f72ba4196ffaa9fbd86067129fe7300a1fee7b7ed700b5b"
+    "bytes": 6547474,
+    "sha256": "fa06e4c1b7f342da91c3f930fbbbae7a264a9601e292aa451578f2d37a804cf5"
   },
   "build_inputs": {
     "AndroidManifest.xml": "68f6aadd38bbd8d73c00736e2a0ee21f2b512de36000ea8cd89e6f3609f3caf2",
@@ -108,14 +108,14 @@
     "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
     "core/scene.rs": "d6526bd3c008bbe3a54b88679fef4f26f889ddc3be0dcfc95246fa7855ba25a0",
     "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
-    "core/services.rs": "637a1a26233a0592f0c92f29851bd27a0256640ad75136f230620c33916e1d1f",
+    "core/services.rs": "7029883a1fa17b99dda07dd674994864d66a654255555f7486013867affb74e2",
     "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
     "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
     "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
     "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
     "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
     "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
-    "core/voice.rs": "054ad6882a6102371cb7ce9b21ac4371ea699f963ba0fba1ec6fb2abe558489f",
+    "core/voice.rs": "fbf7cae4b80ad10eba078c9b67e57c6355d650437ab0c4173c002d629e7a5c9f",
     "core/voice_audio.rs": "7c8314f0cb211aea43542eef543a3cc5ba9c327b401e4c3e907d8d5b27aca065",
     "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
     "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
@@ -126,7 +126,7 @@
     "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
     "package.sh": "ff221b6973fbd911db47d38c7a030b394904833d0238b3b980f3a86ab14559e4",
     "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-    "platform/com/local/client/Activity.java": "ef72a508e1c9a32aabc287fbd15d318e019c3b60ca32ec678c6279235f3abac4",
+    "platform/com/local/client/Activity.java": "139b0c99da086f4db89da99997fbaf88b85de0a2518d30a2af2e831f0dd4b3ed",
     "platform/com/local/client/AudioRoute.java": "0a4d2773be4300611d15cff452e079701c0943f822e595f7e2b866305a7d373b",
     "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
     "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
@@ -563,8 +563,8 @@
       "sha256": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b"
     },
     "core/services.rs": {
-      "bytes": 33322,
-      "sha256": "637a1a26233a0592f0c92f29851bd27a0256640ad75136f230620c33916e1d1f"
+      "bytes": 33351,
+      "sha256": "7029883a1fa17b99dda07dd674994864d66a654255555f7486013867affb74e2"
     },
     "core/stdio.rs": {
       "bytes": 11663,
@@ -591,8 +591,8 @@
       "sha256": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065"
     },
     "core/voice.rs": {
-      "bytes": 24206,
-      "sha256": "054ad6882a6102371cb7ce9b21ac4371ea699f963ba0fba1ec6fb2abe558489f"
+      "bytes": 24958,
+      "sha256": "fbf7cae4b80ad10eba078c9b67e57c6355d650437ab0c4173c002d629e7a5c9f"
     },
     "core/voice_audio.rs": {
       "bytes": 8872,
@@ -635,16 +635,16 @@
       "sha256": "ea98d6f89776486630494de41ed654ae014daf6d7dad0dc435faf90e090961ac"
     },
     "docs/ARCHITECTURE.md": {
-      "bytes": 5820,
-      "sha256": "8d5b73244ce52a82cb859b1ff3fcd982ac999a036a47505e0419b9f4a7955514"
+      "bytes": 6259,
+      "sha256": "0b766fc1ae5784599be8d1baa6d2f83ea92ff640c1e322d17c2f385978974296"
     },
     "docs/ASSETS.md": {
       "bytes": 577,
       "sha256": "4be441540c78cc579da26efcc8dd9678e95b6396ec7b0913e758f4d7b86cf10a"
     },
     "docs/AUDIT.md": {
-      "bytes": 11752,
-      "sha256": "b8a540a4e0e02154a1f174bec9a6ed74b9369accd1340eaa853d2a7751101302"
+      "bytes": 12534,
+      "sha256": "70fc3dc81539e240b8dc8d0c47fc9191523e7971b1bd9a8d3f3e0caf1320f425"
     },
     "docs/AUTHORIZATION.md": {
       "bytes": 6099,
@@ -655,8 +655,8 @@
       "sha256": "6e0f40c106aaa07849a80af2cca067de6ad0a98de60c64d6ae7dc0fea66a3662"
     },
     "docs/BUILD.md": {
-      "bytes": 8873,
-      "sha256": "dff00feda06d3ff00dd70fe8a8cd86cc472c3a7fb77997c4f341006fe2834362"
+      "bytes": 9343,
+      "sha256": "8873e0fe9be17c114983cf054c465ec030df9f06a46fda2ff3aa7a88a387bfa1"
     },
     "docs/CHAT.md": {
       "bytes": 1436,
@@ -707,8 +707,8 @@
       "sha256": "a0d5c3c3bfac7d1fc5e26785b00a2e88021195552db975594c92df5fd3792ee6"
     },
     "docs/SERVICES.md": {
-      "bytes": 18405,
-      "sha256": "27e164c0ad0f70e716156b14b259f5300657131d3ac5348e1666c2c540e66229"
+      "bytes": 19129,
+      "sha256": "1810207ab82c25a80a846af058e7e5afd3632815f6003cc30336ac311a59ee49"
     },
     "docs/SETUP.md": {
       "bytes": 7898,
@@ -719,8 +719,8 @@
       "sha256": "93f5a206d83ac2fd56bf4cb74b50960d6df33005a90b3679856e7e6ae04189f6"
     },
     "docs/STATUS.md": {
-      "bytes": 3890,
-      "sha256": "ee4605f6651e9e1fd0fc303d77218d1a7482eafe6f64794fa373d5941045c2df"
+      "bytes": 4186,
+      "sha256": "0ea23f1f344b1e1d09560a7be29baca36111b5999a8981dfedf5eeded5fed423"
     },
     "docs/TOOL-FEEDBACK.md": {
       "bytes": 4677,
@@ -775,8 +775,8 @@
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     "platform/com/local/client/Activity.java": {
-      "bytes": 165681,
-      "sha256": "ef72a508e1c9a32aabc287fbd15d318e019c3b60ca32ec678c6279235f3abac4"
+      "bytes": 165787,
+      "sha256": "139b0c99da086f4db89da99997fbaf88b85de0a2518d30a2af2e831f0dd4b3ed"
     },
     "platform/com/local/client/AudioRoute.java": {
       "bytes": 1846,
@@ -839,20 +839,20 @@
       "sha256": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f"
     },
     "project-progress.md": {
-      "bytes": 58206,
-      "sha256": "87c1a9e19203c91d007a3adf74ae3696d24a7874f2144003fb5f9de5f24de271"
+      "bytes": 66700,
+      "sha256": "8efe9167308f90afb1e83999061944325206c4e56a4305564028156f26d8e2dc"
     },
     "release/NOTES.md": {
-      "bytes": 3975,
-      "sha256": "3d61127ce46a385d38f5dbb6168be31dcb7ea97a7eb249908991f02d45b86f36"
+      "bytes": 4271,
+      "sha256": "4d4682ab1d3acd537c8369f327dfa25728c36319ed71b521bf016f7b50c41900"
     },
     "release/RLLM.apk": {
-      "bytes": 6543378,
-      "sha256": "b87d77c345e070398f72ba4196ffaa9fbd86067129fe7300a1fee7b7ed700b5b"
+      "bytes": 6547474,
+      "sha256": "fa06e4c1b7f342da91c3f930fbbbae7a264a9601e292aa451578f2d37a804cf5"
     },
     "release/SHA256SUMS.txt": {
       "bytes": 75,
-      "sha256": "cb2971b743a21465f28b60c2a67dc9edad8203b02c7292abd4933b163825b19e"
+      "sha256": "0c33e401aebe116a6d7db32a71a3e37f0cf3fdd7e116bd42f1d3bd715e4c82d0"
     },
     "res/drawable/.gitkeep": {
       "bytes": 1,
@@ -943,8 +943,8 @@
       "sha256": "9b92abc90d951791e5a6b914018caa893a40a97ce29458dc39f06c68ef6bf0ed"
     },
     "tools/apk.py": {
-      "bytes": 5751,
-      "sha256": "1788c563c48cb7068b9207ae48808f31fdeb023ac8667e3aba30090f1f22c12f"
+      "bytes": 5948,
+      "sha256": "393bdf0e363611dbd2541b5c54a752d885bab6bbe5940af2e76bd129ccfc7d35"
     },
     "tools/checkpoint.py": {
       "bytes": 1409,
@@ -955,8 +955,8 @@
       "sha256": "9297b7c14923bf26d4497bedf3d2f6b3a66ce4fe85f224c623ad8457d5b6f60a"
     },
     "tools/package.py": {
-      "bytes": 14645,
-      "sha256": "5fcfc499f069e7342206219642dcf1fd8cebe281852baebd835923031c1e122f"
+      "bytes": 14941,
+      "sha256": "469377306db5337a2991376ad0a3ce94c8581e332557ba59b7425fa1fe1ae7ae"
     },
     "tools/readback.py": {
       "bytes": 1485,
@@ -967,8 +967,8 @@
       "sha256": "40069080e537e60b1a5c4fe0ba83806357bbe446c4440f41d324c0384b9565f2"
     },
     "tools/toolchain.py": {
-      "bytes": 4469,
-      "sha256": "1cb4b997035ebaef0b683fcf246fa3a411bc6e4b440149860f099eaff1c7b14a"
+      "bytes": 6430,
+      "sha256": "bb87699943a446a73980b424d39ca1697be51284d069b62c986dec923ac0bca3"
     },
     "verification/AGENT-SESSIONS-CHECKS.json": {
       "bytes": 2603,
@@ -991,12 +991,12 @@
       "sha256": "ec335557689342d0b80dc75832ec065442c28215f8648088105c7fc98af465b4"
     },
     "verification/RESULTS.json": {
-      "bytes": 198289,
-      "sha256": "d5a9aba75ecd4043a0c5f63f9c2c77b6eb1aec0f586b037580bae47ef310586a"
+      "bytes": 204750,
+      "sha256": "e89747922b85e51e1c3fe5811fb220df8712bef49acb375a72355a800726c7a8"
     },
     "verification/UPGRADE-AUDIT.json": {
-      "bytes": 26049,
-      "sha256": "34b28e2ccc5814f90af34af23e67c3c61ff6b3121747f87bc82acdda32aaa467"
+      "bytes": 28120,
+      "sha256": "d075225637b10ae4302b8bce36d798f26c9221ade93ff2d0ddc04f0973ddf2b5"
     },
     "verification/VOICE-SESSION-CHECKS.json": {
       "bytes": 9615,
@@ -1191,8 +1191,8 @@
       "sha256": "428c0a623469d3a27484453ff3570e8161dbab96dee1764efdbc33712896d8b7"
     },
     "verification/voice.py": {
-      "bytes": 20501,
-      "sha256": "0f8fb4e1d5bc10a879d80c89312f7551509ceb595f912fcb7c3aefbbc82a0bcc"
+      "bytes": 24808,
+      "sha256": "7787287963e94181f55fa4d2530dc82be788df186bb54d1dc215068a4b3e3ea1"
     },
     "verification/voice_interruption.py": {
       "bytes": 17354,
@@ -1239,7 +1239,7 @@
         "services": 69,
         "media": 33,
         "jobs": 18,
-        "voice": 147,
+        "voice": 199,
         "media_stream": 34,
         "media_upload": 49,
         "voice_interruption": 104,
@@ -1249,7 +1249,7 @@
         "acp": 41,
         "oauth": 121
       },
-      "total_executed": 1952,
+      "total_executed": 2004,
       "groups_passed": 41,
       "groups": 42,
       "unavailable": [
@@ -1284,12 +1284,12 @@
       {
         "filter": "stream::",
         "code": 0,
-        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 443 filtered out; finished in 0.04s"
+        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 443 filtered out; finished in 0.05s"
       },
       {
         "filter": "application::harness::",
         "code": 0,
-        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 447 filtered out; finished in 0.90s"
+        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 447 filtered out; finished in 0.95s"
       },
       {
         "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -1354,7 +1354,7 @@
       {
         "filter": "application::instruction::tests::",
         "code": 0,
-        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 449 filtered out; finished in 0.04s"
+        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 449 filtered out; finished in 0.05s"
       },
       {
         "filter": "application::binary_evidence::path_checks::",
@@ -1439,7 +1439,7 @@
       {
         "filter": "application::scene::checks::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 473 filtered out; finished in 0.03s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 473 filtered out; finished in 0.04s"
       }
     ],
     "checks": {
@@ -2995,7 +2995,7 @@
         "scope": "Owner asynchronous HTTP fixture tests. Explicit polling; no background scheduler or live user generation service acceptance."
       },
       "voice": {
-        "passed": 147,
+        "passed": 199,
         "checks": [
           "chat consent review discloses destinations without capturing",
           "chat enabling voice alone never opens microphone",
@@ -3143,7 +3143,59 @@
           "explicit microphone resume remains available after stopping pending playback",
           "Speak now preserves an unsent draft and pauses without capturing",
           "Stop playback during model work preserves the primary request owner",
-          "Stop playback during model work preserves configured speech output"
+          "Stop playback during model work preserves configured speech output",
+          "chat rejecting a speech review settles the microphone into a resumable pause",
+          "chat rejected speech does not retain the prior capture owner",
+          "chat explicit resume after rejection starts a fresh owned listener",
+          "chat speech review exposes its actual waiting state",
+          "chat dismissing review retains the exact unexecuted proposal",
+          "chat approval advances the actual admitted speech operation",
+          "chat approved speech still returns an owned playable artifact",
+          "chat back navigation keeps a transcription review pending without recording or sending",
+          "chat rejected transcription also leaves an explicit resumable pause",
+          "chat actual transcription admission reports recognition rather than synthesis",
+          "chat manually approved transcription reaches the composer without automatic model submission",
+          "chat retained transcript disables microphone resume until the composer is clear",
+          "chat clearing the draft restores the microphone resume control",
+          "local rejecting a speech review settles the microphone into a resumable pause",
+          "local rejected speech does not retain the prior capture owner",
+          "local explicit resume after rejection starts a fresh owned listener",
+          "local speech review exposes its actual waiting state",
+          "local dismissing review retains the exact unexecuted proposal",
+          "local approval advances the actual admitted speech operation",
+          "local approved speech still returns an owned playable artifact",
+          "local back navigation keeps a transcription review pending without recording or sending",
+          "local rejected transcription also leaves an explicit resumable pause",
+          "local actual transcription admission reports recognition rather than synthesis",
+          "local manually approved transcription reaches the composer without automatic model submission",
+          "local retained transcript disables microphone resume until the composer is clear",
+          "local clearing the draft restores the microphone resume control",
+          "messages rejecting a speech review settles the microphone into a resumable pause",
+          "messages rejected speech does not retain the prior capture owner",
+          "messages explicit resume after rejection starts a fresh owned listener",
+          "messages speech review exposes its actual waiting state",
+          "messages dismissing review retains the exact unexecuted proposal",
+          "messages approval advances the actual admitted speech operation",
+          "messages approved speech still returns an owned playable artifact",
+          "messages back navigation keeps a transcription review pending without recording or sending",
+          "messages rejected transcription also leaves an explicit resumable pause",
+          "messages actual transcription admission reports recognition rather than synthesis",
+          "messages manually approved transcription reaches the composer without automatic model submission",
+          "messages retained transcript disables microphone resume until the composer is clear",
+          "messages clearing the draft restores the microphone resume control",
+          "content rejecting a speech review settles the microphone into a resumable pause",
+          "content rejected speech does not retain the prior capture owner",
+          "content explicit resume after rejection starts a fresh owned listener",
+          "content speech review exposes its actual waiting state",
+          "content dismissing review retains the exact unexecuted proposal",
+          "content approval advances the actual admitted speech operation",
+          "content approved speech still returns an owned playable artifact",
+          "content back navigation keeps a transcription review pending without recording or sending",
+          "content rejected transcription also leaves an explicit resumable pause",
+          "content actual transcription admission reports recognition rather than synthesis",
+          "content manually approved transcription reaches the composer without automatic model submission",
+          "content retained transcript disables microphone resume until the composer is clear",
+          "content clearing the draft restores the microphone resume control"
         ],
         "scope": "Owner HTTP/audio fixture orchestration through all four model formats. Capture callback is controlled; physical microphone and installed playback not exercised."
       },
@@ -3643,9 +3695,9 @@
       }
     },
     "apk": {
-      "version": 1793922659,
-      "bytes": 6543378,
-      "sha256": "b87d77c345e070398f72ba4196ffaa9fbd86067129fe7300a1fee7b7ed700b5b",
+      "version": 1793979944,
+      "bytes": 6547474,
+      "sha256": "fa06e4c1b7f342da91c3f930fbbbae7a264a9601e292aa451578f2d37a804cf5",
       "native": [
         {
           "abi": "arm64-v8a",
@@ -3656,7 +3708,7 @@
             16384,
             16384
           ],
-          "bytes": 4887864
+          "bytes": 4889272
         },
         {
           "abi": "x86_64",
@@ -3667,7 +3719,7 @@
             16384,
             16384
           ],
-          "bytes": 6015672
+          "bytes": 6016792
         }
       ],
       "label": "RLLM",
@@ -3772,14 +3824,14 @@
         "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
         "core/scene.rs": "d6526bd3c008bbe3a54b88679fef4f26f889ddc3be0dcfc95246fa7855ba25a0",
         "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
-        "core/services.rs": "637a1a26233a0592f0c92f29851bd27a0256640ad75136f230620c33916e1d1f",
+        "core/services.rs": "7029883a1fa17b99dda07dd674994864d66a654255555f7486013867affb74e2",
         "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
         "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
         "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
         "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
         "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
         "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
-        "core/voice.rs": "054ad6882a6102371cb7ce9b21ac4371ea699f963ba0fba1ec6fb2abe558489f",
+        "core/voice.rs": "fbf7cae4b80ad10eba078c9b67e57c6355d650437ab0c4173c002d629e7a5c9f",
         "core/voice_audio.rs": "7c8314f0cb211aea43542eef543a3cc5ba9c327b401e4c3e907d8d5b27aca065",
         "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
         "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
@@ -3790,7 +3842,7 @@
         "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
         "package.sh": "ff221b6973fbd911db47d38c7a030b394904833d0238b3b980f3a86ab14559e4",
         "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-        "platform/com/local/client/Activity.java": "ef72a508e1c9a32aabc287fbd15d318e019c3b60ca32ec678c6279235f3abac4",
+        "platform/com/local/client/Activity.java": "139b0c99da086f4db89da99997fbaf88b85de0a2518d30a2af2e831f0dd4b3ed",
         "platform/com/local/client/AudioRoute.java": "0a4d2773be4300611d15cff452e079701c0943f822e595f7e2b866305a7d373b",
         "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
         "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
@@ -3841,8 +3893,8 @@
     },
     "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
     "published_comparator": {
-      "version": 1793904514,
-      "source_sha256": "4cd9df4c399c39f579ba0effa710726601692d83674a707796f92723408ea3ce",
+      "version": 1793922659,
+      "source_sha256": "c506100631f916806f5b007808311abe1dd95ff93c5b512fc0c42a48c43acd82",
       "method": "Exact saved and source-published shared core compiled locally; actual retained representations and four before/after scene pixel cases exercised"
     },
     "flow_comparator": {
@@ -4316,6 +4368,45 @@
           "Three genuine historical revision-two comparisons remain unavailable.",
           "Protected scopes, original baseline, optional behavior and full broader roadmap preserved."
         ]
+      },
+      "voice_review_continuation": {
+        "version": 1793979944,
+        "implementation": "Distinct review waiting status; real service dispatch starts recognition/synthesis status; rejection or removal of the owned review pauses capture; explicit resume gets a new owner; shared Rust start conditions drive native Resume enabled state. Manual transcript remains in the composer.",
+        "baseline_reproduction": {
+          "version": 1793922659,
+          "source_sha256": "c506100631f916806f5b007808311abe1dd95ff93c5b512fc0c42a48c43acd82",
+          "observation": {
+            "before_phase": "synthesizing",
+            "after_reject_phase": "synthesizing",
+            "voice_phase": "synthesis",
+            "pending": null,
+            "effect": null
+          },
+          "method": "Actual saved core compiled opaquely; real PCM/HTTP/controlled model/review operation before repair."
+        },
+        "validation": {
+          "selected_rust_cases": 204,
+          "voice_cases": 199,
+          "interruption_cases": 104,
+          "scene_cases": 66,
+          "platform_route_cases": 23,
+          "connected_groups_passed": 41,
+          "connected_groups": 42,
+          "live_public_web_cases": 9,
+          "compiled_inputs": 153
+        },
+        "toolchain_recovery": {
+          "observed": "Two official Rust target archive files persisted truncated at20172800and26451968bytes after an earlier verification message.",
+          "repair": "Parent-owned bounded sequential writes with file/directory fsync,post-close/post-rename size/hash verification,pre-extraction verification and at most one retry; rejected bytes preserved.",
+          "verified_archives": 8,
+          "verified_large_extracted_or_installed_payloads": 287
+        },
+        "limits": [
+          "Owner execution is not independent acceptance.",
+          "No physical Android UI/IME/audio/headset/Bluetooth/call/lifecycle acceptance or actual configured user-service execution.",
+          "Three genuine historical revision-two comparisons remain unavailable; fingerprints and protected historical scopes preserved.",
+          "Original baseline,optional services and full cumulative roadmap preserved."
+        ]
       }
     },
     "historical_full_rust_suite": {
@@ -4385,13 +4476,13 @@
       "transport_observations": [
         {
           "url": "https://api.mwmbl.org/api/v2/search/?q=Rust%20programming%20language",
-          "bytes": 47642,
-          "sha256": "eea450f939f52fe9fa800762b3310a304b77f0fb0885ef3ea7e3f5414c95da62"
+          "bytes": 47710,
+          "sha256": "825ca524ce81c7a6ba11927eda29c834a4f4282b840e45f35a4631371ecad1fb"
         }
       ],
       "scope": "Live public HTTPS search responses transported by curl through actual core review, owned callbacks, evidence retention and child/parent continuation. Model replies are controlled protocol fixtures; configured model inference and installed Android transport require their own execution."
     }
   },
-  "checkpoint_utc": "2026-11-05T23:54:27.502525+00:00",
+  "checkpoint_utc": "2026-11-06T15:49:27.607166+00:00",
   "whole_project_complete": false
 }
