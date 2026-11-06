@@ -52,6 +52,11 @@ pub(super) fn started(st:&mut Json,expected:&Json){
     let phase=text(expected,"voice_phase");if !open(st)||phase!=text(st,"voice_phase"){return;}
     match phase.as_str(){"recognition"|"transcript"=>set_phase(st,"recognizing"),"synthesis"|"manual_synthesis"=>set_phase(st,"synthesizing"),_=>{}}
 }
+pub(super) fn request_interrupted(st:&mut Json,expected:&Json){
+    let phase=text(expected,"voice_phase");if phase.is_empty()||phase!=text(st,"voice_phase"){return;}
+    put(st,"voice_phase",Null);
+    if open(st){pause(st,"Voice request stopped; microphone paused until you resume it");}
+}
 pub(super) fn interrupt(st:&mut Json){let session=text(st,"voice_consent");voice_audio::cancel_session(&session);if let Ok(mut held)=playbacks().lock(){held.retain(|_,(s,_)|*s!=session);}if let Ok(mut held)=consents().lock(){held.remove(&session);}put(st,"voice_consent",Null);put(st,"voice_open",Bool(false));put(st,"voice_audio_expected",Null);put(st,"voice_watch_expected",Null);put(st,"voice_interruption_status",Null);put(st,"voice_playback_expected",Null);set_phase(st,"off");put(st,"voice_turn",Bool(false));put(st,"voice_phase",Null);}
 fn destinations(st:&Json,capability:&str)->Result<String>{
     let args=obj(vec![("capability",s(capability)),("input",obj(vec![]))]);let mut p=obj(vec![("tool",s("service")),("args",args)]);services::prepare(&mut st.clone(),&mut p)?;Ok(text(&p,"destination"))

@@ -197,7 +197,7 @@ pub(super) fn consume(st:&mut Json,input:&Json)->bool{
     let Ok(mut held)=owners().lock()else{return false;};
     if !held.get(&ticket).is_some_and(|v|v.expected==harness_rules::digest(expected)){return false;}let owner=held.remove(&ticket).unwrap();if owner.created.elapsed()>Duration::from_secs(owner.timeout){let mut expired=expected.clone();put(&mut expired,"expired",Bool(true));put(st,"service_expected",expired);}true
 }
-pub(super) fn interrupt(st:&mut Json){let ticket=text(get(st,"service_expected"),"ticket");media_upload::cancel(&ticket);media_stream::cancel_purpose(&ticket);if let Ok(mut held)=owners().lock(){held.remove(&ticket);}put(st,"service_expected",Null);}
+pub(super) fn interrupt(st:&mut Json){let expected=get(st,"service_expected").clone();let ticket=text(&expected,"ticket");media_upload::cancel(&ticket);media_stream::cancel_purpose(&ticket);if let Ok(mut held)=owners().lock(){held.remove(&ticket);}put(st,"service_expected",Null);voice::request_interrupted(st,&expected);}
 pub(super) fn result(st:&mut Json,action:&str,input:&Json)->Result<Json>{
     media_upload::cancel(&text(get(st,"service_expected"),"ticket"));let mut expected=get(st,"service_expected").clone();put(st,"service_expected",Null);put(st,"busy",Bool(false));
     let mut observed_code=0;let mut observed_acceptance=false;
