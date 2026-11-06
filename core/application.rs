@@ -3012,7 +3012,7 @@ fn event_inner(v: &Json) -> Result<Json> {
     oauth::reconcile(&mut st,action);
     voice::reconcile(&mut st,action,inputs);
     if action=="network_result"&&text(inputs,"purpose")=="model"&&boolean(&st,"voice_turn")&&!boolean(&st,"busy")&&effect==Null&&get(&st,"pending")==&Null&&array(&st,"delegation_stack").is_empty()&&!boolean(&st,"notice_error"){
-        match voice::answer(&mut st){Ok(next)=>effect=next,Err(reason)=>{put(&mut st,"voice_turn",Bool(false));put(&mut st,"voice_phase",Null);put(&mut st,"notice",s(&format!("Text reply retained; speech unavailable: {reason}")));}}
+        match voice::answer(&mut st){Ok(next)=>effect=next,Err(reason)=>voice::answer_failed(&mut st,&reason)}
     }
     let cancelled_captures=capture_job::reconcile(&mut st);if cancelled_captures.contains(&text(&effect,"capture_token")){effect=Null;}
     if effect!=Null {if let Err(reason)=workspace::check_effect(&st,&effect).and_then(|_|harness_rules::effect_check(&st,&effect,effect_model_origin)){effect=Null;put(&mut st,"busy",Bool(false));put(&mut st,"notice_error",Bool(true));put(&mut st,"notice",s(&reason));put(&mut st,"dialog",s("harness_denial"));let token=text(get(&st,"web_expected"),"capture_token");capture_job::cancel(&token);}}
