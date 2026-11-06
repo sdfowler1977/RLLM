@@ -1,6 +1,6 @@
 {
   "state": "in_progress; signed candidate",
-  "version": 1793979944,
+  "version": 1793981376,
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
   "signing_certificate_sha256": "ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5",
@@ -8,7 +8,7 @@
   "signed_apk": {
     "path": "release/RLLM.apk",
     "bytes": 6547474,
-    "sha256": "fa06e4c1b7f342da91c3f930fbbbae7a264a9601e292aa451578f2d37a804cf5"
+    "sha256": "13f0c48494ddf62a1470d8c1c7c37547bf8ab483e46e461d3671824037596d46"
   },
   "build_inputs": {
     "AndroidManifest.xml": "68f6aadd38bbd8d73c00736e2a0ee21f2b512de36000ea8cd89e6f3609f3caf2",
@@ -108,14 +108,14 @@
     "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
     "core/scene.rs": "d6526bd3c008bbe3a54b88679fef4f26f889ddc3be0dcfc95246fa7855ba25a0",
     "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
-    "core/services.rs": "7029883a1fa17b99dda07dd674994864d66a654255555f7486013867affb74e2",
+    "core/services.rs": "f29661b10b8868ccc1361f83566d80c1e844be669201fd2c7cb3c87d6c2fbae9",
     "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
     "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
     "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
     "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
     "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
     "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
-    "core/voice.rs": "fbf7cae4b80ad10eba078c9b67e57c6355d650437ab0c4173c002d629e7a5c9f",
+    "core/voice.rs": "5641e0272d268b1bc13cff80043311abe0a401f72a36c09f5c3a139e6cfd064f",
     "core/voice_audio.rs": "7c8314f0cb211aea43542eef543a3cc5ba9c327b401e4c3e907d8d5b27aca065",
     "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
     "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
@@ -563,8 +563,8 @@
       "sha256": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b"
     },
     "core/services.rs": {
-      "bytes": 33351,
-      "sha256": "7029883a1fa17b99dda07dd674994864d66a654255555f7486013867affb74e2"
+      "bytes": 33423,
+      "sha256": "f29661b10b8868ccc1361f83566d80c1e844be669201fd2c7cb3c87d6c2fbae9"
     },
     "core/stdio.rs": {
       "bytes": 11663,
@@ -591,8 +591,8 @@
       "sha256": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065"
     },
     "core/voice.rs": {
-      "bytes": 24958,
-      "sha256": "fbf7cae4b80ad10eba078c9b67e57c6355d650437ab0c4173c002d629e7a5c9f"
+      "bytes": 25250,
+      "sha256": "5641e0272d268b1bc13cff80043311abe0a401f72a36c09f5c3a139e6cfd064f"
     },
     "core/voice_audio.rs": {
       "bytes": 8872,
@@ -635,16 +635,16 @@
       "sha256": "ea98d6f89776486630494de41ed654ae014daf6d7dad0dc435faf90e090961ac"
     },
     "docs/ARCHITECTURE.md": {
-      "bytes": 6259,
-      "sha256": "0b766fc1ae5784599be8d1baa6d2f83ea92ff640c1e322d17c2f385978974296"
+      "bytes": 6621,
+      "sha256": "98e84e123f1fa12f04e2b2ad2ba8a1b52a49095ec5be62babb87a70079b4436a"
     },
     "docs/ASSETS.md": {
       "bytes": 577,
       "sha256": "4be441540c78cc579da26efcc8dd9678e95b6396ec7b0913e758f4d7b86cf10a"
     },
     "docs/AUDIT.md": {
-      "bytes": 12534,
-      "sha256": "70fc3dc81539e240b8dc8d0c47fc9191523e7971b1bd9a8d3f3e0caf1320f425"
+      "bytes": 13136,
+      "sha256": "0bb83bfc6f2817763f2d4b1eb628e0dfc00a1cc524cbd6d39849075c8d6bc19a"
     },
     "docs/AUTHORIZATION.md": {
       "bytes": 6099,
@@ -707,8 +707,8 @@
       "sha256": "a0d5c3c3bfac7d1fc5e26785b00a2e88021195552db975594c92df5fd3792ee6"
     },
     "docs/SERVICES.md": {
-      "bytes": 19129,
-      "sha256": "1810207ab82c25a80a846af058e7e5afd3632815f6003cc30336ac311a59ee49"
+      "bytes": 19565,
+      "sha256": "6e37f82a807941bdd59a2c0f67e4be5b4897f1e8875eeb51d40493c7960098f6"
     },
     "docs/SETUP.md": {
       "bytes": 7898,
@@ -719,8 +719,8 @@
       "sha256": "93f5a206d83ac2fd56bf4cb74b50960d6df33005a90b3679856e7e6ae04189f6"
     },
     "docs/STATUS.md": {
-      "bytes": 4186,
-      "sha256": "0ea23f1f344b1e1d09560a7be29baca36111b5999a8981dfedf5eeded5fed423"
+      "bytes": 4458,
+      "sha256": "bf70199c919092a782b07575ff1392b807550d18f5f6a43eb0ee441dd87814b7"
     },
     "docs/TOOL-FEEDBACK.md": {
       "bytes": 4677,
@@ -839,20 +839,20 @@
       "sha256": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f"
     },
     "project-progress.md": {
-      "bytes": 66700,
-      "sha256": "8efe9167308f90afb1e83999061944325206c4e56a4305564028156f26d8e2dc"
+      "bytes": 74156,
+      "sha256": "c5a2ad25f1b6a78e679696011d8538db8a006bd04c3d1d9b799c49e14199f411"
     },
     "release/NOTES.md": {
-      "bytes": 4271,
-      "sha256": "4d4682ab1d3acd537c8369f327dfa25728c36319ed71b521bf016f7b50c41900"
+      "bytes": 4543,
+      "sha256": "8b676904b765d4e6ca28a0569897887ed6803060ae9e471749f5ef31db2ea209"
     },
     "release/RLLM.apk": {
       "bytes": 6547474,
-      "sha256": "fa06e4c1b7f342da91c3f930fbbbae7a264a9601e292aa451578f2d37a804cf5"
+      "sha256": "13f0c48494ddf62a1470d8c1c7c37547bf8ab483e46e461d3671824037596d46"
     },
     "release/SHA256SUMS.txt": {
       "bytes": 75,
-      "sha256": "0c33e401aebe116a6d7db32a71a3e37f0cf3fdd7e116bd42f1d3bd715e4c82d0"
+      "sha256": "1ec608e3d04045713f2f77b61716c0e49e4849e0a44df131529bcadbb7d059ef"
     },
     "res/drawable/.gitkeep": {
       "bytes": 1,
@@ -943,8 +943,8 @@
       "sha256": "9b92abc90d951791e5a6b914018caa893a40a97ce29458dc39f06c68ef6bf0ed"
     },
     "tools/apk.py": {
-      "bytes": 5948,
-      "sha256": "393bdf0e363611dbd2541b5c54a752d885bab6bbe5940af2e76bd129ccfc7d35"
+      "bytes": 6031,
+      "sha256": "20db166821cb3bc7ec6c35513e3055cb0ec99703e17a2ddbc6dc970b9e93b70d"
     },
     "tools/checkpoint.py": {
       "bytes": 1409,
@@ -955,8 +955,8 @@
       "sha256": "9297b7c14923bf26d4497bedf3d2f6b3a66ce4fe85f224c623ad8457d5b6f60a"
     },
     "tools/package.py": {
-      "bytes": 14941,
-      "sha256": "469377306db5337a2991376ad0a3ce94c8581e332557ba59b7425fa1fe1ae7ae"
+      "bytes": 15213,
+      "sha256": "8ce1fbbd26206473a1d25373e102797f87d06f1d4c5a6d8b6c3678ba424867ea"
     },
     "tools/readback.py": {
       "bytes": 1485,
@@ -991,12 +991,12 @@
       "sha256": "ec335557689342d0b80dc75832ec065442c28215f8648088105c7fc98af465b4"
     },
     "verification/RESULTS.json": {
-      "bytes": 204750,
-      "sha256": "e89747922b85e51e1c3fe5811fb220df8712bef49acb375a72355a800726c7a8"
+      "bytes": 212772,
+      "sha256": "1b0c46f67e235eeddb6922debc84af330e2585d2e4d9fb50dacf4a84ead58d2e"
     },
     "verification/UPGRADE-AUDIT.json": {
-      "bytes": 28120,
-      "sha256": "d075225637b10ae4302b8bce36d798f26c9221ade93ff2d0ddc04f0973ddf2b5"
+      "bytes": 29942,
+      "sha256": "6fca6003484221399e38620191807588febc23803b61a189019566e41845e136"
     },
     "verification/VOICE-SESSION-CHECKS.json": {
       "bytes": 9615,
@@ -1191,8 +1191,8 @@
       "sha256": "428c0a623469d3a27484453ff3570e8161dbab96dee1764efdbc33712896d8b7"
     },
     "verification/voice.py": {
-      "bytes": 24808,
-      "sha256": "7787287963e94181f55fa4d2530dc82be788df186bb54d1dc215068a4b3e3ea1"
+      "bytes": 29392,
+      "sha256": "dfd081ab149ed30441411c321ad50b5475a58f0bbdfa0d369fb7813664a104f8"
     },
     "verification/voice_interruption.py": {
       "bytes": 17354,
@@ -1239,7 +1239,7 @@
         "services": 69,
         "media": 33,
         "jobs": 18,
-        "voice": 199,
+        "voice": 279,
         "media_stream": 34,
         "media_upload": 49,
         "voice_interruption": 104,
@@ -1249,7 +1249,7 @@
         "acp": 41,
         "oauth": 121
       },
-      "total_executed": 2004,
+      "total_executed": 2084,
       "groups_passed": 41,
       "groups": 42,
       "unavailable": [
@@ -1289,7 +1289,7 @@
       {
         "filter": "application::harness::",
         "code": 0,
-        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 447 filtered out; finished in 0.95s"
+        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 447 filtered out; finished in 0.80s"
       },
       {
         "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -1354,7 +1354,7 @@
       {
         "filter": "application::instruction::tests::",
         "code": 0,
-        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 449 filtered out; finished in 0.05s"
+        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 449 filtered out; finished in 0.04s"
       },
       {
         "filter": "application::binary_evidence::path_checks::",
@@ -1364,7 +1364,7 @@
       {
         "filter": "application::operation::drive_checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.01s"
       },
       {
         "filter": "hosted_search::checks::",
@@ -1399,7 +1399,7 @@
       {
         "filter": "application::project_store::transfer::tests::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.12s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.08s"
       },
       {
         "filter": "application::monitor::checks::",
@@ -1439,7 +1439,7 @@
       {
         "filter": "application::scene::checks::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 473 filtered out; finished in 0.04s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 473 filtered out; finished in 0.03s"
       }
     ],
     "checks": {
@@ -2995,7 +2995,7 @@
         "scope": "Owner asynchronous HTTP fixture tests. Explicit polling; no background scheduler or live user generation service acceptance."
       },
       "voice": {
-        "passed": 199,
+        "passed": 279,
         "checks": [
           "chat consent review discloses destinations without capturing",
           "chat enabling voice alone never opens microphone",
@@ -3195,7 +3195,87 @@
           "content actual transcription admission reports recognition rather than synthesis",
           "content manually approved transcription reaches the composer without automatic model submission",
           "content retained transcript disables microphone resume until the composer is clear",
-          "content clearing the draft restores the microphone resume control"
+          "content clearing the draft restores the microphone resume control",
+          "chat16 speech admission itself sends no HTTP request",
+          "chat16 refused speech transfer has no owner or network work",
+          "chat16 refused speech transfer shows an explicit paused state",
+          "chat16 refusal retains the primary answer and scoped memory explanation",
+          "chat16 refused speech resumes only through a fresh explicit microphone",
+          "chat24 speech admission itself sends no HTTP request",
+          "chat24 refused speech transfer has no owner or network work",
+          "chat24 refused speech transfer shows an explicit paused state",
+          "chat24 refusal retains the primary answer and scoped memory explanation",
+          "chat24 refused speech resumes only through a fresh explicit microphone",
+          "chat32 speech admission itself sends no HTTP request",
+          "chat32 sufficient memory still admits synthesis with a current owner",
+          "chat32 admitted synthesis still plays actual returned audio",
+          "chat refused recognition has no owner,network work or upload",
+          "chat refused recognition also pauses and clears its phase",
+          "chat retired capture cannot alter a memory-refused voice state",
+          "chat ordinary text starts after the scoped memory refusal",
+          "chat ordinary text answer completes without voice or replay",
+          "chat refusing an unrelated service retains the current microphone owner",
+          "chat unrelated service cleanup leaves actual microphone PCM admission working",
+          "local16 speech admission itself sends no HTTP request",
+          "local16 refused speech transfer has no owner or network work",
+          "local16 refused speech transfer shows an explicit paused state",
+          "local16 refusal retains the primary answer and scoped memory explanation",
+          "local16 refused speech resumes only through a fresh explicit microphone",
+          "local24 speech admission itself sends no HTTP request",
+          "local24 refused speech transfer has no owner or network work",
+          "local24 refused speech transfer shows an explicit paused state",
+          "local24 refusal retains the primary answer and scoped memory explanation",
+          "local24 refused speech resumes only through a fresh explicit microphone",
+          "local32 speech admission itself sends no HTTP request",
+          "local32 sufficient memory still admits synthesis with a current owner",
+          "local32 admitted synthesis still plays actual returned audio",
+          "local refused recognition has no owner,network work or upload",
+          "local refused recognition also pauses and clears its phase",
+          "local retired capture cannot alter a memory-refused voice state",
+          "local ordinary text starts after the scoped memory refusal",
+          "local ordinary text answer completes without voice or replay",
+          "local refusing an unrelated service retains the current microphone owner",
+          "local unrelated service cleanup leaves actual microphone PCM admission working",
+          "messages16 speech admission itself sends no HTTP request",
+          "messages16 refused speech transfer has no owner or network work",
+          "messages16 refused speech transfer shows an explicit paused state",
+          "messages16 refusal retains the primary answer and scoped memory explanation",
+          "messages16 refused speech resumes only through a fresh explicit microphone",
+          "messages24 speech admission itself sends no HTTP request",
+          "messages24 refused speech transfer has no owner or network work",
+          "messages24 refused speech transfer shows an explicit paused state",
+          "messages24 refusal retains the primary answer and scoped memory explanation",
+          "messages24 refused speech resumes only through a fresh explicit microphone",
+          "messages32 speech admission itself sends no HTTP request",
+          "messages32 sufficient memory still admits synthesis with a current owner",
+          "messages32 admitted synthesis still plays actual returned audio",
+          "messages refused recognition has no owner,network work or upload",
+          "messages refused recognition also pauses and clears its phase",
+          "messages retired capture cannot alter a memory-refused voice state",
+          "messages ordinary text starts after the scoped memory refusal",
+          "messages ordinary text answer completes without voice or replay",
+          "messages refusing an unrelated service retains the current microphone owner",
+          "messages unrelated service cleanup leaves actual microphone PCM admission working",
+          "content16 speech admission itself sends no HTTP request",
+          "content16 refused speech transfer has no owner or network work",
+          "content16 refused speech transfer shows an explicit paused state",
+          "content16 refusal retains the primary answer and scoped memory explanation",
+          "content16 refused speech resumes only through a fresh explicit microphone",
+          "content24 speech admission itself sends no HTTP request",
+          "content24 refused speech transfer has no owner or network work",
+          "content24 refused speech transfer shows an explicit paused state",
+          "content24 refusal retains the primary answer and scoped memory explanation",
+          "content24 refused speech resumes only through a fresh explicit microphone",
+          "content32 speech admission itself sends no HTTP request",
+          "content32 sufficient memory still admits synthesis with a current owner",
+          "content32 admitted synthesis still plays actual returned audio",
+          "content refused recognition has no owner,network work or upload",
+          "content refused recognition also pauses and clears its phase",
+          "content retired capture cannot alter a memory-refused voice state",
+          "content ordinary text starts after the scoped memory refusal",
+          "content ordinary text answer completes without voice or replay",
+          "content refusing an unrelated service retains the current microphone owner",
+          "content unrelated service cleanup leaves actual microphone PCM admission working"
         ],
         "scope": "Owner HTTP/audio fixture orchestration through all four model formats. Capture callback is controlled; physical microphone and installed playback not exercised."
       },
@@ -3695,9 +3775,9 @@
       }
     },
     "apk": {
-      "version": 1793979944,
+      "version": 1793981376,
       "bytes": 6547474,
-      "sha256": "fa06e4c1b7f342da91c3f930fbbbae7a264a9601e292aa451578f2d37a804cf5",
+      "sha256": "13f0c48494ddf62a1470d8c1c7c37547bf8ab483e46e461d3671824037596d46",
       "native": [
         {
           "abi": "arm64-v8a",
@@ -3708,7 +3788,7 @@
             16384,
             16384
           ],
-          "bytes": 4889272
+          "bytes": 4889544
         },
         {
           "abi": "x86_64",
@@ -3719,7 +3799,7 @@
             16384,
             16384
           ],
-          "bytes": 6016792
+          "bytes": 6017416
         }
       ],
       "label": "RLLM",
@@ -3824,14 +3904,14 @@
         "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
         "core/scene.rs": "d6526bd3c008bbe3a54b88679fef4f26f889ddc3be0dcfc95246fa7855ba25a0",
         "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
-        "core/services.rs": "7029883a1fa17b99dda07dd674994864d66a654255555f7486013867affb74e2",
+        "core/services.rs": "f29661b10b8868ccc1361f83566d80c1e844be669201fd2c7cb3c87d6c2fbae9",
         "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
         "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
         "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
         "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
         "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
         "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
-        "core/voice.rs": "fbf7cae4b80ad10eba078c9b67e57c6355d650437ab0c4173c002d629e7a5c9f",
+        "core/voice.rs": "5641e0272d268b1bc13cff80043311abe0a401f72a36c09f5c3a139e6cfd064f",
         "core/voice_audio.rs": "7c8314f0cb211aea43542eef543a3cc5ba9c327b401e4c3e907d8d5b27aca065",
         "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
         "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
@@ -4369,6 +4449,38 @@
           "Protected scopes, original baseline, optional behavior and full broader roadmap preserved."
         ]
       },
+      "voice_admission_continuation": {
+        "version": 1793981376,
+        "implementation": "Service interruption clears only its matching voice phase and pauses that loop without automatic replay or microphone restart. Consent, primary text answers and unrelated capture owners are retained.",
+        "baseline_reproduction": {
+          "version": 1793979944,
+          "source_sha256": "3df328b1b328f7d02fdfb9eefb59fab198169db1262065cc4efcabdd7c0507c4",
+          "method": "Public PCM/HTTP/controlled primary response through the unchanged saved current controller before production edits.",
+          "heap_mib": [
+            16,
+            24
+          ],
+          "voice_status": "synthesizing",
+          "voice_phase": "synthesis",
+          "service_expected": null,
+          "effect": null,
+          "notice": "Current memory cannot admit this transfer; existing files and text remain available"
+        },
+        "validation": {
+          "voice_cases": 279,
+          "new_admission_cases": 80,
+          "selected_rust_cases": 204,
+          "connected_groups_passed": 41,
+          "connected_groups": 42,
+          "scope": "Real PCM and local HTTP through four model formats; measured-memory recognition/synthesis refusal, scoped explanation, retained text, explicit fresh resume, admitted synthesis playback and unrelated-service capture preservation."
+        },
+        "source_checkpoint": "Drive17igD8i0cC0HG7rvxvhtp5yGa5QbB9pc1;257source-only files,all hashes and ZIP CRC verified on actual download;SHA256fae40fa0ef26ced433ce9629b394fe237091ebc19b5de5b748eab64d2fa5f52f",
+        "limits": [
+          "Owner fixture execution does not establish installed Android, actual user-service or independent acceptance.",
+          "Three genuine historical comparisons remain unavailable; protected scopes and fingerprints are preserved.",
+          "Original baseline and cumulative wider roadmap remain open and unchanged."
+        ]
+      },
       "voice_review_continuation": {
         "version": 1793979944,
         "implementation": "Distinct review waiting status; real service dispatch starts recognition/synthesis status; rejection or removal of the owned review pauses capture; explicit resume gets a new owner; shared Rust start conditions drive native Resume enabled state. Manual transcript remains in the composer.",
@@ -4477,12 +4589,12 @@
         {
           "url": "https://api.mwmbl.org/api/v2/search/?q=Rust%20programming%20language",
           "bytes": 47710,
-          "sha256": "825ca524ce81c7a6ba11927eda29c834a4f4282b840e45f35a4631371ecad1fb"
+          "sha256": "a1708d314b580263d5f8335eb7f5f890bbddd3fa5b506ae2296fdab68dc03568"
         }
       ],
       "scope": "Live public HTTPS search responses transported by curl through actual core review, owned callbacks, evidence retention and child/parent continuation. Model replies are controlled protocol fixtures; configured model inference and installed Android transport require their own execution."
     }
   },
-  "checkpoint_utc": "2026-11-06T15:49:27.607166+00:00",
+  "checkpoint_utc": "2026-11-06T16:12:08.311657+00:00",
   "whole_project_complete": false
 }
