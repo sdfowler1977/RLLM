@@ -40,11 +40,13 @@ with tempfile.TemporaryDirectory(prefix='voice-',dir=PROJECT/'output')as temp:
         st=configured('chat');d=event(st,'voice_review');d=event(d['state'],'voice_consent');d=event(d['state'],'voice_record',dict(draft='Existing unsent draft.'));d=event(d['state'],'media_input_result',dict(media_ticket=d['effect']['media_ticket'],name='fixture.wav',data=base64.b64encode(audio).decode()));done=transport(d);check('recognition preserves and appends to existing draft for review',done['state']['draft']=='Existing unsent draft.\nRecognized fixture question.' and done['effect']is None)
         d=event(done['state'],'voice_stop');d=event(d['state'],'send',dict(draft='Read this reply aloud.'));d=reply(d,'chat','Manual spoken reply.');d=event(d['state'],'voice_speak');check('manual speech first uses ordinary request review',d['state']['dialog']=='approval' and d['effect']is None);d=transport(event(d['state'],'approve'));check('manual speech plays actual returned audio',d['effect'] and d['effect']['kind']=='media_preview' and d['effect']['media_kind']=='audio')
         tone=b''.join(struct.pack('<h',3000 if n%2==0 else -3000)for n in range(320))
-        def utterance(d):
+        def utterance(d,callback=True):
             e=d['effect'];owner=dict(voice_session=e['voice_session'],voice_audio_ticket=e['voice_audio_ticket']);d=event(d['state'],'voice_audio_start',owner)
             for frame in [b'\0'*640]*20+[tone]*20+[b'\0'*640]*40:
                 value=op(dict(owner,op='voice_audio_feed',data=base64.b64encode(frame).decode()))
-                if value['ready']:return event(d['state'],'voice_audio_result',dict(owner,receipt=value['receipt']))
+                if value['ready']:
+                    completion=dict(owner,receipt=value['receipt'])
+                    return event(d['state'],'voice_audio_result',completion)if callback else(d,completion)
             raise AssertionError('No actual utterance was produced')
         for fmt in ['chat','local','messages','content']:
             d=event(configured(fmt),'voice_open_review');d=event(d['state'],'voice_consent');e=d['effect'];check(fmt+' open microphone starts only after explicit review',e['kind']=='voice_listen' and d['state']['voice_status']=='microphone_pending');owner=dict(voice_session=e['voice_session'],voice_audio_ticket=e['voice_audio_ticket'])
@@ -112,7 +114,38 @@ with tempfile.TemporaryDirectory(prefix='voice-',dir=PROJECT/'output')as temp:
             stale=event(d['state'],'voice_audio_failure',owner);check(fmt+' retired capture cannot alter a memory-refused voice state',stale['state']==d['state']and stale['effect']is None)
             sent=event(d['state'],'send',dict(draft='Ordinary text after the refused recognition.',device=dict(heap_bytes=64*1024*1024,memory_bytes=1024*1024*1024,cores=2)));check(fmt+' ordinary text starts after the scoped memory refusal',sent['effect']and sent['effect']['purpose']=='model'and not sent['state']['voice_open']);done=reply(sent,fmt,'Ordinary reply after recognition refusal.');check(fmt+' ordinary text answer completes without voice or replay',done['effect']is None and not done['state']['busy'])
             d=event(configured(fmt),'voice_open_review');d=event(d['state'],'voice_consent');owner=dict(voice_session=d['effect']['voice_session'],voice_audio_ticket=d['effect']['voice_audio_ticket']);d=event(d['state'],'voice_audio_start',owner);d=event(d['state'],'service_request');d=event(d['state'],'service_review',dict(service_route='synthesis',service_capability='speech_synthesis',service_input=json.dumps(dict(text='Separate reviewed service request.'))));d=event(d['state'],'approve',dict(device=dict(heap_bytes=16*1024*1024,memory_bytes=1024*1024*1024,cores=2)))
-            check(fmt+' refusing an unrelated service retains the current microphone owner',d['effect']is None and not d['state']['busy']and d['state']['voice_status']=='listening'and d['state']['voice_audio_expected']['ticket']==owner['voice_audio_ticket'])
-            alive=raw(dict(owner,op='voice_audio_feed',data=base64.b64encode(b'\0'*640).decode()));check(fmt+' unrelated service cleanup leaves actual microphone PCM admission working','value'in alive and not alive['value']['ready']);event(d['state'],'voice_stop')
+            check(fmt+' separate service refusal retains the already-paused voice session',d['effect']is None and not d['state']['busy']and d['state']['voice_status']=='paused'and d['state']['voice_audio_expected']is None and d['state']['voice_consent']==owner['voice_session'])
+            retired=raw(dict(owner,op='voice_audio_feed',data=base64.b64encode(b'\0'*640).decode()));check(fmt+' separate service review retires actual PCM admission before its refusal','value'not in retired);event(d['state'],'voice_stop')
+        for fmt in ['chat','local','messages','content']:
+            for stage in ['proposal','admitted']:
+                d=event(configured(fmt),'voice_open_review');d=event(d['state'],'voice_consent');capture=d['effect'];d,completion=utterance(d,callback=False);before=len(requests)
+                d=event(d['state'],'service_request');d=event(d['state'],'service_review',dict(service_route='synthesis',service_capability='speech_synthesis',service_input=json.dumps(dict(text='Preserve this separately reviewed request.'))));proposal=d['state']['pending']
+                check(fmt+stage+' separate request review pauses current capture',d['state']['voice_status']=='paused'and d['state'].get('voice_audio_expected')is None and d['effect']is None and proposal is not None)
+                check(fmt+stage+' a pending separate review disables microphone resume',d['ui']['voice_status']['resume_available']is False)
+                if stage=='admitted':d=event(d['state'],'approve')
+                prior_state=d['state'];service=prior_state.get('service_expected');late=event(prior_state,'voice_audio_result',completion)
+                check(fmt+stage+' a real held utterance cannot replace separate work',late['state']==prior_state and late['effect']is None and len(requests)==before)
+                check(fmt+stage+' retired utterance PCM cannot be reactivated','value'not in raw(dict(op='voice_audio_feed',voice_session=capture['voice_session'],voice_audio_ticket=capture['voice_audio_ticket'],data=base64.b64encode(tone).decode())))
+                if stage=='proposal':
+                    check(fmt+stage+' exact separate proposal survives the late callback',late['state']['pending']==proposal);d=event(late['state'],'approve')
+                else:
+                    check(fmt+stage+' exact admitted service owner survives the late callback',late['state']['service_expected']==service and late['state']['busy'])
+                check(fmt+stage+' admitted separate work keeps resume unavailable',d['ui']['voice_status']['resume_available']is False)
+                done=transport(d);check(fmt+stage+' actual separate HTTP result still completes',done['state']['service_result']['status']=='response_received'and not done['state']['busy']and done['state']['voice_status']=='paused'and done['effect']is None)
+                resumed=event(done['state'],'voice_listen');check(fmt+stage+' explicit resume gets a new owner after separate completion',resumed['effect']and resumed['effect']['kind']=='voice_listen'and resumed['effect']['voice_audio_ticket']!=capture['voice_audio_ticket']);event(resumed['state'],'voice_stop')
+        for fmt in ['chat','local','messages','content']:
+            for refusal in ['text_bound','storage_quota']:
+                previous_temp=temp
+                with tempfile.TemporaryDirectory(prefix='voice-speech-refusal-',dir=PROJECT/'output')as temp:
+                    d=event(configured(fmt),'voice_open_review');d=event(d['state'],'voice_consent');d=utterance(d);d=transport(d);answer='Long controlled reply.'*1800 if refusal=='text_bound'else'Retained reply when artifact storage is full.'
+                    if refusal=='storage_quota':
+                        directory=pathlib.Path(temp)/'service-files'
+                        for index in range(512):(directory/f'quota-{index}.bin').write_bytes(b'')
+                    before=len(requests);d=reply(d,fmt,answer)
+                    check(fmt+refusal+' speech preparation refusal is an explicit paused state',d['state']['voice_status']=='paused'and d['state'].get('voice_phase')is None)
+                    check(fmt+refusal+' speech preparation refusal has no request or replay',d['effect']is None and not d['state']['busy']and d['state'].get('service_expected')is None and len(requests)==before)
+                    check(fmt+refusal+' complete primary text remains with scoped speech explanation',any(m.get('content')==answer for c in d['state']['chats']for m in c.get('messages',[]))and 'Text reply retained; speech unavailable'in d['state']['notice'])
+                    check(fmt+refusal+' speech preparation refusal leaves explicit resume available',d['ui']['voice_status']['resume_available']is True);event(d['state'],'voice_stop')
+                temp=previous_temp
     finally:p.stdin.close();p.wait(timeout=10);server.shutdown();server.server_close()
 report=dict(passed=len(passed),checks=passed,scope='Owner HTTP/audio fixture orchestration through all four model formats. Capture callback is controlled; physical microphone and installed playback not exercised.');(PROJECT/'output/checks/voice.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))

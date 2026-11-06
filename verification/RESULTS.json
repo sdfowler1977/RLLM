@@ -34,7 +34,7 @@
       "services": 69,
       "media": 33,
       "jobs": 18,
-      "voice": 279,
+      "voice": 375,
       "media_stream": 34,
       "media_upload": 49,
       "voice_interruption": 104,
@@ -44,7 +44,7 @@
       "acp": 41,
       "oauth": 121
     },
-    "total_executed": 2084,
+    "total_executed": 2180,
     "groups_passed": 41,
     "groups": 42,
     "unavailable": [
@@ -79,12 +79,12 @@
     {
       "filter": "stream::",
       "code": 0,
-      "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 443 filtered out; finished in 0.05s"
+      "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 443 filtered out; finished in 0.06s"
     },
     {
       "filter": "application::harness::",
       "code": 0,
-      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 447 filtered out; finished in 0.80s"
+      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 447 filtered out; finished in 0.72s"
     },
     {
       "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -159,7 +159,7 @@
     {
       "filter": "application::operation::drive_checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.01s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.00s"
     },
     {
       "filter": "hosted_search::checks::",
@@ -194,7 +194,7 @@
     {
       "filter": "application::project_store::transfer::tests::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.08s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.07s"
     },
     {
       "filter": "application::monitor::checks::",
@@ -1790,7 +1790,7 @@
       "scope": "Owner asynchronous HTTP fixture tests. Explicit polling; no background scheduler or live user generation service acceptance."
     },
     "voice": {
-      "passed": 279,
+      "passed": 375,
       "checks": [
         "chat consent review discloses destinations without capturing",
         "chat enabling voice alone never opens microphone",
@@ -2009,8 +2009,8 @@
         "chat retired capture cannot alter a memory-refused voice state",
         "chat ordinary text starts after the scoped memory refusal",
         "chat ordinary text answer completes without voice or replay",
-        "chat refusing an unrelated service retains the current microphone owner",
-        "chat unrelated service cleanup leaves actual microphone PCM admission working",
+        "chat separate service refusal retains the already-paused voice session",
+        "chat separate service review retires actual PCM admission before its refusal",
         "local16 speech admission itself sends no HTTP request",
         "local16 refused speech transfer has no owner or network work",
         "local16 refused speech transfer shows an explicit paused state",
@@ -2029,8 +2029,8 @@
         "local retired capture cannot alter a memory-refused voice state",
         "local ordinary text starts after the scoped memory refusal",
         "local ordinary text answer completes without voice or replay",
-        "local refusing an unrelated service retains the current microphone owner",
-        "local unrelated service cleanup leaves actual microphone PCM admission working",
+        "local separate service refusal retains the already-paused voice session",
+        "local separate service review retires actual PCM admission before its refusal",
         "messages16 speech admission itself sends no HTTP request",
         "messages16 refused speech transfer has no owner or network work",
         "messages16 refused speech transfer shows an explicit paused state",
@@ -2049,8 +2049,8 @@
         "messages retired capture cannot alter a memory-refused voice state",
         "messages ordinary text starts after the scoped memory refusal",
         "messages ordinary text answer completes without voice or replay",
-        "messages refusing an unrelated service retains the current microphone owner",
-        "messages unrelated service cleanup leaves actual microphone PCM admission working",
+        "messages separate service refusal retains the already-paused voice session",
+        "messages separate service review retires actual PCM admission before its refusal",
         "content16 speech admission itself sends no HTTP request",
         "content16 refused speech transfer has no owner or network work",
         "content16 refused speech transfer shows an explicit paused state",
@@ -2069,8 +2069,104 @@
         "content retired capture cannot alter a memory-refused voice state",
         "content ordinary text starts after the scoped memory refusal",
         "content ordinary text answer completes without voice or replay",
-        "content refusing an unrelated service retains the current microphone owner",
-        "content unrelated service cleanup leaves actual microphone PCM admission working"
+        "content separate service refusal retains the already-paused voice session",
+        "content separate service review retires actual PCM admission before its refusal",
+        "chatproposal separate request review pauses current capture",
+        "chatproposal a pending separate review disables microphone resume",
+        "chatproposal a real held utterance cannot replace separate work",
+        "chatproposal retired utterance PCM cannot be reactivated",
+        "chatproposal exact separate proposal survives the late callback",
+        "chatproposal admitted separate work keeps resume unavailable",
+        "chatproposal actual separate HTTP result still completes",
+        "chatproposal explicit resume gets a new owner after separate completion",
+        "chatadmitted separate request review pauses current capture",
+        "chatadmitted a pending separate review disables microphone resume",
+        "chatadmitted a real held utterance cannot replace separate work",
+        "chatadmitted retired utterance PCM cannot be reactivated",
+        "chatadmitted exact admitted service owner survives the late callback",
+        "chatadmitted admitted separate work keeps resume unavailable",
+        "chatadmitted actual separate HTTP result still completes",
+        "chatadmitted explicit resume gets a new owner after separate completion",
+        "localproposal separate request review pauses current capture",
+        "localproposal a pending separate review disables microphone resume",
+        "localproposal a real held utterance cannot replace separate work",
+        "localproposal retired utterance PCM cannot be reactivated",
+        "localproposal exact separate proposal survives the late callback",
+        "localproposal admitted separate work keeps resume unavailable",
+        "localproposal actual separate HTTP result still completes",
+        "localproposal explicit resume gets a new owner after separate completion",
+        "localadmitted separate request review pauses current capture",
+        "localadmitted a pending separate review disables microphone resume",
+        "localadmitted a real held utterance cannot replace separate work",
+        "localadmitted retired utterance PCM cannot be reactivated",
+        "localadmitted exact admitted service owner survives the late callback",
+        "localadmitted admitted separate work keeps resume unavailable",
+        "localadmitted actual separate HTTP result still completes",
+        "localadmitted explicit resume gets a new owner after separate completion",
+        "messagesproposal separate request review pauses current capture",
+        "messagesproposal a pending separate review disables microphone resume",
+        "messagesproposal a real held utterance cannot replace separate work",
+        "messagesproposal retired utterance PCM cannot be reactivated",
+        "messagesproposal exact separate proposal survives the late callback",
+        "messagesproposal admitted separate work keeps resume unavailable",
+        "messagesproposal actual separate HTTP result still completes",
+        "messagesproposal explicit resume gets a new owner after separate completion",
+        "messagesadmitted separate request review pauses current capture",
+        "messagesadmitted a pending separate review disables microphone resume",
+        "messagesadmitted a real held utterance cannot replace separate work",
+        "messagesadmitted retired utterance PCM cannot be reactivated",
+        "messagesadmitted exact admitted service owner survives the late callback",
+        "messagesadmitted admitted separate work keeps resume unavailable",
+        "messagesadmitted actual separate HTTP result still completes",
+        "messagesadmitted explicit resume gets a new owner after separate completion",
+        "contentproposal separate request review pauses current capture",
+        "contentproposal a pending separate review disables microphone resume",
+        "contentproposal a real held utterance cannot replace separate work",
+        "contentproposal retired utterance PCM cannot be reactivated",
+        "contentproposal exact separate proposal survives the late callback",
+        "contentproposal admitted separate work keeps resume unavailable",
+        "contentproposal actual separate HTTP result still completes",
+        "contentproposal explicit resume gets a new owner after separate completion",
+        "contentadmitted separate request review pauses current capture",
+        "contentadmitted a pending separate review disables microphone resume",
+        "contentadmitted a real held utterance cannot replace separate work",
+        "contentadmitted retired utterance PCM cannot be reactivated",
+        "contentadmitted exact admitted service owner survives the late callback",
+        "contentadmitted admitted separate work keeps resume unavailable",
+        "contentadmitted actual separate HTTP result still completes",
+        "contentadmitted explicit resume gets a new owner after separate completion",
+        "chattext_bound speech preparation refusal is an explicit paused state",
+        "chattext_bound speech preparation refusal has no request or replay",
+        "chattext_bound complete primary text remains with scoped speech explanation",
+        "chattext_bound speech preparation refusal leaves explicit resume available",
+        "chatstorage_quota speech preparation refusal is an explicit paused state",
+        "chatstorage_quota speech preparation refusal has no request or replay",
+        "chatstorage_quota complete primary text remains with scoped speech explanation",
+        "chatstorage_quota speech preparation refusal leaves explicit resume available",
+        "localtext_bound speech preparation refusal is an explicit paused state",
+        "localtext_bound speech preparation refusal has no request or replay",
+        "localtext_bound complete primary text remains with scoped speech explanation",
+        "localtext_bound speech preparation refusal leaves explicit resume available",
+        "localstorage_quota speech preparation refusal is an explicit paused state",
+        "localstorage_quota speech preparation refusal has no request or replay",
+        "localstorage_quota complete primary text remains with scoped speech explanation",
+        "localstorage_quota speech preparation refusal leaves explicit resume available",
+        "messagestext_bound speech preparation refusal is an explicit paused state",
+        "messagestext_bound speech preparation refusal has no request or replay",
+        "messagestext_bound complete primary text remains with scoped speech explanation",
+        "messagestext_bound speech preparation refusal leaves explicit resume available",
+        "messagesstorage_quota speech preparation refusal is an explicit paused state",
+        "messagesstorage_quota speech preparation refusal has no request or replay",
+        "messagesstorage_quota complete primary text remains with scoped speech explanation",
+        "messagesstorage_quota speech preparation refusal leaves explicit resume available",
+        "contenttext_bound speech preparation refusal is an explicit paused state",
+        "contenttext_bound speech preparation refusal has no request or replay",
+        "contenttext_bound complete primary text remains with scoped speech explanation",
+        "contenttext_bound speech preparation refusal leaves explicit resume available",
+        "contentstorage_quota speech preparation refusal is an explicit paused state",
+        "contentstorage_quota speech preparation refusal has no request or replay",
+        "contentstorage_quota complete primary text remains with scoped speech explanation",
+        "contentstorage_quota speech preparation refusal leaves explicit resume available"
       ],
       "scope": "Owner HTTP/audio fixture orchestration through all four model formats. Capture callback is controlled; physical microphone and installed playback not exercised."
     },
@@ -2570,9 +2666,9 @@
     }
   },
   "apk": {
-    "version": 1793981376,
+    "version": 1793982425,
     "bytes": 6547474,
-    "sha256": "13f0c48494ddf62a1470d8c1c7c37547bf8ab483e46e461d3671824037596d46",
+    "sha256": "5451dd9ed056909d43e5d19583cf8f25ce6d1747574fb5163fc9a79d4a3427eb",
     "native": [
       {
         "abi": "arm64-v8a",
@@ -2583,7 +2679,7 @@
           16384,
           16384
         ],
-        "bytes": 4889544
+        "bytes": 4890296
       },
       {
         "abi": "x86_64",
@@ -2594,7 +2690,7 @@
           16384,
           16384
         ],
-        "bytes": 6017416
+        "bytes": 6018088
       }
     ],
     "label": "RLLM",
@@ -2607,7 +2703,7 @@
       "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
       "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
       "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-      "core/application.rs": "39db09e36e8771a404380544dee4d05fc588c957ea9337ea650ab4e10cfbe001",
+      "core/application.rs": "560e85470ef5b98e09910f558c303914122a40dc14c188b4cbc846d7777166a0",
       "core/approval_rules.rs": "e7a5ceec21ecc960f28b87d9d00f4981eb6ba03cd4dc7c7ef32665f78766cc13",
       "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
       "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
@@ -2706,7 +2802,7 @@
       "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
       "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
       "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
-      "core/voice.rs": "5641e0272d268b1bc13cff80043311abe0a401f72a36c09f5c3a139e6cfd064f",
+      "core/voice.rs": "b80a902a3e2c5eac024f0f8421dd4a0e45807b3143c6a6f14a267c89bd965ec5",
       "core/voice_audio.rs": "7c8314f0cb211aea43542eef543a3cc5ba9c327b401e4c3e907d8d5b27aca065",
       "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
       "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
@@ -3244,6 +3340,36 @@
         "Protected scopes, original baseline, optional behavior and full broader roadmap preserved."
       ]
     },
+    "voice_ownership_continuation": {
+      "version": 1793982425,
+      "implementation": "Other proposals, operations and tasks pause capture; callback-time admission prevents a held utterance from replacing separate work. Resume shares the active-task condition. Speech preparation failures pause with complete primary text and their specific explanation.",
+      "baseline_reproduction": {
+        "version": 1793981376,
+        "source_sha256": "bc19fca1eba3ccc922aa97574c66f54ed4e0cbdf7d3d92f169d54e5f5eaf86c2",
+        "method": "Actual public PCM/service-review/admission events on the unchanged saved controller before this repair.",
+        "observations": [
+          "Microphone completion replaced a separate pending service proposal with recognition.",
+          "Microphone completion replaced a separately admitted service owner with recognition.",
+          "An answer beyond the speech bound left thinking without request/effect/busy.",
+          "The actual 512-file media quota left synthesizing without request/effect/busy."
+        ]
+      },
+      "validation": {
+        "voice_cases": 375,
+        "new_ownership_cases": 64,
+        "new_speech_preparation_cases": 32,
+        "selected_rust_cases": 204,
+        "connected_groups_passed": 41,
+        "connected_groups": 42,
+        "scope": "Real PCM completion receipts held across separate review and dispatch in all four model formats; exact proposal/running-owner preservation, no replay, actual separate HTTP completion, explicit fresh resume, full speech text and actual storage-quota refusal."
+      },
+      "source_checkpoint": "Drive1IyjMWkJmeNY_3yaNx_qbFIqBnShHCLi2;257source-only member hashes and ZIP CRC verified after actual download;SHA256a50d939bc6b73cf858869f02a122a32d6d1ca321eccda212f593710c3d25d17a",
+      "limits": [
+        "Owner execution is not installed Android, actual configured user-service or independent acceptance.",
+        "Three genuine historical comparisons remain unavailable; reader fingerprints and protected scopes preserved.",
+        "Original baseline,optional services and full cumulative roadmap preserved."
+      ]
+    },
     "voice_admission_continuation": {
       "version": 1793981376,
       "implementation": "Service interruption clears only its matching voice phase and pauses that loop without automatic replay or microphone restart. Consent, primary text answers and unrelated capture owners are retained.",
@@ -3384,7 +3510,7 @@
       {
         "url": "https://api.mwmbl.org/api/v2/search/?q=Rust%20programming%20language",
         "bytes": 47710,
-        "sha256": "a1708d314b580263d5f8335eb7f5f890bbddd3fa5b506ae2296fdab68dc03568"
+        "sha256": "4fc38024ea5649871c8fa06cee3867add963ed79ea6fd2812bb2211235e7796e"
       }
     ],
     "scope": "Live public HTTPS search responses transported by curl through actual core review, owned callbacks, evidence retention and child/parent continuation. Model replies are controlled protocol fixtures; configured model inference and installed Android transport require their own execution."

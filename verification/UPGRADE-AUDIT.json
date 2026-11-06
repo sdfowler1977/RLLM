@@ -455,6 +455,36 @@
       "Protected scopes, original baseline, optional behavior and full broader roadmap preserved."
     ]
   },
+  "voice_ownership_continuation": {
+    "version": 1793982425,
+    "implementation": "Other proposals, operations and tasks pause capture; callback-time admission prevents a held utterance from replacing separate work. Resume shares the active-task condition. Speech preparation failures pause with complete primary text and their specific explanation.",
+    "baseline_reproduction": {
+      "version": 1793981376,
+      "source_sha256": "bc19fca1eba3ccc922aa97574c66f54ed4e0cbdf7d3d92f169d54e5f5eaf86c2",
+      "method": "Actual public PCM/service-review/admission events on the unchanged saved controller before this repair.",
+      "observations": [
+        "Microphone completion replaced a separate pending service proposal with recognition.",
+        "Microphone completion replaced a separately admitted service owner with recognition.",
+        "An answer beyond the speech bound left thinking without request/effect/busy.",
+        "The actual 512-file media quota left synthesizing without request/effect/busy."
+      ]
+    },
+    "validation": {
+      "voice_cases": 375,
+      "new_ownership_cases": 64,
+      "new_speech_preparation_cases": 32,
+      "selected_rust_cases": 204,
+      "connected_groups_passed": 41,
+      "connected_groups": 42,
+      "scope": "Real PCM completion receipts held across separate review and dispatch in all four model formats; exact proposal/running-owner preservation, no replay, actual separate HTTP completion, explicit fresh resume, full speech text and actual storage-quota refusal."
+    },
+    "source_checkpoint": "Drive1IyjMWkJmeNY_3yaNx_qbFIqBnShHCLi2;257source-only member hashes and ZIP CRC verified after actual download;SHA256a50d939bc6b73cf858869f02a122a32d6d1ca321eccda212f593710c3d25d17a",
+    "limits": [
+      "Owner execution is not installed Android, actual configured user-service or independent acceptance.",
+      "Three genuine historical comparisons remain unavailable; reader fingerprints and protected scopes preserved.",
+      "Original baseline,optional services and full cumulative roadmap preserved."
+    ]
+  },
   "voice_admission_continuation": {
     "version": 1793981376,
     "implementation": "Service interruption clears only its matching voice phase and pauses that loop without automatic replay or microphone restart. Consent, primary text answers and unrelated capture owners are retained.",
