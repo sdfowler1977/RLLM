@@ -4,6 +4,8 @@ The current signed candidate, executed counts and acceptance limits are recorded
 
 The audit records below describe their original source versions and retain their historical counts and wording. Their uses of “current” refer to those original versions. Later foreground spoken interruption, audio-route/focus ownership, bounded scene workers and voice-review lifecycle repairs are described by the current files above. Older broad scope remains preserved.
 
+The connected voice-admission review reproduced a late resource refusal that removed the speech request but retained Preparing speech. Scoped service interruption now clears only its matching voice phase and pauses that loop. Actual PCM/HTTP/public-event checks cover refused recognition and synthesis, retained primary answers, explicit fresh resume, sufficient-memory playback and an unrelated service refusal that leaves real microphone PCM admission working. These are owner checks using controlled platform/model responses; installed Android and actual user-service acceptance remain unverified.
+
 ---
 
 # Historical audit records

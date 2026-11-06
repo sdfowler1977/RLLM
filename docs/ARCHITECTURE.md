@@ -47,3 +47,5 @@ Activity model/snapshot/MCP transports and Gateway upstream I/O share Resolution
 ## Voice review state
 
 Rust owns a distinct pending-review phase. The displayed operation changes to recognition or synthesis only when services admits its current owned dispatch. Losing or rejecting the held review pauses automatic capture; hiding the review preserves its proposal. The Resume microphone control uses the same current consent, pending-operation and draft checks as the actual capture-start operation.
+
+Service interruption retires upload/response ownership, then clears and pauses only the matching voice request phase. This also covers late measured-memory admission refusals after request preparation. Text and current voice consent remain available; an unrelated service has no matching voice phase and cannot retire microphone ownership through this cleanup.
