@@ -1,14 +1,14 @@
 {
   "state": "in_progress; signed candidate",
-  "version": 1793982425,
+  "version": 1793985689,
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
   "signing_certificate_sha256": "ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5",
   "key_change_authorized": true,
   "signed_apk": {
     "path": "release/RLLM.apk",
-    "bytes": 6547474,
-    "sha256": "5451dd9ed056909d43e5d19583cf8f25ce6d1747574fb5163fc9a79d4a3427eb"
+    "bytes": 6559762,
+    "sha256": "b690d225e971562dbcb61fbdc4d4ebca965cc5f584255b5989c4e2525395df87"
   },
   "build_inputs": {
     "AndroidManifest.xml": "68f6aadd38bbd8d73c00736e2a0ee21f2b512de36000ea8cd89e6f3609f3caf2",
@@ -16,8 +16,8 @@
     "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
     "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
     "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-    "core/application.rs": "560e85470ef5b98e09910f558c303914122a40dc14c188b4cbc846d7777166a0",
-    "core/approval_rules.rs": "e7a5ceec21ecc960f28b87d9d00f4981eb6ba03cd4dc7c7ef32665f78766cc13",
+    "core/application.rs": "639ea7d773b15c3a8128ad6ace0ca75565b892eb4bde6fb4e17123d11b17153b",
+    "core/approval_rules.rs": "9128b93dde7f8d82a01c03bf8d4d28d2dacb9139ca27e056e3932c37793e6a34",
     "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
     "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
     "core/binary_declarations.rs": "ccc94d3fd69d92deeaacfab99b7b54245b9a77e5f9ec5e3849154879caf0ba31",
@@ -54,7 +54,7 @@
     "core/gateway.rs": "3bc3e26cfb91cc54ec34868f71192e679031c0c5b8c10001876a00baa197d244",
     "core/generation.rs": "5ffb914ca983efa2ab290f8ca5ee10a3f25f709c9118891435bf5015630ce9ca",
     "core/generation_controls.rs": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c",
-    "core/harness.rs": "42e07344d5f338204144938f6f03fb59de8e54500e1761ef31863c98801a7b68",
+    "core/harness.rs": "ce6d3c569b2f7a6841f837041c229b60ca0afe48ebd6c849bc8b6b6ebb0ddc04",
     "core/harness_rules.rs": "09632ca0c6d0fe434d79eaae1ac7b7e4f6ea52eead45db82bad217a268c99704",
     "core/history_view.rs": "9657effb36f29de5601719a6b8c8334e93490266c6526934516a4a734524efb8",
     "core/hosted_search.rs": "e7ca478bf9f77d0424fccebbf89ffcf82e6ccee8768f1a3d6f26eaa4504e485d",
@@ -66,7 +66,7 @@
     "core/inquiry.rs": "5f8af816157ea95979162b7733c545e88d9c1337353e2b9989ff91fba1d1d528",
     "core/instruction.rs": "97cedda11a56cc611c0aee49c5776b771c282754e0170e7102300f3ad0fa2d8a",
     "core/interaction.rs": "23ed247d366a4928387aa3286317f2fc4d3cc67dab113b5ec84ea7c678c94df8",
-    "core/investigation.rs": "3f21b44d1cf5b6a0becaf818e585432a8393eaefb397352a198cde6f996b1ba3",
+    "core/investigation.rs": "542edd8eaead01f2dca42c37067ea60c36dfe5490e66dce86186d717f15e10df",
     "core/investigation_claims.rs": "19ce0be47873fe7fbfde174f0acccffa494033208bc9a27531c308f9c72b2ddd",
     "core/jobs.rs": "e2e0cd6949e362fd87185e323b7fc19c5bf36a43bf538cf9325bfdbc6cd989c3",
     "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
@@ -96,7 +96,7 @@
     "core/provider.rs": "b3de7b5f18f65eeba4c2b2b40e65c2d0b31f79590a5bfcfb6a2555fc3a9d04f9",
     "core/provider_calls.rs": "b00d9805e4174b56707f34984106561a6a0405cb0406fe1ce925811920b01fdb",
     "core/raster_surface.rs": "a475f9a953a9c54a6d9752fd5f169633437fcc609403caf5d1799364828e6a26",
-    "core/reasoning_text.rs": "f2007c2f8306311ae3badc824000807cb27fa7c5ea885c7e50d535635da3189c",
+    "core/reasoning_text.rs": "425b59b8ed5073eb5c32938ce9dd7ebaa0e608bea942a0749549394256498c3f",
     "core/reconstruction.rs": "8c95d4d8b0d796b3c98d2a8c3a73311366410dcee8c73dabe93a1c884362bcd2",
     "core/redirect.rs": "4f55f161d677e307ba52af8983d15860d89f05e50c75e458789c1207d99d36c2",
     "core/remote_monitor.rs": "6223b278b7f2d83f611433601e3de1b7e75aa22962f675671411dde1ade215b3",
@@ -107,13 +107,13 @@
     "core/resources.rs": "cfdebc1cc58e6b81f862c01a38734dc7ed6911a362a67c1e391fcafaec89100e",
     "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
     "core/scene.rs": "d6526bd3c008bbe3a54b88679fef4f26f889ddc3be0dcfc95246fa7855ba25a0",
-    "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
+    "core/search.rs": "1dfadaf060af4e23ee8ad10950fe4d96a6741e86bbcfabb8a771ecc94746c07a",
     "core/services.rs": "f29661b10b8868ccc1361f83566d80c1e844be669201fd2c7cb3c87d6c2fbae9",
     "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
     "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
     "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
     "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
-    "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
+    "core/tool_format.rs": "cbe8fb0492f8bd999eef6f5fe537b2f88613d3778e91aa57a54e2bdc37d69da8",
     "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
     "core/voice.rs": "b80a902a3e2c5eac024f0f8421dd4a0e45807b3143c6a6f14a267c89bd965ec5",
     "core/voice_audio.rs": "7c8314f0cb211aea43542eef543a3cc5ba9c327b401e4c3e907d8d5b27aca065",
@@ -195,12 +195,12 @@
       "sha256": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be"
     },
     "core/application.rs": {
-      "bytes": 338217,
-      "sha256": "560e85470ef5b98e09910f558c303914122a40dc14c188b4cbc846d7777166a0"
+      "bytes": 339580,
+      "sha256": "639ea7d773b15c3a8128ad6ace0ca75565b892eb4bde6fb4e17123d11b17153b"
     },
     "core/approval_rules.rs": {
-      "bytes": 17224,
-      "sha256": "e7a5ceec21ecc960f28b87d9d00f4981eb6ba03cd4dc7c7ef32665f78766cc13"
+      "bytes": 18119,
+      "sha256": "9128b93dde7f8d82a01c03bf8d4d28d2dacb9139ca27e056e3932c37793e6a34"
     },
     "core/archive.rs": {
       "bytes": 58552,
@@ -347,8 +347,8 @@
       "sha256": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c"
     },
     "core/harness.rs": {
-      "bytes": 122556,
-      "sha256": "42e07344d5f338204144938f6f03fb59de8e54500e1761ef31863c98801a7b68"
+      "bytes": 122838,
+      "sha256": "ce6d3c569b2f7a6841f837041c229b60ca0afe48ebd6c849bc8b6b6ebb0ddc04"
     },
     "core/harness_rules.rs": {
       "bytes": 52600,
@@ -395,8 +395,8 @@
       "sha256": "23ed247d366a4928387aa3286317f2fc4d3cc67dab113b5ec84ea7c678c94df8"
     },
     "core/investigation.rs": {
-      "bytes": 34454,
-      "sha256": "3f21b44d1cf5b6a0becaf818e585432a8393eaefb397352a198cde6f996b1ba3"
+      "bytes": 34553,
+      "sha256": "542edd8eaead01f2dca42c37067ea60c36dfe5490e66dce86186d717f15e10df"
     },
     "core/investigation_claims.rs": {
       "bytes": 15422,
@@ -515,8 +515,8 @@
       "sha256": "a475f9a953a9c54a6d9752fd5f169633437fcc609403caf5d1799364828e6a26"
     },
     "core/reasoning_text.rs": {
-      "bytes": 4005,
-      "sha256": "f2007c2f8306311ae3badc824000807cb27fa7c5ea885c7e50d535635da3189c"
+      "bytes": 4010,
+      "sha256": "425b59b8ed5073eb5c32938ce9dd7ebaa0e608bea942a0749549394256498c3f"
     },
     "core/reconstruction.rs": {
       "bytes": 19818,
@@ -559,8 +559,8 @@
       "sha256": "d6526bd3c008bbe3a54b88679fef4f26f889ddc3be0dcfc95246fa7855ba25a0"
     },
     "core/search.rs": {
-      "bytes": 12978,
-      "sha256": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b"
+      "bytes": 14720,
+      "sha256": "1dfadaf060af4e23ee8ad10950fe4d96a6741e86bbcfabb8a771ecc94746c07a"
     },
     "core/services.rs": {
       "bytes": 33423,
@@ -583,8 +583,8 @@
       "sha256": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093"
     },
     "core/tool_format.rs": {
-      "bytes": 10132,
-      "sha256": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a"
+      "bytes": 13425,
+      "sha256": "cbe8fb0492f8bd999eef6f5fe537b2f88613d3778e91aa57a54e2bdc37d69da8"
     },
     "core/transfer.rs": {
       "bytes": 11455,
@@ -635,16 +635,16 @@
       "sha256": "ea98d6f89776486630494de41ed654ae014daf6d7dad0dc435faf90e090961ac"
     },
     "docs/ARCHITECTURE.md": {
-      "bytes": 6889,
-      "sha256": "c2ea1f6c480fb0f65b25430cc3a4d4cadc561d2558332917032ee6e10b402139"
+      "bytes": 7823,
+      "sha256": "d1a1c22447d6ed90ac7e72eeff4990b5ca097dd87b6f263138c251e6695279c5"
     },
     "docs/ASSETS.md": {
       "bytes": 577,
       "sha256": "4be441540c78cc579da26efcc8dd9678e95b6396ec7b0913e758f4d7b86cf10a"
     },
     "docs/AUDIT.md": {
-      "bytes": 14064,
-      "sha256": "86e41a9e6498dab81bfb44ed51108ec7259e2f589a999002f98f8b6e51f446a2"
+      "bytes": 14920,
+      "sha256": "5d4808dedf6636a3c339a9861626ffc430bfd58545dd5a0ef00eeddd583d2280"
     },
     "docs/AUTHORIZATION.md": {
       "bytes": 6099,
@@ -719,12 +719,12 @@
       "sha256": "93f5a206d83ac2fd56bf4cb74b50960d6df33005a90b3679856e7e6ae04189f6"
     },
     "docs/STATUS.md": {
-      "bytes": 4793,
-      "sha256": "0e7d2e9c1489bacd8552d5660ad18bd083492f7fc02615fdc901869297213267"
+      "bytes": 5208,
+      "sha256": "77f7bc3bffba7638954dc32bc92ee59cddd8d95970dffd04f8b164d3cac014b0"
     },
     "docs/TOOL-FEEDBACK.md": {
-      "bytes": 4677,
-      "sha256": "a020f4c6551ca549d82f06ea7ba95887e11f87fafa58aab3755d6486793b2d62"
+      "bytes": 6037,
+      "sha256": "28b5e17fd91538f83ffd4fb8f13c8f433347f66ed78f0f7b2dcbaaf55eb4590e"
     },
     "docs/TOOLCHAIN.json": {
       "bytes": 3077,
@@ -839,20 +839,20 @@
       "sha256": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f"
     },
     "project-progress.md": {
-      "bytes": 83196,
-      "sha256": "ee37522aa4c7364f39e811e10b0a89dcbb5aa06f9a1646096ea2baebee898e00"
+      "bytes": 91545,
+      "sha256": "8ef6e70c9ce8461ac1b92ec9b42dc9096577bb043ccd9def5908d962efcf6c65"
     },
     "release/NOTES.md": {
-      "bytes": 4878,
-      "sha256": "5e46cd826de5d62a517ae1c56060a489d12f423b8e73e3fe016373c2e42a282c"
+      "bytes": 5293,
+      "sha256": "e2c65a97cfbdf2727067612174e239927d9672e226073009474cd8fed3868a5c"
     },
     "release/RLLM.apk": {
-      "bytes": 6547474,
-      "sha256": "5451dd9ed056909d43e5d19583cf8f25ce6d1747574fb5163fc9a79d4a3427eb"
+      "bytes": 6559762,
+      "sha256": "b690d225e971562dbcb61fbdc4d4ebca965cc5f584255b5989c4e2525395df87"
     },
     "release/SHA256SUMS.txt": {
       "bytes": 75,
-      "sha256": "7fb6993fe95df2593f0c3013ef1a614dceb2a83927e1e9de105d0cfb2c6a8f04"
+      "sha256": "eb83081644af3b501b3f293f6bf53e9ad37898af5314be49c405c8cdd20d1e28"
     },
     "res/drawable/.gitkeep": {
       "bytes": 1,
@@ -943,20 +943,20 @@
       "sha256": "9b92abc90d951791e5a6b914018caa893a40a97ce29458dc39f06c68ef6bf0ed"
     },
     "tools/apk.py": {
-      "bytes": 6131,
-      "sha256": "af43ce9fec717475ed31082614812b9994f0a27a6e51c0d299107aec006bdfac"
+      "bytes": 6338,
+      "sha256": "83d7c0f4dd467cf0e84aaad7777e311f49377f0c2e41e838ac6e576877f0caa7"
     },
     "tools/checkpoint.py": {
       "bytes": 1409,
       "sha256": "7cc25c68497399f80d5d9ab7183687014a7d844f22a881b2a2fdf13bd59a783b"
     },
     "tools/checks.py": {
-      "bytes": 3955,
-      "sha256": "9297b7c14923bf26d4497bedf3d2f6b3a66ce4fe85f224c623ad8457d5b6f60a"
+      "bytes": 4043,
+      "sha256": "ccd6aee4551eb3f8df3fe3f939266301ecf6d3c2b7e6bf2728427a58fa56e421"
     },
     "tools/package.py": {
-      "bytes": 15548,
-      "sha256": "62d518aecd24f404a1d200afd1b3e9f1287e6429256b0d8544e60fe72bc24d72"
+      "bytes": 16005,
+      "sha256": "4bab763be63c658d603265fcf6d9a3987617f0b41e280510611a45c3efe5f9f4"
     },
     "tools/readback.py": {
       "bytes": 1485,
@@ -991,12 +991,12 @@
       "sha256": "ec335557689342d0b80dc75832ec065442c28215f8648088105c7fc98af465b4"
     },
     "verification/RESULTS.json": {
-      "bytes": 222540,
-      "sha256": "9e9107f676e0d09fa9e03fd75df7a5f62cc5ed3d729104c13e0a33d2b7945d72"
+      "bytes": 235026,
+      "sha256": "fc0ded2e94ad574a9d6767afd37a921136c201ba799262e77c12d0f996bbed09"
     },
     "verification/UPGRADE-AUDIT.json": {
-      "bytes": 32030,
-      "sha256": "f0685f6477b13a3d87c54ec379bdc3066084c2a8c61e5f5041d6d62eb4ceba18"
+      "bytes": 34096,
+      "sha256": "689362439eb78b097a7e267a73949433226e527b7cdf4c166554fd44ea6052d1"
     },
     "verification/VOICE-SESSION-CHECKS.json": {
       "bytes": 9615,
@@ -1150,6 +1150,10 @@
       "bytes": 10234,
       "sha256": "d5949d2d860899211e689e1eb93986e1ada79b822c722aa7d89aaf1dcfd8e44a"
     },
+    "verification/proposal_recovery.py": {
+      "bytes": 11945,
+      "sha256": "afb1d21cee4b8879ccbbc46a50afd72ec3662a1fe9e00ca92031702a35c0c4e4"
+    },
     "verification/provider_evidence.py": {
       "bytes": 15928,
       "sha256": "5cd876efa2b910596b8e10b80ebdb43f118d092ae4e513a1f308a1196739e76b"
@@ -1223,6 +1227,7 @@
         "local_feedback": 29,
         "network_feedback": 41,
         "proposal_feedback": 36,
+        "proposal_recovery": 128,
         "review_ownership": 28,
         "task_ownership": 79,
         "dav_listing": 31,
@@ -1249,9 +1254,9 @@
         "acp": 41,
         "oauth": 121
       },
-      "total_executed": 2180,
-      "groups_passed": 41,
-      "groups": 42,
+      "total_executed": 2308,
+      "groups_passed": 42,
+      "groups": 43,
       "unavailable": [
         {
           "name": "binary_flow",
@@ -1259,187 +1264,197 @@
         }
       ]
     },
-    "selected_rust_cases": 204,
+    "selected_rust_cases": 212,
     "selected_rust_runs": [
       {
         "filter": "a2a::tests::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 473 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
       },
       {
         "filter": "execution::scope_tests::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::binary_flow::tests::",
         "code": 0,
-        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.01s"
       },
       {
         "filter": "provider::",
         "code": 0,
-        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.00s"
       },
       {
         "filter": "stream::",
         "code": 0,
-        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 443 filtered out; finished in 0.06s"
+        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 446 filtered out; finished in 0.07s"
       },
       {
         "filter": "application::harness::",
         "code": 0,
-        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 447 filtered out; finished in 0.72s"
+        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 450 filtered out; finished in 1.11s"
       },
       {
         "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::checks::scoped_drive_listing",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::file_evidence::checks::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::investigation::directory_observation::checks::cancellation_and_deadline_remain_scoped",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::elf_observation::",
         "code": 0,
-        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 471 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::binary_observation::",
         "code": 0,
-        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::observation_graph::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::claim_records::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 473 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::investigation::cancellation_scope_checks::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::connection_migration::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 473 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::binary_declarations::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 473 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::checks::settings_menus_are_short_separate_and_preserve_the_thread",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::instruction::tests::",
         "code": 0,
-        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 449 filtered out; finished in 0.04s"
+        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; finished in 0.04s"
       },
       {
         "filter": "application::binary_evidence::path_checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::operation::drive_checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
       },
       {
         "filter": "hosted_search::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::pe_observation::relocation_checks::",
         "code": 0,
-        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 469 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.02s"
       },
       {
         "filter": "resources::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
       },
       {
         "filter": "network::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
       },
       {
         "filter": "network::binary_checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
       },
       {
         "filter": "network::binary_response_checks::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::project_store::transfer::tests::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.07s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.14s"
       },
       {
         "filter": "application::monitor::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::request_metrics::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::throughput::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::checks::live_rate_opens_analytics_without_losing_stream_or_draft",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::checks::tls_guidance_preserves_explicit_endpoint",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::voice_audio::checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::oauth::checks::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::scene::checks::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 473 filtered out; finished in 0.03s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.04s"
+      },
+      {
+        "filter": "application::tool_format::tests::",
+        "code": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::search::checks::",
+        "code": 0,
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.00s"
       }
     ],
     "checks": {
@@ -2300,6 +2315,140 @@
           "child refusal keeps its captured parent return"
         ],
         "scope": "Owner public-event checks: actual proposal/refusal/review transitions through four provider formats, real subsequent file workers, exact routes, bounded feedback, queued review preservation, response admission and captured child returns."
+      },
+      "proposal_recovery": {
+        "passed": 128,
+        "checks": [
+          "chat complete useful response remains visible",
+          "chat malformed reply itself runs no operation",
+          "chat current reply exposes a direct review control",
+          "chat explicit recovery opens exact normal review without execution",
+          "chat recovered request exposes one-time approval only",
+          "chat automatic approval action cannot dispatch recovered work",
+          "chat recovered request cannot create a persistent approval",
+          "chat only approval emits the exact search query",
+          "chat reviewing a recovered page performs no network I/O",
+          "chat actual approved page result returns to requesting model",
+          "chat selected malformed reply shows response details and review",
+          "chatmultiple data or ambiguous requests cannot become recovered review",
+          "chatmultiple direct action still emits no operation",
+          "chatfenced data or ambiguous requests cannot become recovered review",
+          "chatfenced direct action still emits no operation",
+          "chatquoted data or ambiguous requests cannot become recovered review",
+          "chatquoted direct action still emits no operation",
+          "chatnested data or ambiguous requests cannot become recovered review",
+          "chatnested direct action still emits no operation",
+          "chat changed originating connection cannot recover the request",
+          "chatreasoning_only hidden reasoning cannot become a recovered request",
+          "chatunfinished_reasoning hidden reasoning cannot become a recovered request",
+          "chat only visible request is staged after leading reasoning",
+          "chat disabled tool remains unavailable through request recovery",
+          "chat alternative source is disclosed by the actual review destination",
+          "chat explicit alternative emits the exact query to the other source once",
+          "chat ordinary request still supports an actual saved session approval",
+          "chat saved session approval actually matches the same normal request",
+          "chat matching saved rule cannot automatically dispatch recovered prose",
+          "chat matching-rule action also preserves the current recovered review",
+          "chat explicit one-time approval still completes actual HTTP under a saved rule",
+          "local complete useful response remains visible",
+          "local malformed reply itself runs no operation",
+          "local current reply exposes a direct review control",
+          "local explicit recovery opens exact normal review without execution",
+          "local recovered request exposes one-time approval only",
+          "local automatic approval action cannot dispatch recovered work",
+          "local recovered request cannot create a persistent approval",
+          "local only approval emits the exact search query",
+          "local reviewing a recovered page performs no network I/O",
+          "local actual approved page result returns to requesting model",
+          "local selected malformed reply shows response details and review",
+          "localmultiple data or ambiguous requests cannot become recovered review",
+          "localmultiple direct action still emits no operation",
+          "localfenced data or ambiguous requests cannot become recovered review",
+          "localfenced direct action still emits no operation",
+          "localquoted data or ambiguous requests cannot become recovered review",
+          "localquoted direct action still emits no operation",
+          "localnested data or ambiguous requests cannot become recovered review",
+          "localnested direct action still emits no operation",
+          "local changed originating connection cannot recover the request",
+          "localreasoning_only hidden reasoning cannot become a recovered request",
+          "localunfinished_reasoning hidden reasoning cannot become a recovered request",
+          "local only visible request is staged after leading reasoning",
+          "local disabled tool remains unavailable through request recovery",
+          "local alternative source is disclosed by the actual review destination",
+          "local explicit alternative emits the exact query to the other source once",
+          "local ordinary request still supports an actual saved session approval",
+          "local saved session approval actually matches the same normal request",
+          "local matching saved rule cannot automatically dispatch recovered prose",
+          "local matching-rule action also preserves the current recovered review",
+          "local explicit one-time approval still completes actual HTTP under a saved rule",
+          "messages complete useful response remains visible",
+          "messages malformed reply itself runs no operation",
+          "messages current reply exposes a direct review control",
+          "messages explicit recovery opens exact normal review without execution",
+          "messages recovered request exposes one-time approval only",
+          "messages automatic approval action cannot dispatch recovered work",
+          "messages recovered request cannot create a persistent approval",
+          "messages only approval emits the exact search query",
+          "messages reviewing a recovered page performs no network I/O",
+          "messages actual approved page result returns to requesting model",
+          "messages selected malformed reply shows response details and review",
+          "messagesmultiple data or ambiguous requests cannot become recovered review",
+          "messagesmultiple direct action still emits no operation",
+          "messagesfenced data or ambiguous requests cannot become recovered review",
+          "messagesfenced direct action still emits no operation",
+          "messagesquoted data or ambiguous requests cannot become recovered review",
+          "messagesquoted direct action still emits no operation",
+          "messagesnested data or ambiguous requests cannot become recovered review",
+          "messagesnested direct action still emits no operation",
+          "messages changed originating connection cannot recover the request",
+          "messagesreasoning_only hidden reasoning cannot become a recovered request",
+          "messagesunfinished_reasoning hidden reasoning cannot become a recovered request",
+          "messages only visible request is staged after leading reasoning",
+          "messages disabled tool remains unavailable through request recovery",
+          "messages alternative source is disclosed by the actual review destination",
+          "messages explicit alternative emits the exact query to the other source once",
+          "messages ordinary request still supports an actual saved session approval",
+          "messages saved session approval actually matches the same normal request",
+          "messages matching saved rule cannot automatically dispatch recovered prose",
+          "messages matching-rule action also preserves the current recovered review",
+          "messages explicit one-time approval still completes actual HTTP under a saved rule",
+          "content complete useful response remains visible",
+          "content malformed reply itself runs no operation",
+          "content current reply exposes a direct review control",
+          "content explicit recovery opens exact normal review without execution",
+          "content recovered request exposes one-time approval only",
+          "content automatic approval action cannot dispatch recovered work",
+          "content recovered request cannot create a persistent approval",
+          "content only approval emits the exact search query",
+          "content reviewing a recovered page performs no network I/O",
+          "content actual approved page result returns to requesting model",
+          "content selected malformed reply shows response details and review",
+          "contentmultiple data or ambiguous requests cannot become recovered review",
+          "contentmultiple direct action still emits no operation",
+          "contentfenced data or ambiguous requests cannot become recovered review",
+          "contentfenced direct action still emits no operation",
+          "contentquoted data or ambiguous requests cannot become recovered review",
+          "contentquoted direct action still emits no operation",
+          "contentnested data or ambiguous requests cannot become recovered review",
+          "contentnested direct action still emits no operation",
+          "content changed originating connection cannot recover the request",
+          "contentreasoning_only hidden reasoning cannot become a recovered request",
+          "contentunfinished_reasoning hidden reasoning cannot become a recovered request",
+          "content only visible request is staged after leading reasoning",
+          "content disabled tool remains unavailable through request recovery",
+          "content alternative source is disclosed by the actual review destination",
+          "content explicit alternative emits the exact query to the other source once",
+          "content ordinary request still supports an actual saved session approval",
+          "content saved session approval actually matches the same normal request",
+          "content matching saved rule cannot automatically dispatch recovered prose",
+          "content matching-rule action also preserves the current recovered review",
+          "content explicit one-time approval still completes actual HTTP under a saved rule",
+          "manual search exposes the same generic alternative-source choice",
+          "manual alternate source enters ordinary review with exact query",
+          "manual alternate source starts its actual selected endpoint",
+          "custom search alternative refuses before any endpoint or credential use"
+        ],
+        "scope": "Owner public-event checks across four formats; explicit review, current ownership, examples/ambiguity refusal, actual local HTTP and controlled model continuation. Physical Android and actual user server not exercised."
       },
       "review_ownership": {
         "passed": [
@@ -3871,9 +4020,9 @@
       }
     },
     "apk": {
-      "version": 1793982425,
-      "bytes": 6547474,
-      "sha256": "5451dd9ed056909d43e5d19583cf8f25ce6d1747574fb5163fc9a79d4a3427eb",
+      "version": 1793985689,
+      "bytes": 6559762,
+      "sha256": "b690d225e971562dbcb61fbdc4d4ebca965cc5f584255b5989c4e2525395df87",
       "native": [
         {
           "abi": "arm64-v8a",
@@ -3884,7 +4033,7 @@
             16384,
             16384
           ],
-          "bytes": 4890296
+          "bytes": 4902664
         },
         {
           "abi": "x86_64",
@@ -3895,7 +4044,7 @@
             16384,
             16384
           ],
-          "bytes": 6018088
+          "bytes": 6034008
         }
       ],
       "label": "RLLM",
@@ -3908,8 +4057,8 @@
         "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
         "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
         "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-        "core/application.rs": "560e85470ef5b98e09910f558c303914122a40dc14c188b4cbc846d7777166a0",
-        "core/approval_rules.rs": "e7a5ceec21ecc960f28b87d9d00f4981eb6ba03cd4dc7c7ef32665f78766cc13",
+        "core/application.rs": "639ea7d773b15c3a8128ad6ace0ca75565b892eb4bde6fb4e17123d11b17153b",
+        "core/approval_rules.rs": "9128b93dde7f8d82a01c03bf8d4d28d2dacb9139ca27e056e3932c37793e6a34",
         "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
         "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
         "core/binary_declarations.rs": "ccc94d3fd69d92deeaacfab99b7b54245b9a77e5f9ec5e3849154879caf0ba31",
@@ -3946,7 +4095,7 @@
         "core/gateway.rs": "3bc3e26cfb91cc54ec34868f71192e679031c0c5b8c10001876a00baa197d244",
         "core/generation.rs": "5ffb914ca983efa2ab290f8ca5ee10a3f25f709c9118891435bf5015630ce9ca",
         "core/generation_controls.rs": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c",
-        "core/harness.rs": "42e07344d5f338204144938f6f03fb59de8e54500e1761ef31863c98801a7b68",
+        "core/harness.rs": "ce6d3c569b2f7a6841f837041c229b60ca0afe48ebd6c849bc8b6b6ebb0ddc04",
         "core/harness_rules.rs": "09632ca0c6d0fe434d79eaae1ac7b7e4f6ea52eead45db82bad217a268c99704",
         "core/history_view.rs": "9657effb36f29de5601719a6b8c8334e93490266c6526934516a4a734524efb8",
         "core/hosted_search.rs": "e7ca478bf9f77d0424fccebbf89ffcf82e6ccee8768f1a3d6f26eaa4504e485d",
@@ -3958,7 +4107,7 @@
         "core/inquiry.rs": "5f8af816157ea95979162b7733c545e88d9c1337353e2b9989ff91fba1d1d528",
         "core/instruction.rs": "97cedda11a56cc611c0aee49c5776b771c282754e0170e7102300f3ad0fa2d8a",
         "core/interaction.rs": "23ed247d366a4928387aa3286317f2fc4d3cc67dab113b5ec84ea7c678c94df8",
-        "core/investigation.rs": "3f21b44d1cf5b6a0becaf818e585432a8393eaefb397352a198cde6f996b1ba3",
+        "core/investigation.rs": "542edd8eaead01f2dca42c37067ea60c36dfe5490e66dce86186d717f15e10df",
         "core/investigation_claims.rs": "19ce0be47873fe7fbfde174f0acccffa494033208bc9a27531c308f9c72b2ddd",
         "core/jobs.rs": "e2e0cd6949e362fd87185e323b7fc19c5bf36a43bf538cf9325bfdbc6cd989c3",
         "core/layout.rs": "446acf00a44969aa76884de905b9818b3b68e18d7c3242b1fd5aca4f10b15ee1",
@@ -3988,7 +4137,7 @@
         "core/provider.rs": "b3de7b5f18f65eeba4c2b2b40e65c2d0b31f79590a5bfcfb6a2555fc3a9d04f9",
         "core/provider_calls.rs": "b00d9805e4174b56707f34984106561a6a0405cb0406fe1ce925811920b01fdb",
         "core/raster_surface.rs": "a475f9a953a9c54a6d9752fd5f169633437fcc609403caf5d1799364828e6a26",
-        "core/reasoning_text.rs": "f2007c2f8306311ae3badc824000807cb27fa7c5ea885c7e50d535635da3189c",
+        "core/reasoning_text.rs": "425b59b8ed5073eb5c32938ce9dd7ebaa0e608bea942a0749549394256498c3f",
         "core/reconstruction.rs": "8c95d4d8b0d796b3c98d2a8c3a73311366410dcee8c73dabe93a1c884362bcd2",
         "core/redirect.rs": "4f55f161d677e307ba52af8983d15860d89f05e50c75e458789c1207d99d36c2",
         "core/remote_monitor.rs": "6223b278b7f2d83f611433601e3de1b7e75aa22962f675671411dde1ade215b3",
@@ -3999,13 +4148,13 @@
         "core/resources.rs": "cfdebc1cc58e6b81f862c01a38734dc7ed6911a362a67c1e391fcafaec89100e",
         "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
         "core/scene.rs": "d6526bd3c008bbe3a54b88679fef4f26f889ddc3be0dcfc95246fa7855ba25a0",
-        "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
+        "core/search.rs": "1dfadaf060af4e23ee8ad10950fe4d96a6741e86bbcfabb8a771ecc94746c07a",
         "core/services.rs": "f29661b10b8868ccc1361f83566d80c1e844be669201fd2c7cb3c87d6c2fbae9",
         "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
         "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
         "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
         "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
-        "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
+        "core/tool_format.rs": "cbe8fb0492f8bd999eef6f5fe537b2f88613d3778e91aa57a54e2bdc37d69da8",
         "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
         "core/voice.rs": "b80a902a3e2c5eac024f0f8421dd4a0e45807b3143c6a6f14a267c89bd965ec5",
         "core/voice_audio.rs": "7c8314f0cb211aea43542eef543a3cc5ba9c327b401e4c3e907d8d5b27aca065",
@@ -4069,8 +4218,8 @@
     },
     "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
     "published_comparator": {
-      "version": 1793922659,
-      "source_sha256": "c506100631f916806f5b007808311abe1dd95ff93c5b512fc0c42a48c43acd82",
+      "version": 1793982425,
+      "source_sha256": "6bc9f7d834a6d77ad8c52fae511a7145bd47e7f9e1b76fdfc6a63e85cbcc3d21",
       "method": "Exact saved and source-published shared core compiled locally; actual retained representations and four before/after scene pixel cases exercised"
     },
     "flow_comparator": {
@@ -4089,6 +4238,29 @@
     "live_service_endpoints_tested": false,
     "live_model_NAS_tested": false,
     "upgrade_audit": {
+      "proposal_recovery": {
+        "version": 1793985689,
+        "reported_behavior": "Installed screenshots showed useful commentary plus one web_search JSON request replaced by a generic warning. Raw text was exposed only through Branch conversation. Actual search records were irrelevant to current weather.",
+        "baseline_reproduction": {
+          "version": 1793982425,
+          "source_sha256": "6bc9f7d834a6d77ad8c52fae511a7145bd47e7f9e1b76fdfc6a63e85cbcc3d21",
+          "method": "Exact saved core compiled before edits; public model completion with commentary plus one bare JSON object reproduced hidden commentary, no proposal and no operation."
+        },
+        "implementation": "Useful commentary retained in chat; Response details and explicit single-request review; current originating profile/agent/task/permission checks; separate one-time approval that cannot use matching saved rules; examples, ambiguity and hidden reasoning excluded; explicit built-in alternative-source-only search with exact query and custom-credential isolation.",
+        "validation": {
+          "recovery_cases": 128,
+          "selected_rust_cases": 212,
+          "connected_groups_passed": 42,
+          "connected_groups": 43,
+          "scope": "Four model formats through actual shared public events; actual matching session grants, real local HTTP and controlled model continuation. Installed Android screenshots diagnose the old failure; they do not certify the repaired APK."
+        },
+        "source_checkpoint": "Drive1qGkg82ZyexX7iIPH0m1qaR_gTMPZbSN-;258source-only files,all member hashes and ZIP CRC verified on actual download;SHA256b01d183e49e0da1c6f56cc222671475679100ad1e855160adb3c3d5ddee17a49",
+        "limits": [
+          "Actual user's private model server, current weather, physical repaired-device UI and independent acceptance remain unverified.",
+          "Three genuine historical comparisons remain unavailable; reader fingerprints and protected archive/compression/fixture scopes preserved.",
+          "Original baseline,optional voice/media/local services and full cumulative roadmap retained."
+        ]
+      },
       "foreground_voice": {
         "passed": 147,
         "scope": "Actual local HTTP/WAVE with controlled PCM, model and playback callbacks across all four primary formats; device and user endpoint acceptance pending.",
@@ -4450,11 +4622,11 @@
         ],
         "scope": "Owner checks through actual ACP standard streams and shared production workspace engine; no model, external server, developer report or journal in the selected workspace. Read-only ACP v1 capability scope, not full coding-agent or Android ACP client acceptance."
       },
-      "current_selected_rust_cases": 199,
+      "current_selected_rust_cases": 212,
       "current_connected_groups": {
-        "passed": 36,
-        "total": 37,
-        "executed_checks": 1676,
+        "passed": 42,
+        "total": 43,
+        "executed_checks": 2308,
         "unavailable_historical_checks": 3
       },
       "resource_concurrency": {
@@ -4715,12 +4887,12 @@
         {
           "url": "https://api.mwmbl.org/api/v2/search/?q=Rust%20programming%20language",
           "bytes": 47710,
-          "sha256": "4fc38024ea5649871c8fa06cee3867add963ed79ea6fd2812bb2211235e7796e"
+          "sha256": "7a87da5bc9b2d4aa5cf13f25b420f5c8a67512edb622cc658738d3b98a11e45b"
         }
       ],
       "scope": "Live public HTTPS search responses transported by curl through actual core review, owned callbacks, evidence retention and child/parent continuation. Model replies are controlled protocol fixtures; configured model inference and installed Android transport require their own execution."
     }
   },
-  "checkpoint_utc": "2026-11-06T16:29:46.154659+00:00",
+  "checkpoint_utc": "2026-11-06T17:24:35.593515+00:00",
   "whole_project_complete": false
 }
