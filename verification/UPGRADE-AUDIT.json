@@ -455,6 +455,35 @@
       "Protected scopes, original baseline, optional behavior and full broader roadmap preserved."
     ]
   },
+  "voice_admission_continuation": {
+    "version": 1793981376,
+    "implementation": "Service interruption clears only its matching voice phase and pauses that loop without automatic replay or microphone restart. Consent, primary text answers and unrelated capture owners are retained.",
+    "baseline_reproduction": {
+      "version": 1793979944,
+      "source_sha256": "3df328b1b328f7d02fdfb9eefb59fab198169db1262065cc4efcabdd7c0507c4",
+      "method": "Public PCM/HTTP/controlled primary response through the unchanged saved current controller before production edits.",
+      "heap_mib": [16, 24],
+      "voice_status": "synthesizing",
+      "voice_phase": "synthesis",
+      "service_expected": null,
+      "effect": null,
+      "notice": "Current memory cannot admit this transfer; existing files and text remain available"
+    },
+    "validation": {
+      "voice_cases": 279,
+      "new_admission_cases": 80,
+      "selected_rust_cases": 204,
+      "connected_groups_passed": 41,
+      "connected_groups": 42,
+      "scope": "Real PCM and local HTTP through four model formats; measured-memory recognition/synthesis refusal, scoped explanation, retained text, explicit fresh resume, admitted synthesis playback and unrelated-service capture preservation."
+    },
+    "source_checkpoint": "Drive17igD8i0cC0HG7rvxvhtp5yGa5QbB9pc1;257source-only files,all hashes and ZIP CRC verified on actual download;SHA256fae40fa0ef26ced433ce9629b394fe237091ebc19b5de5b748eab64d2fa5f52f",
+    "limits": [
+      "Owner fixture execution does not establish installed Android, actual user-service or independent acceptance.",
+      "Three genuine historical comparisons remain unavailable; protected scopes and fingerprints are preserved.",
+      "Original baseline and cumulative wider roadmap remain open and unchanged."
+    ]
+  },
   "voice_review_continuation": {
     "version": 1793979944,
     "implementation": "Distinct review waiting status; real service dispatch starts recognition/synthesis status; rejection or removal of the owned review pauses capture; explicit resume gets a new owner; shared Rust start conditions drive native Resume enabled state. Manual transcript remains in the composer.",

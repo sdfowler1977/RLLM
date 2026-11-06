@@ -34,7 +34,7 @@
       "services": 69,
       "media": 33,
       "jobs": 18,
-      "voice": 199,
+      "voice": 279,
       "media_stream": 34,
       "media_upload": 49,
       "voice_interruption": 104,
@@ -44,7 +44,7 @@
       "acp": 41,
       "oauth": 121
     },
-    "total_executed": 2004,
+    "total_executed": 2084,
     "groups_passed": 41,
     "groups": 42,
     "unavailable": [
@@ -84,7 +84,7 @@
     {
       "filter": "application::harness::",
       "code": 0,
-      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 447 filtered out; finished in 0.95s"
+      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 447 filtered out; finished in 0.80s"
     },
     {
       "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -149,7 +149,7 @@
     {
       "filter": "application::instruction::tests::",
       "code": 0,
-      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 449 filtered out; finished in 0.05s"
+      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 449 filtered out; finished in 0.04s"
     },
     {
       "filter": "application::binary_evidence::path_checks::",
@@ -159,7 +159,7 @@
     {
       "filter": "application::operation::drive_checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.01s"
     },
     {
       "filter": "hosted_search::checks::",
@@ -194,7 +194,7 @@
     {
       "filter": "application::project_store::transfer::tests::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.12s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.08s"
     },
     {
       "filter": "application::monitor::checks::",
@@ -234,7 +234,7 @@
     {
       "filter": "application::scene::checks::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 473 filtered out; finished in 0.04s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 473 filtered out; finished in 0.03s"
     }
   ],
   "checks": {
@@ -1790,7 +1790,7 @@
       "scope": "Owner asynchronous HTTP fixture tests. Explicit polling; no background scheduler or live user generation service acceptance."
     },
     "voice": {
-      "passed": 199,
+      "passed": 279,
       "checks": [
         "chat consent review discloses destinations without capturing",
         "chat enabling voice alone never opens microphone",
@@ -1990,7 +1990,87 @@
         "content actual transcription admission reports recognition rather than synthesis",
         "content manually approved transcription reaches the composer without automatic model submission",
         "content retained transcript disables microphone resume until the composer is clear",
-        "content clearing the draft restores the microphone resume control"
+        "content clearing the draft restores the microphone resume control",
+        "chat16 speech admission itself sends no HTTP request",
+        "chat16 refused speech transfer has no owner or network work",
+        "chat16 refused speech transfer shows an explicit paused state",
+        "chat16 refusal retains the primary answer and scoped memory explanation",
+        "chat16 refused speech resumes only through a fresh explicit microphone",
+        "chat24 speech admission itself sends no HTTP request",
+        "chat24 refused speech transfer has no owner or network work",
+        "chat24 refused speech transfer shows an explicit paused state",
+        "chat24 refusal retains the primary answer and scoped memory explanation",
+        "chat24 refused speech resumes only through a fresh explicit microphone",
+        "chat32 speech admission itself sends no HTTP request",
+        "chat32 sufficient memory still admits synthesis with a current owner",
+        "chat32 admitted synthesis still plays actual returned audio",
+        "chat refused recognition has no owner,network work or upload",
+        "chat refused recognition also pauses and clears its phase",
+        "chat retired capture cannot alter a memory-refused voice state",
+        "chat ordinary text starts after the scoped memory refusal",
+        "chat ordinary text answer completes without voice or replay",
+        "chat refusing an unrelated service retains the current microphone owner",
+        "chat unrelated service cleanup leaves actual microphone PCM admission working",
+        "local16 speech admission itself sends no HTTP request",
+        "local16 refused speech transfer has no owner or network work",
+        "local16 refused speech transfer shows an explicit paused state",
+        "local16 refusal retains the primary answer and scoped memory explanation",
+        "local16 refused speech resumes only through a fresh explicit microphone",
+        "local24 speech admission itself sends no HTTP request",
+        "local24 refused speech transfer has no owner or network work",
+        "local24 refused speech transfer shows an explicit paused state",
+        "local24 refusal retains the primary answer and scoped memory explanation",
+        "local24 refused speech resumes only through a fresh explicit microphone",
+        "local32 speech admission itself sends no HTTP request",
+        "local32 sufficient memory still admits synthesis with a current owner",
+        "local32 admitted synthesis still plays actual returned audio",
+        "local refused recognition has no owner,network work or upload",
+        "local refused recognition also pauses and clears its phase",
+        "local retired capture cannot alter a memory-refused voice state",
+        "local ordinary text starts after the scoped memory refusal",
+        "local ordinary text answer completes without voice or replay",
+        "local refusing an unrelated service retains the current microphone owner",
+        "local unrelated service cleanup leaves actual microphone PCM admission working",
+        "messages16 speech admission itself sends no HTTP request",
+        "messages16 refused speech transfer has no owner or network work",
+        "messages16 refused speech transfer shows an explicit paused state",
+        "messages16 refusal retains the primary answer and scoped memory explanation",
+        "messages16 refused speech resumes only through a fresh explicit microphone",
+        "messages24 speech admission itself sends no HTTP request",
+        "messages24 refused speech transfer has no owner or network work",
+        "messages24 refused speech transfer shows an explicit paused state",
+        "messages24 refusal retains the primary answer and scoped memory explanation",
+        "messages24 refused speech resumes only through a fresh explicit microphone",
+        "messages32 speech admission itself sends no HTTP request",
+        "messages32 sufficient memory still admits synthesis with a current owner",
+        "messages32 admitted synthesis still plays actual returned audio",
+        "messages refused recognition has no owner,network work or upload",
+        "messages refused recognition also pauses and clears its phase",
+        "messages retired capture cannot alter a memory-refused voice state",
+        "messages ordinary text starts after the scoped memory refusal",
+        "messages ordinary text answer completes without voice or replay",
+        "messages refusing an unrelated service retains the current microphone owner",
+        "messages unrelated service cleanup leaves actual microphone PCM admission working",
+        "content16 speech admission itself sends no HTTP request",
+        "content16 refused speech transfer has no owner or network work",
+        "content16 refused speech transfer shows an explicit paused state",
+        "content16 refusal retains the primary answer and scoped memory explanation",
+        "content16 refused speech resumes only through a fresh explicit microphone",
+        "content24 speech admission itself sends no HTTP request",
+        "content24 refused speech transfer has no owner or network work",
+        "content24 refused speech transfer shows an explicit paused state",
+        "content24 refusal retains the primary answer and scoped memory explanation",
+        "content24 refused speech resumes only through a fresh explicit microphone",
+        "content32 speech admission itself sends no HTTP request",
+        "content32 sufficient memory still admits synthesis with a current owner",
+        "content32 admitted synthesis still plays actual returned audio",
+        "content refused recognition has no owner,network work or upload",
+        "content refused recognition also pauses and clears its phase",
+        "content retired capture cannot alter a memory-refused voice state",
+        "content ordinary text starts after the scoped memory refusal",
+        "content ordinary text answer completes without voice or replay",
+        "content refusing an unrelated service retains the current microphone owner",
+        "content unrelated service cleanup leaves actual microphone PCM admission working"
       ],
       "scope": "Owner HTTP/audio fixture orchestration through all four model formats. Capture callback is controlled; physical microphone and installed playback not exercised."
     },
@@ -2490,9 +2570,9 @@
     }
   },
   "apk": {
-    "version": 1793979944,
+    "version": 1793981376,
     "bytes": 6547474,
-    "sha256": "fa06e4c1b7f342da91c3f930fbbbae7a264a9601e292aa451578f2d37a804cf5",
+    "sha256": "13f0c48494ddf62a1470d8c1c7c37547bf8ab483e46e461d3671824037596d46",
     "native": [
       {
         "abi": "arm64-v8a",
@@ -2503,7 +2583,7 @@
           16384,
           16384
         ],
-        "bytes": 4889272
+        "bytes": 4889544
       },
       {
         "abi": "x86_64",
@@ -2514,7 +2594,7 @@
           16384,
           16384
         ],
-        "bytes": 6016792
+        "bytes": 6017416
       }
     ],
     "label": "RLLM",
@@ -2619,14 +2699,14 @@
       "core/rust_source_observation.rs": "3ba3f0f9a9739c7f26a5a00b3b66edb8214b2fe5aec65d3bcbb5f1e96a187c2f",
       "core/scene.rs": "d6526bd3c008bbe3a54b88679fef4f26f889ddc3be0dcfc95246fa7855ba25a0",
       "core/search.rs": "9cee8a33914bf1ebd8a3b5dc1eaf80dd03dc7ee622aa28ad94ff8a6460b6214b",
-      "core/services.rs": "7029883a1fa17b99dda07dd674994864d66a654255555f7486013867affb74e2",
+      "core/services.rs": "f29661b10b8868ccc1361f83566d80c1e844be669201fd2c7cb3c87d6c2fbae9",
       "core/stdio.rs": "3b7e0afaf69ea24fc0d2a92891eac65ff79fdb9ccbf842fda79d4ce12e1cb471",
       "core/stream.rs": "fd532965a3b35aed541d1a0e04ba655f856470318dacc27825542aa841e42de8",
       "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
       "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
       "core/tool_format.rs": "ee95d1ced179027e0a7c3480ca06415eaf57bf0273c4f6e0500cd6ba2be6627a",
       "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
-      "core/voice.rs": "fbf7cae4b80ad10eba078c9b67e57c6355d650437ab0c4173c002d629e7a5c9f",
+      "core/voice.rs": "5641e0272d268b1bc13cff80043311abe0a401f72a36c09f5c3a139e6cfd064f",
       "core/voice_audio.rs": "7c8314f0cb211aea43542eef543a3cc5ba9c327b401e4c3e907d8d5b27aca065",
       "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
       "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
@@ -3164,6 +3244,38 @@
         "Protected scopes, original baseline, optional behavior and full broader roadmap preserved."
       ]
     },
+    "voice_admission_continuation": {
+      "version": 1793981376,
+      "implementation": "Service interruption clears only its matching voice phase and pauses that loop without automatic replay or microphone restart. Consent, primary text answers and unrelated capture owners are retained.",
+      "baseline_reproduction": {
+        "version": 1793979944,
+        "source_sha256": "3df328b1b328f7d02fdfb9eefb59fab198169db1262065cc4efcabdd7c0507c4",
+        "method": "Public PCM/HTTP/controlled primary response through the unchanged saved current controller before production edits.",
+        "heap_mib": [
+          16,
+          24
+        ],
+        "voice_status": "synthesizing",
+        "voice_phase": "synthesis",
+        "service_expected": null,
+        "effect": null,
+        "notice": "Current memory cannot admit this transfer; existing files and text remain available"
+      },
+      "validation": {
+        "voice_cases": 279,
+        "new_admission_cases": 80,
+        "selected_rust_cases": 204,
+        "connected_groups_passed": 41,
+        "connected_groups": 42,
+        "scope": "Real PCM and local HTTP through four model formats; measured-memory recognition/synthesis refusal, scoped explanation, retained text, explicit fresh resume, admitted synthesis playback and unrelated-service capture preservation."
+      },
+      "source_checkpoint": "Drive17igD8i0cC0HG7rvxvhtp5yGa5QbB9pc1;257source-only files,all hashes and ZIP CRC verified on actual download;SHA256fae40fa0ef26ced433ce9629b394fe237091ebc19b5de5b748eab64d2fa5f52f",
+      "limits": [
+        "Owner fixture execution does not establish installed Android, actual user-service or independent acceptance.",
+        "Three genuine historical comparisons remain unavailable; protected scopes and fingerprints are preserved.",
+        "Original baseline and cumulative wider roadmap remain open and unchanged."
+      ]
+    },
     "voice_review_continuation": {
       "version": 1793979944,
       "implementation": "Distinct review waiting status; real service dispatch starts recognition/synthesis status; rejection or removal of the owned review pauses capture; explicit resume gets a new owner; shared Rust start conditions drive native Resume enabled state. Manual transcript remains in the composer.",
@@ -3272,7 +3384,7 @@
       {
         "url": "https://api.mwmbl.org/api/v2/search/?q=Rust%20programming%20language",
         "bytes": 47710,
-        "sha256": "825ca524ce81c7a6ba11927eda29c834a4f4282b840e45f35a4631371ecad1fb"
+        "sha256": "a1708d314b580263d5f8335eb7f5f890bbddd3fa5b506ae2296fdab68dc03568"
       }
     ],
     "scope": "Live public HTTPS search responses transported by curl through actual core review, owned callbacks, evidence retention and child/parent continuation. Model replies are controlled protocol fixtures; configured model inference and installed Android transport require their own execution."
