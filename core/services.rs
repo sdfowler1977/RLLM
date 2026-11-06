@@ -181,7 +181,7 @@ fn dispatch(st:&mut Json,mut expected:Json)->Result<Json>{
     if let Some(plan)=upload{match media_upload::register(&ticket,plan){Ok(stream)=>put(&mut effect,"media_upload",s(&stream)),Err(error)=>{if let Ok(mut held)=owners().lock(){held.remove(&ticket);}return Err(error);}}}
     put(&mut effect,"endpoint",s(&address));put(&mut effect,"purpose",s(&ticket));put(&mut effect,"timeout_ms",Num((timeout*1000).to_string()));
     if streaming{match media_stream::open(st,&ticket,r,!download&&method!="GET"){Ok((stream,limit))=>{put(&mut effect,"media_download",s(&stream));put(&mut effect,"limit",Num((limit+65536).to_string()));},Err(error)=>{if let Ok(mut held)=owners().lock(){held.remove(&ticket);}return Err(error);}}}else{put(&mut effect,"limit",Num((BODY_LIMIT+65536).to_string()));}
-    put(st,"service_expected",expected);put(st,"busy",Bool(true));Ok(effect)
+    voice::started(st,&expected);put(st,"service_expected",expected);put(st,"busy",Bool(true));Ok(effect)
 }
 pub(super) fn start(st:&mut Json,p:&Json)->Result<Json>{
     if text(p,"service_binding")!=fingerprint(st){return Err("Service review changed; review a new request".into());}
