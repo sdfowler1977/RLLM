@@ -26,6 +26,7 @@ with zipfile.ZipFile(apk)as z:
   for marker in [b'voice-onset:',b'voice_interrupt_listen',b'voice_interruption',b'voice_watch_expected',b'Spoken interruption ownership changed',b'Interrupt replies by speaking']:assert marker in raw,(abi,marker)
   for marker in [b'Voice conversation stopped after an audio route or focus interruption; review voice to start again']:assert marker in raw,(abi,marker)
   for marker in [b'Waiting for voice request approval',b'resume_available',b'Voice request was not started; resume the microphone when ready']:assert marker in raw,(abi,marker)
+  assert b'Voice request stopped; microphone paused until you resume it'in raw,abi
   for marker in [b'scene_ticket',b'Static geometry preview',b'Scene viewport ownership changed',b'Scene source bytes changed while loading']:assert marker in raw,(abi,marker)
   for marker in [b'RLLM Workspace',b'ReverseEngineerAnything',b'reverse_engineer_anything']:assert marker not in raw,(abi,marker)
   native.append(dict(abi=abi,machine=machine,load_alignments=aligns,bytes=len(raw)))
