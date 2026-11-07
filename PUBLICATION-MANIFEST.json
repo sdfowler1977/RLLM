@@ -1,14 +1,14 @@
 {
   "state": "in_progress; signed candidate",
-  "version": 1794022455,
+  "version": 1794024012,
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
   "signing_certificate_sha256": "ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5",
   "key_change_authorized": true,
   "signed_apk": {
     "path": "release/RLLM.apk",
-    "bytes": 6584338,
-    "sha256": "762c6715c9f4c44fc7047b1ff6d90ce8d9ffc24bbd482b0adcd17b5599093b8b"
+    "bytes": 6592530,
+    "sha256": "af4503bcfebd473d9c53887909eec8fd905393d6acf47301477ff49e1e40c5c2"
   },
   "build_inputs": {
     "AndroidManifest.xml": "d1e2d9843ecc5d8b61d9eea22537b1e80d215b244329e93e29ad33128d51b0f3",
@@ -16,7 +16,7 @@
     "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
     "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
     "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-    "core/application.rs": "639ea7d773b15c3a8128ad6ace0ca75565b892eb4bde6fb4e17123d11b17153b",
+    "core/application.rs": "8dc81b38b4f03e72385b911d1deba0b387eb21219c6983ab2561187d9984b051",
     "core/approval_rules.rs": "9128b93dde7f8d82a01c03bf8d4d28d2dacb9139ca27e056e3932c37793e6a34",
     "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
     "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
@@ -121,17 +121,18 @@
     "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
     "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
     "core/web_operation.rs": "308fa627b28613120977f88ba3e8551e69043e977a444baa2ecb24d80820e69a",
-    "core/workspace.rs": "e50362f7f890d77d8fc627a3c0b67559170db4854ba4370b4ed89bc8156d17e7",
+    "core/workspace.rs": "2c7cd8d354193273b886b9a1ae28c6ddf913c67cf99b734ea52680c8a4e0733f",
     "notices/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
     "notices/runtime.html": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27",
     "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
     "package.sh": "ff221b6973fbd911db47d38c7a030b394904833d0238b3b980f3a86ab14559e4",
     "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-    "platform/com/local/client/Activity.java": "e1e8346621d3930c0391a80e1e8e4b82f00fc4c5c1b152969d1dc07db9586044",
+    "platform/com/local/client/Activity.java": "1c6937fb2cc28767209f5d3c63705b9fe766e6b4efc5658cadf8fb72a89dfe83",
     "platform/com/local/client/AudioRoute.java": "0a4d2773be4300611d15cff452e079701c0943f822e595f7e2b866305a7d373b",
     "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
     "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
     "platform/com/local/client/Diagram.java": "5fcab9863eb6a1be85b7a7e841c11cd927a3d722f4a53d6ac19e722177c341ce",
+    "platform/com/local/client/DocumentAccess.java": "e20ab408d9186cd9cebd58d7a1e241e95c20e804c9d12b18ecbfc824211c8004",
     "platform/com/local/client/Execution.java": "6c51afe3a8fce5283af4d8039e43913369da1ca0d3c3e1a14346a1b9d85d90d4",
     "platform/com/local/client/ExportStore.java": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573",
     "platform/com/local/client/Gateway.java": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7",
@@ -197,8 +198,8 @@
       "sha256": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be"
     },
     "core/application.rs": {
-      "bytes": 339580,
-      "sha256": "639ea7d773b15c3a8128ad6ace0ca75565b892eb4bde6fb4e17123d11b17153b"
+      "bytes": 339649,
+      "sha256": "8dc81b38b4f03e72385b911d1deba0b387eb21219c6983ab2561187d9984b051"
     },
     "core/approval_rules.rs": {
       "bytes": 18119,
@@ -617,8 +618,8 @@
       "sha256": "308fa627b28613120977f88ba3e8551e69043e977a444baa2ecb24d80820e69a"
     },
     "core/workspace.rs": {
-      "bytes": 19784,
-      "sha256": "e50362f7f890d77d8fc627a3c0b67559170db4854ba4370b4ed89bc8156d17e7"
+      "bytes": 22321,
+      "sha256": "2c7cd8d354193273b886b9a1ae28c6ddf913c67cf99b734ea52680c8a4e0733f"
     },
     "docs/.gitkeep": {
       "bytes": 1,
@@ -629,8 +630,8 @@
       "sha256": "ec97a3fddcfa6554adf101dd109ced6c2d910c29f03d311041a0b44a63ed96fc"
     },
     "docs/ACCESS-AND-DATA.md": {
-      "bytes": 7000,
-      "sha256": "7ab3fd6a8e4e7cbba99572f90152921117c1ac2cb7ed4a9065eebdeda1337669"
+      "bytes": 8065,
+      "sha256": "011ac50352d19882c57183f22d524e15c53ce4a58885ad41a1d5cb459b55c78b"
     },
     "docs/ACP.md": {
       "bytes": 4159,
@@ -641,8 +642,8 @@
       "sha256": "ea98d6f89776486630494de41ed654ae014daf6d7dad0dc435faf90e090961ac"
     },
     "docs/ARCHITECTURE.md": {
-      "bytes": 9559,
-      "sha256": "2cf3530a78386bdd9afba444123a291b651cd9cbdb2f797015c5956d4b5158ca"
+      "bytes": 11212,
+      "sha256": "b347656253702cffb774e4cec2090f2e2b734d709dbc07dbdac5d896b9603f58"
     },
     "docs/ASSETS.md": {
       "bytes": 577,
@@ -709,12 +710,12 @@
       "sha256": "5c2f13bfc406eb77908b7b24d0e53e89fa222cf3206f85827f62109da18428c2"
     },
     "docs/ROADMAP.md": {
-      "bytes": 4749,
-      "sha256": "aa009dd57b4461d9488280c89b57e008f2a40dbbc09accad5b297d99df9dca95"
+      "bytes": 4892,
+      "sha256": "f004c80746b8821c05fb6dafb592abb555d01ed807b37171fe887ff86d1b1200"
     },
     "docs/SERVICES.md": {
-      "bytes": 23277,
-      "sha256": "51a20280296bd62fc2dae8aafbac51512db598f9bb37319a15cc34f0a5df0906"
+      "bytes": 23944,
+      "sha256": "8da8290c1ca116c90d1251bb5fd846811f3a51558eea498e220b4a08a3f5a067"
     },
     "docs/SETUP.md": {
       "bytes": 7898,
@@ -725,8 +726,8 @@
       "sha256": "93f5a206d83ac2fd56bf4cb74b50960d6df33005a90b3679856e7e6ae04189f6"
     },
     "docs/STATUS.md": {
-      "bytes": 6105,
-      "sha256": "25c04aec5ff01b5a11b0973899c277a3b64d1aed0bb9989d1771a6ce342c0d90"
+      "bytes": 6803,
+      "sha256": "993146c9b9b50035a2592e8b31bd9a0f8198efc7785819afa3c38520706847eb"
     },
     "docs/TOOL-FEEDBACK.md": {
       "bytes": 6037,
@@ -781,8 +782,8 @@
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     "platform/com/local/client/Activity.java": {
-      "bytes": 167376,
-      "sha256": "e1e8346621d3930c0391a80e1e8e4b82f00fc4c5c1b152969d1dc07db9586044"
+      "bytes": 168680,
+      "sha256": "1c6937fb2cc28767209f5d3c63705b9fe766e6b4efc5658cadf8fb72a89dfe83"
     },
     "platform/com/local/client/AudioRoute.java": {
       "bytes": 1846,
@@ -799,6 +800,10 @@
     "platform/com/local/client/Diagram.java": {
       "bytes": 3912,
       "sha256": "5fcab9863eb6a1be85b7a7e841c11cd927a3d722f4a53d6ac19e722177c341ce"
+    },
+    "platform/com/local/client/DocumentAccess.java": {
+      "bytes": 3177,
+      "sha256": "e20ab408d9186cd9cebd58d7a1e241e95c20e804c9d12b18ecbfc824211c8004"
     },
     "platform/com/local/client/Execution.java": {
       "bytes": 1680,
@@ -849,20 +854,20 @@
       "sha256": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f"
     },
     "project-progress.md": {
-      "bytes": 109742,
-      "sha256": "e8819985cc8839dee2cee0c8bf4a2125b430fb574108771b8266a63d5fc2317f"
+      "bytes": 117744,
+      "sha256": "a28707b0137844fc8ff1cd063ba5ae149ca6e624ff2419ac1e6a78b18e355c1b"
     },
     "release/NOTES.md": {
-      "bytes": 6190,
-      "sha256": "611beb526993f787cf2f1a214a3badca18e51232d1ad592fcf700780a102fbb6"
+      "bytes": 6888,
+      "sha256": "011c5f000a2ed790da290d3248cd9afcf4774af0d649e58d274c15e96be33a09"
     },
     "release/RLLM.apk": {
-      "bytes": 6584338,
-      "sha256": "762c6715c9f4c44fc7047b1ff6d90ce8d9ffc24bbd482b0adcd17b5599093b8b"
+      "bytes": 6592530,
+      "sha256": "af4503bcfebd473d9c53887909eec8fd905393d6acf47301477ff49e1e40c5c2"
     },
     "release/SHA256SUMS.txt": {
       "bytes": 75,
-      "sha256": "17cd6e958831014b97f2ea7f4ff55662e80d1c96a3aead4ba2798a1f17976027"
+      "sha256": "4912b55b4b51d9f5fae90ae4098497d3f6c1e2695a174a45e00ad8c93da84f38"
     },
     "res/drawable/.gitkeep": {
       "bytes": 1,
@@ -953,20 +958,20 @@
       "sha256": "9b92abc90d951791e5a6b914018caa893a40a97ce29458dc39f06c68ef6bf0ed"
     },
     "tools/apk.py": {
-      "bytes": 7386,
-      "sha256": "f967161a8eb7507219a01560ed942be602c14470f076308fac0ccd802db12222"
+      "bytes": 7826,
+      "sha256": "23bfa74c924958253e00c81aefff94cda0b93c826ce97d232f3f255368dafccc"
     },
     "tools/checkpoint.py": {
       "bytes": 1409,
       "sha256": "7cc25c68497399f80d5d9ab7183687014a7d844f22a881b2a2fdf13bd59a783b"
     },
     "tools/checks.py": {
-      "bytes": 4217,
-      "sha256": "cd62682f23de679f745a3f94cfe5d7b8614f862be4eba1c0b3a209566d8e5dd4"
+      "bytes": 4238,
+      "sha256": "cdb5aa23dc842ee06f2b1326d53dc106a56c394d3ce0d494de17b357ed5abd63"
     },
     "tools/package.py": {
-      "bytes": 17107,
-      "sha256": "58b3aecd2d6a63e7cdc49ce00cdad153daef9baf054b7a36f176f0ae5f3316b1"
+      "bytes": 17847,
+      "sha256": "6566a6da3ff75ecf6ba4707067b8fd274515e341d4cbebf0e7e0d529ed8b853c"
     },
     "tools/readback.py": {
       "bytes": 1485,
@@ -1001,8 +1006,8 @@
       "sha256": "ec335557689342d0b80dc75832ec065442c28215f8648088105c7fc98af465b4"
     },
     "verification/RESULTS.json": {
-      "bytes": 249075,
-      "sha256": "68438cf62642742d4931cce7d8514b6a4a6e2dd85a852b51f399edab8c127337"
+      "bytes": 252909,
+      "sha256": "eed296909fea420c26c9845de3127d7b3fa81882bdc2b777bff48dcc183e5278"
     },
     "verification/UPGRADE-AUDIT.json": {
       "bytes": 34096,
@@ -1071,6 +1076,10 @@
     "verification/diagnostics.py": {
       "bytes": 7750,
       "sha256": "2d1e63b29b8757c94013aab595ce1f178a5cc590bd18ab210ba428cf7dfe67b2"
+    },
+    "verification/document_providers.py": {
+      "bytes": 15979,
+      "sha256": "7610228757b2d9eeb0c95839ac4e98935d93f248ccabff9d9cf1e73847a301c1"
     },
     "verification/drive_ownership.py": {
       "bytes": 10094,
@@ -1229,8 +1238,8 @@
       "sha256": "fb7ef80c8670ff4f5d5e78d073ee98fb189ac7e7b51fee57c5953091872edffe"
     },
     "verification/workspace_navigation.py": {
-      "bytes": 22966,
-      "sha256": "89d65ed1da2317797264e658e76ef16b31989522cef7d6359c1ebd3895944f6f"
+      "bytes": 23002,
+      "sha256": "f679770838ed1d6cb62b218f06b8485e5f1f1ec5c5b5d360f0cdbcb35c2ea218"
     }
   },
   "validation": {
@@ -1280,13 +1289,14 @@
         "scene": 66,
         "apk_alignment": 8,
         "audio_route": 23,
+        "document_providers": 51,
         "acp": 41,
         "oauth": 121,
         "device_authorization": 92
       },
-      "total_executed": 2503,
-      "groups_passed": 46,
-      "groups": 47,
+      "total_executed": 2554,
+      "groups_passed": 47,
+      "groups": 48,
       "unavailable": [
         {
           "name": "binary_flow",
@@ -1319,12 +1329,12 @@
       {
         "filter": "stream::",
         "code": 0,
-        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 448 filtered out; finished in 0.20s"
+        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 448 filtered out; finished in 0.17s"
       },
       {
         "filter": "application::harness::",
         "code": 0,
-        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; finished in 3.82s"
+        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; finished in 4.46s"
       },
       {
         "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -1389,7 +1399,7 @@
       {
         "filter": "application::instruction::tests::",
         "code": 0,
-        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 0.38s"
+        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 0.35s"
       },
       {
         "filter": "application::binary_evidence::path_checks::",
@@ -1434,12 +1444,12 @@
       {
         "filter": "application::project_store::transfer::tests::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 1.07s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 1.10s"
       },
       {
         "filter": "application::monitor::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::request_metrics::",
@@ -1464,7 +1474,7 @@
       {
         "filter": "application::voice_audio::checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.35s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.30s"
       },
       {
         "filter": "application::oauth::checks::",
@@ -2824,13 +2834,13 @@
       "workspace_navigation": {
         "passed": [
           "Workspace has six unique categories",
-          "Storage separates phone, network and Google Drive",
+          "Storage separates phone, network and document provider",
           "phone browsing has no connection setup action",
           "Back returns from phone to Storage",
           "Back returns from Storage to Workspace",
           "all27 previous Workspace operations remain reachable",
           "phone attachment is available beside phone files",
-          "Google Drive browsing is separate from account setup",
+          "document provider browsing is separate from account setup",
           "app inspection remains visible under diagnostics",
           "Setup exposes unique connection and permission routes",
           "phone setup separates scope and permission from browsing",
@@ -2870,17 +2880,17 @@
           "MCP access can be revoked during an active request",
           "revoked MCP response is withheld and settles the request",
           "disabled MCP access sends no new request",
-          "Google Drive sign-in uses the Android account action",
+          "document provider sign-in uses the Android account action",
           "owned document selection opens local file controls",
           "text read has an owned platform effect and active state",
           "owned text result remains in its local source view",
           "copying selected text uses the existing reviewed editor",
-          "Google Drive access off blocks file opening",
-          "disabled Google Drive routes browsing to access setup",
+          "document provider access off blocks file opening",
+          "disabled document provider routes browsing to access setup",
           "workspace changes retire the old document selection",
           "owned file selection completes while the primary remains active",
           "primary response remains usable after independent file selection",
-          "cancel retires the current Google Drive read owner",
+          "cancel retires the current document provider read owner",
           "cloud_text_result from a cancelled read leaves the newer model and UI unchanged",
           "cloud_failure from a cancelled read leaves the newer model and UI unchanged",
           "cloud_cancel from a cancelled read leaves the newer model and UI unchanged",
@@ -4005,6 +4015,63 @@
         ],
         "scope": "Owner execution of actual production AudioRoute and extracted unchanged Media audioFocus method against controlled Android callback/registration/focus adapters. Actual Android35SDK compilation is separate. No physical wired/Bluetooth/call/audio-focus/lifecycle acceptance is claimed."
       },
+      "document_providers": {
+        "passed": 51,
+        "checks": [
+          "provider navigation is generic",
+          "provider-neutral visible controls document_providers",
+          "provider-neutral visible controls google_drive",
+          "provider-neutral visible controls cloud_setup",
+          "provider-neutral visible controls workspace_permissions",
+          "account setup has no provider credential contract",
+          "two unrelated providers retain actual selected grant ownership",
+          "external opening creates no pending read owner",
+          "new picker cannot orphan a document read",
+          "disconnect settles only its owned read",
+          "disconnect retires late read text",
+          "failed grant release remains retryable while access is off",
+          "successful retry removes only confirmed grant records",
+          "late cleanup callback preserves state exactly",
+          "document read cannot replace an active model owner",
+          "grant cleanup retains unrelated primary work",
+          "invalid URI cannot become selected 'content://'",
+          "invalid URI cannot become selected 'content:///document/empty'",
+          "invalid URI cannot become selected 'content://host'",
+          "invalid URI cannot become selected 'content://host/'",
+          "invalid URI cannot become selected 'content://user@host/document/a'",
+          "invalid URI cannot become selected 'content://host/document/a#fragment'",
+          "invalid URI cannot become selected 'content://host/document/a\\x00'",
+          "invalid URI cannot become selected 'file:///tmp/a'",
+          "invalid URI cannot become selected 'https://host/document/a'",
+          "grant ownership remains bounded at64",
+          "full grant allowance refuses another picker without discarding grants",
+          "unknown providers are accepted without package discovery",
+          "another provider uses the same native path",
+          "unknown provider cannot bypass disabled provider access",
+          "local phone file retains its separate phone policy",
+          "explicit provider selection also requires provider access for a local file",
+          "native URI refusal content://",
+          "native URI refusal content:///document/a",
+          "native URI refusal content://host/",
+          "native URI refusal content://user@host/document/a",
+          "native URI refusal content://host/document/a#part",
+          "native URI refusal file:///tmp/a",
+          "native URI refusal content://host/document/anewline",
+          "cleanup releases only its owned standalone read permission",
+          "cleanup preserves unrelated writable tree and selected phone grants",
+          "failed cleanup remains absent from confirmation",
+          "failed grant cleanup succeeds on explicit retry",
+          "already missing grant cleanup is idempotent",
+          "actual selection persists and adopts a current read grant",
+          "retired selection cannot persist any URI grant",
+          "closed activity cannot persist a returned grant",
+          "permission revocation before UI delivery refuses persistence",
+          "failed core adoption releases only the newly acquired read grant",
+          "failed adoption preserves a pre-existing read grant",
+          "temporary provider permission is usable without invented persistence"
+        ],
+        "scope": "Owner public core events plus unchanged production DocumentAccess and exact Activity selection-commit method against controlled Android URI/grant/resolver and state-delivery adapters. Actual Android provider account, picker, grant and lifecycle execution requires installed-device acceptance; no application-owned cloud OAuth or SMB is claimed."
+      },
       "acp": {
         "passed": 41,
         "checks": [
@@ -4279,9 +4346,9 @@
       }
     },
     "apk": {
-      "version": 1794022455,
-      "bytes": 6584338,
-      "sha256": "762c6715c9f4c44fc7047b1ff6d90ce8d9ffc24bbd482b0adcd17b5599093b8b",
+      "version": 1794024012,
+      "bytes": 6592530,
+      "sha256": "af4503bcfebd473d9c53887909eec8fd905393d6acf47301477ff49e1e40c5c2",
       "native": [
         {
           "abi": "arm64-v8a",
@@ -4292,7 +4359,7 @@
             16384,
             16384
           ],
-          "bytes": 4921352
+          "bytes": 4925256
         },
         {
           "abi": "x86_64",
@@ -4303,7 +4370,7 @@
             16384,
             16384
           ],
-          "bytes": 6059464
+          "bytes": 6064504
         }
       ],
       "label": "RLLM",
@@ -4316,7 +4383,7 @@
         "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
         "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
         "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-        "core/application.rs": "639ea7d773b15c3a8128ad6ace0ca75565b892eb4bde6fb4e17123d11b17153b",
+        "core/application.rs": "8dc81b38b4f03e72385b911d1deba0b387eb21219c6983ab2561187d9984b051",
         "core/approval_rules.rs": "9128b93dde7f8d82a01c03bf8d4d28d2dacb9139ca27e056e3932c37793e6a34",
         "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
         "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
@@ -4421,17 +4488,18 @@
         "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
         "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
         "core/web_operation.rs": "308fa627b28613120977f88ba3e8551e69043e977a444baa2ecb24d80820e69a",
-        "core/workspace.rs": "e50362f7f890d77d8fc627a3c0b67559170db4854ba4370b4ed89bc8156d17e7",
+        "core/workspace.rs": "2c7cd8d354193273b886b9a1ae28c6ddf913c67cf99b734ea52680c8a4e0733f",
         "notices/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
         "notices/runtime.html": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27",
         "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
         "package.sh": "ff221b6973fbd911db47d38c7a030b394904833d0238b3b980f3a86ab14559e4",
         "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-        "platform/com/local/client/Activity.java": "e1e8346621d3930c0391a80e1e8e4b82f00fc4c5c1b152969d1dc07db9586044",
+        "platform/com/local/client/Activity.java": "1c6937fb2cc28767209f5d3c63705b9fe766e6b4efc5658cadf8fb72a89dfe83",
         "platform/com/local/client/AudioRoute.java": "0a4d2773be4300611d15cff452e079701c0943f822e595f7e2b866305a7d373b",
         "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
         "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
         "platform/com/local/client/Diagram.java": "5fcab9863eb6a1be85b7a7e841c11cd927a3d722f4a53d6ac19e722177c341ce",
+        "platform/com/local/client/DocumentAccess.java": "e20ab408d9186cd9cebd58d7a1e241e95c20e804c9d12b18ecbfc824211c8004",
         "platform/com/local/client/Execution.java": "6c51afe3a8fce5283af4d8039e43913369da1ca0d3c3e1a14346a1b9d85d90d4",
         "platform/com/local/client/ExportStore.java": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573",
         "platform/com/local/client/Gateway.java": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7",
@@ -4479,8 +4547,8 @@
     },
     "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
     "published_comparator": {
-      "version": 1794019852,
-      "source_sha256": "c7f895388b99cb1ee9660534c9da8399858fcba3353675a000a632c830aa3a27",
+      "version": 1794022455,
+      "source_sha256": "803b5f487325ffb2c61e29ba2158b29b055792738d9b6f605c8159dbf5dc64a4",
       "method": "Exact saved and source-published shared core compiled locally; actual retained representations and four before/after scene pixel cases exercised"
     },
     "flow_comparator": {
@@ -5133,6 +5201,6 @@
       "scope": "Preserved earlier full-suite outcome only. Current execution is the selected Rust cases and connected groups; excluded historical fixture scopes were not reexecuted."
     }
   },
-  "checkpoint_utc": "2026-11-07T03:38:11.145803+00:00",
+  "checkpoint_utc": "2026-11-07T04:03:24.605006+00:00",
   "whole_project_complete": false
 }
