@@ -35,6 +35,7 @@ with zipfile.ZipFile(apk)as z:
   for marker in [b'Sign in with device code',b'Check authorization',b'Device authorization',b'Device verification URI contains private protocol fields']:assert marker in raw,(abi,marker)
   for marker in [b'voice_background',b'voice_lease_ms',b'Continue voice outside the app']:assert marker in raw,(abi,marker)
   for marker in [b'Document providers',b'Provider document selected',b'cloud_release_result',b'Selected document grants removed']:assert marker in raw,(abi,marker)
+  for marker in [b'Request framing is ambiguous; no TLS identity was applied',b'Request headers are incomplete; no TLS identity was applied']:assert marker in raw,(abi,marker)
   for marker in [b'scene_ticket',b'Static geometry preview',b'Scene viewport ownership changed',b'Scene source bytes changed while loading']:assert marker in raw,(abi,marker)
   for marker in [b'RLLM Workspace',b'ReverseEngineerAnything',b'reverse_engineer_anything']:assert marker not in raw,(abi,marker)
   native.append(dict(abi=abi,machine=machine,load_alignments=aligns,bytes=len(raw)))
