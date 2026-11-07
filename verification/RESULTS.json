@@ -43,11 +43,12 @@
       "apk_alignment": 8,
       "audio_route": 23,
       "acp": 41,
-      "oauth": 121
+      "oauth": 121,
+      "device_authorization": 92
     },
-    "total_executed": 2308,
-    "groups_passed": 42,
-    "groups": 43,
+    "total_executed": 2400,
+    "groups_passed": 43,
+    "groups": 44,
     "unavailable": [
       {
         "name": "binary_flow",
@@ -55,197 +56,207 @@
       }
     ]
   },
-  "selected_rust_cases": 212,
+  "selected_rust_cases": 214,
   "selected_rust_runs": [
     {
       "filter": "a2a::tests::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
     },
     {
       "filter": "execution::scope_tests::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::binary_flow::tests::",
       "code": 0,
-      "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.01s"
+      "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
     },
     {
       "filter": "provider::",
       "code": 0,
-      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
     },
     {
       "filter": "stream::",
       "code": 0,
-      "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 446 filtered out; finished in 0.07s"
+      "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 448 filtered out; finished in 0.18s"
     },
     {
       "filter": "application::harness::",
       "code": 0,
-      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 450 filtered out; finished in 1.11s"
+      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; finished in 3.22s"
     },
     {
       "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::checks::scoped_drive_listing",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::file_evidence::checks::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::investigation::directory_observation::checks::cancellation_and_deadline_remain_scoped",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::elf_observation::",
       "code": 0,
-      "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::binary_observation::",
       "code": 0,
-      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::observation_graph::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::claim_records::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::investigation::cancellation_scope_checks::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::connection_migration::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::binary_declarations::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::checks::settings_menus_are_short_separate_and_preserve_the_thread",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::instruction::tests::",
       "code": 0,
-      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; finished in 0.04s"
+      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 0.29s"
     },
     {
       "filter": "application::binary_evidence::path_checks::",
       "code": 0,
-      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.01s"
     },
     {
       "filter": "application::operation::drive_checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.02s"
     },
     {
       "filter": "hosted_search::checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.01s"
     },
     {
       "filter": "application::pe_observation::relocation_checks::",
       "code": 0,
-      "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 472 filtered out; finished in 0.02s"
+      "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.01s"
     },
     {
       "filter": "resources::checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
     },
     {
       "filter": "network::checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
     },
     {
       "filter": "network::binary_checks::",
       "code": 0,
-      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
     },
     {
       "filter": "network::binary_response_checks::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::project_store::transfer::tests::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.14s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.76s"
     },
     {
       "filter": "application::monitor::checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::request_metrics::",
       "code": 0,
-      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::throughput::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::checks::live_rate_opens_analytics_without_losing_stream_or_draft",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.01s"
     },
     {
       "filter": "application::checks::tls_guidance_preserves_explicit_endpoint",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::voice_audio::checks::",
       "code": 0,
-      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.25s"
     },
     {
       "filter": "application::oauth::checks::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::scene::checks::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.04s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.17s"
     },
     {
       "filter": "application::tool_format::tests::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::search::checks::",
       "code": 0,
-      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 475 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+    },
+    {
+      "filter": "network::authorization_response_checks::",
+      "code": 0,
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+    },
+    {
+      "filter": "application::oauth::device_authorization::checks::",
+      "code": 0,
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     }
   ],
   "checks": {
@@ -2808,12 +2819,110 @@
         "expired optional authorization does not destroy API-key capability"
       ],
       "scope": "Owner checks through actual local HTTP authorization, S256 code verification, token refresh/rotation and model peers across all four formats. Browser-return delivery is controlled; installed Android browser/deep-link/Keystore and live authorization-server acceptance remain unverified."
+    },
+    "device_authorization": {
+      "passed": 92,
+      "checks": [
+        "chat accepts a device-only saved public-client configuration",
+        "chat native authorization form exposes device method",
+        "chat private device credential remains out of UI and saved state",
+        "chat actual user code and verification address are displayed",
+        "chat early polling emits no network request",
+        "chat browser opens only by explicit action",
+        "chat same-process activity return preserves waiting flow without network",
+        "chat previous phase callback cannot satisfy a new poll",
+        "chat actual pending response preserves user instructions",
+        "chat prior poll callback cannot satisfy the next request",
+        "chat actual grant adopts bearer and retains key",
+        "chat successful grant callback remains single-use",
+        "chat grant reaches original configured model",
+        "chat actual model response completes normally",
+        "chat device grant uses existing atomic refresh lifecycle",
+        "chat export excludes credentials",
+        "local accepts a device-only saved public-client configuration",
+        "local native authorization form exposes device method",
+        "local private device credential remains out of UI and saved state",
+        "local actual user code and verification address are displayed",
+        "local early polling emits no network request",
+        "local browser opens only by explicit action",
+        "local same-process activity return preserves waiting flow without network",
+        "local previous phase callback cannot satisfy a new poll",
+        "local actual pending response preserves user instructions",
+        "local prior poll callback cannot satisfy the next request",
+        "local actual grant adopts bearer and retains key",
+        "local successful grant callback remains single-use",
+        "local grant reaches original configured model",
+        "local actual model response completes normally",
+        "local device grant uses existing atomic refresh lifecycle",
+        "local export excludes credentials",
+        "messages accepts a device-only saved public-client configuration",
+        "messages native authorization form exposes device method",
+        "messages private device credential remains out of UI and saved state",
+        "messages actual user code and verification address are displayed",
+        "messages early polling emits no network request",
+        "messages browser opens only by explicit action",
+        "messages same-process activity return preserves waiting flow without network",
+        "messages previous phase callback cannot satisfy a new poll",
+        "messages actual pending response preserves user instructions",
+        "messages prior poll callback cannot satisfy the next request",
+        "messages actual grant adopts bearer and retains key",
+        "messages successful grant callback remains single-use",
+        "messages grant reaches original configured model",
+        "messages actual model response completes normally",
+        "messages device grant uses existing atomic refresh lifecycle",
+        "messages export excludes credentials",
+        "content accepts a device-only saved public-client configuration",
+        "content native authorization form exposes device method",
+        "content private device credential remains out of UI and saved state",
+        "content actual user code and verification address are displayed",
+        "content early polling emits no network request",
+        "content browser opens only by explicit action",
+        "content same-process activity return preserves waiting flow without network",
+        "content previous phase callback cannot satisfy a new poll",
+        "content actual pending response preserves user instructions",
+        "content prior poll callback cannot satisfy the next request",
+        "content actual grant adopts bearer and retains key",
+        "content successful grant callback remains single-use",
+        "content grant reaches original configured model",
+        "content actual model response completes normally",
+        "content device grant uses existing atomic refresh lifecycle",
+        "content export excludes credentials",
+        "slow_down permanently adds five seconds before another poll",
+        "poll succeeds after increased interval",
+        "null interval is treated as omitted default",
+        "default five-second interval is enforced",
+        "expired local grant cannot send another request",
+        "access_denied retires the flow without exposing server details",
+        "access_denied leaves existing API key available",
+        "expired_token retires the flow without exposing server details",
+        "expired_token leaves existing API key available",
+        "invalid_client retires the flow without exposing server details",
+        "invalid_client leaves existing API key available",
+        "unknown_error retires the flow without exposing server details",
+        "unknown_error leaves existing API key available",
+        "empty code is refused without adopting credentials",
+        "control code is refused without adopting credentials",
+        "non-http URI is refused without adopting credentials",
+        "private URI fields is refused without adopting credentials",
+        "negative lifetime is refused without adopting credentials",
+        "string timing is refused without adopting credentials",
+        "zero interval is refused without adopting credentials",
+        "large timing is refused without adopting credentials",
+        "cancel retains key and rejects late response exactly",
+        "cancelled in-flight initialization cannot adopt or reopen code",
+        "uncertain token exchange retires without replay",
+        "changed model destination cannot use held device code",
+        "unsaved device endpoint cannot receive a request",
+        "configured endpoints cannot override protocol parameters",
+        "new process never reconstructs or replays a private device code"
+      ],
+      "scope": "Owner execution through actual local HTTP device/token/model peers and shared event interface across four formats. Explicit rate-limited status checks; no autonomous polling or physical Android/browser/live server acceptance claimed."
     }
   },
   "apk": {
-    "version": 1793985689,
-    "bytes": 6559762,
-    "sha256": "b690d225e971562dbcb61fbdc4d4ebca965cc5f584255b5989c4e2525395df87",
+    "version": 1794019852,
+    "bytes": 6580242,
+    "sha256": "c7847850e48b327e28aa05af559c9aea39ba3b7802e23e8a020652ca93bfd6dd",
     "native": [
       {
         "abi": "arm64-v8a",
@@ -2824,7 +2933,7 @@
           16384,
           16384
         ],
-        "bytes": 4902664
+        "bytes": 4919048
       },
       {
         "abi": "x86_64",
@@ -2835,7 +2944,7 @@
           16384,
           16384
         ],
-        "bytes": 6034008
+        "bytes": 6056792
       }
     ],
     "label": "RLLM",
@@ -2869,6 +2978,7 @@
       "core/css_stylesheet.rs": "2705d6437f61ba613b9695e6d5243b88131734d5577872b133e56813e3defbe5",
       "core/css_syntax.rs": "e1550592d461b660081d101c6ac3c7ab5a46269b20b5e3cbd05e3a5099144088",
       "core/delegation.rs": "fc0d7a345b1f63f4e36f985cb58327d0b489d7d18f28558c6659f7211ee9fbb4",
+      "core/device_authorization.rs": "474e6cf609c18eaab18d9ee0749812d08907b7cd8ec24652ba694086aa13a1bd",
       "core/dex.rs": "dee1b5c5a0c865944c39da0b593ef404ade201ed9a6404b8d4dacccbb4ef9f0b",
       "core/dex_calls.rs": "3fe323ac8d3cfdb49f7f73f9df43cdae9064f7e4b5394a6111bd64b2bcd43a17",
       "core/dex_code.rs": "bec42b524a2e50294ecd44920824a8381bab45aef0d60d2a8bad5587642cd9de",
@@ -2913,8 +3023,8 @@
       "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
       "core/model_metadata.rs": "b024330ac89f786670ae336f3855ee4b69a95898b1588e5ee16254c56d94e3e4",
       "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
-      "core/network.rs": "1daee2ab7b20977f916263860f69389a7962928f531566743f9ee8d35abc8e18",
-      "core/oauth.rs": "5594507163dec6b36a7d3cd1d0fb3830f3433250974ad298e92652bae6742d3f",
+      "core/network.rs": "c2851f9a0eecbb6b1d45d41a519a5ae8133998ef57f4768d75d6019ee9c53563",
+      "core/oauth.rs": "fca04f8e74d373d475fb34bceb07fcf9a1ba97cd045fecb7a8352e0e98dc0a57",
       "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
       "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
       "core/observation_store.rs": "8c8bb6b53a141a33392521f2d8c9e955b64a3d2537ab80936e03cec373393689",
@@ -3009,8 +3119,8 @@
   },
   "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
   "published_comparator": {
-    "version": 1793982425,
-    "source_sha256": "6bc9f7d834a6d77ad8c52fae511a7145bd47e7f9e1b76fdfc6a63e85cbcc3d21",
+    "version": 1793985689,
+    "source_sha256": "47164214a37fc88d63788c8b11b0f41f32fa45b586019f32e3a4426414a5f028",
     "method": "Exact saved and source-published shared core compiled locally; actual retained representations and four before/after scene pixel cases exercised"
   },
   "flow_comparator": {
@@ -3661,26 +3771,5 @@
       "scope": "Fresh serial complete Rust sweeps in distinct clean working/temp directories with explicit font. Baseline is exact immediate published f78088a3 candidate core; historical fixtures are retained, not relabeled as passes."
     },
     "scope": "Preserved earlier full-suite outcome only. Current execution is the selected Rust cases and connected groups; excluded historical fixture scopes were not reexecuted."
-  },
-  "live_public_web": {
-    "passed": [
-      "intrinsic command process is present with optional guidance off",
-      "child selection enters review",
-      "approved child uses its assigned model",
-      "child search enters its own review",
-      "actual live search evidence returns to the assigned child",
-      "retained results include source URLs and actual snippets",
-      "live returned evidence reaches the integrated journal",
-      "actual child completion returns to the captured parent",
-      "parent completes the ordinary command"
-    ],
-    "transport_observations": [
-      {
-        "url": "https://api.mwmbl.org/api/v2/search/?q=Rust%20programming%20language",
-        "bytes": 47710,
-        "sha256": "7a87da5bc9b2d4aa5cf13f25b420f5c8a67512edb622cc658738d3b98a11e45b"
-      }
-    ],
-    "scope": "Live public HTTPS search responses transported by curl through actual core review, owned callbacks, evidence retention and child/parent continuation. Model replies are controlled protocol fixtures; configured model inference and installed Android transport require their own execution."
   }
 }
