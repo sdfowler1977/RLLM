@@ -1575,7 +1575,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     | "export_cancel" | "export_review" | "export_resume" | "export_discard_review" | "export_discard"
                     | "export_staged" | "export_started" | "export_done" | "export_failed" | "export_discarded" | "export_stage_failed"
                     | "chat" | "history" | "workspace" | "settings" | "config" | "navigation" | "diagnostics"
-                    | "cloud_result" | "cloud_text_result" | "cloud_failure" | "cloud_cancel" | "workspace_access_save" | "workspace_projects" | "workspace_storage" | "workspace_setup" | "workspace_permissions" | "workspace_locations" | "phone_locations" | "network_locations" | "google_drive" | "workspace_programs" | "workspace_research" | "workspace_snapshots" | "workspace_files" | "cloud_setup"
+                    | "cloud_result" | "cloud_text_result" | "cloud_release_result" | "cloud_disconnect" | "cloud_failure" | "cloud_cancel" | "workspace_access_save" | "workspace_projects" | "workspace_storage" | "workspace_setup" | "workspace_permissions" | "workspace_locations" | "phone_locations" | "network_locations" | "document_providers" | "google_drive" | "workspace_programs" | "workspace_research" | "workspace_snapshots" | "workspace_files" | "cloud_setup"
                     | "phone_access" | "phone_access_status" | "apps_view" | "apps_result" | "apps_disable"
                     | "server_monitor" | "chat_models" | "agent_settings" | "storage_settings" | "instruction_settings" | "connections" | "services" | "observability"
             ) && !(app_observation::controls(action) && get(&st,"apps_expected")!=&Null)
