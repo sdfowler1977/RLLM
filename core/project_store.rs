@@ -81,8 +81,8 @@ fn wire(p:&Json,phase:&str,encoded:&str)->Result<Json> {
  if !["write","probe","verify"].contains(&phase){return Err("Invalid pending transfer phase".into());}
  let bytes=payload_bytes(p,encoded)?;let mime=payload_mime(p)?;
  if boolean(p,"phone") {return Ok(obj(vec![("kind",s("project_phone")),("mime",s(&mime)),("tree",get(p,"tree").clone()),("name",get(p,"target").clone()),("phase",s(phase)),("purpose",get(p,"purpose").clone()),("archive",if phase=="write" {s(encoded)} else {Null})]));}
- let c=get(p,"connection");let url=text(p,"target");let mut headers=vec![];let user=text(c,"user");
- if !user.is_empty(){headers.push(("Authorization",format!("Basic {}",network::b64(format!("{}:{}",user,text(c,"password")).as_bytes()))));}
+ let c=get(p,"connection");let url=text(p,"target");let mut headers=vec![];let authorization=network::storage_authorization(c)?;
+ if let Some((name,value))=&authorization{headers.push((name.as_str(),value.clone()));}
  let mut e=if phase=="write"{headers.push(("Content-Type",mime));headers.push(("If-None-Match","*".into()));network::wire_binary(&url,boolean(c,"plain"),&bytes,headers)?}else{network::wire(&url,boolean(c,"plain"),"GET","",headers)?};
  network::tls_identity(&mut e,&text(c,"tls_name"))?;
  put(&mut e,"purpose",get(p,"purpose").clone());put(&mut e,"limit",Num((5*1024*1024+65536).to_string()));Ok(e)

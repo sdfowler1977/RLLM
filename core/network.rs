@@ -84,6 +84,24 @@ pub fn encoded(text: &str) -> String {
     }
     out
 }
+pub fn credential_header(name:&str,prefix:&str,key:&str)->Result<(String,String)>{
+    if name.len()>64||name.is_empty()||name.bytes().any(|b|!b.is_ascii_alphanumeric()&&b!=b'-')
+        ||["host","connection","content-length","transfer-encoding","content-type","accept-encoding"].contains(&name.to_ascii_lowercase().as_str())
+        ||prefix.len()>64||key.chars().chain(prefix.chars()).any(char::is_control){return Err("Invalid authentication header or prefix".into());}
+    Ok((name.into(),if prefix.is_empty(){key.into()}else{format!("{prefix} {key}")}))
+}
+pub fn storage_authorization(connection:&Json)->Result<Option<(String,String)>>{
+    fn setting<'a>(connection:&'a Json,key:&str)->Result<&'a str>{match connection{Null=>Ok(""),Obj(fields)=>match fields.get(key){None|Some(Null)=>Ok(""),Some(Str(value))=>Ok(value),_=>Err(format!("Network storage {key} must be text"))},_=>Err("Network storage connection must be an object".into())}}
+    let key=setting(connection,"key")?;
+    if !key.is_empty(){
+        if key.len()>8192{return Err("Network storage access key exceeds8192bytes".into());}
+        let name=setting(connection,"auth_header")?.trim();let name=if name.is_empty(){"Authorization"}else{name};
+        let prefix=if connection.get("auth_prefix").is_ok_and(|v|v!=&Null){setting(connection,"auth_prefix")?.trim()}else{"Bearer"};
+        return credential_header(name,prefix,key).map(Some);
+    }
+    let user=setting(connection,"user")?;if user.is_empty(){return Ok(None);}
+    Ok(Some(("Authorization".into(),format!("Basic {}",b64(format!("{}:{}",user,setting(connection,"password")?).as_bytes())))))
+}
 pub fn b64(bytes: &[u8]) -> String {
     let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut o = String::new();

@@ -327,7 +327,7 @@ fn menu(title: &str, buttons: Vec<Json>) -> Json {
     put(&mut value,"presentation",s("list"));value
 }
 fn app_settings_menu() -> Json {
-    menu("App settings",vec![button("Harness rules","harness_settings"),button("LLM connections","connections"),button("Files and storage","storage_settings"),button("Appearance","appearance"),button("Resources","resources_edit"),button("Network services","services"),button("Diagnostics","observability")])
+    menu("App settings",vec![button("Harness rules","harness_settings"),button("LLM connections","connections"),button("Files and storage","storage_settings"),button("Voice and microphone","voice_settings"),button("Appearance","appearance"),button("Resources","resources_edit"),button("Network services","services"),button("Diagnostics","observability")])
 }
 fn agent_settings_menu() -> Json {
     menu("Agent settings",vec![button("Harness rules","harness_settings"),button("Agent profiles","agents"),button("Default models","routing"),button("Instructions and preferences","instruction_settings"),button("Skills","skills"),button("Tool access","tools")])
@@ -504,7 +504,7 @@ fn ui(st: &Json) -> Json {
     let edit = get(st, "edit");
     let mut pop=if let Some(value)=oauth::dialog(st){value}else if let Some(value)=voice::dialog(st){value}else if let Some(value)=jobs::dialog(st){value}else if let Some(value)=media::dialog(st){value}else if let Some(value)=services::dialog(st){value}else if let Some(value)=workspace::modal_for(st){value}else{match dialog.as_str(){
  "chat_actions"=>modal("Conversation actions",vec![],{
-    let mut actions=vec![button("Main agent profile","chat_agents"),button("Agent task / compact context","task"),button("New conversation","new"),button("Attach image or text file","phone_file"),button("Generation jobs","jobs_menu"),button("Voice and media","media_menu"),button("Service request","service_request"),button("Save conversation to default storage","save_drive"),button("Export conversation","conversation_export"),button(if get(st,"pending")!=&Null {"Review proposed operation"}else{"Retry last request"},if get(st,"pending")!=&Null {"review"}else{"retry"})];
+    let mut actions=vec![button("Main agent profile","chat_agents"),button("Agent task / compact context","task"),button("New conversation","new"),button("Attach image or text file","phone_file"),button("Generation jobs","jobs_menu"),button("Voice and media","media_menu"),button("Voice and microphone settings","voice_settings"),button("Service request","service_request"),button("Save conversation to default storage","save_drive"),button("Export conversation","conversation_export"),button(if get(st,"pending")!=&Null {"Review proposed operation"}else{"Retry last request"},if get(st,"pending")!=&Null {"review"}else{"retry"})];
     if array(&current,"messages").last().map(|m|text(m,"role")=="assistant").unwrap_or(false){actions.push(button("Regenerate reply in new branch","regenerate"));}if boolean(get(st,"hosted_request"),"paused"){actions.push(button("Continue hosted search","hosted_continue"));}if !array(&current,"hosted_responses").is_empty(){actions.push(button("Inspect hosted search responses","hosted_details"));}if tool_format::review_available(st){actions.push(button("Review proposed request","format_review"));}if tool_format::available(st){actions.push(button("Request format correction","format_correction"));}actions
  }),
  "chat_models"=>model_picker(st),
@@ -516,7 +516,7 @@ fn ui(st: &Json) -> Json {
  "storage_settings"=>workspace::modal_for(&{let mut current=st.clone();put(&mut current,"dialog",s("workspace_setup"));current}).unwrap_or(Null),
  "instruction_settings"=>menu("Instructions and preferences",vec![button("Global instructions","instructions"),button("Investigation preferences","investigation_preferences"),button("Saved refinement","refinement_review")]),
  "connections"=>menu("LLM connections",vec![button("Choose or add an LLM","chat_models"),button("Edit current connection","profile_edit"),button("Connection authorization","oauth_settings"),button("Optional model-list check","connection_test"),button("Connection details","configuration"),button("Export configuration","configuration_export")]),
- "services"=>menu("Network services",vec![button("Service connections","service_connections"),button("MCP server connection","mcp_client_settings"),button("Web access","web_settings"),button("Phone API gateway","gateway_edit")]),
+ "services"=>menu("Network services",vec![button("Voice and microphone","voice_settings"),button("Service connections","service_connections"),button("MCP server connection","mcp_client_settings"),button("Web access","web_settings"),button("Phone API gateway","gateway_edit")]),
  "observability"=>menu("Diagnostics",vec![button("Phone observations","diagnostics"),button("App inspection","apps_view"),button("Server monitor","server_monitor"),button("Features","capabilities")]),
  "configuration"=>modal("Configuration",vec![field_ui("server","Model server address",&endpoint_summary(&text(&p,"endpoint")),"readonly"),field_ui("detail","Current configuration",&text(&out,"detail"),"readonly"),field_ui("notice","Operation status",&text(st,"notice"),"readonly"),field_ui("fields","Profile fields",if p==Null {"0"}else{"9"},"readonly"),field_ui("budget","Configured memory budget",&format!("{} bytes; measured resource inputs: {}",number(get(st,"policy"),"budget_bytes"),boolean(get(st,"policy"),"measured")),"readonly"),field_ui("rate","Last reply measurements",&telemetry_summary(get(st,"telemetry")),"readonly")],{let mut buttons=vec![button("Apply profile settings","profile_edit"),button("Export configuration","configuration_export")];if get(st,"export_pending")!=&Null{buttons.push(button("Review saved export","export_review"));}buttons}),
  "status"=>modal("Operation status",{
@@ -534,7 +534,7 @@ fn ui(st: &Json) -> Json {
  "server_monitor"|"server_monitor_settings"=>remote_monitor::modal(st),
  "hosted_details"=>modal("Hosted search protocol history",vec![field_ui("raw","Raw provider blocks and citations (untrusted data)",&get(&current,"hosted_responses").string(),"readonly")],vec![]),
  "formats"=>modal("API format",vec![],vec![button("Chat completions · /v1/chat/completions","format:chat"),button("Server chat · /api/chat","format:local"),button("Messages · /v1/messages","format:messages"),button("Generate content · model endpoint","format:content")]),
- "drive"=>{let d=get(st,"drive");modal("Network drive connection",vec![field_ui("url","WebDAV folder URL, port and share path",&text(d,"url"),"uri"),field_ui("tls_name","Certificate DNS hostname",&text(d,"tls_name"),"text"),field_ui("user","Username",&text(d,"user"),"text"),field_ui("password","Password",&text(d,"password"),"secret"),field_ui("plain","Allow HTTP on this LAN or VPN",if boolean(d,"plain"){"true"}else{"false"},"check"),field_ui("access","Allow network storage access",if workspace::allowed(st,"network"){"true"}else{"false"},"check")],vec![button("Save network connection","drive_save")])},
+ "drive"=>{let d=get(st,"drive");let header=text(d,"auth_header");let prefix=if get(d,"auth_prefix")==&Null{"Bearer".to_string()}else{text(d,"auth_prefix")};modal("Network drive connection",vec![field_ui("url","WebDAV folder URL, port and share path",&text(d,"url"),"uri"),field_ui("tls_name","Certificate DNS hostname",&text(d,"tls_name"),"text"),field_ui("user","Username",&text(d,"user"),"text"),field_ui("password","Password",&text(d,"password"),"secret"),field_ui("key","Access key/token (optional; overrides username/password)",&text(d,"key"),"secret"),field_ui("auth_header","Key/token header name",if header.is_empty(){"Authorization"}else{&header},"text"),field_ui("auth_prefix","Header value prefix (empty sends the raw key)",&prefix,"text"),field_ui("auth_status","Current saved method",if !text(d,"key").is_empty(){"Key/token header active; username/password retained"}else if !text(d,"user").is_empty(){"Username/password credentials active"}else{"No network credentials configured"},"readonly"),field_ui("plain","Allow HTTP on this LAN or VPN",if boolean(d,"plain"){"true"}else{"false"},"check"),field_ui("access","Allow network storage access",if workspace::allowed(st,"network"){"true"}else{"false"},"check")],vec![button("Save network connection","drive_save")])},
  "remote_save_review"=>{let r=get(st,"remote_save");modal("Pending remote save",vec![field_ui("target","Destination",&endpoint_summary(&text(r,"target")),"readonly"),field_ui("phase","Verification state",&text(r,"phase"),"readonly"),field_ui("warning","Status","Not reported as saved until an exact GET readback matches the encrypted pending snapshot.","readonly")],vec![button("Verify existing destination","remote_save_verify"),button("Retry save (verify before creating)","remote_save_retry"),button("Discard pending snapshot","remote_save_discard")])},
  "resources"=>{let r=get(st,"resources");let percent=text(r,"percent");modal("Resources and mode",vec![field_ui("performance","Performance mode",if boolean(r,"performance"){"true"}else{"false"},"check"),field_ui("percent","Performance memory limit: 50–95% of measured heap",if percent.is_empty(){"75"}else{&percent},"text"),field_ui("local","Pause remote model requests (keep file tools available)",if text(st,"capability_mode")=="local"{"true"}else{"false"},"check"),field_ui("fallback","Use next compatible profile if connection fails before sending",if boolean(r,"fallback"){"true"}else{"false"},"check"),field_ui("measurement","Current policy",&get(st,"policy").string(),"readonly")],vec![button("Apply and stop gateway","resources_save")])},
  "gateway"=>{let g=get(st,"gateway");modal("Phone API gateway",vec![field_ui("listen","Listen address: 127.0.0.1 or 0.0.0.0",&text(g,"listen"),"text"),field_ui("port","TCP port",&text(g,"port"),"text"),field_ui("token","Client bearer token",&text(g,"token"),"secret"),field_ui("lan","Allow unencrypted traffic from LAN clients",if boolean(g,"lan"){"true"}else{"false"},"check"),field_ui("a2a","Enable read-only A2A for this workspace (127.0.0.1 only)",if boolean(g,"a2a"){"true"}else{"false"},"check"),field_ui("workspace","A2A scope: the currently selected workspace; inspect and compare only",&text(st,"approval_root"),"readonly"),field_ui("status","Current service status",&text(st,"gateway_status"),"readonly")],vec![button("Start gateway","gateway_start"),button("Stop gateway","gateway_stop")])},
@@ -595,6 +595,7 @@ fn capture(st: &mut Json, inputs: &Json) {
         "service_connections",
         "service_request",
         "voice_review",
+        "voice_settings",
         "profile",
         "workspace_new",
         "workspace_permissions",
@@ -854,16 +855,8 @@ fn drive_effect(
             },
         )]
     };
-    let user = text(d, "user");
-    if !user.is_empty() {
-        headers.push((
-            "Authorization",
-            format!(
-                "Basic {}",
-                network::b64(format!("{}:{}", user, text(d, "password")).as_bytes())
-            ),
-        ));
-    }
+    let authorization=network::storage_authorization(d)?;
+    if let Some((name,value))=&authorization{headers.push((name.as_str(),value.clone()));}
     if method == "PUT" {
         if purpose == "drive_update_write" {
             let tag = text(get(st, "drive_revision"), "etag");
@@ -1995,7 +1988,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 }
                 let address=if address.is_empty(){String::new()}else if address.contains("://") {address}else{format!("{}://{}",if boolean(inputs,"plain") {"http"}else{"https"},address)};
                 if !address.is_empty(){let mut probe=network::wire(&address,boolean(inputs,"plain"),"GET","",vec![])?;network::tls_identity(&mut probe,&text(inputs,"tls_name"))?;}
-                let mut drive=get(&st,"drive").clone();if drive==Null{drive=obj(vec![]);}for key in ["tls_name","user","password","plain","phone_default","autosave"]{if get(inputs,key)!=&Null{put(&mut drive,key,get(inputs,key).clone());}}put(&mut drive,"url",s(&address));if get(inputs,"access")!=&Null{workspace::set_access(&mut st,"network",boolean(inputs,"access"));}
+                let mut drive=get(&st,"drive").clone();if drive==Null{drive=obj(vec![]);}for key in ["tls_name","user","password","key","auth_header","auth_prefix","plain","phone_default","autosave"]{if get(inputs,key)!=&Null{put(&mut drive,key,get(inputs,key).clone());}}put(&mut drive,"url",s(&address));network::storage_authorization(&drive)?;if get(inputs,"access")!=&Null{workspace::set_access(&mut st,"network",boolean(inputs,"access"));}
                 put(&mut st, "drive", drive);
                 if !workspace::back(&mut st){put(&mut st,"dialog",Null);}
                 put(&mut st,"notice",s("Network storage settings saved"));
@@ -3650,7 +3643,7 @@ mod checks {
     #[test]
     fn settings_menus_are_short_separate_and_preserve_the_thread() {
         let mut st=configured();append(&mut st,"user","Retained conversation").unwrap();put(&mut st,"draft",s("Retained draft"));let active=text(&st,"active");
-        let app=step(st,"config",Null);let pop=get(get(&app,"ui"),"modal");assert_eq!(text(pop,"presentation"),"list");assert_eq!(text(pop,"title"),"App settings");assert!(array(pop,"buttons").len()<=7);assert!(!array(pop,"buttons").iter().any(|b|text(b,"event")=="agents"));
+        let app=step(st,"config",Null);let pop=get(get(&app,"ui"),"modal");assert_eq!(text(pop,"presentation"),"list");assert_eq!(text(pop,"title"),"App settings");let settings_events=array(pop,"buttons").iter().map(|b|text(b,"event")).collect::<std::collections::BTreeSet<_>>();assert_eq!(settings_events,["harness_settings","connections","storage_settings","voice_settings","appearance","resources_edit","services","observability"].into_iter().map(str::to_string).collect());assert_eq!(array(pop,"buttons").len(),settings_events.len());assert!(!array(pop,"buttons").iter().any(|b|text(b,"event")=="agents"));
         let agent=step(get(&app,"state").clone(),"agent_settings",Null);let pop=get(get(&agent,"ui"),"modal");assert_eq!(text(pop,"presentation"),"list");assert_eq!(array(pop,"buttons").len(),6);assert_eq!(text(get(&agent,"state"),"active"),active);assert_eq!(text(get(&agent,"state"),"draft"),"Retained draft");
         let settings=step(get(&agent,"state").clone(),"instruction_settings",Null);assert!(array(get(get(&settings,"ui"),"modal"),"buttons").iter().any(|b|text(b,"event")=="investigation_preferences"));let skills=step(get(&agent,"state").clone(),"skills",Null);assert!(!array(get(get(&skills,"ui"),"modal"),"buttons").iter().any(|b|text(b,"event")=="investigation_preferences"));
         let mut old=get(&agent,"state").clone();put(&mut old,"page",s("config"));put(&mut old,"dialog",Null);let restored=step(old,"resume",Null);assert_eq!(text(get(&restored,"ui"),"page"),"chat");assert_eq!(text(get(get(&restored,"ui"),"modal"),"title"),"App settings");

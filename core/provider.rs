@@ -145,33 +145,7 @@ pub fn authorization(p: &Json) -> Result<Option<(String, String)>> {
     } else {
         (custom, text(p, "auth_prefix").trim())
     };
-    if name.len() > 64
-        || name.is_empty()
-        || name
-            .bytes()
-            .any(|b| !b.is_ascii_alphanumeric() && b != b'-')
-        || [
-            "host",
-            "connection",
-            "content-length",
-            "transfer-encoding",
-            "content-type",
-            "accept-encoding",
-        ]
-        .contains(&name.to_ascii_lowercase().as_str())
-        || prefix.len() > 64
-        || key.chars().chain(prefix.chars()).any(char::is_control)
-    {
-        return Err("Invalid authentication header or prefix".into());
-    }
-    Ok(Some((
-        name.into(),
-        if prefix.is_empty() {
-            key.into()
-        } else {
-            format!("{prefix} {key}")
-        },
-    )))
+    network::credential_header(name,prefix,key).map(Some)
 }
 /// Probe the selected server without adding chat messages or sending prompts.
 pub fn probe(p: &Json) -> Result<Json> {
