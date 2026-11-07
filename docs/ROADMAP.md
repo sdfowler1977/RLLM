@@ -1,5 +1,7 @@
 # Product completion
 
+Current implementation cycle: direct Voice and microphone settings and optional generic network-storage key/header credentials are implemented. The fresh connected run passes all 50 executable groups (2751 executed checks), with three genuine historical comparisons unavailable in the remaining group. The 216 selected Rust cases and signed application inspection pass. Publish the matching application/source checkpoint, then continue the open work below. Physical Android and live configured-endpoint acceptance remain unperformed. Broader requirements below remain in force.
+
 The agreed goal is the complete RLLM product. A passing feature check, signed candidate or published archive does not close the broader work. Preserve the original app, optional provider-neutral services, native UI, intrinsic investigation process and existing data formats. Implementation and acceptance remain separate. This plan records the original cumulative scope and does not replace it with a narrower voice-only contract.
 
 | Area | Current implementation | Remaining work |
