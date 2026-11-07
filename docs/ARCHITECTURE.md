@@ -57,3 +57,9 @@ Service interruption retires upload/response ownership, then clears and pauses o
 ## Device authorization ownership
 
 The optional Rust device grant shares the existing connection token transport, bounded sessions and credential adoption. Its private code stays inside the current flow map. Each network phase receives a unique nonce, so an old initialization or polling callback cannot authorize the next exchange. User status checks enforce the server interval and permanent slow-down increases. Current destination, workspace, ownership and expiration checks scope refusal to that grant. No report, test result, release catalog or planning artifact participates in application execution.
+
+## Voice service lifetime
+
+VoiceSession binds the current explicitly reviewed microphone session to a private Android microphone/playback foreground service. It uses a weak activity/controller reference, an immutable session-specific Stop intent and a bounded wake lease. Current notification/permission/owner/expiry checks stop only the affected session. Media starts no background AudioRecord before actual service admission. Capture start and cancellation share a critical section, preventing a late native start after cancellation returns. Activity pause suppresses UI presentation while the current background voice owner continues; activity destruction retires it. The process never restarts or replays a microphone session.
+
+Background callbacks capture transport data only, not stale UI forms. The first activity return renders current core state before reading visible input again, preserving unsent core drafts. Pause-time input capture immediately reconciles native audio and service ownership. Ordinary previews use the existing complete teardown path; only owned synthesized audio survives background transition.
