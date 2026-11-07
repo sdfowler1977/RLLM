@@ -51,7 +51,7 @@ pub(super) fn response(st: &mut Json, ticket: &str, mut flow: Flow, status: u16,
             || uri.is_empty() || uri.len() > 2048 || uri.contains(&code) {
             return Err("Device authorization returned invalid verification details".into());
         }
-        let p = current(st, flow.index)?;
+        let p = current(st, flow.target)?;
         let parsed = network::url(&uri, boolean(get(&p, "oauth"), "plain"))?;
         let q = query(parsed.path.split_once('?').map(|(_, v)| v).unwrap_or(""))?;
         if q.keys().any(|k| ["device_code", "access_token", "refresh_token", "client_secret"].contains(&k.as_str())) {
@@ -84,9 +84,9 @@ pub(super) fn action(st: &mut Json, a: &str) -> Result<Json> {
     let ticket = owner(st);
     let mut held = flows().lock().map_err(|_| "Authorization is unavailable")?;
     let flow = held.get_mut(&ticket).ok_or("Device authorization is no longer active; start sign-in again")?;
-    let p = current(st, flow.index)?;
-    if flow.binding != flow_binding(st, &p) || text(st, "dialog") != "oauth_device" || flow.phase != "device_wait"
-        || boolean(st, "busy") || selected(st)? != flow.index || interaction::locked(st) {
+    let p = current(st, flow.target)?;
+    if flow.binding != flow_binding(st, flow.target, &p) || text(st, "dialog") != "oauth_device" || flow.phase != "device_wait"
+        || boolean(st, "busy") || selected(st)? != flow.target || interaction::locked(st) {
         return Err("Device authorization context changed; no request was sent".into());
     }
     let device = flow.device.as_ref().ok_or("Device authorization is unavailable")?;
@@ -110,7 +110,7 @@ pub(super) fn action(st: &mut Json, a: &str) -> Result<Json> {
 pub(super) fn live_wait(st: &Json) -> bool {
     flows().lock().ok().and_then(|m| m.get(&owner(st)).map(|f| {
         f.phase == "device_wait" && f.device.as_ref().is_some_and(|d| !d.expired())
-            && current(st, f.index).is_ok_and(|p| flow_binding(st, &p) == f.binding)
+            && current(st, f.target).is_ok_and(|p| flow_binding(st, f.target, &p) == f.binding)
     })).unwrap_or(false)
 }
 
@@ -124,8 +124,9 @@ pub(super) fn recover(st: &mut Json) {
 pub(super) fn dialog(st: &Json) -> Json {
     let held = flows().lock().ok();
     let device = held.as_ref().and_then(|m| m.get(&owner(st))).and_then(|f| f.device.as_ref());
-    let mut fields = vec![field_ui("status", "Device authorization",
-        "Verify the address and code on your authorization server. Check authorization after granting access. Nothing is checked automatically.", "readonly")];
+    let mut fields = connection_fields(st);
+    fields.push(field_ui("status", "Device authorization",
+        "Verify the address and code on your authorization server. Check authorization after granting access. Nothing is checked automatically.", "readonly"));
     if let Some(d) = device {
         fields.push(field_ui("verification_uri", "Verification address", &d.uri, "readonly"));
         fields.push(field_ui("user_code", "Verification code", &d.user, "readonly"));

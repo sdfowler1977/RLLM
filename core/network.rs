@@ -90,7 +90,23 @@ pub fn credential_header(name:&str,prefix:&str,key:&str)->Result<(String,String)
         ||prefix.len()>64||key.chars().chain(prefix.chars()).any(char::is_control){return Err("Invalid authentication header or prefix".into());}
     Ok((name.into(),if prefix.is_empty(){key.into()}else{format!("{prefix} {key}")}))
 }
+pub(crate) fn bearer_token(token:&str)->bool{let base=token.trim_end_matches('=');!base.is_empty()&&base.bytes().all(|b|b.is_ascii_alphanumeric()||b"-._~+/".contains(&b))}
+pub(crate) fn storage_oauth_context(connection:&Json)->Json{
+    Obj(["url","tls_name","plain","oauth"].into_iter().map(|key|(key.into(),connection.get(key).unwrap_or(&Null).clone())).collect())
+}
 pub fn storage_authorization(connection:&Json)->Result<Option<(String,String)>>{
+    let oauth=match connection.get("oauth_enabled"){Ok(Bool(value))=>*value,Ok(Null)|Err(_)=>false,_=>return Err("Network storage authorization mode must be a toggle".into())};
+    if oauth{
+        let tokens=connection.get("oauth_tokens").map_err(|_|"Sign in through network storage authorization first")?;
+        if tokens.get("storage_connection")!=Ok(&storage_oauth_context(connection)){return Err("Network storage authorization destination changed; sign in again".into());}
+        if tokens.get("refresh_uncertain")==Ok(&Bool(true)){return Err("The previous storage authorization refresh outcome is unconfirmed; sign in again".into());}
+        let token=tokens.get("access_token").and_then(Json::text).map_err(|_|"Network storage authorization has no access token")?;
+        if token.len()>8192||!bearer_token(token){return Err("Network storage authorization returned an invalid access token".into());}
+        let expiry=match tokens.get("expires_at"){Ok(Num(v))=>v.parse::<u64>().map_err(|_|"Network storage token lifetime is invalid")?,_=>return Err("Network storage token lifetime is invalid".into())};
+        let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|"System clock is before the supported epoch")?.as_secs();
+        if expiry>0&&now.saturating_add(15)>=expiry{return Err("Network storage authorization has expired; refresh or sign in from storage settings".into());}
+        return credential_header("Authorization","Bearer",token).map(Some);
+    }
     fn setting<'a>(connection:&'a Json,key:&str)->Result<&'a str>{match connection{Null=>Ok(""),Obj(fields)=>match fields.get(key){None|Some(Null)=>Ok(""),Some(Str(value))=>Ok(value),_=>Err(format!("Network storage {key} must be text"))},_=>Err("Network storage connection must be an object".into())}}
     let key=setting(connection,"key")?;
     if !key.is_empty(){
