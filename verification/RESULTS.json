@@ -46,13 +46,14 @@
       "apk_alignment": 8,
       "audio_route": 23,
       "document_providers": 51,
+      "snapshot_identity": 61,
       "acp": 41,
       "oauth": 121,
       "device_authorization": 92
     },
-    "total_executed": 2554,
-    "groups_passed": 47,
-    "groups": 48,
+    "total_executed": 2615,
+    "groups_passed": 48,
+    "groups": 49,
     "unavailable": [
       {
         "name": "binary_flow",
@@ -60,207 +61,207 @@
       }
     ]
   },
-  "selected_rust_cases": 214,
+  "selected_rust_cases": 216,
   "selected_rust_runs": [
     {
       "filter": "a2a::tests::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
     },
     {
       "filter": "execution::scope_tests::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::binary_flow::tests::",
       "code": 0,
-      "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
     },
     {
       "filter": "provider::",
       "code": 0,
-      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
     },
     {
       "filter": "stream::",
       "code": 0,
-      "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 448 filtered out; finished in 0.17s"
+      "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 450 filtered out; finished in 0.15s"
     },
     {
       "filter": "application::harness::",
       "code": 0,
-      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; finished in 4.46s"
+      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 3.30s"
     },
     {
       "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::checks::scoped_drive_listing",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::file_evidence::checks::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::investigation::directory_observation::checks::cancellation_and_deadline_remain_scoped",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::elf_observation::",
       "code": 0,
-      "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::binary_observation::",
       "code": 0,
-      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::observation_graph::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::claim_records::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::investigation::cancellation_scope_checks::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::connection_migration::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::binary_declarations::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::checks::settings_menus_are_short_separate_and_preserve_the_thread",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::instruction::tests::",
       "code": 0,
-      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 0.35s"
+      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 456 filtered out; finished in 0.31s"
     },
     {
       "filter": "application::binary_evidence::path_checks::",
       "code": 0,
-      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.01s"
+      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::operation::drive_checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.02s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.02s"
     },
     {
       "filter": "hosted_search::checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.01s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.01s"
     },
     {
       "filter": "application::pe_observation::relocation_checks::",
       "code": 0,
-      "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 0.01s"
+      "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.01s"
     },
     {
       "filter": "resources::checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
     },
     {
       "filter": "network::checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
     },
     {
       "filter": "network::binary_checks::",
       "code": 0,
-      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
     },
     {
       "filter": "network::binary_response_checks::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::project_store::transfer::tests::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 1.10s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.78s"
     },
     {
       "filter": "application::monitor::checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::request_metrics::",
       "code": 0,
-      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::throughput::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::checks::live_rate_opens_analytics_without_losing_stream_or_draft",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.01s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.01s"
     },
     {
       "filter": "application::checks::tls_guidance_preserves_explicit_endpoint",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::voice_audio::checks::",
       "code": 0,
-      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.30s"
+      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.27s"
     },
     {
       "filter": "application::oauth::checks::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::scene::checks::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.20s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.16s"
     },
     {
       "filter": "application::tool_format::tests::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.01s"
     },
     {
       "filter": "application::search::checks::",
       "code": 0,
-      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
     },
     {
       "filter": "network::authorization_response_checks::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::oauth::device_authorization::checks::",
       "code": 0,
-      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
     }
   ],
   "checks": {
@@ -2828,6 +2829,73 @@
       ],
       "scope": "Owner public core events plus unchanged production DocumentAccess and exact Activity selection-commit method against controlled Android URI/grant/resolver and state-delivery adapters. Actual Android provider account, picker, grant and lifecycle execution requires installed-device acceptance; no application-owned cloud OAuth or SMB is claimed."
     },
+    "snapshot_identity": {
+      "passed": 61,
+      "checks": [
+        "legacy write retains VPN socket route and HTTPS",
+        "legacy write retains configured certificate DNS identity",
+        "legacy write applies certificate alias only to request authority",
+        "legacy write retains original connection credentials",
+        "legacy write preserves conditional write or read semantics",
+        "legacy write preserves exact body framing",
+        "legacy write leaves saved connection and source bytes unchanged",
+        "legacy probe retains VPN socket route and HTTPS",
+        "legacy probe retains configured certificate DNS identity",
+        "legacy probe applies certificate alias only to request authority",
+        "legacy probe retains original connection credentials",
+        "legacy probe preserves conditional write or read semantics",
+        "legacy probe carries no write payload",
+        "legacy probe leaves saved connection and source bytes unchanged",
+        "legacy verify retains VPN socket route and HTTPS",
+        "legacy verify retains configured certificate DNS identity",
+        "legacy verify applies certificate alias only to request authority",
+        "legacy verify retains original connection credentials",
+        "legacy verify preserves conditional write or read semantics",
+        "legacy verify carries no write payload",
+        "legacy verify leaves saved connection and source bytes unchanged",
+        "legacy rejects invalid certificate identity 'https://nas.example.test'",
+        "legacy rejects invalid certificate identity '*.example.test'",
+        "legacy rejects invalid certificate identity '100.64.0.2'",
+        "legacy rejects invalid certificate identity 'bad\\r\\nInjected: value'",
+        "legacy refuses certificate identity on unencrypted transport",
+        "legacy refuses changed saved connection before transport",
+        "legacy retains ordinary HTTPS when no alias is configured",
+        "streamed write retains VPN socket route and HTTPS",
+        "streamed write retains configured certificate DNS identity",
+        "streamed write applies certificate alias only to request authority",
+        "streamed write retains original connection credentials",
+        "streamed write preserves conditional write or read semantics",
+        "streamed write preserves exact body framing",
+        "streamed write leaves saved connection and source bytes unchanged",
+        "streamed probe retains VPN socket route and HTTPS",
+        "streamed probe retains configured certificate DNS identity",
+        "streamed probe applies certificate alias only to request authority",
+        "streamed probe retains original connection credentials",
+        "streamed probe preserves conditional write or read semantics",
+        "streamed probe carries no write payload",
+        "streamed probe leaves saved connection and source bytes unchanged",
+        "streamed verify retains VPN socket route and HTTPS",
+        "streamed verify retains configured certificate DNS identity",
+        "streamed verify applies certificate alias only to request authority",
+        "streamed verify retains original connection credentials",
+        "streamed verify preserves conditional write or read semantics",
+        "streamed verify carries no write payload",
+        "streamed verify leaves saved connection and source bytes unchanged",
+        "streamed rejects invalid certificate identity 'https://nas.example.test'",
+        "streamed rejects invalid certificate identity '*.example.test'",
+        "streamed rejects invalid certificate identity '100.64.0.2'",
+        "streamed rejects invalid certificate identity 'bad\\r\\nInjected: value'",
+        "streamed refuses certificate identity on unencrypted transport",
+        "streamed refuses changed saved connection before transport",
+        "streamed retains ordinary HTTPS when no alias is configured",
+        "actual production TLS binding completes a trusted DNS-alias handshake over an IP socket",
+        "actual TLS server receives unchanged opaque payload and aliased HTTP authority",
+        "production hostname verification rejects the socket IP",
+        "production hostname verification rejects a mismatched DNS identity",
+        "production TLS sends configured SNI while keeping failed peers from request bytes"
+      ],
+      "scope": "Owner execution of public legacy project_payload/current project_chunks operations, opaque bytes and pinned connections; unchanged production Android TLS socket block executed on the host JVM against a real local certificate, per-process fixture trust, successful alias/SNI and refused hostname mismatches. No archive extraction, excluded historical fixtures or physical Android/live-user NAS acceptance is claimed."
+    },
     "acp": {
       "passed": 41,
       "checks": [
@@ -3102,9 +3170,9 @@
     }
   },
   "apk": {
-    "version": 1794024012,
+    "version": 1794024786,
     "bytes": 6592530,
-    "sha256": "af4503bcfebd473d9c53887909eec8fd905393d6acf47301477ff49e1e40c5c2",
+    "sha256": "32ef9fe47f51650fe4f057cea021a271538bada7ace23d85f5e13c6720a252f2",
     "native": [
       {
         "abi": "arm64-v8a",
@@ -3115,7 +3183,7 @@
           16384,
           16384
         ],
-        "bytes": 4925256
+        "bytes": 4926392
       },
       {
         "abi": "x86_64",
@@ -3126,7 +3194,7 @@
           16384,
           16384
         ],
-        "bytes": 6064504
+        "bytes": 6065816
       }
     ],
     "label": "RLLM",
@@ -3205,7 +3273,7 @@
       "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
       "core/model_metadata.rs": "b024330ac89f786670ae336f3855ee4b69a95898b1588e5ee16254c56d94e3e4",
       "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
-      "core/network.rs": "c2851f9a0eecbb6b1d45d41a519a5ae8133998ef57f4768d75d6019ee9c53563",
+      "core/network.rs": "38ae24c748de882d2052700d42997f97f88e6e9865b9432d12873286816de3b4",
       "core/oauth.rs": "fca04f8e74d373d475fb34bceb07fcf9a1ba97cd045fecb7a8352e0e98dc0a57",
       "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
       "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
@@ -3216,7 +3284,7 @@
       "core/page_program.rs": "2c80e145356e4fc2546b8dfc9fa6c1a98652cc275419bdf4eeaac1dd86eecebf",
       "core/pe_observation.rs": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0",
       "core/png_inflate.rs": "bd0f4d5e4a60d52d942c5ec5f0e0a5ff8bbb649b3c4ab89b91175743cf83c5f0",
-      "core/project_store.rs": "8415a71473e592f65eea82510244c933e9cb42dfb7877515bf3bec528be79da3",
+      "core/project_store.rs": "e9423c61ac57eca378b8bb99008d926c07bdcb4d600d3aaa1ff53560a0cf08e0",
       "core/provider.rs": "b3de7b5f18f65eeba4c2b2b40e65c2d0b31f79590a5bfcfb6a2555fc3a9d04f9",
       "core/provider_calls.rs": "b00d9805e4174b56707f34984106561a6a0405cb0406fe1ce925811920b01fdb",
       "core/raster_surface.rs": "a475f9a953a9c54a6d9752fd5f169633437fcc609403caf5d1799364828e6a26",
@@ -3303,8 +3371,8 @@
   },
   "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
   "published_comparator": {
-    "version": 1794022455,
-    "source_sha256": "803b5f487325ffb2c61e29ba2158b29b055792738d9b6f605c8159dbf5dc64a4",
+    "version": 1794024012,
+    "source_sha256": "e382f15ddb1da617205d66dcc7729ce4dfefc5efe4c1b104bf93d7758524dbfa",
     "method": "Exact saved and source-published shared core compiled locally; actual retained representations and four before/after scene pixel cases exercised"
   },
   "flow_comparator": {
