@@ -127,6 +127,10 @@ Starting a separate request review, operation or task pauses the current microph
 
 If an otherwise completed answer cannot enter speech preparation, including the speech-text size bound or full local media storage, the loop also shows Paused with its specific explanation. The complete primary text remains in the conversation. It is not truncated for speech or automatically sent again.
 
+## Document provider inputs
+
+Document and media inputs can come from installed document providers through the generic Android picker. Storage → Document providers opens selected-file controls; Setup → Document provider access configures its source policy and optional account setup. Provider accounts are managed by their own app or Android settings. No specific provider is required. Read grants are owned and can be removed without revoking unrelated phone-folder or writable grants; unsuccessful removals remain available for retry. Temporary grants require reselection when Android expires them. Application-owned cloud OAuth and SMB are separate open work.
+
 ## Background voice
 
 Start open microphone now offers a separate, default-off Continue voice outside the app checkbox. It applies only to the current reviewed ten-minute microphone session. Recognition, synthesis, fallback order and the conversation model still use the same optional configured server connections. Manual speech does not silently enable background capture.
