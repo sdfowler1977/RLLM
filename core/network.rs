@@ -187,9 +187,9 @@ pub fn tls_identity(effect: &mut Json, name: &str) -> Result<()> {
     Ok(())
 }
 pub fn decoded_bytes(bytes: &[u8]) -> Result<(u16, Vec<u8>)> {
-    decoded_bytes_with_interim(bytes, 0, false, false)
+    decoded_bytes_with_interim(bytes, 0, 0, false)
 }
-fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allow_missing: bool, coded:bool) -> Result<(u16, Vec<u8>)> {
+fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allowed_error: u16, coded:bool) -> Result<(u16, Vec<u8>)> {
     if bytes.len() > 8 * 1024 * 1024 {
         return Err("Response exceeds 8 MiB".into());
     }
@@ -216,7 +216,7 @@ fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allow_missing: bo
         if interim_count >= 4 {
             return Err("Too many informational HTTP responses".into());
         }
-        return decoded_bytes_with_interim(&bytes[end + 4..], interim_count + 1, allow_missing, coded);
+        return decoded_bytes_with_interim(&bytes[end + 4..], interim_count + 1, allowed_error, coded);
     }
     let mut chunked = false;
     let mut length = None;
@@ -316,7 +316,7 @@ fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allow_missing: bo
             "HTTP {code}: redirects are not followed; enter the final server address"
         ));
     }
-    if !(200..300).contains(&code) && !(allow_missing && code == 404) {
+    if !(200..300).contains(&code) && (allowed_error == 0 || code != allowed_error) {
         return Err(format!(
             "HTTP {code}. Check server address, credentials, model and permissions."
         ));
@@ -333,7 +333,7 @@ pub fn decoded(bytes: &[u8]) -> Result<(u16, String)> {
 /// A recoverable create may inspect a framed 404 before a conditional PUT.
 /// Redirects, auth failures, malformed framing and all other errors stay errors.
 pub fn decoded_optional_file(bytes:&[u8])->Result<(u16,String)>{
-    let (code,data)=decoded_bytes_with_interim(bytes,0,true,false)?;
+    let (code,data)=decoded_bytes_with_interim(bytes,0,404,false)?;
     Ok((code,String::from_utf8(data).map_err(|_|"File or response is not UTF-8 text")?))
 }
 pub fn strong_etag(bytes: &[u8]) -> Result<String> {
@@ -514,10 +514,10 @@ mod binary_response_checks {
     }
 }
 
-pub fn decoded_optional_bytes(bytes:&[u8])->Result<(u16,Vec<u8>)>{decoded_bytes_with_interim(bytes,0,true,false)}
+pub fn decoded_optional_bytes(bytes:&[u8])->Result<(u16,Vec<u8>)>{decoded_bytes_with_interim(bytes,0,404,false)}
 
 /// Explicit page/resource transport only. Default transport remains identity.
-pub fn decoded_coded_bytes(bytes:&[u8])->Result<(u16,Vec<u8>)>{decoded_bytes_with_interim(bytes,0,false,true)}
+pub fn decoded_coded_bytes(bytes:&[u8])->Result<(u16,Vec<u8>)>{decoded_bytes_with_interim(bytes,0,0,true)}
 pub fn page_wire(address:&str,plain:bool,headers:Vec<(&str,String)>)->Result<Json>{let mut effect=wire(address,plain,"GET","",headers)?;let w=effect.get("wire")?.text()?.replacen("Accept-Encoding: identity\r\n","Accept-Encoding: gzip, identity\r\n",1);if let Obj(ref mut fields)=effect{fields.insert("wire".into(),s(&w));}Ok(effect)}
 
 const FRAME_CHUNK:usize=65536;
@@ -573,4 +573,25 @@ pub(super) fn frame(v:&Json)->Result<Json>{
  if field(v,"op")?!="network_frame_feed"{return Err("Unknown response frame operation".into());}
  let result=(||{let encoded=field(v,"data")?;if encoded.len()>87400{return Err("Response chunk exceeds bound".into());}let bytes=unbase64(encoded)?;let session=slots.get_mut(&id).unwrap();session.seen=session.seen.checked_add(bytes.len()).ok_or("Response size overflow")?;if session.seen>session.limit{return Err("Response exceeds current memory bound".into());}session.http.feed(&bytes)?;if [1,4].contains(&session.http.mode)&&session.http.left>session.limit.saturating_sub(session.seen)as u64{return Err("Declared response exceeds current memory bound".into());}Ok(obj(vec![("ready",Bool(session.http.done)),("status",Num(session.http.status.to_string()))]))})();
  if result.is_err(){slots.remove(&id);}result
+}
+
+/// Device authorization alone needs the protocol's framed HTTP 400 responses.
+/// Other HTTP errors and all existing callers retain their strict status policy.
+pub fn decoded_authorization(bytes: &[u8]) -> Result<(u16, String)> {
+    let (status, data) = decoded_bytes_with_interim(bytes, 0, 400, false)?;
+    Ok((status, String::from_utf8(data).map_err(|_| "Authorization response is not UTF-8")?))
+}
+#[cfg(test)] mod authorization_response_checks {
+    use super::*;
+    #[test] fn pending_status_is_scoped_and_framed() {
+        let pending=b"HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\n\r\n{}";
+        assert_eq!(decoded_authorization(pending).unwrap(),(400,"{}".into()));
+        assert!(decoded(pending).is_err());
+        assert!(decoded(b"HTTP/1.1 000 Invalid\r\nContent-Length: 0\r\n\r\n").is_err());
+        for raw in [b"HTTP/1.1 500 Error\r\nContent-Length: 2\r\n\r\n{}".as_slice(),
+            b"HTTP/1.1 302 Found\r\nContent-Length: 2\r\n\r\n{}".as_slice(),
+            b"HTTP/1.1 400 Bad Request\r\nContent-Length: 3\r\n\r\n{}".as_slice()] {
+            assert!(decoded_authorization(raw).is_err());
+        }
+    }
 }
