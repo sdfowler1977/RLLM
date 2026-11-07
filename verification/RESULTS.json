@@ -36,9 +36,12 @@
       "media": 33,
       "jobs": 18,
       "voice": 375,
-      "media_stream": 34,
+      "media_stream": 36,
       "media_upload": 49,
       "voice_interruption": 104,
+      "voice_background": 52,
+      "voice_session": 34,
+      "capture_lifecycle": 15,
       "scene": 66,
       "apk_alignment": 8,
       "audio_route": 23,
@@ -46,9 +49,9 @@
       "oauth": 121,
       "device_authorization": 92
     },
-    "total_executed": 2400,
-    "groups_passed": 43,
-    "groups": 44,
+    "total_executed": 2503,
+    "groups_passed": 46,
+    "groups": 47,
     "unavailable": [
       {
         "name": "binary_flow",
@@ -81,12 +84,12 @@
     {
       "filter": "stream::",
       "code": 0,
-      "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 448 filtered out; finished in 0.18s"
+      "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 448 filtered out; finished in 0.20s"
     },
     {
       "filter": "application::harness::",
       "code": 0,
-      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; finished in 3.22s"
+      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; finished in 3.82s"
     },
     {
       "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -151,7 +154,7 @@
     {
       "filter": "application::instruction::tests::",
       "code": 0,
-      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 0.29s"
+      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 0.38s"
     },
     {
       "filter": "application::binary_evidence::path_checks::",
@@ -196,12 +199,12 @@
     {
       "filter": "application::project_store::transfer::tests::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.76s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 1.07s"
     },
     {
       "filter": "application::monitor::checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.01s"
     },
     {
       "filter": "application::request_metrics::",
@@ -226,7 +229,7 @@
     {
       "filter": "application::voice_audio::checks::",
       "code": 0,
-      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.25s"
+      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.35s"
     },
     {
       "filter": "application::oauth::checks::",
@@ -236,7 +239,7 @@
     {
       "filter": "application::scene::checks::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.17s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.20s"
     },
     {
       "filter": "application::tool_format::tests::",
@@ -2327,7 +2330,7 @@
       "scope": "Owner HTTP/audio fixture orchestration through all four model formats. Capture callback is controlled; physical microphone and installed playback not exercised."
     },
     "media_stream": {
-      "passed": 34,
+      "passed": 36,
       "checks": [
         "artifact URL creates a separate bounded GET",
         "download credentials belong only to artifact host",
@@ -2361,7 +2364,9 @@
         "uncertain initial binary submission never retries",
         "large GET retrieval remains exact",
         "created-file allowance stays scoped to initial submissions",
+        "expiry read begins with one exact reserved allowance",
         "expired stream read releases its unwritten reservation",
+        "admission expiry begins with one exact reserved allowance",
         "new stream prunes abandoned expired reservations"
       ],
       "scope": "Owner public-core and real local HTTP checks; Android storage/decoder and live configured endpoints need device acceptance."
@@ -2424,7 +2429,7 @@
     "voice_interruption": {
       "passed": 104,
       "checks": [
-        "voice review explicitly offers foreground interruption consent",
+        "voice review explicitly offers separate interruption and background consent",
         "reviewed microphone controls save their actual input values",
         "invalid reviewed microphone timing cannot start capture",
         "default-off retains half-duplex playback without a watch",
@@ -2530,6 +2535,125 @@
         "local work remains usable without voice or service availability"
       ],
       "scope": "Owner execution with actual Rust PCM segmentation, files, HTTP service fixtures and controlled model replies/echo-start callbacks. Physical echo suppression, Android microphone/audio routing/lifecycle and live user providers remain unverified."
+    },
+    "voice_background": {
+      "passed": 52,
+      "checks": [
+        "chat background consent defaults off",
+        "chat explicit background intent reaches capture with a bounded remaining lease",
+        "chat unrelated service stop is an exact no-op",
+        "chat actual recognition still reaches the configured primary model",
+        "chat actual returned speech retains its owned session",
+        "chat notification status exposes background intent and actual phase",
+        "chat next real capture keeps the same session without extending consent",
+        "chat owned service stop retires the session and actual PCM owner",
+        "chat stopped session cannot revive capture",
+        "chat stopping service preserves an in-flight primary answer",
+        "chat primary result remains text without restarting speech",
+        "chat ordinary foreground voice still needs no background service",
+        "local background consent defaults off",
+        "local explicit background intent reaches capture with a bounded remaining lease",
+        "local unrelated service stop is an exact no-op",
+        "local actual recognition still reaches the configured primary model",
+        "local actual returned speech retains its owned session",
+        "local notification status exposes background intent and actual phase",
+        "local next real capture keeps the same session without extending consent",
+        "local owned service stop retires the session and actual PCM owner",
+        "local stopped session cannot revive capture",
+        "local stopping service preserves an in-flight primary answer",
+        "local primary result remains text without restarting speech",
+        "local ordinary foreground voice still needs no background service",
+        "messages background consent defaults off",
+        "messages explicit background intent reaches capture with a bounded remaining lease",
+        "messages unrelated service stop is an exact no-op",
+        "messages actual recognition still reaches the configured primary model",
+        "messages actual returned speech retains its owned session",
+        "messages notification status exposes background intent and actual phase",
+        "messages next real capture keeps the same session without extending consent",
+        "messages owned service stop retires the session and actual PCM owner",
+        "messages stopped session cannot revive capture",
+        "messages stopping service preserves an in-flight primary answer",
+        "messages primary result remains text without restarting speech",
+        "messages ordinary foreground voice still needs no background service",
+        "content background consent defaults off",
+        "content explicit background intent reaches capture with a bounded remaining lease",
+        "content unrelated service stop is an exact no-op",
+        "content actual recognition still reaches the configured primary model",
+        "content actual returned speech retains its owned session",
+        "content notification status exposes background intent and actual phase",
+        "content next real capture keeps the same session without extending consent",
+        "content owned service stop retires the session and actual PCM owner",
+        "content stopped session cannot revive capture",
+        "content stopping service preserves an in-flight primary answer",
+        "content primary result remains text without restarting speech",
+        "content ordinary foreground voice still needs no background service",
+        "background cannot silently enable a microphone for manual-only voice",
+        "old notification cannot stop a newly reviewed session",
+        "background callback without stale form input preserves the actual unsent draft",
+        "activity return before form refresh keeps the retained draft"
+      ],
+      "scope": "Owner execution through actual Rust PCM, local files and speech HTTP peers across all four model formats. Platform service notification/permission/lifecycle still requires separate adapter and physical Android acceptance."
+    },
+    "voice_session": {
+      "passed": 34,
+      "checks": [
+        "visible current UI contributes actual input",
+        "background callbacks cannot replay stale form or draft",
+        "first activity return preserves core state before UI refresh",
+        "refreshed visible UI resumes ordinary input capture",
+        "missing session intent cannot crash or start capture",
+        "background cannot create a microphone service",
+        "missing runtime permission refuses only background startup",
+        "disabled notifications prevent background capture",
+        "disabled voice channel also prevents capture",
+        "expired and oversized leases are refused",
+        "platform start denial remains scoped",
+        "failed start retires pending ownership",
+        "startup waits for actual service admission",
+        "service never requests process restart",
+        "actual service admission reaches microphone owner",
+        "current service declares microphone and playback types",
+        "screen-off wake lease is bounded and non-reference-counted",
+        "notification stop is immutable and session-bound",
+        "existing background service can retain its current capture owner",
+        "old notification cannot stop current service",
+        "unchanged voice status does not flood notifications",
+        "owned Stop requests teardown",
+        "teardown releases audio owner and wake resources",
+        "prior session notification cannot stop replacement",
+        "notification removal stops background audio through health check",
+        "expiry stops service without extending consent",
+        "cold process cannot replay a saved start intent",
+        "failed foreground admission never starts microphone",
+        "changed conversation session retires current service",
+        "task removal stops optional service",
+        "platform health exception stops only the optional service",
+        "platform foreground cleanup exception still releases wake and owner",
+        "supported legacy foreground overload 26",
+        "supported legacy foreground overload 29"
+      ],
+      "scope": "Owner execution of the unchanged production VoiceSession and exact Activity event-input guard against controlled Android notification/service/permission/clock/wake/lifecycle adapters. Separate full Android35SDK compilation passes; this is not physical screen-off, battery, route, notification or lifecycle acceptance."
+    },
+    "capture_lifecycle": {
+      "passed": 15,
+      "checks": [
+        "current capture reaches the actual native start binding",
+        "stop returns after native capture is stopped and owner retired",
+        "retired capture cannot call native start",
+        "closed host cannot start a current-generation capture",
+        "native failure never reports recording success",
+        "controlled driver starts the concurrent path",
+        "stop cannot return ahead of a native start in progress",
+        "overlapping start and stop leave no running microphone",
+        "late callback cannot rearm the retired racing capture",
+        "already-retired driver still advances cancellation ownership",
+        "background pause retires every ordinary preview through its existing stop path",
+        "owned speech hides its dialog without stopping playback",
+        "repeated background pause retains owned speech",
+        "service stop preserves an ordinary preview",
+        "service stop retires only its owned speech playback"
+      ],
+      "scope": "Owner execution of exact production Media capture critical-section and preview-pause methods against controlled native-driver/UI state and deterministic start/stop interleaving. No physical microphone/driver/lifecycle acceptance is claimed."
     },
     "scene": {
       "passed": 66,
@@ -2920,9 +3044,9 @@
     }
   },
   "apk": {
-    "version": 1794019852,
-    "bytes": 6580242,
-    "sha256": "c7847850e48b327e28aa05af559c9aea39ba3b7802e23e8a020652ca93bfd6dd",
+    "version": 1794022455,
+    "bytes": 6584338,
+    "sha256": "762c6715c9f4c44fc7047b1ff6d90ce8d9ffc24bbd482b0adcd17b5599093b8b",
     "native": [
       {
         "abi": "arm64-v8a",
@@ -2933,7 +3057,7 @@
           16384,
           16384
         ],
-        "bytes": 4919048
+        "bytes": 4921352
       },
       {
         "abi": "x86_64",
@@ -2944,7 +3068,7 @@
           16384,
           16384
         ],
-        "bytes": 6056792
+        "bytes": 6059464
       }
     ],
     "label": "RLLM",
@@ -2952,7 +3076,7 @@
     "signature": "v2/v3; one pinned current signer",
     "zip_crc": "passed",
     "build_inputs": {
-      "AndroidManifest.xml": "68f6aadd38bbd8d73c00736e2a0ee21f2b512de36000ea8cd89e6f3609f3caf2",
+      "AndroidManifest.xml": "d1e2d9843ecc5d8b61d9eea22537b1e80d215b244329e93e29ad33128d51b0f3",
       "core/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
       "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
       "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
@@ -3057,7 +3181,7 @@
       "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
       "core/tool_format.rs": "cbe8fb0492f8bd999eef6f5fe537b2f88613d3778e91aa57a54e2bdc37d69da8",
       "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
-      "core/voice.rs": "b80a902a3e2c5eac024f0f8421dd4a0e45807b3143c6a6f14a267c89bd965ec5",
+      "core/voice.rs": "f77399afbb7e9b226006781e5ea7cda5de994f7453d944ea07da003add0e3451",
       "core/voice_audio.rs": "7c8314f0cb211aea43542eef543a3cc5ba9c327b401e4c3e907d8d5b27aca065",
       "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
       "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
@@ -3068,7 +3192,7 @@
       "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
       "package.sh": "ff221b6973fbd911db47d38c7a030b394904833d0238b3b980f3a86ab14559e4",
       "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-      "platform/com/local/client/Activity.java": "139b0c99da086f4db89da99997fbaf88b85de0a2518d30a2af2e831f0dd4b3ed",
+      "platform/com/local/client/Activity.java": "e1e8346621d3930c0391a80e1e8e4b82f00fc4c5c1b152969d1dc07db9586044",
       "platform/com/local/client/AudioRoute.java": "0a4d2773be4300611d15cff452e079701c0943f822e595f7e2b866305a7d373b",
       "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
       "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
@@ -3076,11 +3200,12 @@
       "platform/com/local/client/Execution.java": "6c51afe3a8fce5283af4d8039e43913369da1ca0d3c3e1a14346a1b9d85d90d4",
       "platform/com/local/client/ExportStore.java": "c1028d0df871b42d67152e163c26aeb271021e6b9b3fdc1a75578ee3acc6c573",
       "platform/com/local/client/Gateway.java": "1efb1106fed79b8ef60c39eb07a2f7c6f930852f99a415afd052d28b14f1cff7",
-      "platform/com/local/client/Media.java": "e65792d311107def6a98e29beec4d2f0081800dea9305ddd577c4d56bd94c0b1",
+      "platform/com/local/client/Media.java": "860ab7e4c1193ef928dc75ded3adb593587d7750f8bf5b33145fbde493aa4f21",
       "platform/com/local/client/Resolution.java": "9e706ecd3c199d7dee7f20ac312b4ba78d355e3eab8a534e07b4277216b3f068",
       "platform/com/local/client/SceneView.java": "ce28561ebd59b354add2edbb50b5e2ef4b510c7b409546dc9921f05b5c3b7e36",
       "platform/com/local/client/TransferStore.java": "a164cf07e67e2ad8d98183c9dac5e367582f37c313fe01d8a99001eee61cd73b",
       "platform/com/local/client/Usage.java": "1a0f2b042bb7fb8651e6f644d6b6a4cac685e1ddf02c08eabc08ada0fbda8165",
+      "platform/com/local/client/VoiceSession.java": "5e34c0138b414e2eea8279afd152ef897f08620e2da7a3e65a276f3e8ec6d61f",
       "platform/com/local/client/Wire.java": "44fd658c225cbd7c108ce842d24b6a5b14eb0500ff7e7f3f0e7c6a54a517e6fb",
       "platform/jni/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
       "platform/jni/bridge.c": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f",
@@ -3119,8 +3244,8 @@
   },
   "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
   "published_comparator": {
-    "version": 1793985689,
-    "source_sha256": "47164214a37fc88d63788c8b11b0f41f32fa45b586019f32e3a4426414a5f028",
+    "version": 1794019852,
+    "source_sha256": "c7f895388b99cb1ee9660534c9da8399858fcba3353675a000a632c830aa3a27",
     "method": "Exact saved and source-published shared core compiled locally; actual retained representations and four before/after scene pixel cases exercised"
   },
   "flow_comparator": {

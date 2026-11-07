@@ -37,7 +37,7 @@ class Peer(BaseHTTPRequestHandler):
 servers=[ThreadingHTTPServer(('127.0.0.1',0),Peer) for _ in range(2)]
 for server in servers:threading.Thread(target=server.serve_forever,daemon=True).start()
 with tempfile.TemporaryDirectory(prefix='stream-',dir=PROJECT/'output') as temp:
-    root=pathlib.Path(temp);p=subprocess.Popen([str(PROJECT/'output/headless/RLLM'),'--jsonl'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+    root=pathlib.Path(temp);opened=[];p=subprocess.Popen([str(PROJECT/'output/headless/RLLM'),'--jsonl'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
     def raw(v):p.stdin.write(json.dumps(v)+'\n');p.stdin.flush();return json.loads(p.stdout.readline())
     def op(v):r=raw(v);assert 'value'in r,r;return r['value']
     def event(st,a,i=None):return op(dict(op='event',state=st,action=a,inputs=i or {},root=temp))
@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory(prefix='stream-',dir=PROJECT/'output') as temp:
         d=event(None,'resume');d=event(d['state'],'service_connections');d=event(d['state'],'service_save',dict(service_config=json.dumps(cfg)));assert not d['state'].get('notice_error'),d['state'].get('notice')
         if file:
             d=event(d['state'],'media_pick');d=event(d['state'],'media_input_result',dict(media_ticket=d['effect']['media_ticket'],name='audio.wav',data=base64.b64encode(audio).decode()))
-        d=event(d['state'],'service_request');d=event(d['state'],'service_review',dict(service_route=''if fallback else'generate',service_capability='speech_synthesis'if fallback else'',service_file=file,service_input='{}'));return event(d['state'],'approve')
+        d=event(d['state'],'service_request');d=event(d['state'],'service_review',dict(service_route=''if fallback else'generate',service_capability='speech_synthesis'if fallback else'',service_file=file,service_input='{}'));d=event(d['state'],'approve');opened.append(d['effect']);return d
     def owner(e):return dict(purpose=e['purpose'],ticket=e['media_download'])
     def wire(e):return base64.b64decode(e['wire_base64'])if'wire_base64'in e else e['wire'].encode()
     def exchange(d):
@@ -61,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix='stream-',dir=PROJECT/'output') as temp:
             while chunk:=sock.recv(8192):out+=chunk
         return event(d['state'],'network_result',dict(purpose=e['purpose'],data=base64.b64encode(out).decode()))
     def feed(d,wire_bytes=None):
-        e=d['effect'];o=owner(e);ready=False
+        e=d['effect'];opened.append(e);o=owner(e);ready=False
         def part(data):return op(dict(o,op='media_stream_feed',data=base64.b64encode(data).decode()))['ready']
         if wire_bytes is not None:
             for i in range(0,len(wire_bytes),8192):ready=part(wire_bytes[i:i+8192])
@@ -110,8 +110,17 @@ with tempfile.TemporaryDirectory(prefix='stream-',dir=PROJECT/'output') as temp:
         try:feed(d);raise AssertionError('retrieval accepted submission-only status')
         except AssertionError as error:check('created-file allowance stays scoped to initial submissions','HTTP 201'in str(error))
         cancel(d)
-        total=lambda:sum(f.stat().st_size for f in(root/'service-files').iterdir());before=total();expired=[start(response='binary',path='/post-file',kind='audio',limit=8,method='POST',timeout=5)for _ in range(2)];time.sleep(5.1)
-        bad=raw(dict(owner(expired[0]['effect']),op='media_stream_feed',data=base64.b64encode(b'x').decode()));check('expired stream read releases its unwritten reservation','value'not in bad and total()==before+8*1024*1024)
+        # Retire earlier fixture streams before measuring these two independent
+        # expiry paths. An unrelated lease may expire under compiler/IO load.
+        for effect in opened:
+            if effect and effect.get('media_download'):op(dict(owner(effect),op='media_stream_cancel'))
+        total=lambda:sum(f.stat().st_size for f in(root/'service-files').iterdir());before=total()
+        expired=start(response='binary',path='/post-file',kind='audio',limit=8,method='POST',timeout=5)
+        check('expiry read begins with one exact reserved allowance',total()==before+8*1024*1024);time.sleep(5.1)
+        bad=raw(dict(owner(expired['effect']),op='media_stream_feed',data=base64.b64encode(b'x').decode()));after=total()
+        check('expired stream read releases its unwritten reservation','value'not in bad and after==before)
+        abandoned=start(response='binary',path='/post-file',kind='audio',limit=8,method='POST',timeout=5)
+        check('admission expiry begins with one exact reserved allowance',total()==before+8*1024*1024);time.sleep(5.1)
         current=start(response='binary',path='/post-file',kind='audio',limit=8,method='POST');check('new stream prunes abandoned expired reservations',total()==before+8*1024*1024);cancel(current)
     finally:p.stdin.close();p.wait(timeout=10)
 for server in servers:server.shutdown();server.server_close()

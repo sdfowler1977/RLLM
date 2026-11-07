@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory(prefix='interruption-',dir=PROJECT/'output')as 
             if 'onset_receipt'in v:return dict(owner,onset_receipt=v['onset_receipt'])
         raise AssertionError('speech onset did not complete')
     try:
-        d=event(configured(),'voice_open_review');modal=json.dumps(d['ui']['modal']);check('voice review explicitly offers foreground interruption consent','voice_interruption'in modal and'echo control'in modal and'foreground'in modal)
+        d=event(configured(),'voice_open_review');modal=json.dumps(d['ui']['modal']);check('voice review explicitly offers separate interruption and background consent','voice_interruption'in modal and'echo control'in modal and'voice_background'in modal and'notification'in modal)
         d=event(configured(),'voice_open_review');d=event(d['state'],'voice_consent',dict(voice_interruption=True,voice_open=True,voice_silence_ms='600',voice_threshold='700',voice_max_seconds='10'));check('reviewed microphone controls save their actual input values',d['state']['voice_settings']==dict(interruption=True,silence_ms=600,threshold=700,max_seconds=10));event(d['state'],'voice_stop')
         d=event(configured(),'voice_open_review');d=event(d['state'],'voice_consent',dict(voice_silence_ms='299'));check('invalid reviewed microphone timing cannot start capture',d['effect']is None and d['state'].get('notice_error') and not d['state'].get('voice_consent'))
         d,play=playback(interruption=False);started=event(d['state'],'voice_playback_start',play);check('default-off retains half-duplex playback without a watch',started['effect']is None and not started['state'].get('voice_watch_expected'));event(started['state'],'voice_stop')
