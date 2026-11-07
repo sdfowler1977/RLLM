@@ -129,7 +129,7 @@ If an otherwise completed answer cannot enter speech preparation, including the 
 
 ## Document provider inputs
 
-Document and media inputs can come from installed document providers through the generic Android picker. Storage → Document providers opens selected-file controls; Setup → Document provider access configures its source policy and optional account setup. Provider accounts are managed by their own app or Android settings. No specific provider is required. Read grants are owned and can be removed without revoking unrelated phone-folder or writable grants; unsuccessful removals remain available for retry. Temporary grants require reselection when Android expires them. Application-owned cloud OAuth and SMB are separate open work.
+Document and media inputs can come from installed document providers through the generic Android picker. Storage → Document providers opens selected-file controls; Setup → Document provider access configures its source policy and optional account setup. Provider accounts are managed by their own app or Android settings. No specific provider is required. Read grants are owned and can be removed without revoking unrelated phone-folder or writable grants; unsuccessful removals remain available for retry. Temporary grants require reselection when Android expires them. The app can separately authorize its configured WebDAV connection as described below; provider-native cloud file APIs and SMB remain separate open work.
 
 ## Voice and microphone settings
 
@@ -149,7 +149,19 @@ The network-drive connection supports optional username/password credentials, an
 
 Header syntax, reserved framing headers, control characters, field types and the 8192-byte storage key bound are checked before saving an active key configuration or sending a request. Invalid settings preserve the prior connection. A 401/403 response does not replay with another credential. Ordinary text and other sources remain available. Manual WebDAV, legacy pending payloads and current streamed payloads use the same credential selection. Saved pending transfers retain their original complete connection for writes/probes/readback; credentials are not borrowed from a newly selected destination. Configuration export omits both the key and retained username/password values. Protected saved app state remains the credential storage boundary.
 
-This is configurable credential presentation. It does not acquire or refresh cloud tokens; application-owned cloud authorization and SMB remain separate roadmap work. Existing trusted-LAN HTTP opt-in and certificate identity checks remain in force.
+Manual credential presentation is separate from the optional sign-in flow below. Existing trusted-LAN HTTP opt-in and certificate identity checks remain in force.
+
+## Network storage sign-in
+
+Save the network-drive URL first, then choose Connection authorization in that connection's settings. Configure the authorization server's browser and/or device endpoint, token endpoint, registered public client identifier, scopes and optional expected issuer. Register the displayed app redirect URI with that server for browser sign-in. Hosts, account types and keys remain configurable; no particular provider or paid key is required. A public-client sign-in can only work with an authorization server that supports the selected flow and your registration.
+
+Sign in with browser uses the external browser, a fresh S256 challenge and an expiring matching return. Sign in with device code shows the actual server address and code; Check authorization performs one explicit, rate-limited status request. Opening authorization ends an active microphone session. Its review identifies whether credentials belong to storage or a model and shows the authorized destination. An unfinished optional sign-in does not prevent a new primary text request; its old return cannot then adopt credentials.
+
+Successful storage grants are saved separately from model grants and manually configured storage credentials. Only that network-drive connection uses the returned Bearer token. Refresh authorization explicitly renews it using the configured token endpoint; tokens are not refreshed by replaying failed file requests. A definitely unsent refresh can be retried explicitly. An uncertain sent refresh requires a fresh sign-in, preserving the existing rotating-token boundary. Expired tokens, changed destinations or trust/authorization settings refuse only the affected storage operation and never silently select a saved key or password. Use saved key or username/password explicitly restores manual mode without deleting the grant.
+
+Manual WebDAV requests and both pending-transfer formats share the same destination-bound token checks. Pending writes, probes and readback keep their original complete connection; refreshing or editing a connection does not retarget an outstanding transfer. Configuration export omits access tokens, refresh tokens and manual secrets. Existing encrypted app state remains the credential storage boundary. Browser returns can recover their matching pending owner after resume; process loss never replays device polling or an uncertain token exchange.
+
+This provides authorization for the configured WebDAV interface. It does not implement arbitrary provider-native cloud file APIs, SMB, confidential-client secrets, sender-constrained tokens or every authorization grant. It extends the existing native-app public-client design described by [RFC 8252](https://www.rfc-editor.org/info/rfc8252/) and [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html). Physical browser/deep-link/Keystore behavior and actual user server registration remain separate acceptance work.
 
 ## Background voice
 
