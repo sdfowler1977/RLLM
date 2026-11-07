@@ -179,10 +179,16 @@ pub fn tls_identity(effect: &mut Json, name: &str) -> Result<()> {
     let old_host=if old_host.contains(':'){format!("[{old_host}]")}else{old_host};
     let old=format!("\r\nHost: {}:{}\r\n",old_host,port);
     let replacement=format!("\r\nHost: {}:{}\r\n",name,port);
-    let wire=field(effect,"wire")?.to_string();
-    if !wire.contains(&old){return Err("Request authority is missing; no TLS identity was applied".into());}
+    let binary=effect.get("wire_base64").is_ok_and(|v|v!=&Null);
+    if binary&&effect.get("wire").is_ok_and(|v|v!=&Null){return Err("Request framing is ambiguous; no TLS identity was applied".into());}
+    let wire=if binary{unbase64(field(effect,"wire_base64")?)?}else{field(effect,"wire")?.as_bytes().to_vec()};
+    let end=wire.windows(4).position(|v|v==b"\r\n\r\n").filter(|n|*n<=65536).ok_or("Request headers are incomplete; no TLS identity was applied")?+4;
+    let header=std::str::from_utf8(&wire[..end]).map_err(|_|"Request headers are invalid; no TLS identity was applied")?;
+    if header.matches(&old).count()!=1{return Err("Request authority is missing or duplicated; no TLS identity was applied".into());}
+    let mut updated=header.replacen(&old,&replacement,1).into_bytes();updated.extend_from_slice(&wire[end..]);
+    let value=if binary{b64(&updated)}else{String::from_utf8(updated).map_err(|_|"Request text is invalid; no TLS identity was applied")?};
     let Obj(fields)=effect else{return Err("Invalid request effect".into())};
-    fields.insert("wire".into(),s(&wire.replacen(&old,&replacement,1)));
+    fields.insert(if binary{"wire_base64"}else{"wire"}.into(),s(&value));
     fields.insert("tls_host".into(),s(&name));
     Ok(())
 }
@@ -461,6 +467,24 @@ pub fn wire_binary(
 #[cfg(test)]
 mod binary_checks {
     use super::*;
+    #[test]
+    fn binary_tls_identity_preserves_opaque_body_and_vpn_route(){
+        let body=b"\x00\xff\r\nHost: 100.64.0.2:5006\r\nopaque";
+        let mut e=wire_binary("https://100.64.0.2:5006/share/file.bin",false,body,vec![]).unwrap();
+        tls_identity(&mut e,"nas.example.test").unwrap();
+        assert_eq!(field(&e,"host").unwrap(),"100.64.0.2");assert_eq!(field(&e,"tls_host").unwrap(),"nas.example.test");
+        assert!(e.get("wire").is_err());let raw=unbase64(field(&e,"wire_base64").unwrap()).unwrap();
+        let end=raw.windows(4).position(|v|v==b"\r\n\r\n").unwrap()+4;assert_eq!(&raw[end..],body);
+        assert!(std::str::from_utf8(&raw[..end]).unwrap().contains("\r\nHost: nas.example.test:5006\r\n"));
+    }
+    #[test]
+    fn tls_identity_never_uses_body_authority_or_ambiguous_framing(){
+        let mut e=wire("https://100.64.0.2:5006/share/file.bin",false,"POST","\r\nHost: 100.64.0.2:5006\r\n",vec![]).unwrap();
+        let original=e.clone();if let Obj(m)=&mut e{let w=field(&original,"wire").unwrap().replacen("\r\nHost: 100.64.0.2:5006\r\n","\r\nHost: another.test:5006\r\n",1);m.insert("wire".into(),s(&w));}
+        let unchanged=e.clone();assert!(tls_identity(&mut e,"nas.example.test").is_err());assert_eq!(e,unchanged);
+        let mut ambiguous=original.clone();if let Obj(m)=&mut ambiguous{m.insert("wire_base64".into(),s(&b64(b"opaque")));}
+        let unchanged=ambiguous.clone();assert!(tls_identity(&mut ambiguous,"nas.example.test").is_err());assert_eq!(ambiguous,unchanged);
+    }
     #[test]
     fn binary_request_has_exact_length_and_preserves_payload() {
         let body = [0, 255, 80, 75, 3, 4];

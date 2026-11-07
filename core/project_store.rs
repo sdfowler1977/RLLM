@@ -84,6 +84,7 @@ fn wire(p:&Json,phase:&str,encoded:&str)->Result<Json> {
  let c=get(p,"connection");let url=text(p,"target");let mut headers=vec![];let user=text(c,"user");
  if !user.is_empty(){headers.push(("Authorization",format!("Basic {}",network::b64(format!("{}:{}",user,text(c,"password")).as_bytes()))));}
  let mut e=if phase=="write"{headers.push(("Content-Type",mime));headers.push(("If-None-Match","*".into()));network::wire_binary(&url,boolean(c,"plain"),&bytes,headers)?}else{network::wire(&url,boolean(c,"plain"),"GET","",headers)?};
+ network::tls_identity(&mut e,&text(c,"tls_name"))?;
  put(&mut e,"purpose",get(p,"purpose").clone());put(&mut e,"limit",Num((5*1024*1024+65536).to_string()));Ok(e)
 }
 fn request(st:&mut Json,phase:&str)->Result<Json>{
