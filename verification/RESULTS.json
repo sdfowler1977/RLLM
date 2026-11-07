@@ -48,14 +48,15 @@
       "document_providers": 51,
       "snapshot_identity": 61,
       "storage_auth": 55,
+      "storage_oauth": 78,
       "voice_settings": 81,
       "acp": 41,
       "oauth": 121,
       "device_authorization": 92
     },
-    "total_executed": 2751,
-    "groups_passed": 50,
-    "groups": 51,
+    "total_executed": 2829,
+    "groups_passed": 51,
+    "groups": 52,
     "unavailable": [
       {
         "name": "binary_flow",
@@ -93,7 +94,7 @@
     {
       "filter": "application::harness::",
       "code": 0,
-      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 2.99s"
+      "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 3.08s"
     },
     {
       "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -158,17 +159,17 @@
     {
       "filter": "application::instruction::tests::",
       "code": 0,
-      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 456 filtered out; finished in 0.28s"
+      "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 456 filtered out; finished in 0.29s"
     },
     {
       "filter": "application::binary_evidence::path_checks::",
       "code": 0,
-      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.01s"
+      "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::operation::drive_checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.02s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.01s"
     },
     {
       "filter": "hosted_search::checks::",
@@ -203,12 +204,12 @@
     {
       "filter": "application::project_store::transfer::tests::",
       "code": 0,
-      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.73s"
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.74s"
     },
     {
       "filter": "application::monitor::checks::",
       "code": 0,
-      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.01s"
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
     },
     {
       "filter": "application::request_metrics::",
@@ -243,7 +244,7 @@
     {
       "filter": "application::scene::checks::",
       "code": 0,
-      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.19s"
+      "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.15s"
     },
     {
       "filter": "application::tool_format::tests::",
@@ -2959,6 +2960,89 @@
       ],
       "scope": "Owner public core events and actual loopback WebDAV sockets for no-auth/Basic/Bearer/custom headers, conditional create/readback/folder operations, and legacy/current opaque snapshot writes/probes/readback. Model callbacks and stored records are controlled inputs. Live user NAS/cloud account and Android secure-state acceptance remains separate; no application-owned cloud OAuth or SMB is claimed."
     },
+    "storage_oauth": {
+      "passed": 78,
+      "checks": [
+        "storage authorization configures without any model",
+        "network connection exposes actual authorization route",
+        "storage authorization has its own visible owner",
+        "authorization review identifies credential use and destination",
+        "storage browser flow uses a fresh external S256 request",
+        "wrong storage return is an exact no-op",
+        "storage token transport owns one exact request",
+        "real authorization adopts tokens only into storage",
+        "storage grant retains every manually configured credential",
+        "authorization UI omits access and refresh tokens",
+        "storage token callback cannot adopt twice",
+        "network settings show active authorization without secrets",
+        "real WebDAV listing uses storage token and no manual header",
+        "real authorized read completes ordinary viewer",
+        "authorized writes retain ordinary user review",
+        "authorized conditional write and exact readback complete",
+        "configuration export omits manual and authorization credentials",
+        "explicit manual-mode choice restores configured key without losing grant",
+        "expired storage grant refuses only its request with no credential fallback",
+        "storage refresh marks only its own uncertain credential",
+        "real storage refresh rotates credentials and retains manual key",
+        "chat primary request never borrows storage credentials",
+        "chat real primary reply completes with storage still authorized",
+        "chat starting storage authorization cannot replace a primary operation",
+        "local primary request never borrows storage credentials",
+        "local real primary reply completes with storage still authorized",
+        "local starting storage authorization cannot replace a primary operation",
+        "messages primary request never borrows storage credentials",
+        "messages real primary reply completes with storage still authorized",
+        "messages starting storage authorization cannot replace a primary operation",
+        "content primary request never borrows storage credentials",
+        "content real primary reply completes with storage still authorized",
+        "content starting storage authorization cannot replace a primary operation",
+        "model authorization explicitly selects its own owner after storage settings",
+        "model grant does not overwrite storage credentials",
+        "storage request never borrows an authorized model token",
+        "authorized model still completes while storage was selected",
+        "automatic model refresh ignores selected storage settings",
+        "automatic model refresh resumes the exact primary turn",
+        "waiting optional storage sign-in does not block the primary model",
+        "primary reply completes while an unfinished storage sign-in is retired",
+        "retired storage sign-in cannot adopt after the primary reply",
+        "confirmed storage pre-send failure permits explicit retry",
+        "uncertain storage refresh is never replayed automatically or explicitly",
+        "cancelled storage browser return cannot change credentials",
+        "storage browser recovery retains its typed owner",
+        "recovered storage browser exchange updates storage only",
+        "changed storage destination refuses old browser callback without transport",
+        "saved grant never follows a changed storage destination or falls back",
+        "device-code storage authorization reaches its owned review",
+        "storage device polling respects server interval",
+        "actual storage device grant adopts only storage credentials",
+        "real microphone owner accepts PCM before changing authorization",
+        "opening storage authorization retires the microphone without a network request",
+        "retired microphone cannot accept more PCM",
+        "old voice callback cannot restart capture from authorization settings",
+        "invalid authorization mode never selects manual credentials 'true'",
+        "invalid authorization mode never selects manual credentials 1",
+        "invalid authorization mode never selects manual credentials {}",
+        "invalid authorization mode never selects manual credentials []",
+        "legacy write uses pinned storage authorization only",
+        "legacy write completes at actual authorized storage peer",
+        "legacy write refuses a changed pinned storage credential",
+        "legacy probe uses pinned storage authorization only",
+        "legacy probe completes at actual authorized storage peer",
+        "legacy probe refuses a changed pinned storage credential",
+        "legacy verify uses pinned storage authorization only",
+        "legacy verify completes at actual authorized storage peer",
+        "legacy verify refuses a changed pinned storage credential",
+        "streamed write uses pinned storage authorization only",
+        "streamed write completes at actual authorized storage peer",
+        "streamed write refuses a changed pinned storage credential",
+        "streamed probe uses pinned storage authorization only",
+        "streamed probe completes at actual authorized storage peer",
+        "streamed probe refuses a changed pinned storage credential",
+        "streamed verify uses pinned storage authorization only",
+        "streamed verify completes at actual authorized storage peer",
+        "streamed verify refuses a changed pinned storage credential"
+      ]
+    },
     "voice_settings": {
       "passed": 81,
       "checks": [
@@ -3320,9 +3404,9 @@
     }
   },
   "apk": {
-    "version": 1794084437,
-    "bytes": 6600722,
-    "sha256": "0666046e52c52963d8510a7217e82411037ac27f4af1f1b4f999bea51d984a05",
+    "version": 1794086565,
+    "bytes": 6613010,
+    "sha256": "0e6d0eb04d638c2b8f30ca2bafa2da8944cb5f1ddf8d8ce4345c489eb5aed279",
     "native": [
       {
         "abi": "arm64-v8a",
@@ -3333,7 +3417,7 @@
           16384,
           16384
         ],
-        "bytes": 4934728
+        "bytes": 4942872
       },
       {
         "abi": "x86_64",
@@ -3344,7 +3428,7 @@
           16384,
           16384
         ],
-        "bytes": 6077368
+        "bytes": 6088584
       }
     ],
     "label": "RLLM",
@@ -3357,7 +3441,7 @@
       "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
       "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
       "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-      "core/application.rs": "fc54372717e70d4f58a799cdd158cd108f9e6936ded8d51ef4cb2738b734227f",
+      "core/application.rs": "04a6ca9c46176f41ab8b10983b4a50f57c92e2c8c54720ea3290435f10637128",
       "core/approval_rules.rs": "9128b93dde7f8d82a01c03bf8d4d28d2dacb9139ca27e056e3932c37793e6a34",
       "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
       "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
@@ -3378,7 +3462,7 @@
       "core/css_stylesheet.rs": "2705d6437f61ba613b9695e6d5243b88131734d5577872b133e56813e3defbe5",
       "core/css_syntax.rs": "e1550592d461b660081d101c6ac3c7ab5a46269b20b5e3cbd05e3a5099144088",
       "core/delegation.rs": "fc0d7a345b1f63f4e36f985cb58327d0b489d7d18f28558c6659f7211ee9fbb4",
-      "core/device_authorization.rs": "474e6cf609c18eaab18d9ee0749812d08907b7cd8ec24652ba694086aa13a1bd",
+      "core/device_authorization.rs": "44d38d371819a5e6e4697b9666591d0c50dce41e17dff9c9d985ae656eb832ce",
       "core/dex.rs": "dee1b5c5a0c865944c39da0b593ef404ade201ed9a6404b8d4dacccbb4ef9f0b",
       "core/dex_calls.rs": "3fe323ac8d3cfdb49f7f73f9df43cdae9064f7e4b5394a6111bd64b2bcd43a17",
       "core/dex_code.rs": "bec42b524a2e50294ecd44920824a8381bab45aef0d60d2a8bad5587642cd9de",
@@ -3423,8 +3507,8 @@
       "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
       "core/model_metadata.rs": "b024330ac89f786670ae336f3855ee4b69a95898b1588e5ee16254c56d94e3e4",
       "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
-      "core/network.rs": "154e6fbafed62c4a998304a6e1f101a163e2d79252a3a89d1af5d9e3649b2669",
-      "core/oauth.rs": "fca04f8e74d373d475fb34bceb07fcf9a1ba97cd045fecb7a8352e0e98dc0a57",
+      "core/network.rs": "57712a0f59567bbec67b860f301b10e7cf092b54f8730b4295f7bc630b3708b7",
+      "core/oauth.rs": "b2ab9ba1de0741f24722fd7eaa3268d5e655832763d18dbeb28a8a88be48b3a9",
       "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
       "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
       "core/observation_store.rs": "8c8bb6b53a141a33392521f2d8c9e955b64a3d2537ab80936e03cec373393689",
@@ -3521,8 +3605,8 @@
   },
   "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
   "published_comparator": {
-    "version": 1794024786,
-    "source_sha256": "9394a5c056464b100cfc7e0c05c372aa9e4377b3d0171c79892e4df44e34e19d",
+    "version": 1794084437,
+    "source_sha256": "40b758b8ac7b654b13f6dcfbebe9340d33de66e44827448df7ca135e0ec4b797",
     "method": "Exact saved and source-published shared core compiled locally; actual retained representations and four before/after scene pixel cases exercised"
   },
   "flow_comparator": {
