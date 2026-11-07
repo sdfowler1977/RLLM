@@ -13,6 +13,9 @@ badging=subprocess.check_output([str(tools/'aapt'),'dump','badging',str(apk)],te
 subprocess.run([str(tools/'zipalign'),'-c','-P','16','-v','4',str(apk)],check=True,capture_output=True);native=[]
 manifest=subprocess.check_output([str(tools/'aapt'),'dump','xmltree',str(apk),'AndroidManifest.xml'],text=True);resource_id=re.search(r'android:networkSecurityConfig[^=]*=@(0x[0-9a-f]+)',manifest)[1];resources=subprocess.check_output([str(tools/'aapt'),'dump','resources',str(apk)],text=True);assert re.search(r'\bresource\s+'+re.escape(resource_id)+r'\s+\S+:xml/network:',resources)
 assert 'android.permission.MODIFY_AUDIO_SETTINGS'in manifest and 'android.permission.RECORD_AUDIO'in manifest
+assert all(name in manifest for name in ['android.permission.FOREGROUND_SERVICE_MICROPHONE','android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK','android.permission.WAKE_LOCK','com.local.client.VoiceSession'])
+voice_service=next(block for block in re.split(r'(?=      E: service )',manifest)if 'com.local.client.VoiceSession'in block);voice_service=voice_service.split('      E: service ',1)[-1].split('      E: activity ',1)[0]
+assert 'android:exported(0x01010010)=(type 0x12)0x0'in voice_service and 'android:foregroundServiceType(0x01010599)=(type 0x11)0x82'in voice_service
 network=subprocess.check_output([str(tools/'aapt'),'dump','xmltree',str(apk),'res/xml/network.xml'],text=True);assert network.count('E: base-config')==1 and network.count('E: trust-anchors')==1 and network.count('E: certificates')==2 and 'E: debug-overrides'not in network and all('A: src="'+name+'"'in network for name in ['system','user'])and network.count('A: overridePins=(type 0x12)0x0')==2 and 'A: cleartextTrafficPermitted=(type 0x12)0xffffffff'in network
 
 with zipfile.ZipFile(apk)as z:
@@ -30,6 +33,7 @@ with zipfile.ZipFile(apk)as z:
   assert b'Microphone paused while another operation is pending; resume it when finished'in raw,abi
   for marker in [b'Review proposed request',b'Review recovered request',b'Response details',b'Alternative source only',b'No current reply is eligible for request recovery']:assert marker in raw,(abi,marker)
   for marker in [b'Sign in with device code',b'Check authorization',b'Device authorization',b'Device verification URI contains private protocol fields']:assert marker in raw,(abi,marker)
+  for marker in [b'voice_background',b'voice_lease_ms',b'Continue voice outside the app']:assert marker in raw,(abi,marker)
   for marker in [b'scene_ticket',b'Static geometry preview',b'Scene viewport ownership changed',b'Scene source bytes changed while loading']:assert marker in raw,(abi,marker)
   for marker in [b'RLLM Workspace',b'ReverseEngineerAnything',b'reverse_engineer_anything']:assert marker not in raw,(abi,marker)
   native.append(dict(abi=abi,machine=machine,load_alignments=aligns,bytes=len(raw)))
@@ -38,5 +42,6 @@ with zipfile.ZipFile(apk)as z:
  for marker in [b'media_input_open',b'media_input_feed',b'media_input_finish',b'media_upload_read',b'upload_bytes',b'media_receipt']:assert marker in dex,marker
  for marker in [b'voice_watch',b'voice_watch_start',b'voice_watch_unavailable',b'voice_interrupt_listen',b'Landroid/media/audiofx/AcousticEchoCanceler;',b'echo_active']:assert marker in dex,marker
  for marker in [b'Lcom/local/client/AudioRoute;',b'setWillPauseWhenDucked',b'voice_route_lost',b'android.media.AUDIO_BECOMING_NOISY',b'resume_available']:assert marker in dex,marker
+ for marker in [b'Lcom/local/client/VoiceSession;',b'Landroid/os/PowerManager$WakeLock;',b'voiceSessionStopped',b'startCapture']:assert marker in dex,marker
  for marker in [b'Lcom/local/client/SceneView;',b'scene_frame',b'scene_close',b'Rotate left',b'Reset view']:assert marker in dex,marker
 record=dict(version=args.version,path=str(apk),bytes=apk.stat().st_size,sha256=hashlib.sha256(apk.read_bytes()).hexdigest(),native=native,label='RLLM',package='com.local.client.lab',signature='v2/v3; one pinned current signer',zip_crc='passed',build_inputs=build_inputs,network_security=dict(path='res/xml/network.xml',resource_id=resource_id,trust_anchors=['system','user'],pin_overrides=False));out=root/'output/checks';out.mkdir(parents=True,exist_ok=True);(out/'apk.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record,indent=2))
