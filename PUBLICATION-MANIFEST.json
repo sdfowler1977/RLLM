@@ -1,14 +1,14 @@
 {
   "state": "in_progress; signed candidate",
-  "version": 1794024786,
+  "version": 1794084437,
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
   "signing_certificate_sha256": "ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5",
   "key_change_authorized": true,
   "signed_apk": {
     "path": "release/RLLM.apk",
-    "bytes": 6592530,
-    "sha256": "32ef9fe47f51650fe4f057cea021a271538bada7ace23d85f5e13c6720a252f2"
+    "bytes": 6600722,
+    "sha256": "0666046e52c52963d8510a7217e82411037ac27f4af1f1b4f999bea51d984a05"
   },
   "build_inputs": {
     "AndroidManifest.xml": "d1e2d9843ecc5d8b61d9eea22537b1e80d215b244329e93e29ad33128d51b0f3",
@@ -16,7 +16,7 @@
     "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
     "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
     "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-    "core/application.rs": "8dc81b38b4f03e72385b911d1deba0b387eb21219c6983ab2561187d9984b051",
+    "core/application.rs": "fc54372717e70d4f58a799cdd158cd108f9e6936ded8d51ef4cb2738b734227f",
     "core/approval_rules.rs": "9128b93dde7f8d82a01c03bf8d4d28d2dacb9139ca27e056e3932c37793e6a34",
     "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
     "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
@@ -75,14 +75,14 @@
     "core/mcp_identity.rs": "8487fa1479ae947071be28ec4118d2becf56d2c32894adf47dbca3e8a0dcf4cb",
     "core/mcp_lifecycle.rs": "9b23677d24cca981362accf03bbc238dd90c022fce988d6c1fb46f19b335d7ca",
     "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
-    "core/media.rs": "466c7a806dac3471091ede2025d6218cc39006dafedf0c3bb6c2ce065475786d",
+    "core/media.rs": "42f5bc5f2cd92490772948ea925340e6e3a36dda2643fbe987a2496019d8378e",
     "core/media_input.rs": "6d242e2df2f5d037bd82d6aed46942324af749a3ebef24e084e0da17a65f282e",
     "core/media_stream.rs": "c08439254e3f845f677e45b4d47e897c7d72940e48b251645eee3d8976adf2d7",
     "core/media_upload.rs": "cd064446ab38584bc99d7907d682508d73bb6fe51d629e4aa1dfe89f7ab2d242",
     "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
     "core/model_metadata.rs": "b024330ac89f786670ae336f3855ee4b69a95898b1588e5ee16254c56d94e3e4",
     "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
-    "core/network.rs": "38ae24c748de882d2052700d42997f97f88e6e9865b9432d12873286816de3b4",
+    "core/network.rs": "154e6fbafed62c4a998304a6e1f101a163e2d79252a3a89d1af5d9e3649b2669",
     "core/oauth.rs": "fca04f8e74d373d475fb34bceb07fcf9a1ba97cd045fecb7a8352e0e98dc0a57",
     "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
     "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
@@ -93,8 +93,8 @@
     "core/page_program.rs": "2c80e145356e4fc2546b8dfc9fa6c1a98652cc275419bdf4eeaac1dd86eecebf",
     "core/pe_observation.rs": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0",
     "core/png_inflate.rs": "bd0f4d5e4a60d52d942c5ec5f0e0a5ff8bbb649b3c4ab89b91175743cf83c5f0",
-    "core/project_store.rs": "e9423c61ac57eca378b8bb99008d926c07bdcb4d600d3aaa1ff53560a0cf08e0",
-    "core/provider.rs": "b3de7b5f18f65eeba4c2b2b40e65c2d0b31f79590a5bfcfb6a2555fc3a9d04f9",
+    "core/project_store.rs": "b8c74485562ecc4b72efd3d9ad900f13999f5c31dc80cf76ccee980bbb3b03f8",
+    "core/provider.rs": "719d9df22fe65ccda6ed6d3d880a603fb2293677a9932272f3a6dd18ff1d1e80",
     "core/provider_calls.rs": "b00d9805e4174b56707f34984106561a6a0405cb0406fe1ce925811920b01fdb",
     "core/raster_surface.rs": "a475f9a953a9c54a6d9752fd5f169633437fcc609403caf5d1799364828e6a26",
     "core/reasoning_text.rs": "425b59b8ed5073eb5c32938ce9dd7ebaa0e608bea942a0749549394256498c3f",
@@ -115,8 +115,8 @@
     "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
     "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
     "core/tool_format.rs": "cbe8fb0492f8bd999eef6f5fe537b2f88613d3778e91aa57a54e2bdc37d69da8",
-    "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
-    "core/voice.rs": "f77399afbb7e9b226006781e5ea7cda5de994f7453d944ea07da003add0e3451",
+    "core/transfer.rs": "6ba2254dde80d59243f6a40921c1a277e58e835312df144c46fd10835c8bae2d",
+    "core/voice.rs": "32d3aa9881193a602c44af5a9bdedda340da417666cbad6ebd5115b71fe9213b",
     "core/voice_audio.rs": "7c8314f0cb211aea43542eef543a3cc5ba9c327b401e4c3e907d8d5b27aca065",
     "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
     "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
@@ -127,7 +127,7 @@
     "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
     "package.sh": "ff221b6973fbd911db47d38c7a030b394904833d0238b3b980f3a86ab14559e4",
     "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-    "platform/com/local/client/Activity.java": "1c6937fb2cc28767209f5d3c63705b9fe766e6b4efc5658cadf8fb72a89dfe83",
+    "platform/com/local/client/Activity.java": "a3d76751695c5e4b04eacb75ea114c8a23ec9a384f78801a8a9d6f4aa61e1e84",
     "platform/com/local/client/AudioRoute.java": "0a4d2773be4300611d15cff452e079701c0943f822e595f7e2b866305a7d373b",
     "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
     "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
@@ -178,8 +178,8 @@
       "sha256": "d1e2d9843ecc5d8b61d9eea22537b1e80d215b244329e93e29ad33128d51b0f3"
     },
     "README.md": {
-      "bytes": 1817,
-      "sha256": "9ce28e816b452467293a0ea2102b78f2a144a9019252bb7dc0dc21d8b36e9828"
+      "bytes": 2522,
+      "sha256": "442e9150a6a7ded1b6d25390967394cb48f3ac3c28273f45f1ac080fd8f1e6dc"
     },
     "core/.gitkeep": {
       "bytes": 1,
@@ -198,8 +198,8 @@
       "sha256": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be"
     },
     "core/application.rs": {
-      "bytes": 339649,
-      "sha256": "8dc81b38b4f03e72385b911d1deba0b387eb21219c6983ab2561187d9984b051"
+      "bytes": 340782,
+      "sha256": "fc54372717e70d4f58a799cdd158cd108f9e6936ded8d51ef4cb2738b734227f"
     },
     "core/approval_rules.rs": {
       "bytes": 18119,
@@ -434,8 +434,8 @@
       "sha256": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70"
     },
     "core/media.rs": {
-      "bytes": 30490,
-      "sha256": "466c7a806dac3471091ede2025d6218cc39006dafedf0c3bb6c2ce065475786d"
+      "bytes": 30537,
+      "sha256": "42f5bc5f2cd92490772948ea925340e6e3a36dda2643fbe987a2496019d8378e"
     },
     "core/media_input.rs": {
       "bytes": 4463,
@@ -462,8 +462,8 @@
       "sha256": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c"
     },
     "core/network.rs": {
-      "bytes": 32372,
-      "sha256": "38ae24c748de882d2052700d42997f97f88e6e9865b9432d12873286816de3b4"
+      "bytes": 33997,
+      "sha256": "154e6fbafed62c4a998304a6e1f101a163e2d79252a3a89d1af5d9e3649b2669"
     },
     "core/oauth.rs": {
       "bytes": 27146,
@@ -506,12 +506,12 @@
       "sha256": "bd0f4d5e4a60d52d942c5ec5f0e0a5ff8bbb649b3c4ab89b91175743cf83c5f0"
     },
     "core/project_store.rs": {
-      "bytes": 27068,
-      "sha256": "e9423c61ac57eca378b8bb99008d926c07bdcb4d600d3aaa1ff53560a0cf08e0"
+      "bytes": 27044,
+      "sha256": "b8c74485562ecc4b72efd3d9ad900f13999f5c31dc80cf76ccee980bbb3b03f8"
     },
     "core/provider.rs": {
-      "bytes": 19873,
-      "sha256": "b3de7b5f18f65eeba4c2b2b40e65c2d0b31f79590a5bfcfb6a2555fc3a9d04f9"
+      "bytes": 19195,
+      "sha256": "719d9df22fe65ccda6ed6d3d880a603fb2293677a9932272f3a6dd18ff1d1e80"
     },
     "core/provider_calls.rs": {
       "bytes": 7786,
@@ -594,12 +594,12 @@
       "sha256": "cbe8fb0492f8bd999eef6f5fe537b2f88613d3778e91aa57a54e2bdc37d69da8"
     },
     "core/transfer.rs": {
-      "bytes": 11455,
-      "sha256": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065"
+      "bytes": 11431,
+      "sha256": "6ba2254dde80d59243f6a40921c1a277e58e835312df144c46fd10835c8bae2d"
     },
     "core/voice.rs": {
-      "bytes": 26903,
-      "sha256": "f77399afbb7e9b226006781e5ea7cda5de994f7453d944ea07da003add0e3451"
+      "bytes": 30409,
+      "sha256": "32d3aa9881193a602c44af5a9bdedda340da417666cbad6ebd5115b71fe9213b"
     },
     "core/voice_audio.rs": {
       "bytes": 8872,
@@ -630,8 +630,8 @@
       "sha256": "ec97a3fddcfa6554adf101dd109ced6c2d910c29f03d311041a0b44a63ed96fc"
     },
     "docs/ACCESS-AND-DATA.md": {
-      "bytes": 8065,
-      "sha256": "011ac50352d19882c57183f22d524e15c53ce4a58885ad41a1d5cb459b55c78b"
+      "bytes": 8930,
+      "sha256": "0fd44d40dd86480608bb428d1c805bd7ac0709e76d83c0eded6cb0f7392303a3"
     },
     "docs/ACP.md": {
       "bytes": 4159,
@@ -642,8 +642,8 @@
       "sha256": "ea98d6f89776486630494de41ed654ae014daf6d7dad0dc435faf90e090961ac"
     },
     "docs/ARCHITECTURE.md": {
-      "bytes": 12229,
-      "sha256": "fd89f49c882c459b5ea8eacc7ed59f2d1db0d30e3a65649872a6ce84f837ec88"
+      "bytes": 13339,
+      "sha256": "f671130448f3a3ac918059201b14110f3bec325ab03765ea737674d7fb6ba5fb"
     },
     "docs/ASSETS.md": {
       "bytes": 577,
@@ -710,12 +710,12 @@
       "sha256": "5c2f13bfc406eb77908b7b24d0e53e89fa222cf3206f85827f62109da18428c2"
     },
     "docs/ROADMAP.md": {
-      "bytes": 4892,
-      "sha256": "f004c80746b8821c05fb6dafb592abb555d01ed807b37171fe887ff86d1b1200"
+      "bytes": 5471,
+      "sha256": "41b2f2130d85ce7b0af95ebcd4561cc84203b331b128992a252b2b1ddaa363c8"
     },
     "docs/SERVICES.md": {
-      "bytes": 23944,
-      "sha256": "8da8290c1ca116c90d1251bb5fd846811f3a51558eea498e220b4a08a3f5a067"
+      "bytes": 28283,
+      "sha256": "8b42983b4639f601a481451ff62c43cdfe9eac2827ff129019df8ef4f45bc765"
     },
     "docs/SETUP.md": {
       "bytes": 7898,
@@ -726,8 +726,8 @@
       "sha256": "93f5a206d83ac2fd56bf4cb74b50960d6df33005a90b3679856e7e6ae04189f6"
     },
     "docs/STATUS.md": {
-      "bytes": 7304,
-      "sha256": "4d09e4cbd8085f2ffb4343df058d737ebd4ea57301a5523ab2ead3e0b9506499"
+      "bytes": 8050,
+      "sha256": "5e290d6ae603dbb8ea9178d12d8569380b5cac78787a8379fba7dce41ad34550"
     },
     "docs/TOOL-FEEDBACK.md": {
       "bytes": 6037,
@@ -782,8 +782,8 @@
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
     "platform/com/local/client/Activity.java": {
-      "bytes": 168680,
-      "sha256": "1c6937fb2cc28767209f5d3c63705b9fe766e6b4efc5658cadf8fb72a89dfe83"
+      "bytes": 169017,
+      "sha256": "a3d76751695c5e4b04eacb75ea114c8a23ec9a384f78801a8a9d6f4aa61e1e84"
     },
     "platform/com/local/client/AudioRoute.java": {
       "bytes": 1846,
@@ -854,20 +854,20 @@
       "sha256": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f"
     },
     "project-progress.md": {
-      "bytes": 126247,
-      "sha256": "5219693d07a3b05a91209c4eaa5cf94f30c3c6f112008971b674e7e45e43bb37"
+      "bytes": 139458,
+      "sha256": "2b1b8a434751995bca229f185197fb2d09ad49ec877d49872b63ef409f32f0d1"
     },
     "release/NOTES.md": {
-      "bytes": 7389,
-      "sha256": "32150e58edc8a76852f9a009290cb04563852131482ce67b7b050cfcd88b4640"
+      "bytes": 8135,
+      "sha256": "8788f0d8ebb125be0889a997091b5df04addbdb7d1ca3791a58e9e66fa833ae7"
     },
     "release/RLLM.apk": {
-      "bytes": 6592530,
-      "sha256": "32ef9fe47f51650fe4f057cea021a271538bada7ace23d85f5e13c6720a252f2"
+      "bytes": 6600722,
+      "sha256": "0666046e52c52963d8510a7217e82411037ac27f4af1f1b4f999bea51d984a05"
     },
     "release/SHA256SUMS.txt": {
       "bytes": 75,
-      "sha256": "9e37fe9532430b2b0b6cdbc3ea953cfe0f79984ad050b8dbbf06c3b9e469f53e"
+      "sha256": "54fc713fca3c0711412f9fb316208ee9b5eae9e87ac443ee63ed47a89acc3b73"
     },
     "res/drawable/.gitkeep": {
       "bytes": 1,
@@ -958,20 +958,20 @@
       "sha256": "9b92abc90d951791e5a6b914018caa893a40a97ce29458dc39f06c68ef6bf0ed"
     },
     "tools/apk.py": {
-      "bytes": 8002,
-      "sha256": "a60497f1c80fcd73f6e3ff6d568313b83e0d979f86119494b10e2bcbff276e7c"
+      "bytes": 8392,
+      "sha256": "ca29100c808947b61bccca70fa3667cb56b800a64a613ea013d4748ae8c662b1"
     },
     "tools/checkpoint.py": {
       "bytes": 1409,
       "sha256": "7cc25c68497399f80d5d9ab7183687014a7d844f22a881b2a2fdf13bd59a783b"
     },
     "tools/checks.py": {
-      "bytes": 4258,
-      "sha256": "7924aecc7ac03b1e288b7629a09cb834f4f5982b0943a2086dca4f9d9ec69650"
+      "bytes": 4290,
+      "sha256": "614d804106f604ed9c003df62d0dbbdc8a1b769475b360e97579c5e659807291"
     },
     "tools/package.py": {
-      "bytes": 18388,
-      "sha256": "04e873b6d1fd4f13d4e4a06284bec815d720b6b6af9ab71b5d3c9e13a7403a02"
+      "bytes": 19198,
+      "sha256": "acb1c4a0eb5f8d8ea704bb64a53a164d153631101430a61d9c3e9acfbd515a03"
     },
     "tools/readback.py": {
       "bytes": 1485,
@@ -1006,8 +1006,8 @@
       "sha256": "ec335557689342d0b80dc75832ec065442c28215f8648088105c7fc98af465b4"
     },
     "verification/RESULTS.json": {
-      "bytes": 257749,
-      "sha256": "303f65d7889674e4363b41c78971d67bb6cc73d9a9beaaac1b815fa7f0046fbd"
+      "bytes": 268904,
+      "sha256": "b4836c14669aa1cf4b324483cf35f21883092fb07eeb326a88dbce60edc23c7c"
     },
     "verification/UPGRADE-AUDIT.json": {
       "bytes": 34096,
@@ -1217,6 +1217,10 @@
       "bytes": 10151,
       "sha256": "df1f1a7db8aa158c8805323bfd779a2ae82bb5795b3f8788844015ec3d285add"
     },
+    "verification/storage_auth.py": {
+      "bytes": 10890,
+      "sha256": "37eba4dcd26a07e9ea701a252d27aadd01eda62acb0ee7bfcf414b4ec5fe7be0"
+    },
     "verification/task_ownership.py": {
       "bytes": 13310,
       "sha256": "1adca344f81a9b15d068e102dda35b41c645343a2a2118745d92a5e14b995050"
@@ -1240,6 +1244,10 @@
     "verification/voice_session.py": {
       "bytes": 17075,
       "sha256": "fb7ef80c8670ff4f5d5e78d073ee98fb189ac7e7b51fee57c5953091872edffe"
+    },
+    "verification/voice_settings.py": {
+      "bytes": 13258,
+      "sha256": "5b8123f685d6257104c7f979dbed95bf4425d3cb71ac05b7786251e6cd62ea78"
     },
     "verification/workspace_navigation.py": {
       "bytes": 23002,
@@ -1295,13 +1303,15 @@
         "audio_route": 23,
         "document_providers": 51,
         "snapshot_identity": 61,
+        "storage_auth": 55,
+        "voice_settings": 81,
         "acp": 41,
         "oauth": 121,
         "device_authorization": 92
       },
-      "total_executed": 2615,
-      "groups_passed": 48,
-      "groups": 49,
+      "total_executed": 2751,
+      "groups_passed": 50,
+      "groups": 51,
       "unavailable": [
         {
           "name": "binary_flow",
@@ -1334,12 +1344,12 @@
       {
         "filter": "stream::",
         "code": 0,
-        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 450 filtered out; finished in 0.15s"
+        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 450 filtered out; finished in 0.14s"
       },
       {
         "filter": "application::harness::",
         "code": 0,
-        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 3.30s"
+        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 2.99s"
       },
       {
         "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
@@ -1404,12 +1414,12 @@
       {
         "filter": "application::instruction::tests::",
         "code": 0,
-        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 456 filtered out; finished in 0.31s"
+        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 456 filtered out; finished in 0.28s"
       },
       {
         "filter": "application::binary_evidence::path_checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.01s"
       },
       {
         "filter": "application::operation::drive_checks::",
@@ -1449,12 +1459,12 @@
       {
         "filter": "application::project_store::transfer::tests::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.78s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.73s"
       },
       {
         "filter": "application::monitor::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.01s"
       },
       {
         "filter": "application::request_metrics::",
@@ -1479,7 +1489,7 @@
       {
         "filter": "application::voice_audio::checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.27s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.24s"
       },
       {
         "filter": "application::oauth::checks::",
@@ -1489,12 +1499,12 @@
       {
         "filter": "application::scene::checks::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.16s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.19s"
       },
       {
         "filter": "application::tool_format::tests::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::search::checks::",
@@ -4144,6 +4154,154 @@
         ],
         "scope": "Owner execution of public legacy project_payload/current project_chunks operations, opaque bytes and pinned connections; unchanged production Android TLS socket block executed on the host JVM against a real local certificate, per-process fixture trust, successful alias/SNI and refused hostname mismatches. No archive extraction, excluded historical fixtures or physical Android/live-user NAS acceptance is claimed."
       },
+      "storage_auth": {
+        "passed": 55,
+        "checks": [
+          "empty credential settings retain real unauthenticated WebDAV",
+          "legacy username/password settings retain exact Basic authentication",
+          "default key uses one Bearer header without Basic fallback",
+          "key mode preserves existing username/password credentials",
+          "storage key has a secret control and configurable protocol fields",
+          "saved credential mode is explicit without printing the key",
+          "custom credential header and prefix reach the real server",
+          "explicit empty prefix sends the exact raw key",
+          "file reads retain the same configured credential method",
+          "custom-key write remains behind ordinary review",
+          "conditional create and exact readback use the configured key",
+          "folder creation uses the same credential boundary",
+          "configuration export omits key and retained credentials",
+          "invalid active credential refuses atomically ['auth_header']",
+          "invalid active credential refuses atomically ['auth_header']",
+          "invalid active credential refuses atomically ['auth_header']",
+          "invalid active credential refuses atomically ['auth_header']",
+          "invalid active credential refuses atomically ['auth_header']",
+          "invalid active credential refuses atomically ['auth_header']",
+          "invalid active credential refuses atomically ['auth_header']",
+          "invalid active credential refuses atomically ['auth_prefix']",
+          "invalid active credential refuses atomically ['key']",
+          "invalid active credential refuses atomically ['key']",
+          "invalid active credential refuses atomically ['key']",
+          "invalid active credential refuses atomically ['auth_prefix']",
+          "invalid active credential refuses atomically ['auth_header']",
+          "clearing the key explicitly restores retained Basic mode",
+          "401 refusal does not replay with another credential",
+          "a scoped authentication refusal preserves later storage use",
+          "storage credentials never enter the primary model request",
+          "editing storage during a model request preserves its current owner",
+          "legacy write retains its pinned key and excludes Basic credentials",
+          "legacy write reaches the actual authenticated storage peer",
+          "legacy write preserves exact source payload or readback",
+          "legacy write refuses changed pinned credentials before transport",
+          "legacy probe retains its pinned key and excludes Basic credentials",
+          "legacy probe reaches the actual authenticated storage peer",
+          "legacy probe preserves exact source payload or readback",
+          "legacy probe refuses changed pinned credentials before transport",
+          "legacy verify retains its pinned key and excludes Basic credentials",
+          "legacy verify reaches the actual authenticated storage peer",
+          "legacy verify preserves exact source payload or readback",
+          "legacy verify refuses changed pinned credentials before transport",
+          "streamed write retains its pinned key and excludes Basic credentials",
+          "streamed write reaches the actual authenticated storage peer",
+          "streamed write preserves exact source payload or readback",
+          "streamed write refuses changed pinned credentials before transport",
+          "streamed probe retains its pinned key and excludes Basic credentials",
+          "streamed probe reaches the actual authenticated storage peer",
+          "streamed probe preserves exact source payload or readback",
+          "streamed probe refuses changed pinned credentials before transport",
+          "streamed verify retains its pinned key and excludes Basic credentials",
+          "streamed verify reaches the actual authenticated storage peer",
+          "streamed verify preserves exact source payload or readback",
+          "streamed verify refuses changed pinned credentials before transport"
+        ],
+        "scope": "Owner public core events and actual loopback WebDAV sockets for no-auth/Basic/Bearer/custom headers, conditional create/readback/folder operations, and legacy/current opaque snapshot writes/probes/readback. Model callbacks and stored records are controlled inputs. Live user NAS/cloud account and Android secure-state acceptance remains separate; no application-owned cloud OAuth or SMB is claimed."
+      },
+      "voice_settings": {
+        "passed": 81,
+        "checks": [
+          "app settings retains every prior section and exposes microphone settings",
+          "chat_actions exposes the same microphone settings route",
+          "media_menu exposes the same microphone settings route",
+          "services exposes the same microphone settings route",
+          "microphone settings are available with no AI or speech service",
+          "settings disclose the actual recognition boundary",
+          "settings show permission as unmeasured until platform observation",
+          "settings expose all saved capture controls",
+          "saving preferences persists real values without opening microphone or network",
+          "permission control opens only the app permission surface",
+          "platform denial is shown without claiming a missing microphone",
+          "platform permission observation reaches its visible control",
+          "reopening settings retains saved capture values",
+          "invalid preferences preserve the saved configuration {'voice_silence_ms': '299'}",
+          "invalid preferences preserve the saved configuration {'voice_threshold': '5001'}",
+          "invalid preferences preserve the saved configuration {'voice_max_seconds': '31'}",
+          "invalid preferences preserve the saved configuration {'voice_threshold': 'not-a-number'}",
+          "invalid preferences preserve the saved configuration {'voice_threshold': True}",
+          "invalid preferences preserve the saved configuration {'voice_threshold': ''}",
+          "invalid preferences preserve the saved configuration {'voice_background': 'true'}",
+          "saving outside its settings dialog cannot change preferences",
+          "typed integer settings save their actual values",
+          "chat open-microphone button reaches an explicit review without capture",
+          "chat review starts actual capture with saved preferences and background choice",
+          "chat opening settings retires only its voice session",
+          "chat old microphone callback cannot rearm capture after settings",
+          "chat manual review does not silently select background capture",
+          "chat cancelled manual review preserves saved background preference",
+          "chat opening settings during a primary reply preserves that model owner",
+          "chat saving preferences preserves the in-flight primary reply",
+          "chat primary reply completes without starting unreviewed speech",
+          "chat configured recognition receives real microphone data",
+          "chat recognized text reaches ordinary conversation",
+          "chat real synthesis result reaches owned playback",
+          "chat completed spoken reply returns to the same bounded listening session",
+          "chat returning to settings stops the new listener without removing text",
+          "local open-microphone button reaches an explicit review without capture",
+          "local review starts actual capture with saved preferences and background choice",
+          "local opening settings retires only its voice session",
+          "local old microphone callback cannot rearm capture after settings",
+          "local manual review does not silently select background capture",
+          "local cancelled manual review preserves saved background preference",
+          "local opening settings during a primary reply preserves that model owner",
+          "local saving preferences preserves the in-flight primary reply",
+          "local primary reply completes without starting unreviewed speech",
+          "local configured recognition receives real microphone data",
+          "local recognized text reaches ordinary conversation",
+          "local real synthesis result reaches owned playback",
+          "local completed spoken reply returns to the same bounded listening session",
+          "local returning to settings stops the new listener without removing text",
+          "messages open-microphone button reaches an explicit review without capture",
+          "messages review starts actual capture with saved preferences and background choice",
+          "messages opening settings retires only its voice session",
+          "messages old microphone callback cannot rearm capture after settings",
+          "messages manual review does not silently select background capture",
+          "messages cancelled manual review preserves saved background preference",
+          "messages opening settings during a primary reply preserves that model owner",
+          "messages saving preferences preserves the in-flight primary reply",
+          "messages primary reply completes without starting unreviewed speech",
+          "messages configured recognition receives real microphone data",
+          "messages recognized text reaches ordinary conversation",
+          "messages real synthesis result reaches owned playback",
+          "messages completed spoken reply returns to the same bounded listening session",
+          "messages returning to settings stops the new listener without removing text",
+          "content open-microphone button reaches an explicit review without capture",
+          "content review starts actual capture with saved preferences and background choice",
+          "content opening settings retires only its voice session",
+          "content old microphone callback cannot rearm capture after settings",
+          "content manual review does not silently select background capture",
+          "content cancelled manual review preserves saved background preference",
+          "content opening settings during a primary reply preserves that model owner",
+          "content saving preferences preserves the in-flight primary reply",
+          "content primary reply completes without starting unreviewed speech",
+          "content configured recognition receives real microphone data",
+          "content recognized text reaches ordinary conversation",
+          "content real synthesis result reaches owned playback",
+          "content completed spoken reply returns to the same bounded listening session",
+          "content returning to settings stops the new listener without removing text",
+          "microphone preferences preserve a separate manual speech proposal",
+          "preserved manual speech proposal still completes its actual output",
+          "recognition and synthesis used the actual configured HTTP peers"
+        ],
+        "scope": "Owner execution through current public settings/navigation/core events, actual PCM frames, local files and recognition/synthesis HTTP peers across all four model formats. Native permission observation and playback callbacks are controlled inputs; physical Android permission, visual layout, microphone and speaker acceptance remains separate."
+      },
       "acp": {
         "passed": 41,
         "checks": [
@@ -4418,9 +4576,9 @@
       }
     },
     "apk": {
-      "version": 1794024786,
-      "bytes": 6592530,
-      "sha256": "32ef9fe47f51650fe4f057cea021a271538bada7ace23d85f5e13c6720a252f2",
+      "version": 1794084437,
+      "bytes": 6600722,
+      "sha256": "0666046e52c52963d8510a7217e82411037ac27f4af1f1b4f999bea51d984a05",
       "native": [
         {
           "abi": "arm64-v8a",
@@ -4431,7 +4589,7 @@
             16384,
             16384
           ],
-          "bytes": 4926392
+          "bytes": 4934728
         },
         {
           "abi": "x86_64",
@@ -4442,7 +4600,7 @@
             16384,
             16384
           ],
-          "bytes": 6065816
+          "bytes": 6077368
         }
       ],
       "label": "RLLM",
@@ -4455,7 +4613,7 @@
         "core/a2a.rs": "dd3702e9d25c1f027e92ffa5165a041d0788ff0675d95d3d992679ccd87078ee",
         "core/acp.rs": "2df03a2c3ba88a24fce9514c3eebd19633748c49ffb619f483352e34d1837ba3",
         "core/app_observation.rs": "7fc3bf15585196a057423f4a45bac12af673bb6e67031cd6102cc7e49ad725be",
-        "core/application.rs": "8dc81b38b4f03e72385b911d1deba0b387eb21219c6983ab2561187d9984b051",
+        "core/application.rs": "fc54372717e70d4f58a799cdd158cd108f9e6936ded8d51ef4cb2738b734227f",
         "core/approval_rules.rs": "9128b93dde7f8d82a01c03bf8d4d28d2dacb9139ca27e056e3932c37793e6a34",
         "core/archive.rs": "2b7dc050788c9fd577bb7f9fb7caf71f76ac3726a04ba9075b83c2208eab1e6b",
         "core/attachments.rs": "8fdf2c6f3ec0f33b5b6097c4b805708518869413d84669920b0a5bd7221a0029",
@@ -4514,14 +4672,14 @@
         "core/mcp_identity.rs": "8487fa1479ae947071be28ec4118d2becf56d2c32894adf47dbca3e8a0dcf4cb",
         "core/mcp_lifecycle.rs": "9b23677d24cca981362accf03bbc238dd90c022fce988d6c1fb46f19b335d7ca",
         "core/mcp_schema.rs": "f757c8e7eecd445c50205e4efe0b4d7d866bdfaad9f20eb468cbbb815f206e70",
-        "core/media.rs": "466c7a806dac3471091ede2025d6218cc39006dafedf0c3bb6c2ce065475786d",
+        "core/media.rs": "42f5bc5f2cd92490772948ea925340e6e3a36dda2643fbe987a2496019d8378e",
         "core/media_input.rs": "6d242e2df2f5d037bd82d6aed46942324af749a3ebef24e084e0da17a65f282e",
         "core/media_stream.rs": "c08439254e3f845f677e45b4d47e897c7d72940e48b251645eee3d8976adf2d7",
         "core/media_upload.rs": "cd064446ab38584bc99d7907d682508d73bb6fe51d629e4aa1dfe89f7ab2d242",
         "core/model_artifact.rs": "887854a8fb949135dbb30ad6cdd95e615e104960e3a954d8026904337a3b19a4",
         "core/model_metadata.rs": "b024330ac89f786670ae336f3855ee4b69a95898b1588e5ee16254c56d94e3e4",
         "core/monitor.rs": "92d0f34235be1f319b398ed3f95ee8094a8c20d0cf69050ae6f392b2fb50ff6c",
-        "core/network.rs": "38ae24c748de882d2052700d42997f97f88e6e9865b9432d12873286816de3b4",
+        "core/network.rs": "154e6fbafed62c4a998304a6e1f101a163e2d79252a3a89d1af5d9e3649b2669",
         "core/oauth.rs": "fca04f8e74d373d475fb34bceb07fcf9a1ba97cd045fecb7a8352e0e98dc0a57",
         "core/observation_graph.rs": "0e549145bff209e3206bb3569f44371e64529a5fc304eff9287b16d722f1bfed",
         "core/observation_records.rs": "7530206e18067e001f5d39622027fa1e75dee1bf41a33f65e26f7006ad1e9f3b",
@@ -4532,8 +4690,8 @@
         "core/page_program.rs": "2c80e145356e4fc2546b8dfc9fa6c1a98652cc275419bdf4eeaac1dd86eecebf",
         "core/pe_observation.rs": "219e8d43628d80c0340a2cde44ce63d03c4a90b5c2115a19bc3c66c2cc7860f0",
         "core/png_inflate.rs": "bd0f4d5e4a60d52d942c5ec5f0e0a5ff8bbb649b3c4ab89b91175743cf83c5f0",
-        "core/project_store.rs": "e9423c61ac57eca378b8bb99008d926c07bdcb4d600d3aaa1ff53560a0cf08e0",
-        "core/provider.rs": "b3de7b5f18f65eeba4c2b2b40e65c2d0b31f79590a5bfcfb6a2555fc3a9d04f9",
+        "core/project_store.rs": "b8c74485562ecc4b72efd3d9ad900f13999f5c31dc80cf76ccee980bbb3b03f8",
+        "core/provider.rs": "719d9df22fe65ccda6ed6d3d880a603fb2293677a9932272f3a6dd18ff1d1e80",
         "core/provider_calls.rs": "b00d9805e4174b56707f34984106561a6a0405cb0406fe1ce925811920b01fdb",
         "core/raster_surface.rs": "a475f9a953a9c54a6d9752fd5f169633437fcc609403caf5d1799364828e6a26",
         "core/reasoning_text.rs": "425b59b8ed5073eb5c32938ce9dd7ebaa0e608bea942a0749549394256498c3f",
@@ -4554,8 +4712,8 @@
         "core/text_encoding.rs": "efba630730e9a9c13388b6d8d749d6280111fba1d68d492ace0cb417a2e1a318",
         "core/throughput.rs": "10e6ddf49510c36201c28ead9908e5d5fe32242e4a9fa4881fcec96008840093",
         "core/tool_format.rs": "cbe8fb0492f8bd999eef6f5fe537b2f88613d3778e91aa57a54e2bdc37d69da8",
-        "core/transfer.rs": "8c563263b5661a543a9027930a2f093a06139aa078413226329fd78baef88065",
-        "core/voice.rs": "f77399afbb7e9b226006781e5ea7cda5de994f7453d944ea07da003add0e3451",
+        "core/transfer.rs": "6ba2254dde80d59243f6a40921c1a277e58e835312df144c46fd10835c8bae2d",
+        "core/voice.rs": "32d3aa9881193a602c44af5a9bdedda340da417666cbad6ebd5115b71fe9213b",
         "core/voice_audio.rs": "7c8314f0cb211aea43542eef543a3cc5ba9c327b401e4c3e907d8d5b27aca065",
         "core/web_document.rs": "ab3f5a68fe99911169161b39bf55203d0af42d2dd2e83bc7d50b3fcd5bdba3f1",
         "core/web_evidence.rs": "9d20a45e3fe87684bd6bb25add01ca187fddc676625174d73ecdcd280fa28953",
@@ -4566,7 +4724,7 @@
         "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
         "package.sh": "ff221b6973fbd911db47d38c7a030b394904833d0238b3b980f3a86ab14559e4",
         "platform/com/local/client/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-        "platform/com/local/client/Activity.java": "1c6937fb2cc28767209f5d3c63705b9fe766e6b4efc5658cadf8fb72a89dfe83",
+        "platform/com/local/client/Activity.java": "a3d76751695c5e4b04eacb75ea114c8a23ec9a384f78801a8a9d6f4aa61e1e84",
         "platform/com/local/client/AudioRoute.java": "0a4d2773be4300611d15cff452e079701c0943f822e595f7e2b866305a7d373b",
         "platform/com/local/client/Core.java": "aef742abf331b299cec5766e412c117dd2ec8da4c5b534a878d89e4825ed4881",
         "platform/com/local/client/Deadline.java": "9cb92dc5c703cc10c4fab8b15787437fda9e6ed1bf69cf207bdc98745dd5c827",
@@ -4619,8 +4777,8 @@
     },
     "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
     "published_comparator": {
-      "version": 1794024012,
-      "source_sha256": "e382f15ddb1da617205d66dcc7729ce4dfefc5efe4c1b104bf93d7758524dbfa",
+      "version": 1794024786,
+      "source_sha256": "9394a5c056464b100cfc7e0c05c372aa9e4377b3d0171c79892e4df44e34e19d",
       "method": "Exact saved and source-published shared core compiled locally; actual retained representations and four before/after scene pixel cases exercised"
     },
     "flow_comparator": {
@@ -5273,6 +5431,6 @@
       "scope": "Preserved earlier full-suite outcome only. Current execution is the selected Rust cases and connected groups; excluded historical fixture scopes were not reexecuted."
     }
   },
-  "checkpoint_utc": "2026-11-07T04:18:16.603986+00:00",
+  "checkpoint_utc": "2026-11-07T20:56:27.406787+00:00",
   "whole_project_complete": false
 }
