@@ -29,6 +29,7 @@ with zipfile.ZipFile(apk)as z:
   assert b'Voice request stopped; microphone paused until you resume it'in raw,abi
   assert b'Microphone paused while another operation is pending; resume it when finished'in raw,abi
   for marker in [b'Review proposed request',b'Review recovered request',b'Response details',b'Alternative source only',b'No current reply is eligible for request recovery']:assert marker in raw,(abi,marker)
+  for marker in [b'Sign in with device code',b'Check authorization',b'Device authorization',b'Device verification URI contains private protocol fields']:assert marker in raw,(abi,marker)
   for marker in [b'scene_ticket',b'Static geometry preview',b'Scene viewport ownership changed',b'Scene source bytes changed while loading']:assert marker in raw,(abi,marker)
   for marker in [b'RLLM Workspace',b'ReverseEngineerAnything',b'reverse_engineer_anything']:assert marker not in raw,(abi,marker)
   native.append(dict(abi=abi,machine=machine,load_alignments=aligns,bytes=len(raw)))
