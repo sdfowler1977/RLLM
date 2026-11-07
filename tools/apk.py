@@ -36,6 +36,7 @@ with zipfile.ZipFile(apk)as z:
   for marker in [b'voice_background',b'voice_lease_ms',b'Continue voice outside the app']:assert marker in raw,(abi,marker)
   for marker in [b'Document providers',b'Provider document selected',b'cloud_release_result',b'Selected document grants removed']:assert marker in raw,(abi,marker)
   for marker in [b'Request framing is ambiguous; no TLS identity was applied',b'Request headers are incomplete; no TLS identity was applied']:assert marker in raw,(abi,marker)
+  for marker in [b'Voice and microphone',b'Save microphone preferences',b'Review open microphone conversation',b'Key/token header active; username/password retained',b'Network storage access key exceeds8192bytes']:assert marker in raw,(abi,marker)
   for marker in [b'scene_ticket',b'Static geometry preview',b'Scene viewport ownership changed',b'Scene source bytes changed while loading']:assert marker in raw,(abi,marker)
   for marker in [b'RLLM Workspace',b'ReverseEngineerAnything',b'reverse_engineer_anything']:assert marker not in raw,(abi,marker)
   native.append(dict(abi=abi,machine=machine,load_alignments=aligns,bytes=len(raw)))
@@ -46,6 +47,7 @@ with zipfile.ZipFile(apk)as z:
  for marker in [b'Lcom/local/client/AudioRoute;',b'setWillPauseWhenDucked',b'voice_route_lost',b'android.media.AUDIO_BECOMING_NOISY',b'resume_available']:assert marker in dex,marker
  for marker in [b'Lcom/local/client/VoiceSession;',b'Landroid/os/PowerManager$WakeLock;',b'voiceSessionStopped',b'startCapture']:assert marker in dex,marker
  for marker in [b'Lcom/local/client/DocumentAccess;',b'completeCloudSelection',b'selectedDocumentAccess',b'cloud_release_result']:assert marker in dex,marker
+ for marker in [b'microphone_permissions',b'microphone_granted',b'android.settings.APPLICATION_DETAILS_SETTINGS']:assert marker in dex,marker
  for marker in [b'com.google.android.apps.docs',b'Choose Google Drive',b'com.google']:assert marker not in dex,marker
  for marker in [b'Lcom/local/client/SceneView;',b'scene_frame',b'scene_close',b'Rotate left',b'Reset view']:assert marker in dex,marker
 record=dict(version=args.version,path=str(apk),bytes=apk.stat().st_size,sha256=hashlib.sha256(apk.read_bytes()).hexdigest(),native=native,label='RLLM',package='com.local.client.lab',signature='v2/v3; one pinned current signer',zip_crc='passed',build_inputs=build_inputs,network_security=dict(path='res/xml/network.xml',resource_id=resource_id,trust_anchors=['system','user'],pin_overrides=False));out=root/'output/checks';out.mkdir(parents=True,exist_ok=True);(out/'apk.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record,indent=2))
