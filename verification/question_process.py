@@ -1,6 +1,6 @@
 import tempfile
 """Exercise the manual built-in question/design workflow without a model."""
-import json,pathlib,subprocess
+import copy,json,pathlib,subprocess
 PROJECT=pathlib.Path(__file__).resolve().parents[1]
 (PROJECT/'output').mkdir(exist_ok=True)
 testdir=tempfile.TemporaryDirectory(prefix='checks-',dir=PROJECT/'output')
@@ -30,6 +30,12 @@ try:
  exported=json.loads((root/'question.json').read_text());assert exported['type']=='question_process';c=exported['data'];assert c['question'].startswith('Design an original') and c['item_review']['unreviewed']==2 and c['item_review']['authored_answered']==0;assert c['evidence']==[];passed.append('reviewed export writes actual journal, unresolved state and original design')
  i={k:v for k,v in e.items() if k in ['purpose','tool_ticket','tool_binding']};i['output']=r['value'];d=event(d['state'],'tool_result',i)
  d=event(d['state'],'inquiry_export');d=event(d['state'],'inquiry_export_review',{'output':'cancelled.json'});d=event(d['state'],'approve');e=d['effect'];d=event(d['state'],'cancel');r=op(dict(e,op='tool',root=str(root)));assert 'error' in r and not (root/'cancelled.json').exists(),r;passed.append('cancelled export cannot execute a stale approved write')
+ d=event(d['state'],'inquiry_export');d=event(d['state'],'inquiry_export_review',{'output':'design-brief.md','format':'design_brief'});assert d['state']['dialog']=='approval'and not(root/'design-brief.md').exists();assert d['state']['pending']['inquiry_export']['format']=='design_brief';passed.append('design brief has explicit contents and ordinary write review')
+ d=event(d['state'],'approve');e=d['effect'];altered=copy.deepcopy(e);altered['inquiry_export']['format']='journal';refused=op(dict(altered,op='tool',root=str(root)));assert'error'in refused and not(root/'design-brief.md').exists();passed.append('changed export format cannot borrow an approved write')
+ r=op(dict(e,op='tool',root=str(root)));assert'value'in r,r;brief=(root/'design-brief.md').read_text();assert brief.startswith('# Design brief')and'Use original code to preserve observed filename bytes.'in brief and'## Returned-evidence references'in brief and'Unknown entries without an authored resolution: 1.'in brief,brief;passed.append('actual no-model design brief preserves authored design and unresolved work')
+ values={k:v for k,v in e.items()if k in['purpose','tool_ticket','tool_binding']};values['output']=r['value'];d=event(d['state'],'tool_result',values)
+ d=event(d['state'],'inquiry_export');bad=event(d['state'],'inquiry_export_review',{'output':'bad-format.md','format':'unknown'});assert bad['effect']is None and bad['state'].get('notice_error')and not(root/'bad-format.md').exists();passed.append('unknown brief mode refuses only that export')
+ d=event(bad['state'],'inquiry_export');d=event(d['state'],'inquiry_export_review',{'output':'cancelled-brief.md','format':'design_brief'});d=event(d['state'],'approve');e=d['effect'];cancelled=event(d['state'],'cancel');r=op(dict(e,op='tool',root=str(root)));assert'error'in r and not(root/'cancelled-brief.md').exists();passed.append('cancelled design brief cannot execute a stale approved write');d=cancelled
  def confirmation(value):
   if isinstance(value,dict):
    if value.get('event','').startswith('inquiry_delete_confirm:'):return value['event']
