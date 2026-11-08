@@ -1,14 +1,14 @@
 {
   "state": "in_progress; signed candidate",
-  "version": 1794086565,
+  "version": 1794104604,
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
   "signing_certificate_sha256": "ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5",
   "key_change_authorized": true,
   "signed_apk": {
     "path": "release/RLLM.apk",
-    "bytes": 6613010,
-    "sha256": "0e6d0eb04d638c2b8f30ca2bafa2da8944cb5f1ddf8d8ce4345c489eb5aed279"
+    "bytes": 6629394,
+    "sha256": "e4e11b6263fac8dd2f981937d5d1e08e51526139646bb34a5ce606cec8d60cdc"
   },
   "build_inputs": {
     "AndroidManifest.xml": "d1e2d9843ecc5d8b61d9eea22537b1e80d215b244329e93e29ad33128d51b0f3",
@@ -26,7 +26,7 @@
     "core/binary_observation.rs": "630368ff10116c484739751b06bc94ab36e315f8df1e51258d1de86e7bf5ccff",
     "core/capture_file.rs": "bc295f066f492a1246f6a75e8e23ca06e068ef8c18024d64ca12db6bab74f0e4",
     "core/capture_job.rs": "a4890ee2a7d613c564622506f1b6fac2535752d44f3dadf9fbd3d67864f620b0",
-    "core/claim_records.rs": "509c346ea0a7b83c2aa967f759dd311be5521633cd3542ba4985ed81faaeabe6",
+    "core/claim_records.rs": "8d64df434ddd8f38b5e994a95325ab12db125d2f54f0ae680bda365775413b40",
     "core/comparison.rs": "f9e52d1686865d59550ee87a773d0b0d36f6901a414e4caeef47fdf61beb6d75",
     "core/compression.rs": "ac2ad8cc149ff2b7b79cde903bbb2cebcb51888700895495126260dee5fc7388",
     "core/connection_migration.rs": "850593c4d32812c9640ab45cf162361963edf0d795f5f6e2e394cce6e7e1a945",
@@ -37,6 +37,7 @@
     "core/css_stylesheet.rs": "2705d6437f61ba613b9695e6d5243b88131734d5577872b133e56813e3defbe5",
     "core/css_syntax.rs": "e1550592d461b660081d101c6ac3c7ab5a46269b20b5e3cbd05e3a5099144088",
     "core/delegation.rs": "fc0d7a345b1f63f4e36f985cb58327d0b489d7d18f28558c6659f7211ee9fbb4",
+    "core/design_brief.rs": "09af0b65c7d1562c9584b19c282ff837aa7a7243e486afa97a3bc3e1ddf7c5cf",
     "core/device_authorization.rs": "44d38d371819a5e6e4697b9666591d0c50dce41e17dff9c9d985ae656eb832ce",
     "core/dex.rs": "dee1b5c5a0c865944c39da0b593ef404ade201ed9a6404b8d4dacccbb4ef9f0b",
     "core/dex_calls.rs": "3fe323ac8d3cfdb49f7f73f9df43cdae9064f7e4b5394a6111bd64b2bcd43a17",
@@ -55,7 +56,7 @@
     "core/gateway.rs": "3bc3e26cfb91cc54ec34868f71192e679031c0c5b8c10001876a00baa197d244",
     "core/generation.rs": "5ffb914ca983efa2ab290f8ca5ee10a3f25f709c9118891435bf5015630ce9ca",
     "core/generation_controls.rs": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c",
-    "core/harness.rs": "ce6d3c569b2f7a6841f837041c229b60ca0afe48ebd6c849bc8b6b6ebb0ddc04",
+    "core/harness.rs": "cb46b79512179cf5bb96c62f4f9f6d11a42efbc7b999f4ad3e58c69648872e00",
     "core/harness_rules.rs": "09632ca0c6d0fe434d79eaae1ac7b7e4f6ea52eead45db82bad217a268c99704",
     "core/history_view.rs": "9657effb36f29de5601719a6b8c8334e93490266c6526934516a4a734524efb8",
     "core/hosted_search.rs": "e7ca478bf9f77d0424fccebbf89ffcf82e6ccee8768f1a3d6f26eaa4504e485d",
@@ -64,7 +65,7 @@
     "core/http_content_coding.rs": "3e57b84bc1249dc5565d049e88fcd193fcba55292aa374965404d199da4ad923",
     "core/image_png.rs": "d9092643d4d7b4191728af3a34240caeb3d17135d5c6a810ed8570142b90841c",
     "core/incremental_digest.rs": "117bcf1ad7a8e069240cc4ba5cada7a4500d4170670209c80c4a97a14fa3191b",
-    "core/inquiry.rs": "5f8af816157ea95979162b7733c545e88d9c1337353e2b9989ff91fba1d1d528",
+    "core/inquiry.rs": "60ddca816d65681c97d96cccce56f4d151caa6644e5478b229cd2a924c1421d9",
     "core/instruction.rs": "97cedda11a56cc611c0aee49c5776b771c282754e0170e7102300f3ad0fa2d8a",
     "core/interaction.rs": "23ed247d366a4928387aa3286317f2fc4d3cc67dab113b5ec84ea7c678c94df8",
     "core/investigation.rs": "542edd8eaead01f2dca42c37067ea60c36dfe5490e66dce86186d717f15e10df",
@@ -178,8 +179,8 @@
       "sha256": "d1e2d9843ecc5d8b61d9eea22537b1e80d215b244329e93e29ad33128d51b0f3"
     },
     "README.md": {
-      "bytes": 2522,
-      "sha256": "442e9150a6a7ded1b6d25390967394cb48f3ac3c28273f45f1ac080fd8f1e6dc"
+      "bytes": 3076,
+      "sha256": "f43f119d685ebc0ab4be80b3ee2c6328a9de4a539a9d4502364edf0a779af497"
     },
     "core/.gitkeep": {
       "bytes": 1,
@@ -238,8 +239,8 @@
       "sha256": "a4890ee2a7d613c564622506f1b6fac2535752d44f3dadf9fbd3d67864f620b0"
     },
     "core/claim_records.rs": {
-      "bytes": 30532,
-      "sha256": "509c346ea0a7b83c2aa967f759dd311be5521633cd3542ba4985ed81faaeabe6"
+      "bytes": 30480,
+      "sha256": "8d64df434ddd8f38b5e994a95325ab12db125d2f54f0ae680bda365775413b40"
     },
     "core/comparison.rs": {
       "bytes": 4452,
@@ -280,6 +281,10 @@
     "core/delegation.rs": {
       "bytes": 22497,
       "sha256": "fc0d7a345b1f63f4e36f985cb58327d0b489d7d18f28558c6659f7211ee9fbb4"
+    },
+    "core/design_brief.rs": {
+      "bytes": 6016,
+      "sha256": "09af0b65c7d1562c9584b19c282ff837aa7a7243e486afa97a3bc3e1ddf7c5cf"
     },
     "core/device_authorization.rs": {
       "bytes": 7802,
@@ -354,8 +359,8 @@
       "sha256": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c"
     },
     "core/harness.rs": {
-      "bytes": 122838,
-      "sha256": "ce6d3c569b2f7a6841f837041c229b60ca0afe48ebd6c849bc8b6b6ebb0ddc04"
+      "bytes": 123226,
+      "sha256": "cb46b79512179cf5bb96c62f4f9f6d11a42efbc7b999f4ad3e58c69648872e00"
     },
     "core/harness_rules.rs": {
       "bytes": 52600,
@@ -390,8 +395,8 @@
       "sha256": "117bcf1ad7a8e069240cc4ba5cada7a4500d4170670209c80c4a97a14fa3191b"
     },
     "core/inquiry.rs": {
-      "bytes": 62336,
-      "sha256": "5f8af816157ea95979162b7733c545e88d9c1337353e2b9989ff91fba1d1d528"
+      "bytes": 64270,
+      "sha256": "60ddca816d65681c97d96cccce56f4d151caa6644e5478b229cd2a924c1421d9"
     },
     "core/instruction.rs": {
       "bytes": 67149,
@@ -642,8 +647,8 @@
       "sha256": "ea98d6f89776486630494de41ed654ae014daf6d7dad0dc435faf90e090961ac"
     },
     "docs/ARCHITECTURE.md": {
-      "bytes": 14306,
-      "sha256": "50b204a5295574420c997df6ce100b4c98e087009512b40d0cfc1ac14320fe49"
+      "bytes": 15132,
+      "sha256": "074cff1f52df775ce6d5f17e42e5d1d8b51a7f792181448c820c41561e2020b1"
     },
     "docs/ASSETS.md": {
       "bytes": 577,
@@ -670,8 +675,8 @@
       "sha256": "78c8802ab8ed4e2c01e01263cfc5d9f40b54e8fbee6f8713a2f988644a201909"
     },
     "docs/COMMANDS.md": {
-      "bytes": 3470,
-      "sha256": "73bb6d1d2e59809531e5265164e60c2c5846ef2f8d668dc51adc8428627a016f"
+      "bytes": 4066,
+      "sha256": "8bee360e59bd536a63b874407a8ee473dece56067088703d32a74ed88613821f"
     },
     "docs/CONNECTIONS.md": {
       "bytes": 7083,
@@ -702,16 +707,16 @@
       "sha256": "314075e351ae1d9d34fdab386ae31bcf6087d7b2ac9cc4572c32e1d1e5eda8e9"
     },
     "docs/QUESTION-PROCESS.md": {
-      "bytes": 3272,
-      "sha256": "15c9f1fe95c0d58c0ff417e982f4c4cebe7272edb921eff3a5f476a3c390f48f"
+      "bytes": 6066,
+      "sha256": "3cd51d641046cef704e328e7601ca60b41feceab5f9c779e8d52625b811b1b68"
     },
     "docs/REPLIES.md": {
       "bytes": 1206,
       "sha256": "5c2f13bfc406eb77908b7b24d0e53e89fa222cf3206f85827f62109da18428c2"
     },
     "docs/ROADMAP.md": {
-      "bytes": 6180,
-      "sha256": "45e84aa10554b9f11b7838fe8910c1e7ce50a5751e9375c5726ea2c5af1a1545"
+      "bytes": 7196,
+      "sha256": "a8a385b5afbf52882e8941ff792f5c9aafabb7c7fe5e11c6c0a993ed0f655ec3"
     },
     "docs/SERVICES.md": {
       "bytes": 31211,
@@ -726,8 +731,8 @@
       "sha256": "93f5a206d83ac2fd56bf4cb74b50960d6df33005a90b3679856e7e6ae04189f6"
     },
     "docs/STATUS.md": {
-      "bytes": 8766,
-      "sha256": "2381eda4b35855935fba638179f78ccf53362e7c106320c89329823887bdf5e2"
+      "bytes": 9424,
+      "sha256": "2a4e1aac7971e30df6119e85bf0a60b7a261cb58cf6cd0426d59a75c911a199e"
     },
     "docs/TOOL-FEEDBACK.md": {
       "bytes": 6037,
@@ -854,20 +859,20 @@
       "sha256": "1f08b4485f4546ced4a8e1b9eddd1aaf971ef130d192dfb4999cfecb72aba02f"
     },
     "project-progress.md": {
-      "bytes": 152375,
-      "sha256": "c6b2492ea71361ed481c9135bb8876aacfc30a47e919a5839f0155a5b244904e"
+      "bytes": 166661,
+      "sha256": "c8c7e85dd01c645c428599485c6272126c05bec87feb6bcbc01a86dffb03e919"
     },
     "release/NOTES.md": {
-      "bytes": 8851,
-      "sha256": "4a737de4deea71af2eb06cf6bbeabbdb431412056534a6c7232fec7a25116d01"
+      "bytes": 9509,
+      "sha256": "a7d95899bb2d1ee52b53abaa1e5ff3a1f0440e1e2fab33c88564a41c9a8f2798"
     },
     "release/RLLM.apk": {
-      "bytes": 6613010,
-      "sha256": "0e6d0eb04d638c2b8f30ca2bafa2da8944cb5f1ddf8d8ce4345c489eb5aed279"
+      "bytes": 6629394,
+      "sha256": "e4e11b6263fac8dd2f981937d5d1e08e51526139646bb34a5ce606cec8d60cdc"
     },
     "release/SHA256SUMS.txt": {
       "bytes": 75,
-      "sha256": "b0393c9c0903a6e9ffb7684283812d6d1ef923bc5bf70114327182801c057f10"
+      "sha256": "9de0e5644bf0c20479f606d2034fbc738c25f3ea85c563cda9e40907daea8ac3"
     },
     "res/drawable/.gitkeep": {
       "bytes": 1,
@@ -958,20 +963,20 @@
       "sha256": "9b92abc90d951791e5a6b914018caa893a40a97ce29458dc39f06c68ef6bf0ed"
     },
     "tools/apk.py": {
-      "bytes": 8736,
-      "sha256": "57c53305697dcbf3849a1d0f0f366e06639daa85d644c3ca63e6dea4978f9244"
+      "bytes": 8969,
+      "sha256": "59a463229b24e5cbcacbb238d278f180ab4a3a46c13554ead30b9c72d7ac37b5"
     },
     "tools/checkpoint.py": {
       "bytes": 1409,
       "sha256": "7cc25c68497399f80d5d9ab7183687014a7d844f22a881b2a2fdf13bd59a783b"
     },
     "tools/checks.py": {
-      "bytes": 4306,
-      "sha256": "17a9b68ddbe70653812d28aded1ca1105681ace44b930d1a6e85eccb229b691b"
+      "bytes": 4353,
+      "sha256": "8467c3ca2ac0f395de81f7f03be145dfcbb75e4b6638fc3758b50cfda8bb6365"
     },
     "tools/package.py": {
-      "bytes": 19946,
-      "sha256": "11081153a16be14e4d26d32ddf30b5c2535229add4c58950b5b41f49e9712755"
+      "bytes": 20604,
+      "sha256": "7351ec230f3d345279fc7aa3100fc8517dc01057af1f498a78f78b7c15ffc1cb"
     },
     "tools/readback.py": {
       "bytes": 1485,
@@ -1006,8 +1011,8 @@
       "sha256": "ec335557689342d0b80dc75832ec065442c28215f8648088105c7fc98af465b4"
     },
     "verification/RESULTS.json": {
-      "bytes": 274498,
-      "sha256": "c97252268805ea0405a942a2e3974a1f7f0a93e5c6d363a085287046b59bc097"
+      "bytes": 275795,
+      "sha256": "49417daa26f4108ce7b25ea43b2ad42d27e75a56680a083426dee5097adc3442"
     },
     "verification/UPGRADE-AUDIT.json": {
       "bytes": 34096,
@@ -1186,16 +1191,16 @@
       "sha256": "5cd876efa2b910596b8e10b80ebdb43f118d092ae4e513a1f308a1196739e76b"
     },
     "verification/provider_process.py": {
-      "bytes": 6552,
-      "sha256": "30f2fe3ef5fbecd5e0a4790a3c06b84786918586d07be4e01cb75e3e2ba88ee2"
+      "bytes": 7633,
+      "sha256": "4edce0cb840041fd4718f7678c31affc1b5446e5718b5b38d41747a649382a5c"
     },
     "verification/query_feedback.py": {
       "bytes": 12806,
       "sha256": "5b3c70102c0f096031e993a376fb559d21ba4976b61dba0ec3715c812085ae7a"
     },
     "verification/question_process.py": {
-      "bytes": 6979,
-      "sha256": "9afa06ed29ec96b110ac607f657da1da1ae38d3fe4551ba244a02fa9fcfb6b67"
+      "bytes": 8929,
+      "sha256": "13cb2c22b22c9bdde575abdec298b0aa8e1b53a88ab0af0f39a5c6a0daa25c30"
     },
     "verification/review_ownership.py": {
       "bytes": 8801,
@@ -1261,10 +1266,10 @@
   "validation": {
     "connected": {
       "counts": {
-        "provider_process": 52,
+        "provider_process": 60,
         "network_drive": 46,
         "drive_ownership": 38,
-        "question_process": 14,
+        "question_process": 19,
         "history": 6,
         "a2a": 72,
         "binary_flow": 94,
@@ -1314,7 +1319,7 @@
         "oauth": 121,
         "device_authorization": 92
       },
-      "total_executed": 2829,
+      "total_executed": 2842,
       "groups_passed": 51,
       "groups": 52,
       "unavailable": [
@@ -1324,218 +1329,225 @@
         }
       ]
     },
-    "selected_rust_cases": 216,
+    "selected_rust_cases": 219,
     "selected_rust_runs": [
       {
         "filter": "a2a::tests::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.00s"
       },
       {
         "filter": "execution::scope_tests::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::binary_flow::tests::",
         "code": 0,
-        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
       },
       {
         "filter": "provider::",
         "code": 0,
-        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
       },
       {
         "filter": "stream::",
         "code": 0,
-        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 450 filtered out; finished in 0.14s"
+        "summary": "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 453 filtered out; finished in 0.17s"
       },
       {
         "filter": "application::harness::",
         "code": 0,
-        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 454 filtered out; finished in 3.08s"
+        "summary": "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 457 filtered out; finished in 3.39s"
       },
       {
         "filter": "application::checks::reviewed_drive_create_is_conditional_and_failure_stops",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::checks::scoped_drive_listing",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::file_evidence::checks::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 486 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::investigation::directory_observation::checks::cancellation_and_deadline_remain_scoped",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::elf_observation::",
         "code": 0,
-        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 478 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::binary_observation::",
         "code": 0,
-        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::observation_graph::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 486 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::claim_records::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::investigation::cancellation_scope_checks::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::connection_migration::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::binary_declarations::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::checks::settings_menus_are_short_separate_and_preserve_the_thread",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::instruction::tests::",
         "code": 0,
-        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 456 filtered out; finished in 0.29s"
+        "summary": "test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 459 filtered out; finished in 0.32s"
       },
       {
         "filter": "application::binary_evidence::path_checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 485 filtered out; finished in 0.01s"
       },
       {
         "filter": "application::operation::drive_checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.02s"
       },
       {
         "filter": "hosted_search::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.01s"
       },
       {
         "filter": "application::pe_observation::relocation_checks::",
         "code": 0,
-        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 476 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.01s"
       },
       {
         "filter": "resources::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
       },
       {
         "filter": "network::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
       },
       {
         "filter": "network::binary_checks::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.00s"
       },
       {
         "filter": "network::binary_response_checks::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::project_store::transfer::tests::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.74s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 486 filtered out; finished in 0.84s"
       },
       {
         "filter": "application::monitor::checks::",
         "code": 0,
-        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 481 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::request_metrics::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 485 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::throughput::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::checks::live_rate_opens_analytics_without_losing_stream_or_draft",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.01s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.01s"
       },
       {
         "filter": "application::checks::tls_guidance_preserves_explicit_endpoint",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::voice_audio::checks::",
         "code": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.24s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 485 filtered out; finished in 0.31s"
       },
       {
         "filter": "application::oauth::checks::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::scene::checks::",
         "code": 0,
-        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 480 filtered out; finished in 0.15s"
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.18s"
       },
       {
         "filter": "application::tool_format::tests::",
         "code": 0,
-        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 483 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 486 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::search::checks::",
         "code": 0,
-        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 482 filtered out; finished in 0.00s"
       },
       {
         "filter": "network::authorization_response_checks::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
       },
       {
         "filter": "application::oauth::device_authorization::checks::",
         "code": 0,
-        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 484 filtered out; finished in 0.00s"
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 487 filtered out; finished in 0.00s"
+      },
+      {
+        "filter": "application::inquiry::design_brief::checks::",
+        "code": 0,
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 485 filtered out; finished in 0.00s"
       }
     ],
     "checks": {
       "provider_process": {
         "passed": [
           "chat declaration",
+          "chat normal conversation starts a question without manual forms",
           "chat review",
           "chat held worker and retained evidence",
           "chat plan",
           "chat note",
           "chat check",
+          "chat ordinary model plans produce a brief without raw returned source",
           "chat assessment",
           "chat captured child return",
           "chat final answer",
@@ -1544,11 +1556,13 @@
           "chat parent can answer after child failure",
           "chat cancelled callback refusal",
           "local declaration",
+          "local normal conversation starts a question without manual forms",
           "local review",
           "local held worker and retained evidence",
           "local plan",
           "local note",
           "local check",
+          "local ordinary model plans produce a brief without raw returned source",
           "local assessment",
           "local captured child return",
           "local final answer",
@@ -1557,11 +1571,13 @@
           "local parent can answer after child failure",
           "local cancelled callback refusal",
           "messages declaration",
+          "messages normal conversation starts a question without manual forms",
           "messages review",
           "messages held worker and retained evidence",
           "messages plan",
           "messages note",
           "messages check",
+          "messages ordinary model plans produce a brief without raw returned source",
           "messages assessment",
           "messages captured child return",
           "messages final answer",
@@ -1570,11 +1586,13 @@
           "messages parent can answer after child failure",
           "messages cancelled callback refusal",
           "content declaration",
+          "content normal conversation starts a question without manual forms",
           "content review",
           "content held worker and retained evidence",
           "content plan",
           "content note",
           "content check",
+          "content ordinary model plans produce a brief without raw returned source",
           "content assessment",
           "content captured child return",
           "content final answer",
@@ -1687,6 +1705,11 @@
           "revised plan does not inherit answered or partial status",
           "reviewed export writes actual journal, unresolved state and original design",
           "cancelled export cannot execute a stale approved write",
+          "design brief has explicit contents and ordinary write review",
+          "changed export format cannot borrow an approved write",
+          "actual no-model design brief preserves authored design and unresolved work",
+          "unknown brief mode refuses only that export",
+          "cancelled design brief cannot execute a stale approved write",
           "deletion review displays its exact question and captures its identity",
           "stale Question A confirmation cannot delete Question B",
           "legacy unbound deletion callback cannot delete a journal",
@@ -4664,9 +4687,9 @@
       }
     },
     "apk": {
-      "version": 1794086565,
-      "bytes": 6613010,
-      "sha256": "0e6d0eb04d638c2b8f30ca2bafa2da8944cb5f1ddf8d8ce4345c489eb5aed279",
+      "version": 1794104604,
+      "bytes": 6629394,
+      "sha256": "e4e11b6263fac8dd2f981937d5d1e08e51526139646bb34a5ce606cec8d60cdc",
       "native": [
         {
           "abi": "arm64-v8a",
@@ -4677,7 +4700,7 @@
             16384,
             16384
           ],
-          "bytes": 4942872
+          "bytes": 4961848
         },
         {
           "abi": "x86_64",
@@ -4688,7 +4711,7 @@
             16384,
             16384
           ],
-          "bytes": 6088584
+          "bytes": 6111816
         }
       ],
       "label": "RLLM",
@@ -4711,7 +4734,7 @@
         "core/binary_observation.rs": "630368ff10116c484739751b06bc94ab36e315f8df1e51258d1de86e7bf5ccff",
         "core/capture_file.rs": "bc295f066f492a1246f6a75e8e23ca06e068ef8c18024d64ca12db6bab74f0e4",
         "core/capture_job.rs": "a4890ee2a7d613c564622506f1b6fac2535752d44f3dadf9fbd3d67864f620b0",
-        "core/claim_records.rs": "509c346ea0a7b83c2aa967f759dd311be5521633cd3542ba4985ed81faaeabe6",
+        "core/claim_records.rs": "8d64df434ddd8f38b5e994a95325ab12db125d2f54f0ae680bda365775413b40",
         "core/comparison.rs": "f9e52d1686865d59550ee87a773d0b0d36f6901a414e4caeef47fdf61beb6d75",
         "core/compression.rs": "ac2ad8cc149ff2b7b79cde903bbb2cebcb51888700895495126260dee5fc7388",
         "core/connection_migration.rs": "850593c4d32812c9640ab45cf162361963edf0d795f5f6e2e394cce6e7e1a945",
@@ -4722,6 +4745,7 @@
         "core/css_stylesheet.rs": "2705d6437f61ba613b9695e6d5243b88131734d5577872b133e56813e3defbe5",
         "core/css_syntax.rs": "e1550592d461b660081d101c6ac3c7ab5a46269b20b5e3cbd05e3a5099144088",
         "core/delegation.rs": "fc0d7a345b1f63f4e36f985cb58327d0b489d7d18f28558c6659f7211ee9fbb4",
+        "core/design_brief.rs": "09af0b65c7d1562c9584b19c282ff837aa7a7243e486afa97a3bc3e1ddf7c5cf",
         "core/device_authorization.rs": "44d38d371819a5e6e4697b9666591d0c50dce41e17dff9c9d985ae656eb832ce",
         "core/dex.rs": "dee1b5c5a0c865944c39da0b593ef404ade201ed9a6404b8d4dacccbb4ef9f0b",
         "core/dex_calls.rs": "3fe323ac8d3cfdb49f7f73f9df43cdae9064f7e4b5394a6111bd64b2bcd43a17",
@@ -4740,7 +4764,7 @@
         "core/gateway.rs": "3bc3e26cfb91cc54ec34868f71192e679031c0c5b8c10001876a00baa197d244",
         "core/generation.rs": "5ffb914ca983efa2ab290f8ca5ee10a3f25f709c9118891435bf5015630ce9ca",
         "core/generation_controls.rs": "eaf3e109493bfcc42e6632141d21a6fa52746d9cf3eed6a743703ccf6350c06c",
-        "core/harness.rs": "ce6d3c569b2f7a6841f837041c229b60ca0afe48ebd6c849bc8b6b6ebb0ddc04",
+        "core/harness.rs": "cb46b79512179cf5bb96c62f4f9f6d11a42efbc7b999f4ad3e58c69648872e00",
         "core/harness_rules.rs": "09632ca0c6d0fe434d79eaae1ac7b7e4f6ea52eead45db82bad217a268c99704",
         "core/history_view.rs": "9657effb36f29de5601719a6b8c8334e93490266c6526934516a4a734524efb8",
         "core/hosted_search.rs": "e7ca478bf9f77d0424fccebbf89ffcf82e6ccee8768f1a3d6f26eaa4504e485d",
@@ -4749,7 +4773,7 @@
         "core/http_content_coding.rs": "3e57b84bc1249dc5565d049e88fcd193fcba55292aa374965404d199da4ad923",
         "core/image_png.rs": "d9092643d4d7b4191728af3a34240caeb3d17135d5c6a810ed8570142b90841c",
         "core/incremental_digest.rs": "117bcf1ad7a8e069240cc4ba5cada7a4500d4170670209c80c4a97a14fa3191b",
-        "core/inquiry.rs": "5f8af816157ea95979162b7733c545e88d9c1337353e2b9989ff91fba1d1d528",
+        "core/inquiry.rs": "60ddca816d65681c97d96cccce56f4d151caa6644e5478b229cd2a924c1421d9",
         "core/instruction.rs": "97cedda11a56cc611c0aee49c5776b771c282754e0170e7102300f3ad0fa2d8a",
         "core/interaction.rs": "23ed247d366a4928387aa3286317f2fc4d3cc67dab113b5ec84ea7c678c94df8",
         "core/investigation.rs": "542edd8eaead01f2dca42c37067ea60c36dfe5490e66dce86186d717f15e10df",
@@ -4865,8 +4889,8 @@
     },
     "evidence_owner": "implementation owner; real local HTTP/file fixtures, compiled prior core and LLVM references",
     "published_comparator": {
-      "version": 1794084437,
-      "source_sha256": "40b758b8ac7b654b13f6dcfbebe9340d33de66e44827448df7ca135e0ec4b797",
+      "version": 1794086565,
+      "source_sha256": "ca14f491e29acd17afa181341d37f9f1e95386e35b61d7ae46bddaf26cbafca8",
       "method": "Exact saved and source-published shared core compiled locally; actual retained representations and four before/after scene pixel cases exercised"
     },
     "flow_comparator": {
@@ -5519,6 +5543,6 @@
       "scope": "Preserved earlier full-suite outcome only. Current execution is the selected Rust cases and connected groups; excluded historical fixture scopes were not reexecuted."
     }
   },
-  "checkpoint_utc": "2026-11-07T21:26:12.283761+00:00",
+  "checkpoint_utc": "2026-11-08T02:27:09.457051+00:00",
   "whole_project_complete": false
 }

@@ -4,6 +4,8 @@ RLLM connects your Android device to configured language models and integrates i
 
 Configured models and callable-agent routes appear in the request catalog. Reviewed delegation returns the actual child response or error to the captured parent. Question/design records connect plans, source observations, interpretations, finite checks and implementation decisions.
 
+Start an investigation by telling the assistant what to examine; the editable plan and hypothesis forms are optional. Permitted model operations can record findings and implementation-language constraints in the same journal. A design brief can be read by the model or exported as Markdown without raw returned source/output bodies, alongside the existing complete journal JSON. Authored text may still quote sources; a brief does not establish separate analysis and implementation contexts. See [Question and design process](docs/QUESTION-PROCESS.md).
+
 The app includes four provider formats, incremental replies, user agent/skill settings, file inspection/comparison, typed binary evidence, web search/page capture, reviewed reconstruction/experiments, WebDAV storage, encrypted history and local MCP/A2A access.
 
 The source includes one matching signed RLLM APK in release/RLLM.apk. Build instructions are in [docs/BUILD.md](docs/BUILD.md), command behavior in [docs/COMMANDS.md](docs/COMMANDS.md), and recorded validation in [verification/RESULTS.json](verification/RESULTS.json).
