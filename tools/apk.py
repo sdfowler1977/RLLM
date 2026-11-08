@@ -38,6 +38,7 @@ with zipfile.ZipFile(apk)as z:
   for marker in [b'Request framing is ambiguous; no TLS identity was applied',b'Request headers are incomplete; no TLS identity was applied']:assert marker in raw,(abi,marker)
   for marker in [b'Voice and microphone',b'Save microphone preferences',b'Review open microphone conversation',b'Key/token header active; username/password retained',b'Network storage access key exceeds8192bytes']:assert marker in raw,(abi,marker)
   for marker in [b'Network storage authorization',b'This network storage connection only; model credentials remain separate',b'Storage authorization active; manual credentials retained',b'Network storage authorization destination changed; sign in again',b'Network storage authorization mode must be a toggle']:assert marker in raw,(abi,marker)
+  for marker in [b'Design brief (Markdown)',b'Export contents',b'Design brief exceeds256KiB',b'Unknown entries without an authored resolution:',b'The user does not need to fill manual forms first.']:assert marker in raw,(abi,marker)
   for marker in [b'scene_ticket',b'Static geometry preview',b'Scene viewport ownership changed',b'Scene source bytes changed while loading']:assert marker in raw,(abi,marker)
   for marker in [b'RLLM Workspace',b'ReverseEngineerAnything',b'reverse_engineer_anything']:assert marker not in raw,(abi,marker)
   native.append(dict(abi=abi,machine=machine,load_alignments=aligns,bytes=len(raw)))
