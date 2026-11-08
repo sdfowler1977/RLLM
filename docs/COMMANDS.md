@@ -2,6 +2,8 @@
 
 Investigation runs within the normal command path. The app follows the goal, identifies unknowns, gathers relevant evidence, evaluates explanations, applies findings and checks the result. Ordinary requests, assigned tasks, callable children, refinement and compaction use that shared method.
 
+Investigation forms are optional: an ordinary conversation request starts its question automatically. An agent with the hypotheses permission can record the plan and findings through the usual reviewed operations. A requested implementation language belongs in the authored constraints. The same records supply the optional design-brief projection and reviewed Markdown export, alongside the existing complete journal JSON. See [Question and design process](QUESTION-PROCESS.md) for the distinction between authored plans, actual returned evidence and separate analysis/implementation contexts.
+
 Detailed operation reference follows the current permissions, source configuration and request phase. Baseline/probe work uses its configured operations; proposal/composition uses captured evidence; compaction summarizes the supplied conversation. A turn supports eight reviewed operations and a fresh native instruction starts a new allowance.
 
 Additional guidance is available under Agent settings → Instructions and preferences. Saved user skills supply their selected instructions. App settings → Files and storage groups the configured source controls. Drafts and the active conversation remain available through navigation.
