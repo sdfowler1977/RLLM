@@ -115,12 +115,12 @@ pub(super) fn validate_tool(args:&Json)->Result<()>{
  Ok(())
 }
 pub(super) fn approve_author(st:&Json,args:&Json,model:bool)->Result<()>{
- if model&&(get(args,"create")!=&Null||(get(args,"process")!=&Null&&! ["list","current","review"].contains(&text(get(args,"process"),"action").as_str()))){process_author(st)?;}
+ if model&&(get(args,"create")!=&Null||(get(args,"process")!=&Null&&!inquiry::read_action(&text(get(args,"process"),"action")))){process_author(st)?;}
  Ok(())
 }
 pub(super) fn execute(st:&mut Json,args:&Json,model:bool)->Result<String>{
  validate_tool(args)?;
- if get(args,"process")!=&Null{if model&&! ["list","current","review"].contains(&text(get(args,"process"),"action").as_str()){process_author(st)?;}return inquiry::execute(st,get(args,"process"),model);}
+ if get(args,"process")!=&Null{if model&&!inquiry::read_action(&text(get(args,"process"),"action")){process_author(st)?;}return inquiry::execute(st,get(args,"process"),model);}
  if get(args,"create")==&Null{let id=if let Num(n)=get(args,"id"){Some(n.parse().map_err(|_|"Invalid claim ID")?)}else{None};return Ok(query(st,id,model)?.string());}
  let agent=if get(st,"task_run")==&Null{harness::active_agent(st)}else{get(get(st,"task_run"),"agent").clone()};
  let agent_name=text(&agent,"name");let connection=if model{
