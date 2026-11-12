@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T16:4Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T17:0Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -7,10 +7,13 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **620/620 cases plus 55 isolated application cases, exit 0**, measured with the pinned
-  `rustc 1.99.1` toolchain from `tooling/env.sh` (the 620 count is the tree at `5b898cd`: 597 at `600e44d`,
+  report bytes): **638/638 cases plus 55 isolated application cases, exit 0**, measured with the pinned
+  `rustc 1.99.1` toolchain from `tooling/env.sh` (the 638 count is the tree at `c34b170`: 597 at `600e44d`,
   +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
-  cases in `a9c62c5`, +4 refine-workspace cases in `5b898cd`; every delta was
+  cases in `a9c62c5`, +4 refine-workspace cases in `5b898cd`, +9 call-edge/cross-reference cases in `a2a976e`,
+  +4 durable-successor cases in `12cdc6b`, +5 cross-reference cap-disclosure cases in `c34b170`; the sums were
+  re-derived by counting added `#[test]` lines per commit with `git show`, which is why `3e5eda1` (+3) and
+  `112e251` (+1) are absent from the chain — those are `tools/` package-test legs, not core unit cases; every delta was
   re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
   `git archive f2a6ad8` plus its file, which is exactly the tree at `63bf5c5`. The earlier 517 tally was additionally reproduced on the
   drifted `rustc 1.95.0` build, `output/units` vs `output/units-pinned`, log `output/units-pinned.log`). A bare
@@ -1228,6 +1231,52 @@ nothing, so the change introduces no outside-program dependency. Its three findi
   same exit a second time. Repair lane `bg_ed8ed3e7` reorders it (state first, row second, failure surfaced once) and
   must also add the tamper legs the audit noted were untested: a flipped byte inside a reap row, a wrong `parent`, and
   a row removed from a three-row chain.
+
+### Cross-reference caps named, and the new loop group convicts three things — 2026-11-12T16:5Z–17:0Z
+
+`c34b170` closes the GAP4 truncation-disclosure leg in `core/control_flow.rs`: `xref_text` used to print only
+`set.refusal`, so when the edge cap fired first the reader never learned that the unknown list, the per-symbol
+edge lists or the 4 KiB report had also been cut. It now recomputes both — per-symbol `unknown` tallies against
+the stored unknown list, and each symbol's incoming/outgoing edges against its stored lists — and appends the
+cap's own sentence. The refusal strings themselves are byte-unchanged. Verified alone in a room of `HEAD` plus
+that one file: **638/638 cases + 55 isolated application cases**, exit 0 (633 + its 5 new cases), with the marker
+census moving 8 → 13 in that file as the second, independent attribution instrument.
+
+The MiniMax seat on this diff is text-only (it sees the diff, not the repo), so its verdicts were adjudicated
+against measurement rather than accepted:
+- **Claim 2 REFUTED, and my own wording was the error.** I had claimed the recount runs against *the untruncated
+  edge set*; it runs against `set.edges`, which is itself capped by `XREF_MAX`. For the per-symbol list cap that
+  is the right semantics (the list cap is per-symbol, `XREF_SYMBOL_LIST = 8`, independent of the 64-edge cap), but
+  it does not detect a cut in the edge source — that is what `set.refusal` names. Corrected above and in the
+  follow-up brief, which now requires a case where the edge cap did **not** fire.
+- **Its vacuity objection is real for two cases, and I settled it with a mutation it could not run.** Deleting
+  both new disclosure blocks in a room copy flips exactly one case —
+  `application::control_flow::tests::later_caps_are_named_beside_the_first_refusal` (638 → 637/638, gate exit 1).
+  So the new code is load-bearing, but `unknown_cap_names_the_refusal_in_the_report` and
+  `symbol_list_cap_names_the_refusal_in_the_report` pass without it: in their fixtures the cap under test *is* the
+  first refusal, so the pre-existing `set.refusal` path prints the sentence anyway. Follow-up lane `xrefo` must
+  make each discriminate on its own.
+- **Claim 4 measured by me, not by the seat:** the `disagree` arm (`core/control_flow.rs:75`, displaced and
+  coordinate arithmetic both yield a target but they differ) is still **uncovered** — every occurrence of
+  `"disagree"` in the tests asserts its *absence*. Also dispatched in `xrefo`.
+
+The new `rrsi_loop` group (uncommitted: `verification/rrsi_loop.py` plus the 71-group census wiring in
+`tools/checks.py`, `tools/harness.rs`, `tools/package.py`, `tools/package.rs`) is sound as a registration — the
+room's unit gate stayed green at 638/638, which is what `checks.py`'s assertion against the runner's own list
+certifies — and it convicted three things on its first live run:
+1. **My instrument was stale, not the product.** The group found `task_run.workspace` absent on `refine` while the
+   on-disk `core/harness.rs:400` sets it. The reason is that `output/headless/RLLM` is dated **06:13**, i.e. it
+   predates `5b898cd` (07:31) and every product commit since. So the sweep witness I recorded at 08:1x
+   (63 pass / 0 fail, 4,108 checks) measured a product binary that predates four landed commits. Nothing about
+   the census or record mechanics changes, but the connected legs of that sweep are an older product's behaviour,
+   and the republish run must come **after** `bash headless.sh` rebuilds the binary.
+2. **A wrong expectation in the group, not a defect.** The live loop writes its edit ledger as
+   `{run_digest}.jsonl` under the default root; `edits.jsonl` is never created (`commit_edit` picks the digest
+   filename when the ledger root is empty). `experience.jsonl` does gain a sealed row for the settled run.
+3. **A real GAP3 defect the group found.** `rrsi::resume_run` is **not on the JSON-lines path** — its only callers
+   are two unit tests in `core/rrsi.rs`. A fresh process with the ledger and `experience.jsonl` on disk reads the
+   library into the propose prompt but never rebuilds the ledger prompt, so a refinement cannot be resumed across
+   processes. That is the "resume across tasks" leg of GAP3, now with an instrument attached to it.
 
 ## Historical baseline audit (original text)
 
