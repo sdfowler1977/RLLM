@@ -507,3 +507,133 @@ summary lines.
 
 Sanctioned-runner truth is unchanged: `python3 tools/checks.py --all-units` always passes
 `--test-threads=1`, and under it the tree gates 611/611 + 55.
+
+## The whole chain in one job, on committed bytes — 2026-11-12T16:5Z, commit `57b063f`
+
+This is the GAP1 §4 witness: **edit → build → test → journal commit → re-exec → continuing the same job**,
+one live pipe, one workspace, no restart of the driver between legs. Driver `/tmp/g1run4.py`, log
+`/tmp/g1run4.log`, room `/tmp/g1run4-room`.
+
+### Room
+
+```
+rm -rf /tmp/g1run4-room && mkdir -p /tmp/g1run4-room
+git -C /home/shawn/RLLM archive HEAD | tar -x -C /tmp/g1run4-room   # HEAD = 57b063f5fea5a429…
+ln -s /home/shawn/RLLM/tooling /tmp/g1run4-room/tooling
+mkdir -p output/self output/tools output/headless
+bash tools/build-tools.sh output/tools > output/tools-build.log 2>&1; tools_rc=0
+bash headless.sh > output/headless-build.log 2>&1;                 headless_rc=0
+cp output/headless/RLLM output/headless/RLLM.pre                   # the pre-edit image
+```
+
+`output/tools/gate` and `output/headless/RLLM.pre` (12 913 504 bytes) both exist before the first verb, which
+is what the first attempt of this run forgot (see the defect list below). The room build prints 46 `^warning:`
+lines of pre-existing core dead code; nothing in this run changes that.
+
+### Leg 1 — the committed tree, and the control that the verb does not exist yet
+
+```
+{"op":"self_fingerprint","root":".","binary":"output/headless/RLLM.pre",...}
+{"value":{"binary_digest":"20f410e2f081b2547f8ae9c0f16cba96db53e37fe2f06837dab96856092beeee","files":346,
+ "fingerprint":"63177281b0eefb1abcc16e3ac46244be29452c05716b16c38fc111bff49a190a",
+ "source_digest":"adc84f512732b76728e5bbc4dc16fff648c06a535549e3f4ddddc9abaaf82c00","stale":false}}
+{"op":"self_echo","echo":"pre-edit"}
+{"error":"Unknown operation"}
+```
+
+`core/lib.rs` in the room is `git show HEAD:core/lib.rs`, sha256
+`7463fcf335b2d88d51574acce4e24cdbec94f90da0311f6084e5c86316f1c8fc`.
+
+### Leg 2 — the edit
+
+One arm added after the `self_handoff` arm of `core/lib.rs`, and nothing else:
+
+```rust
+"self_echo" => Ok(obj(vec![("canary", s("successor-build"))])),
+```
+
+`core/lib.rs` is now 21 918 bytes, sha256 `1a487c17a12730309b7a445eccb9fbe66c60964c7d21f8ebe2f4f8bd5a5c8b79`.
+
+### Leg 3 — the pre-edit image builds, gates and commits the journal over a live pipe
+
+```
+{"op":"self_journal","root":".","binary":"output/headless/RLLM.pre","previous_binary":"output/headless/RLLM.pre",
+ "successor_binary":"output/headless/RLLM","journal":"output/self/journal.jsonl","rollback":"output/self/rollback",
+ "parent":"","sanctioned":true,"units":"output/units-run","review_confirmed":true}
+{"value":{"build_digest":"20f410e2f081b254…","builder_exit":0,
+ "gate":{"cases":855,"green":true,"isolated":57,"passed":855},"parent":"","recorded":true,
+ "revision":"e623ae04581987e350ac11e9f68ef19c42063825fc90441c8effd1f347b6bcf0",
+ "rollback":"output/self/rollback","rollback_digest":"20f410e2f081b254…",
+ "source_digest":"cabd5a21b83f0d65ab34e2c9fa5d20b26ade5a3c709ce081e1a6b1198f009bfa",
+ "successor":{"argv":["./output/headless/RLLM"],"binary_digest":"fc3cf889e4c43861…","pid":2552296},
+ "verdicts":["gate-green"]}} (221.9s)
+```
+
+One call ran the sanctioned plan (`bash headless.sh` → `bash tools/build-units.sh output/units-run` →
+`output/tools/gate output/units-run`) as bounded children and parsed the gate line, not the exit code: the
+post-edit tree gates **855/855 with 57 isolated application cases**. The revision is appended to
+`output/self/journal.jsonl`; `output/self/rollback` is the 12 913 504-byte pre-edit image whose digest is
+`20f410e2…`, and `build_digest` names the image that performed the build. The successor image written by that
+build is `fc3cf889e4c43861…`.
+
+### Leg 4 — staleness is computed, not assumed
+
+```
+{"op":"self_fingerprint", ... "source_digest":"adc84f512732b767…"}
+{"value":{"claimed_source_digest":"adc84f512732b767…","source_digest":"cabd5a21b83f0d65…","stale":true}}
+```
+
+### Leg 5 — reload without review does not replace the image
+
+```
+{"op":"self_handoff","root":".","binary":"output/headless/RLLM","args":["--jsonl"],"review_confirmed":false}
+{"value":{"argv":["./output/headless/RLLM","--jsonl"],"binary_digest":"fc3cf889e4c43861…","executed":false,
+ "pid":2552296,"source_digest":"cabd5a21b83f0d65…","successor_rows":0,"successor_tip":"","successors":[]}}
+```
+
+### Leg 6 — re-exec, and the same job continues
+
+```
+{"op":"self_handoff","root":".","binary":"output/headless/RLLM","args":["--jsonl"],"review_confirmed":true}
+   (the image is replaced in place; no reply is expected from this op)
+{"op":"self_echo","echo":"post-reload"}
+{"value":{"canary":"successor-build"}} (0.0s)
+{"op":"self_fingerprint","root":".","binary":"output/headless/RLLM",...}
+{"value":{"binary_digest":"fc3cf889e4c43861…","source_digest":"cabd5a21b83f0d65…","stale":false}} (0.2s)
+{"op":"self_journal", ... "parent":"e623ae04581987e3…","sanctioned":true, ...}
+revision 2 = e494f78fc9efb849717139d66328c05772f925398993ff9523748b776c1d75d9   (build_digest fc3cf889…)
+{"op":"self_echo","echo":"after-revision-2"}
+{"value":{"canary":"successor-build"}} (0.0s)
+successor exit: 0
+```
+
+`self_echo` answers **only** because the Leg 2 edit is live in the process that the same pipe is now talking
+to: the control in Leg 1 printed `{"error":"Unknown operation"}` for the identical op. The journal on disk is
+two parent-linked rows —
+
+```
+{"revision":"e623ae04581987e3…","parent":"","gate":{"cases":855,"green":true,"isolated":57,"passed":855},
+ "build_digest":"20f410e2…","rollback_digest":"20f410e2…","verdicts":["gate-green"]}
+{"revision":"e494f78fc9efb849…","parent":"e623ae04581987e3…","gate":{"cases":855,"green":true,"isolated":57,"passed":855},
+ "build_digest":"fc3cf889…","rollback_digest":"20f410e2…","verdicts":["gate-green"]}
+```
+
+— so the successor re-gated the tree it was built from and recorded its own revision under the revision the
+pre-edit image wrote. `wc -l output/self/journal.jsonl` = 2.
+
+What this log does **not** claim: the `job`/`instruction` fields are journal fields, not handoff fields
+(`self_handoff` accepts only `root, binary, args, source_digest, review_confirmed, parent, revision, journal,
+rollback`), so "the same job" here is the same live session, the same recorded chain and the same edited tree,
+not a carried `RLLM_SELF_JOB` string — the carried-job route lives in the reviewed-edit path
+(`apply_reviewed_edit` → builder → gate → journal → reload with `RLLM_SELF_JOB`), which is not reachable from
+these four JSONL verbs.
+
+### Driver defects in this attempt (recorded so the next driver does not repeat them)
+
+| Attempt | What the driver got wrong | What it printed |
+|---|---|---|
+| `/tmp/g1run2.log` | the exec op carried `job` and `instruction`, which `self_handoff` refuses | `{"error":"unknown self-build field instruction"}`, then every reply shifted by one because the image was never replaced |
+| `/tmp/g1run3.log` | pre-created `output/self/rollback` as a **directory** | `self_journal` ran 235.4 s (build + gate) and then refused: `./output/self/rollback must be a regular non-symlink file`. Its exec leg was green: the successor answered `self_echo` with `{"canary":"successor-build"}` |
+| attempt 1 of `g1run4` | ran `git show HEAD:core/lib.rs` **inside** the room, which has no `.git` | the redirect truncated `core/lib.rs` to empty (sha256 `e3b0c442…`), and the driver died at Leg 2 |
+| attempt 2 of `g1run4` | wrote `> output/tools-build.log` in a room with no `output/` yet | `tools_rc=1`, `headless_rc=1`, `cp: cannot stat 'output/headless/RLLM'` — neither build had actually run |
+
