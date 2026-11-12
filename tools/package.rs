@@ -2043,7 +2043,7 @@ struct ToolPython {
 const TOOL_PYTHON: &[ToolPython] = &[
     ToolPython {
         name: "checks.py",
-        role: "full-suite unit gate (--all-units), selected-unit runner (--units), and connected-group runner",
+        role: "full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep, Python-only)",
     },
     ToolPython {
         name: "package.py",
@@ -3725,8 +3725,30 @@ mod checks {
             "{err}"
         );
         assert!(census_line(&err).contains("tools files 3 lines 3"), "{err}");
-        assert!(census_line(&err).contains("checks.py (full-suite unit gate (--all-units), selected-unit runner (--units), and connected-group runner)"), "{err}");
+        assert!(census_line(&err).contains("checks.py (full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep, Python-only))"), "{err}");
         assert!(census_line(&err).contains("package.py (publisher until a signed candidate is published with the native package binary)"), "{err}");
+    }
+
+    #[test]
+    fn checks_py_role_names_the_native_twin_and_refuses_a_python_only_label() {
+        let role = TOOL_PYTHON.iter().find(|item| item.name == "checks.py").unwrap().role;
+        let all_at = role.find("full-suite unit gate").unwrap();
+        let selected_at = role.find("selected-unit runner").unwrap();
+        let sweep_at = role.find("connected-group").unwrap();
+        assert!(all_at < selected_at && selected_at < sweep_at, "{role}");
+        assert!(!role[..all_at].contains("Python-only"), "{role}");
+        let all_units = &role[all_at..selected_at];
+        let selected = &role[selected_at..sweep_at];
+        let sweep = &role[sweep_at..];
+        assert!(all_units.contains("--all-units"), "{all_units}");
+        assert!(all_units.contains("native twin gate <units>"), "{all_units}");
+        assert!(!all_units.contains("Python-only"), "native-equivalent --all-units role is described as Python-only: {all_units}");
+        assert!(selected.contains("native twin gate --units"), "{selected}");
+        assert!(!selected.contains("--all-units"), "{selected}");
+        assert!(!selected.contains("Python-only"), "native-equivalent --units role is described as Python-only: {selected}");
+        assert!(sweep.contains("no-flag"), "{sweep}");
+        assert!(sweep.contains("sweep"), "{sweep}");
+        assert!(sweep.contains("Python-only"), "the no-flag connected-group sweep is not named Python-only: {sweep}");
     }
 
     #[test]
@@ -3829,7 +3851,7 @@ mod checks {
         assert!(line.contains("tools files 2 lines 2"), "{line}");
         assert!(line.contains("verification files 73 lines 73 ceiling files 73 lines 8570"), "{line}");
         assert!(line.contains("elsewhere files 0 lines 0"), "{line}");
-        assert!(line.contains("checks.py (full-suite unit gate (--all-units), selected-unit runner (--units), and connected-group runner)"), "{line}");
+        assert!(line.contains("checks.py (full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep, Python-only))"), "{line}");
         assert!(line.contains("package.py (publisher until a signed candidate is published with the native package binary)"), "{line}");
     }
 
