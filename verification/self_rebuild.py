@@ -1,5 +1,5 @@
 """Connected self-build through the product binary: edit, sanctioned build, gate, journal, refusal, spawn and reap."""
-import base64,hashlib,json,os,pathlib,shutil,stat,subprocess,tempfile,time,traceback
+import base64,contextlib,hashlib,io,json,os,pathlib,shutil,stat,subprocess,tempfile,time,traceback
 PROJECT=pathlib.Path(__file__).resolve().parents[1]
 passed=[]
 problems=[]
@@ -159,7 +159,13 @@ with tempfile.TemporaryDirectory(prefix='self-rebuild-',dir=PROJECT/'output') as
   try:body()
   except Exception:
    traceback.print_exc()
-   if name not in evaluated:check(name,False,traceback.format_exc()[-2000:])
+   detail=traceback.format_exc()[-2000:]
+   if name not in evaluated:check(name,False,detail)
+   elif name in passed:
+    passed[:]=[item for item in passed if item!=name]
+    if name not in problems:problems.append(name)
+    print('FAIL '+name,flush=True)
+    if detail:print(detail[:2000],flush=True)
  def adopt(done):
   held['state']=done['state']
  def over_cap():
@@ -263,7 +269,39 @@ with tempfile.TemporaryDirectory(prefix='self-rebuild-',dir=PROJECT/'output') as
     successor=row.get('successor') or {}
     every.append(compact and row.get('revision')==digest and successor.get('mode') in MODES and successor.get('job_source') in SOURCES)
   check('every revision row names a known successor mode and job source',bool(every) and all(every),'rows='+str(len(every)))
- names=['a 257-byte job is refused before the source edit','an unsanctioned builder is refused and the source bytes stay unchanged','a failing unit gate refuses reload with the unit gate is not green wording','empty reload journals the edited source under a recomputed digest whose parent is empty','spawn records a successor pid that is a child of this product process','the next self-build reaps that successor and the pid is gone','an omitted job records the carried job as inherited','every revision row names a known successor mode and job source']
+ def raising_leg_fails():
+  saved_passed,saved_problems,saved_evaluated=list(passed),list(problems),list(evaluated)
+  out,err=io.StringIO(),io.StringIO()
+  ok=False
+  detail=''
+  try:
+   with contextlib.redirect_stdout(out),contextlib.redirect_stderr(err):
+    def run(label,body):
+     leg(label,body)
+     return evaluated.count(label),problems.count(label),label in passed
+    def after_pass():
+     check('raise-after-pass',True,'recorded pass')
+     raise RuntimeError('after pass')
+    def bare():
+     raise RuntimeError('before check')
+    def after_fail():
+     check('raise-after-fail',False,'recorded fail')
+     raise RuntimeError('after fail')
+    after=run('raise-after-pass',after_pass)
+    bare_row=run('raise-before-check',bare)
+    failed=run('raise-after-fail',after_fail)
+   text,trace=out.getvalue(),err.getvalue()
+   once=text.count('FAIL raise-after-pass')==1 and text.count('FAIL raise-before-check')==1 and text.count('FAIL raise-after-fail')==1
+   ok=after==(1,1,False) and bare_row==(1,1,False) and failed==(1,1,False) and once and 'leg raise-after-pass' in text and 'RuntimeError: after pass' in text and 'RuntimeError: after pass' in trace
+   detail='after='+str(after)+' bare='+str(bare_row)+' failed='+str(failed)+' fails='+str((text.count('FAIL raise-after-pass'),text.count('FAIL raise-before-check'),text.count('FAIL raise-after-fail')))
+  except Exception:
+   detail=traceback.format_exc()[-800:]
+  finally:
+   passed[:]=saved_passed
+   problems[:]=saved_problems
+   evaluated[:]=saved_evaluated
+  check('a raising leg is a failure even after its own check',ok,detail)
+ names=['a 257-byte job is refused before the source edit','an unsanctioned builder is refused and the source bytes stay unchanged','a failing unit gate refuses reload with the unit gate is not green wording','empty reload journals the edited source under a recomputed digest whose parent is empty','spawn records a successor pid that is a child of this product process','the next self-build reaps that successor and the pid is gone','an omitted job records the carried job as inherited','every revision row names a known successor mode and job source','a raising leg is a failure even after its own check']
  try:
   open_product(clean_env())
   state=event(None,'resume')['state']
@@ -275,14 +313,14 @@ with tempfile.TemporaryDirectory(prefix='self-rebuild-',dir=PROJECT/'output') as
   for name in names:
    if name not in evaluated:check(name,False,'product setup failed\n'+traceback.format_exc()[-1500:])
  else:
-  for name,body in zip(names,[over_cap,unsanctioned,red_gate,green_journal,spawn_child,reap_child,inherited_job,known_rows]):leg(name,body)
+  for name,body in zip(names,[over_cap,unsanctioned,red_gate,green_journal,spawn_child,reap_child,inherited_job,known_rows,raising_leg_fails]):leg(name,body)
  finally:
   err_path=room/'product.err'
   close_product()
   err_text=err_path.read_text()[-4000:] if err_path.exists() else ''
   if err_text and problems:print(err_text,flush=True)
   record=dict(checks=evaluated,count=len(evaluated),failed=problems,scope='Owner checks through the product JSON-lines route: a room-local sanctioned build and unit gate, content-addressed journal digests, refusal before an over-cap job, a real red gate, spawn parentage, reap, and an inherited job.')
-  if not problems:record['passed']=passed
+  if not problems:record['passed']=len(passed)
   out=PROJECT/'output/checks'
   out.mkdir(parents=True,exist_ok=True)
   (out/'self-rebuild.json').write_text(json.dumps(record,indent=2)+'\n')
