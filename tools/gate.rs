@@ -1256,7 +1256,7 @@ exit 1\n",
         let dir = TempDir::new();
         let script = dir.0.join("ready");
         write_script(&script, "#!/bin/sh\nprintf 'ready\\n'\n");
-        let output = Command::new(&script).output().unwrap();
+        let output = retry_executable_file_busy(|| Command::new(&script).output()).unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         assert_eq!(output.stdout, b"ready\n");
     }
@@ -1275,18 +1275,25 @@ exit 1\n",
 
     #[test]
     fn executable_busy_retry_succeeds_after_two_busy_failures() {
-        let mut attempts = 0;
-        let value = retry_executable_file_busy(|| {
+        let mut attempts = 0u32;
+        let result = retry_executable_file_busy(|| {
             attempts += 1;
             if attempts <= 2 {
-                Err(std::io::Error::from_raw_os_error(26))
+                let error = std::io::Error::from_raw_os_error(26);
+                assert_eq!(error.raw_os_error(), Some(26));
+                assert_eq!(error.kind(), std::io::ErrorKind::ExecutableFileBusy);
+                Err(error)
             } else {
                 Ok(7u8)
             }
-        })
-        .unwrap();
-        assert_eq!(value, 7);
+        });
+        assert!(
+            result.is_ok(),
+            "retry did not succeed within the window after {attempts} attempts: {result:?}"
+        );
+        assert_eq!(result.unwrap(), 7);
         assert_eq!(attempts, 3);
+        assert!(attempts <= 5, "success landed outside the five-attempt window: {attempts}");
     }
 
     fn declared_pinned_filters(source: &str) -> Result<Vec<String>, String> {
