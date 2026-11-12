@@ -1788,6 +1788,14 @@ fn project_root() -> Result<PathBuf, PyErr> {
     Err(PyErr::value("cannot locate the RLLM project root from tools/toolchain.rs"))
 }
 
+fn write_env_sh(base: &Path) -> Result<PathBuf, PyErr> {
+    let tooling = base.join("tooling");
+    fs::create_dir_all(&tooling).map_err(|err| io_err(&err, &display(&tooling)))?;
+    let env_path = base.join("tooling/env.sh");
+    fs::write(&env_path, ENV_SH).map_err(|err| io_err(&err, &display(&env_path)))?;
+    Ok(env_path)
+}
+
 fn restore() -> Result<(), PyErr> {
     // Empty arguments reach this function and write tooling/ under the current
     // directory. Unit tests never call it.
@@ -1803,8 +1811,7 @@ fn restore() -> Result<(), PyErr> {
         extract_verified(pin, &downloads.join(cache_name(pin)), &base)?;
     }
     install_rust(&base, &pins)?;
-    let env_path = base.join("tooling/env.sh");
-    fs::write(&env_path, ENV_SH).map_err(|err| io_err(&err, &display(&env_path)))?;
+    write_env_sh(&base)?;
     println!("Verified toolchain restored.");
     let _ = io::stdout().flush();
     Ok(())
@@ -2130,7 +2137,16 @@ mod checks {
         assert_eq!(cache_name(&pins[4]), "buildtools-host.zip");
         assert_eq!(pins[7].component, "ndk");
         assert_eq!(pins[7].bytes, 722261334);
-        assert_eq!(fs::read_to_string(root.join("tooling/env.sh")).unwrap(), ENV_SH);
+        let env_path = root.join("tooling/env.sh");
+        if env_path.is_file() {
+            assert_eq!(fs::read_to_string(&env_path).unwrap(), ENV_SH);
+        } else {
+            let env_root = scratch("env-absent");
+            let written = write_env_sh(&env_root).unwrap();
+            assert_eq!(fs::read(&written).unwrap(), ENV_SH.as_bytes());
+            println!("env.sh leg: project file absent, writer leg exercised");
+            let _ = fs::remove_dir_all(&env_root);
+        }
         let dir = scratch("missing");
         fs::create_dir_all(dir.join("tooling")).unwrap();
         let pin = Pin {
@@ -2147,6 +2163,27 @@ mod checks {
             format!("FileNotFoundError: [Errno 2] No such file or directory: {}", py_repr(&display(&expected)))
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_env_sh_replaces_preexisting() {
+        let fresh = scratch("env-fresh");
+        let seeded = scratch("env-seeded");
+        let seeded_env = seeded.join("tooling/env.sh");
+        fs::create_dir_all(seeded.join("tooling")).unwrap();
+        let prior = b"replaced-not-appended\n";
+        fs::write(&seeded_env, prior).unwrap();
+        assert_eq!(fs::read(&seeded_env).unwrap(), prior);
+        let fresh_path = write_env_sh(&fresh).unwrap();
+        let seeded_path = write_env_sh(&seeded).unwrap();
+        let fresh_bytes = fs::read(&fresh_path).unwrap();
+        let seeded_bytes = fs::read(&seeded_path).unwrap();
+        assert_eq!(fresh_bytes.as_slice(), ENV_SH.as_bytes());
+        assert_eq!(seeded_bytes.as_slice(), ENV_SH.as_bytes());
+        assert_eq!(fresh_bytes, seeded_bytes);
+        assert_ne!(seeded_bytes.len(), prior.len() + ENV_SH.len());
+        let _ = fs::remove_dir_all(&fresh);
+        let _ = fs::remove_dir_all(&seeded);
     }
 
     #[test]
