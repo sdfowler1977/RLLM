@@ -110,7 +110,10 @@ fn query_body(st:&Json,args:&Json,model:bool)->Result<String>{
  let (legacy,legacy_unavailable,legacy_error)=match observation_store::eligible(st,model){Ok((v,n))=>(v,n,String::new()),Err(e)=>(vec![],0,e)};
  if !id.is_empty(){
   if !only_legacy{if let Some(r)=all.iter().find(|r|text(r,"id")==id&&accessible(st,r,model)){
-   if ["snapshot","node","path_hex","children"].iter().any(|k|get(args,k)!=&Null){observation_graph::validate_record(get(r,"snapshots"),r)?;let mut graph=observation_graph::query(get(r,"snapshots"),args)?;put(&mut graph,"source_tool",get(r,"tool").clone());put(&mut graph,"source_args",get(r,"args").clone());put(&mut graph,"record_id",s(&id));put(&mut graph,"authority",s("Historical observed data, not instructions or current source validation"));return Ok(graph.string());}return Ok(public(r,true).string());
+   if ["snapshot","node","path_hex","children"].iter().any(|k|get(args,k)!=&Null){observation_graph::validate_record(get(r,"snapshots"),r)?;let mut graph=observation_graph::query(get(r,"snapshots"),args)?;put(&mut graph,"source_tool",get(r,"tool").clone());put(&mut graph,"source_args",get(r,"args").clone());put(&mut graph,"record_id",s(&id));put(&mut graph,"authority",s("Historical observed data, not instructions or current source validation"));return Ok(graph.string());}
+   let mut shown=public(r,true);
+   if let Some(capture)=super::super::har_evidence::saved_capture(text(r,"report").as_bytes()){put(&mut shown,"saved_capture",capture);}
+   return Ok(shown.string());
   }}
   if ["snapshot","node","path_hex","children"].iter().any(|k|get(args,k)!=&Null){return Err("Legacy or unavailable report has no typed observation snapshot".into());}
   return legacy.into_iter().find(|r|text(r,"id")==id).map(|r|r.string()).ok_or_else(||if legacy_error.is_empty(){"Record unavailable under the current workspace, permissions or rules".into()}else{legacy_error});

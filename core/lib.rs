@@ -20,6 +20,7 @@ mod mcp_lifecycle;
 mod mcp_schema;
 mod mcp_identity;
 mod document;
+mod har_evidence;
 use std::{collections::BTreeMap, ffi::CString, os::raw::c_char};
 
 #[derive(Clone, Debug, PartialEq)]
