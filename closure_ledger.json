@@ -854,8 +854,7 @@
     "status": "open product gap, GAP2 headline",
     "measured": "core/improvement.rs:113-119 refinement_rounds accepts only 1 or 2 ('Select one or up to two refinement rounds'), so a real run records round ids {1,2} only; annealed budget reaches 4 then 3 and never b_min",
     "no_production_writer": [
-      "noise_floor (validated rrsi.rs:315-316, written only by tests rrsi.rs:2236)",
-      "held_out_known/held_out_passed/held_out_task_key/held_out_verifier (declared rrsi.rs:70-79, validated by known_leg :282)"
+      "held_out_known/held_out_passed/held_out_task_key/held_out_verifier - core/harness.rs:922 reads the run-state held_out_known but the only writers of that key (:2529/:2531/:2571) are inside #[cfg(test)] mod checks (opened :1562); declared rrsi.rs:70-79, validated by known_leg :282"
     ],
     "machinery_already_live": [
       "annealed_budget :684 / budget_for :687 (used :705, :1397)",
@@ -863,7 +862,8 @@
       "prune_refusal :718 / pruned_components :790 (consumed :707,:805,:895,:1403)",
       "leakage values validated :180"
     ],
-    "lane": "gap2e dispatched (owns core/improvement.rs core/rrsi.rs core/harness.rs verification/rrsi_loop.py); must replace rrsi_loop's 'refinement rounds 3 is refused before a third round id exists' rather than leave it asserting a dead ceiling"
+    "lane": "gap2e dispatched (owns core/improvement.rs core/rrsi.rs core/harness.rs verification/rrsi_loop.py); must replace rrsi_loop's 'refinement rounds 3 is refused before a third round id exists' rather than leave it asserting a dead ceiling",
+    "production_writer_found": "CORRECTION: noise_floor does reach the rrsi edit row in production - core/harness.rs:935 writes the acceptance-policy floor and :123 copies it into the edit row before rrsi::annotate/attach; rrsi.rs:315-316 validates it (rrsi.rs:2236 is only rrsi's own test). The earlier entry scoped the claim to core/rrsi.rs and was wrong about the route. Still owed: a route witness that a journal row carries noise_floor - grep -rl noise_floor output/ matches only binaries today."
   },
   "loop7_audited_pending_commit": {
     "status": "audited, commit held",

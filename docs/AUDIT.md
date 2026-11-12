@@ -1482,9 +1482,14 @@ budget reaches 4 then 3, never `b_min`. The RRSI machinery is already live and u
 `annealed_budget` (`core/rrsi.rs:684`) and `budget_for` (:687, used at :705 and :1397),
 `acceptance(baseline,candidate,floor,cost_before,cost_after)` (`core/improvement.rs:129`),
 `prune_refusal` (:718) and `pruned_components` (:790, consumed at :707/:805/:895/:1403), leakage values
-validated at :180 — but nothing in production writes `noise_floor` (validated `core/rrsi.rs:315-316`,
-written only by the test at :2236) or the four `held_out_*` keys it declares at :70-79 and validates at :282.
-So the open item is the ceiling plus the two missing production writers, not the witness.
+validated at :180 — but the held-out leg has no production writer: `core/harness.rs:922` reads the run-state
+`held_out_known`, and the only writers of that key (`:2529`/:2531/:2571) are inside `#[cfg(test)] mod checks`
+(opened at :1562). `noise_floor` was listed here as having no production writer; **that was wrong and is
+corrected** — `core/harness.rs:935` writes the acceptance-policy floor and `:123` copies it into the rrsi edit
+row (`core/rrsi.rs:315-316` validates it, and `:2236` is only rrsi's own test). What is still owed is a *route*
+witness: no journal on disk carries a `noise_floor` row today (`grep -rl noise_floor output/` matches only
+binaries). So the open item is the ceiling plus a production writer for the held-out leg, not the acceptance
+machinery.
 
 `dotnet5` relocated the .NET/CIL reader off the dead consumer and onto the real `MZ` branch:
 `cli_evidence` (`core/dotnet_evidence.rs:1017`, outside `#[cfg(test)]`; the JSON view `subject_view` at
