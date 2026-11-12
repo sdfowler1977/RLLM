@@ -1749,21 +1749,39 @@ both the work budget and the cancellation token, which is the strongest escape. 
 (`dotnet observation byte cap`, `dotnet parse work cap`, `WORK_UNREAD`), and the seat's R-rules verdict on the
 production diff is PASS.
 
-**`gap2e` — one Critical, and my own measurement found what it was really about.** The seat flagged that the
-refine arm now records `source_digest` when `require_recorded_worktree` fails for any reason other than an identity
-mismatch, and that the consumer at `core/harness.rs:860` (`if !text(run,"source_digest").is_empty() {…} else {
-recorded_source(root)}`) then skips `recorded_source`. I measured the underlying cause instead: at `dbfa7db` inside
-a **linked git worktree**, with the product built inside that worktree, `verification/rrsi_loop.py` is red on
-exactly one of six legs — `refine entry copies approval_root onto task_run.workspace and records source_digest` —
-while the same group is green in the primary tree. The reason is `locate_worktree` (`core/rrsi.rs`), which requires
-`<root>/.git` to be a **directory**: a linked worktree stores `.git` as a *file* holding a `gitdir:` pointer, so
-RLLM's own provenance guard refuses a legitimate worktree. That is a product defect, it is why the archive-room
-leg went red, and it means the pending delivered sweep cannot be run in a linked worktree until it is fixed. The
-lane's response was to record the pre-existing `SOURCE_ABSENT` marker (`"absent"`) rather than leave the field
-empty — and the group's own model already treats a missing `rllm-harness.txt` as `"absent"` — so the sentinel is
-not invented, but writing it on a failed worktree check conflates "no harness file" with "provenance unproven".
-Held: fix `locate_worktree` to accept a linked worktree, then re-measure; the seat's other High (the `held_out`
-phase is written in production but no connected route is shown reaching it) stands as an open item either way.
+**`gap2e` — one Critical, and the investigation it triggered turned into a bigger finding than the lane.** The
+seat flagged that the refine arm now records `source_digest` when `require_recorded_worktree` fails for any reason
+other than an identity mismatch, and that the consumer at `core/harness.rs:860` (`if !text(run,"source_digest").is_empty()
+{…} else { recorded_source(root)}`) then skips `recorded_source`. I chased why that arm was needed at all, and my
+first explanation — that `locate_worktree` requires `<root>/.git` to be a **directory** while a linked worktree
+stores `.git` as a file — is **true as a fact but was not the cause**, so it is corrected here. Measured chain:
+
+- The group plants its own git store in the fixture room (`plant_git`, `verification/rrsi_loop.py:44-53`) inside
+  `PROJECT/output` (`:78`), with an isolated `XDG_DATA_HOME` under the room (`:80-85`). Probed directly, that planted
+  store satisfies git: `rev-parse --is-inside-work-tree` → `true`, `rev-parse --show-toplevel` → the room,
+  `rev-parse HEAD` → a commit hex, `worktree list` → the room. So the fixture is a legitimate work tree by git's
+  own answer, and the directory-vs-file rule never fires for it.
+- The leg is red in **every** tree I built: the main tree (`/tmp/rrsi-maintree.out`, exit 1, one of six legs), a
+  linked worktree at `dbfa7db` with the product built inside it (`/tmp/rrsi-head-gitreal2.out`), and the same
+  worktree with my scratch `.git`-file experiment applied (`/tmp/rrsi-wtexp.out` — still the same single leg). The
+  failure detail is identical everywhere: `source_digest=None expected=absent`, with `approval_root` and `workspace`
+  both equal to the canonical room.
+- The delivered record's green `rrsi_loop` row (`verification/RESULTS.json` published 09:26:20,
+  `connected.counts.rrsi_loop = 6`, 67 passed of 71 groups) comes from a binary built **before** `436b281`
+  (10:04:29, "Bind refine and pool adoption to the approved work-tree identity"). So this leg has been red against
+  every product built since `436b281`, and the record still carries the pre-guard green row. That is a real
+  unowned regression, exactly the mixed-provenance hazard this file keeps warning about.
+- The refusal reason is **invisible** in the product: the refine arm's failure path (`Err(_)=>{put workspace}`)
+  swallows the sentence, so the group can only observe a missing `source_digest`. Finding which arm fires —
+  identity mismatch, `ignore_worktrees`, or something else — is now an explicit work item, not a guess.
+
+Lane `gap2e`'s arm makes the group green again by recording the pre-existing `SOURCE_ABSENT` marker, and the group's
+own model already treats a missing `rllm-harness.txt` as `"absent"`, so the sentinel is not invented. But it records
+provenance for a root whose work-tree check failed, which is what the seat called out, and it hides the regression
+instead of fixing it. Adjudication: the arm is dropped, `core/rrsi.rs` and the swallowed refusal become a work item,
+and the leg must go green in the main tree without weakening provenance. `locate_worktree`'s linked-worktree gap
+stays a separate real finding: it is what stops any git-reading group from passing in a linked worktree, so the
+pending delivered sweep must run in the primary tree.
 
 ## Historical baseline audit (original text)
 

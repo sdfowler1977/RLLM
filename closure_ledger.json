@@ -999,13 +999,13 @@
   },
   "gap2e_held_pending_linked_worktree_fix": {
     "status": "held",
-    "seat_critical": "core/harness.rs refine arm records source_digest when require_recorded_worktree fails for a non-identity reason; the consumer at core/harness.rs:860 then skips recorded_source(root), so absent provenance is carried as if it were a digest",
-    "coordinator_measurement": "at dbfa7db inside a LINKED git worktree with the product built inside, verification/rrsi_loop.py is red on exactly 1 of 6 legs (refine entry copies approval_root onto task_run.workspace and records source_digest); the same group is green in the primary tree (/tmp/rrsi-head-gitreal2.out)",
-    "root_cause": "locate_worktree in core/rrsi.rs requires <root>/.git to be a directory (symlink_metadata(...).is_dir()); a linked git worktree stores .git as a file holding a gitdir: pointer, so RLLM's provenance guard refuses a legitimate worktree",
-    "note": "SOURCE_ABSENT (\"absent\") is a pre-existing marker returned by harness_marker when rllm-harness.txt is missing, and the group's own source_digest_of models a missing harness as 'absent' - the lane did not invent the sentinel, but writing it on a failed worktree check conflates 'no harness file' with 'provenance unproven'",
-    "consequence_for_sweep": "the pending delivered sweep cannot run in a linked worktree until locate_worktree accepts a .git file; the primary tree stays valid meanwhile",
-    "other_open": "the held_out phase is written in production (held_out_before / held_out_error) but no connected route is shown reaching it; three annealed budgets 4,3,2 are asserted only by the unit test",
-    "witness_pending": "fix locate_worktree, then re-measure the leg and decide whether the source_digest arm is needed at all"
+    "seat_critical": "core/harness.rs refine arm records source_digest when require_recorded_worktree fails for a non-identity reason; the consumer at core/harness.rs:860 then skips recorded_source(root)",
+    "adjudication": "arm dropped; the real defect is that require_recorded_worktree fails for the group's own fixture and the refine arm swallows the refusal sentence",
+    "corrected_cause": "the earlier linked-worktree/.git-file explanation is true as a fact (locate_worktree requires a .git directory) but is NOT this leg's cause: the group plants a git-valid store (plant_git, verification/rrsi_loop.py:44-53) and git itself answers is-inside-work-tree=true, show-toplevel=room, HEAD=commit hex for it",
+    "measured": "leg 1 red in the main tree (/tmp/rrsi-maintree.out), in a linked worktree at dbfa7db with the product built inside (/tmp/rrsi-head-gitreal2.out), and with a scratch .git-file arm applied (/tmp/rrsi-wtexp.out); identical detail source_digest=None expected=absent with approval_root==workspace==canonical room",
+    "regression_window": "the delivered record (RESULTS.json published 09:26:20, counts.rrsi_loop=6, 67/71 passed) predates 436b281 (10:04:29, work-tree identity binding); the leg has been red against every product built since",
+    "work_item": "find which refusal fires for the fixture room and make it observable; fix it; get rrsi_loop green in the main tree without recording provenance for a failed work-tree check",
+    "sweep_constraint": "locate_worktree still refuses a linked worktree (.git file), so the delivered sweep must run in the primary tree"
   },
   "lanes_in_flight_2026_11_13T0600": {
     "status": "in flight",
@@ -1017,5 +1017,18 @@
       "g4v2": "verification/product_flow.py - strengthens the three weak clean-room legs"
     },
     "held_uncommitted": "core/improvement.rs + core/harness.rs (gap2e, held), core/dotnet_evidence.rs + core/investigation.rs (dotnet6, held), verification/rrsi_loop.py (rrsik/gap2e, awaiting adjudication)"
+  },
+  "xect_witness_pending_commit": {
+    "status": "measured, awaiting seat + commit",
+    "claim": "core/self_build.rs test work: extended handoff_review_confirmed_execs_the_binary_after_a_valid_chain with a tampered-chain child (probe handoff-exec-tampered) and added handoff_review_confirmed_refuses_exec_on_a_tampered_successor_journal; asserts valid-proof written, tampered-proof absent, and the child text containing successor journal row is not content-addressed",
+    "witness": "room /tmp/xectw = git archive 4634b34 + core/self_build.rs only: Rust cases passed: 730/730; isolated application cases: 55 (HEAD 729 + 1)",
+    "mutation": "successor_witness -> Ok((0, String::new())) reddens 5 cases now: the three journal cases plus both exec cases (the gap this lane was dispatched to close)"
+  },
+  "native_gate_equals_checks_py": {
+    "status": "measured",
+    "claim": "tools/checks.py --all-units role has a native equivalent",
+    "witness": "in the /tmp/headw worktree at dbfa7db: /tmp/headw/tools/gate /tmp/headw/bin printed 'Rust cases passed: 729/729; isolated application cases: 55' exit 0 and wrote output/checks/full-units.json byte-identical to the checks.py report (sha256 a7fdb1ca9f9f8f18cb974b3694b5158cecad144377fdc700a11f676dd9f25c05 both)",
+    "tools_census_at_head": "86 tool cases: alignment 2, readback 24, checkpoint 5, signature 5, apk 6, toolchain 7, gate 8, package 29",
+    "next": "GAP5 retirement of the --all-units branch in tools/checks.py once lanes settle; the group-sweep role and verification/*.py remain the larger retirement"
   }
 }
