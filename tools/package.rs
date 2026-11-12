@@ -1508,117 +1508,258 @@ fn j_str(value: &str) -> Json {
     Json::Str(value.to_string())
 }
 
-fn is_ident(byte: u8) -> bool {
+fn refuse_groups_absent() -> String {
+    refuse("tools/harness.rs absent; expected const GROUPS")
+}
+
+fn refuse_groups_missing() -> String {
+    refuse("tools/harness.rs has no GROUPS list")
+}
+
+fn refuse_groups_malformed() -> String {
+    refuse("tools/harness.rs GROUPS list is malformed")
+}
+
+fn is_ident_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+fn is_ident_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
-fn skip_py_string(bytes: &[u8], start: usize) -> Result<usize, String> {
-    let quote = bytes[start];
-    if bytes.get(start..start + 3) == Some(&[quote, quote, quote]) {
-        let mut index = start + 3;
-        while index + 2 < bytes.len() {
-            if bytes[index] == quote && bytes[index + 1] == quote && bytes[index + 2] == quote {
-                return Ok(index + 3);
-            }
-            index += 1;
-        }
-        return Err(refuse("tools/checks.py has an unterminated string"));
+fn at_ident_boundary(bytes: &[u8], index: usize) -> bool {
+    index == 0 || !is_ident_byte(bytes[index - 1])
+}
+
+fn eat_ident(bytes: &[u8], index: usize) -> Option<(&str, usize)> {
+    if index >= bytes.len() || !is_ident_start(bytes[index]) {
+        return None;
     }
-    let mut index = start + 1;
-    while index < bytes.len() {
-        if bytes[index] == b'\\' {
+    let mut end = index + 1;
+    while end < bytes.len() && is_ident_byte(bytes[end]) {
+        end += 1;
+    }
+    let ident = std::str::from_utf8(&bytes[index..end]).ok()?;
+    Some((ident, end))
+}
+
+fn skip_block_comment(bytes: &[u8], start: usize) -> Result<usize, String> {
+    let mut index = start + 2;
+    let mut depth = 1;
+    while index + 1 < bytes.len() {
+        if bytes[index] == b'/' && bytes[index + 1] == b'*' {
+            depth += 1;
             index += 2;
             continue;
         }
-        if bytes[index] == quote {
-            return Ok(index + 1);
-        }
-        if bytes[index] == b'\n' {
-            return Err(refuse("tools/checks.py has an unterminated string"));
+        if bytes[index] == b'*' && bytes[index + 1] == b'/' {
+            depth -= 1;
+            index += 2;
+            if depth == 0 {
+                return Ok(index);
+            }
+            continue;
         }
         index += 1;
     }
-    Err(refuse("tools/checks.py has an unterminated string"))
+    Err(refuse_groups_malformed())
 }
 
-fn parse_py_string(bytes: &[u8], start: usize) -> Result<(String, usize), String> {
-    let quote = bytes[start];
+fn skip_gap(bytes: &[u8], mut index: usize, commas: bool) -> Result<usize, String> {
+    loop {
+        if index >= bytes.len() {
+            return Ok(index);
+        }
+        match bytes[index] {
+            b' ' | b'\t' | b'\n' | b'\r' => index += 1,
+            b',' if commas => index += 1,
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                index += 2;
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index = skip_block_comment(bytes, index)?;
+            }
+            _ => return Ok(index),
+        }
+    }
+}
+
+fn eat_byte(bytes: &[u8], index: usize, want: u8) -> Result<usize, String> {
+    let index = skip_gap(bytes, index, false)?;
+    if bytes.get(index) != Some(&want) {
+        return Err(refuse_groups_malformed());
+    }
+    Ok(index + 1)
+}
+
+fn skip_rust_string(bytes: &[u8], start: usize) -> Result<usize, String> {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            if index + 1 >= bytes.len() {
+                return Err(refuse_groups_malformed());
+            }
+            index += 2;
+            continue;
+        }
+        if bytes[index] == b'"' {
+            return Ok(index + 1);
+        }
+        index += 1;
+    }
+    Err(refuse_groups_malformed())
+}
+
+fn take_rust_string(bytes: &[u8], start: usize) -> Result<(String, usize), String> {
     let mut index = start + 1;
     let mut out = String::new();
     while index < bytes.len() {
         let byte = bytes[index];
         if byte == b'\\' {
-            let next = *bytes.get(index + 1).ok_or_else(|| refuse("tools/checks.py names list"))?;
+            let next = *bytes.get(index + 1).ok_or_else(refuse_groups_malformed)?;
             match next {
                 b'\\' => out.push('\\'),
-                b'\'' => out.push('\''),
                 b'"' => out.push('"'),
+                b'\'' => out.push('\''),
                 b'n' => out.push('\n'),
                 b't' => out.push('\t'),
                 b'r' => out.push('\r'),
-                other => out.push(other as char),
+                b'0' => out.push('\0'),
+                _ => return Err(refuse_groups_malformed()),
             }
             index += 2;
             continue;
         }
-        if byte == quote {
+        if byte == b'"' {
             return Ok((out, index + 1));
+        }
+        if byte == b'\n' {
+            return Err(refuse_groups_malformed());
         }
         out.push(byte as char);
         index += 1;
     }
-    Err(refuse("tools/checks.py names list"))
+    Err(refuse_groups_malformed())
 }
 
-fn parse_names_list(source: &str) -> Result<Vec<String>, String> {
+fn raw_string_hashes(bytes: &[u8], index: usize) -> Option<usize> {
+    if !at_ident_boundary(bytes, index) || bytes.get(index) != Some(&b'r') {
+        return None;
+    }
+    let mut look = index + 1;
+    let mut hashes = 0usize;
+    while bytes.get(look) == Some(&b'#') {
+        hashes += 1;
+        look += 1;
+    }
+    if bytes.get(look) == Some(&b'"') {
+        Some(hashes)
+    } else {
+        None
+    }
+}
+
+fn skip_raw_string(bytes: &[u8], index: usize, hashes: usize) -> Result<usize, String> {
+    let mut cursor = index + 1 + hashes + 1;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'"' {
+            let tail = cursor + 1;
+            let closed = bytes.get(tail..tail + hashes).map(|slice| slice.iter().all(|byte| *byte == b'#')).unwrap_or(false);
+            if closed {
+                return Ok(tail + hashes);
+            }
+        }
+        cursor += 1;
+    }
+    Err(refuse_groups_malformed())
+}
+
+fn parse_group_entries(bytes: &[u8], mut index: usize) -> Result<(Vec<String>, usize), String> {
+    let mut names = Vec::new();
+    loop {
+        index = skip_gap(bytes, index, true)?;
+        if index >= bytes.len() {
+            return Err(refuse_groups_malformed());
+        }
+        if bytes[index] == b']' {
+            return Ok((names, index + 1));
+        }
+        if bytes[index] != b'"' {
+            return Err(refuse_groups_malformed());
+        }
+        let (name, next) = take_rust_string(bytes, index)?;
+        names.push(name);
+        index = next;
+    }
+}
+
+fn groups_after_const(bytes: &[u8], index: usize) -> Result<Option<(Vec<String>, usize)>, String> {
+    let index = skip_gap(bytes, index, false)?;
+    let Some((ident, end)) = eat_ident(bytes, index) else {
+        return Ok(None);
+    };
+    if ident != "GROUPS" {
+        return Ok(None);
+    }
+    let mut index = eat_byte(bytes, end, b':')?;
+    index = eat_byte(bytes, index, b'&')?;
+    index = eat_byte(bytes, index, b'[')?;
+    index = eat_byte(bytes, index, b'&')?;
+    let index = skip_gap(bytes, index, false)?;
+    let Some((ty, end)) = eat_ident(bytes, index) else {
+        return Err(refuse_groups_malformed());
+    };
+    if ty != "str" {
+        return Err(refuse_groups_malformed());
+    }
+    let mut index = eat_byte(bytes, end, b']')?;
+    index = eat_byte(bytes, index, b'=')?;
+    index = eat_byte(bytes, index, b'&')?;
+    index = eat_byte(bytes, index, b'[')?;
+    Ok(Some(parse_group_entries(bytes, index)?))
+}
+
+// Packaging reads the runner group census from const GROUPS in tools/harness.rs.
+fn parse_groups_list(source: &str) -> Result<Vec<String>, String> {
     let bytes = source.as_bytes();
-    let mut index = 0;
+    let (mut index, mut found) = (0usize, Vec::<Vec<String>>::new());
     while index < bytes.len() {
-        if bytes[index] == b'#' {
-            while index < bytes.len() && bytes[index] != b'\n' {
-                index += 1;
-            }
+        let gap = skip_gap(bytes, index, false)?;
+        if gap != index {
+            index = gap;
             continue;
         }
-        if bytes[index] == b'\'' || bytes[index] == b'"' {
-            index = skip_py_string(bytes, index)?;
+        if bytes[index] == b'"' {
+            index = skip_rust_string(bytes, index)?;
             continue;
         }
-        let boundary = index == 0 || !is_ident(bytes[index - 1]);
-        if boundary && bytes.get(index..index + 5) == Some(b"names") && bytes.get(index + 5).map(|byte| !is_ident(*byte)).unwrap_or(true) {
-            let mut cursor = index + 5;
-            while matches!(bytes.get(cursor), Some(b' ' | b'\t')) {
-                cursor += 1;
-            }
-            if bytes.get(cursor) == Some(&b'=') {
-                cursor += 1;
-                while matches!(bytes.get(cursor), Some(b' ' | b'\t' | b'\n')) {
-                    cursor += 1;
-                }
-                if bytes.get(cursor) != Some(&b'[') {
-                    return Err(refuse("tools/checks.py names list"));
-                }
-                cursor += 1;
-                let mut names = Vec::new();
-                loop {
-                    while matches!(bytes.get(cursor), Some(b' ' | b'\t' | b'\n' | b'\r' | b',')) {
-                        cursor += 1;
+        if let Some(hashes) = raw_string_hashes(bytes, index) {
+            index = skip_raw_string(bytes, index, hashes)?;
+            continue;
+        }
+        if at_ident_boundary(bytes, index) {
+            if let Some((ident, end)) = eat_ident(bytes, index) {
+                if ident == "const" {
+                    if let Some((names, after)) = groups_after_const(bytes, end)? {
+                        found.push(names); index = after; continue;
                     }
-                    if bytes.get(cursor) == Some(&b']') {
-                        return Ok(names);
-                    }
-                    if !matches!(bytes.get(cursor), Some(b'\'' | b'"')) {
-                        return Err(refuse("tools/checks.py names list"));
-                    }
-                    let (name, next) = parse_py_string(bytes, cursor)?;
-                    names.push(name);
-                    cursor = next;
                 }
+                index = end;
+                continue;
             }
         }
         index += 1;
     }
-    Err(refuse("tools/checks.py has no names list"))
+    finish_groups_list(found)
+}
+
+fn load_runner_groups(root: &Path) -> Result<Vec<String>, String> {
+    let source = fs::read_to_string(root.join("tools/harness.rs")).map_err(|_| refuse_groups_absent())?;
+    parse_groups_list(&source)
 }
 
 const EXPLICIT_PAIRS: &[(&str, &str)] = &[
@@ -1742,7 +1883,9 @@ fn pairs_cover(expected: &[String]) -> Result<(), String> {
     let missing: Vec<&String> = pairs.difference(&got).collect();
     let extra: Vec<&String> = got.difference(&pairs).collect();
     Err(refuse(&format!(
-        "Packaging report inventory differs from current checks (missing {missing:?}, extra {extra:?})"
+        "Packaging report inventory differs from the runner GROUPS list (groups {}, pairs {}, missing {missing:?}, extra {extra:?})",
+        expected.len(),
+        report_pairs().len()
     )))
 }
 
@@ -2061,6 +2204,18 @@ const VERIFICATION_PY_LARGEST_SHOWN: usize = 8;
 // A planted Python file is refused before its body is allocated past this cap.
 // The largest counted product Python file is under 48 KiB.
 const PYTHON_CENSUS_BYTE_CAP: u64 = 1024 * 1024;
+
+// Zero declarations keep the missing-list refusal. One declaration is that list.
+// Two or more, nested modules included, are a duplicate refusal.
+fn finish_groups_list(mut found: Vec<Vec<String>>) -> Result<Vec<String>, String> {
+    if found.is_empty() {
+        return Err(refuse_groups_missing());
+    }
+    if found.len() != 1 {
+        return Err(refuse("tools/harness.rs has more than one const GROUPS declaration"));
+    }
+    Ok(found.remove(0))
+}
 
 fn extension_of(relative: &str) -> Option<&str> {
     let name = relative.rsplit('/').next().unwrap_or(relative);
@@ -2600,8 +2755,7 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
     };
     let regression = read_required(root, "output/checks/current-regression.json")?;
     let runs = load_runs(&regression)?;
-    let names_source = fs::read_to_string(root.join("tools/checks.py")).map_err(|_| refuse("tools/checks.py absent"))?;
-    let expected = parse_names_list(&names_source)?;
+    let expected = load_runner_groups(root)?;
     let run_names: Vec<String> = runs.iter().map(|row| row.name.clone()).collect();
     inventory_order(&run_names, &expected)?;
     duplicate_groups(&expected)?;
@@ -3077,23 +3231,161 @@ mod checks {
     #[test]
     fn runner_names_match_packaging_pairs() {
         let root = project_root().unwrap();
-        let source = fs::read_to_string(root.join("tools/checks.py")).unwrap();
-        let names = parse_names_list(&source).unwrap();
-        assert_eq!(names.len(), 71, "{}", names.len());
-        assert_eq!(names.first().map(String::as_str), Some("provider_process"));
-        assert_eq!(names.last().map(String::as_str), Some("rrsi_loop"));
+        let names = load_runner_groups(&root).unwrap();
         duplicate_groups(&names).unwrap();
         pairs_cover(&names).unwrap();
+        assert_eq!(EXPLICIT_PAIRS.len(), 35);
+        assert_eq!(IDENTITY_PAIRS.len(), 22);
+        assert_eq!(HYPHEN_PAIRS.len(), 14);
+        assert_eq!(names.len(), 71, "{}", names.len());
         assert_eq!(report_pairs().len(), 71);
+        assert_eq!(names.len(), EXPLICIT_PAIRS.len() + IDENTITY_PAIRS.len() + HYPHEN_PAIRS.len());
+        assert_eq!(names.first().map(String::as_str), Some("provider_process"));
+        assert_eq!(names.last().map(String::as_str), Some("rrsi_loop"));
+    }
+
+    #[test]
+    fn runner_groups_list_refuses_absent_missing_and_malformed() {
+        let dir = TempDir::new();
+        let absent = load_runner_groups(&dir.0).unwrap_err();
+        assert_eq!(absent, "refusing: tools/harness.rs absent; expected const GROUPS");
+        let commented = parse_groups_list("// const GROUPS: &[&str] = &[\"hidden\"];\nfn main() {}\n").unwrap_err();
+        assert_eq!(commented, "refusing: tools/harness.rs has no GROUPS list");
+        let missing = parse_groups_list("fn main() {}\nconst OTHER: &[&str] = &[\"a\"];\n").unwrap_err();
+        assert_eq!(missing, "refusing: tools/harness.rs has no GROUPS list");
+        let malformed = parse_groups_list("const GROUPS: &[&str] = &[\"ok\", not_a_string];\n").unwrap_err();
+        assert_eq!(malformed, "refusing: tools/harness.rs GROUPS list is malformed");
+        let open = parse_groups_list("const GROUPS: &[&str] = &[\"unterminated\n").unwrap_err();
+        assert_eq!(open, "refusing: tools/harness.rs GROUPS list is malformed");
     }
 
     #[test]
     fn matching_inventory_passes() {
-        let parsed = parse_names_list("'''doc names = not this'''\nnames=['b', 'a']\n# names=['z']\n").unwrap();
-        assert_eq!(parsed, vec!["b".to_string(), "a".to_string()]);
+        let source = r##"
+const LABEL: &str = "const GROUPS: &[&str] = &[\"no\"];";
+// const GROUPS: &[&str] = &["z"];
+/* const GROUPS: &[&str] = &["z"]; */
+const OTHER: &[&str] = &["skip"];
+const GROUPS: &[&str] = &[
+    "b",
+    "a\"b",
+];
+"##;
+        let parsed = parse_groups_list(source).unwrap();
+        assert_eq!(parsed, vec!["b".to_string(), "a\"b".to_string()]);
         inventory_order(&parsed, &parsed).unwrap();
-        let escaped = parse_names_list("names=['a\\'b']\n").unwrap();
-        assert_eq!(escaped, vec!["a'b".to_string()]);
+        let escaped = parse_groups_list("const GROUPS: &[&str] = &[\"a\\\"b\"];\n").unwrap();
+        assert_eq!(escaped, vec!["a\"b".to_string()]);
+    }
+
+    fn real_runner_group_names() -> Vec<String> {
+        [
+            "provider_process",
+            "network_drive",
+            "drive_ownership",
+            "question_process",
+            "history",
+            "a2a",
+            "acp",
+            "oauth",
+            "device_authorization",
+            "binary_flow",
+            "pe_declarations",
+            "commands",
+            "history_migration",
+            "hosted_phases",
+            "prompt_reference",
+            "provider_evidence",
+            "delegation_visibility",
+            "local_feedback",
+            "network_feedback",
+            "proposal_feedback",
+            "proposal_recovery",
+            "review_ownership",
+            "task_ownership",
+            "dav_listing",
+            "server_admission",
+            "http_framing",
+            "gateway_expectation",
+            "device_shortcut",
+            "request_fields",
+            "response_fields",
+            "chunk_fields",
+            "storage_etags",
+            "platform_resolution",
+            "query_feedback",
+            "carry_flow",
+            "workspace_navigation",
+            "mcp_catalog",
+            "mcp_catalog_events",
+            "mcp_images",
+            "mcp_continuation",
+            "mcp_history",
+            "document_providers",
+            "snapshot_identity",
+            "storage_auth",
+            "storage_oauth",
+            "credential_rotation",
+            "storage_owner",
+            "voice_settings",
+            "field_flow",
+            "flags_flow",
+            "product_flow",
+            "diagnostics",
+            "services",
+            "media",
+            "jobs",
+            "voice",
+            "media_stream",
+            "media_upload",
+            "voice_interruption",
+            "voice_background",
+            "voice_session",
+            "capture_lifecycle",
+            "scene",
+            "apk_alignment",
+            "audio_route",
+            "state_sealing",
+            "desktop_runtime",
+            "turn_background",
+            "permission_modes",
+            "self_rebuild",
+            "rrsi_loop",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
+    fn real_groups_declaration() -> String {
+        let quoted = real_runner_group_names().iter().map(|name| format!("\"{name}\"")).collect::<Vec<_>>().join(", ");
+        format!("const GROUPS: &[&str] = &[{quoted}];\n")
+    }
+
+    #[test]
+    fn nested_decoy_groups_before_the_real_const_refuses() {
+        let source = format!("mod legacy_probe {{\n    pub const GROUPS: &[&str] = &[\"wrong\"];\n}}\n\n{}", real_groups_declaration());
+        let err = parse_groups_list(&source).unwrap_err();
+        assert_eq!(err, "refusing: tools/harness.rs has more than one const GROUPS declaration");
+    }
+
+    #[test]
+    fn two_groups_declarations_refuse_in_either_order() {
+        let sentence = "refusing: tools/harness.rs has more than one const GROUPS declaration";
+        let alpha = "const GROUPS: &[&str] = &[\"alpha\"];\n";
+        let beta = "const GROUPS: &[&str] = &[\"beta\"];\n";
+        assert_eq!(parse_groups_list(&format!("{alpha}{beta}")).unwrap_err(), sentence);
+        assert_eq!(parse_groups_list(&format!("{beta}{alpha}")).unwrap_err(), sentence);
+    }
+
+    #[test]
+    fn single_groups_declaration_returns_the_real_71_names() {
+        let expected = real_runner_group_names();
+        assert_eq!(expected.len(), 71);
+        let parsed = parse_groups_list(&real_groups_declaration()).unwrap();
+        assert_eq!(parsed, expected);
+        let runner = load_runner_groups(&project_root().unwrap()).unwrap();
+        assert_eq!(parsed, runner);
     }
 
     #[test]
@@ -3118,7 +3410,8 @@ mod checks {
         names.pop();
         names.push("not_a_group".into());
         let err = pairs_cover(&names).unwrap_err();
-        assert!(err.contains("Packaging report inventory differs from current checks"), "{err}");
+        assert!(err.contains("Packaging report inventory differs from the runner GROUPS list"), "{err}");
+        assert!(err.contains("groups 71, pairs 71"), "{err}");
         pairs_cover(&report_pairs().into_iter().map(|(name, _)| name).collect::<Vec<_>>()).unwrap();
     }
 
@@ -3330,8 +3623,10 @@ mod checks {
         fs::create_dir_all(root.join("tools")).unwrap();
         fs::write(root.join("tools/alignment.rs"), b"align").unwrap();
         let names = report_pairs().into_iter().map(|(name, _)| name).collect::<Vec<_>>();
-        let quoted = names.iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(",");
-        fs::write(root.join("tools/checks.py"), format!("names=[{quoted}]\n")).unwrap();
+        let quoted = names.iter().map(|name| format!("\"{name}\"")).collect::<Vec<_>>().join(", ");
+        fs::write(root.join("tools/harness.rs"), format!("const GROUPS: &[&str] = &[{quoted}];\n")).unwrap();
+        let py_quoted = names.iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(",");
+        fs::write(root.join("tools/checks.py"), format!("names=[{py_quoted}]\n")).unwrap();
         fs::write(root.join("README.md"), "# RLLM\n\nOld paragraph.\n\nRLLM connects your Android device to models.\n").unwrap();
         fs::create_dir_all(root.join("docs")).unwrap();
         fs::write(root.join("docs/STATUS.md"), b"old status\n").unwrap();
