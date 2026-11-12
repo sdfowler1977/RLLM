@@ -1456,8 +1456,12 @@ fn unavailable_object(row: &SweepRow) -> String {
     }
 }
 
-// Replaces only the connected object. Comparators and selected_rust_* stay.
-// A product failure does not reach this writer: commit_sweep refuses first.
+// Replaces the connected object and the checks object. The serialized text must still
+// contain the names published_comparator, flow_comparator and authentication_comparator;
+// selected_rust_* fields stay because this writer never touches them, not because a
+// guard checks them. On the commit_sweep route, a row that row_failed classifies as
+// failed causes an early return, so publish_sweep is not reached with that row; a test
+// may call publish_sweep directly with a failing row.
 fn publish_sweep(root: &Path, rows: &[SweepRow]) -> Result<(), String> {
     let path = root.join("verification/RESULTS.json");
     let original = read(&path);
