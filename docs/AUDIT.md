@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T20:0Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T22:3Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -7,7 +7,7 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **672/672 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
+  report bytes): **701/701 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
   69-group record is backed by 638/638, measured at `c34b170`), measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the 638 count is the tree at `c34b170`: 597 at `600e44d`,
   +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
@@ -15,7 +15,7 @@ their original counts and wording.
   +4 durable-successor cases in `12cdc6b`, +5 cross-reference cap-disclosure cases in `c34b170`; continued by
   +4 in `4758d28` → 642 and +7 in `5c93aed` → 645, then 649 re-measured in a room at `e4b7452` — that +4 was not
   re-derived per commit — and +1 in `98fb0d9` → 650, +8 in `e4118b1` → 658, +9 in `e7d13ec` → 667, +5 in
-  `db16ffa` → 672; the sums were
+  `db16ffa` → 672, +14 in `436b281` → 686, +15 in `28b29d3` → 701; the sums were
   re-derived by counting added `#[test]` lines per commit with `git show`, which is why `3e5eda1` (+3) and
   `112e251` (+1) are absent from the chain — those are `tools/` package-test legs, not core unit cases; every delta was
   re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
@@ -1437,6 +1437,85 @@ measurement at all — a compile-only `BUILD_EXIT:0` is not a case count.
 The delivered record (71 groups, 4,215 checks, 67 pass, 0 fail, 4 unavailable) is still backed by a
 product binary of mixed provenance (built at 09:23:49 from `e7d13ec` plus `js3`'s then-uncommitted files).
 A second full sweep on a settled tree must supersede it before that record is cited as current.
+
+## Worktree provenance lands, GAP2's blocker turns out to be the route, and a lane's own commit adds a dead-code warning — 2026-11-12T20:1Z–22:3Z
+
+`root3` landed as `436b281` (only `core/rrsi.rs` and `core/harness.rs`). It rewrites how a refinement
+finds its work tree: `locate_worktree` canonicalizes **before** git runs (so a relative `--git-dir`
+resolves from the work tree rather than the caller's spelling), `require_recorded_worktree` compares the
+`dev:ino` identity from `workspace_identity` before any git subprocess or `.git/info/exclude` write, and
+`validate_fields` gained an exact-match arm for `workspace identity does not match the approved root` so a
+mismatch seals **unscored**. Witnessed in a `git archive` room of `44b755e` plus exactly those two files
+(md5-identical to the worktree): **686/686 cases plus 55 isolated application cases, exit 0** — HEAD's 672
+plus the 14 `#[test]` markers the diff adds, 7 per file. Every added `Command::new("git")` and
+`std::env::current_dir()` sits past the `#[cfg(test)]` boundary (`core/rrsi.rs:1873`, calls at
+:2393/:2423/:2461; `core/harness.rs:1558`, calls at :2025/:2049/:2054/:2364), so production R1 exposure is
+unchanged. The audit seat's ordering leg is closed by census: the identity writer is production
+(`core/approval_rules.rs:12`, which computes `dev:ino` and writes `approval_root_identity` before
+`approval_root`), both production call sites (`core/harness.rs:437` refine entry, :782 pool path) pass the
+recorded identity, and **no** production call site passes an empty one — `require_worktree_root` is reached
+only from tests. A decorated identity sentence does not slip past the seal: with scores present the exact
+sentence is refused, pinned by `identity_mismatch_seals_without_scores_and_a_longer_sentence_does_not`.
+
+The same room's product build (`bash headless.sh`) caught a regression that commit introduced:
+`warning: function require_worktree_root is never used` (`core/rrsi.rs:1592`), one of 26 warnings. The
+wrapper was live at `44b755e` — it became dead exactly when the two production call sites switched to the
+identity-carrying variant. Kept as an open cleanup rather than papered over, and not dispatched immediately
+because `core/rrsi.rs` is owned by the in-flight GAP2 lane.
+
+`loop7` grew `verification/rrsi_loop.py` from 6 to 13 checks and reported, honestly, that three of GAP2's
+six sub-claims are **not produced** by the route: no noise-floor sentence, no pruned component, no held-out
+keys. Its audit seat confirmed 6 of the 7 new checks are non-vacuous and that checks 5 and 7 lean on absence
+assertions (`Pruned:`, `held_out_*`) that are green by construction while no production writer exists —
+valid as regression guards, not as capability witnesses. Coordinator legs closed on the group: it exits
+`raise SystemExit(1)` on failure (`:455`), runs inside a per-run `TemporaryDirectory(prefix='rrsi-loop-',
+dir=PROJECT/'output')` (`:78`) with the product data home inside it (`:82`), and launches
+`PROJECT/'output/headless/RLLM'` (`:106`) with no freshness pin, so the binary must be dated before the
+witness is cited. Its commit is **held** because the GAP2 lane is editing that same file — committing now
+could capture a half-finished edit.
+
+That corrects the previous section's closing claim that "GAP2 is now an instrument extension of
+`verification/rrsi_loop.py` over at least three rounds, not a product gap". Measured: it is a **route** gap.
+`core/improvement.rs:113-119 refinement_rounds` accepts only `1` or `2` and answers anything else with
+`Select one or up to two refinement rounds`, so a real run records round ids `{1,2}` only and the annealed
+budget reaches 4 then 3, never `b_min`. The RRSI machinery is already live and unit-tested —
+`annealed_budget` (`core/rrsi.rs:684`) and `budget_for` (:687, used at :705 and :1397),
+`acceptance(baseline,candidate,floor,cost_before,cost_after)` (`core/improvement.rs:129`),
+`prune_refusal` (:718) and `pruned_components` (:790, consumed at :707/:805/:895/:1403), leakage values
+validated at :180 — but nothing in production writes `noise_floor` (validated `core/rrsi.rs:315-316`,
+written only by the test at :2236) or the four `held_out_*` keys it declares at :70-79 and validates at :282.
+So the open item is the ceiling plus the two missing production writers, not the witness.
+
+`dotnet5` relocated the .NET/CIL reader off the dead consumer and onto the real `MZ` branch:
+`cli_evidence` (`core/dotnet_evidence.rs:1017`, outside `#[cfg(test)]`; the JSON view `subject_view` at
+:1010 is test-only) is now called from `core/investigation.rs` inside `data.starts_with(b"MZ")` after the PE
+observation and a `cancelled()` check, and the dead `dotnet_image`/`retained_image` line is gone
+(`core/observation_records.rs` no longer appears in the diff). Verified by the coordinator in a
+`git archive` room of `436b281` plus its three files: **701/701 cases plus 55 isolated application cases,
+exit 0** — 686 plus 15 (the module's 7 pre-existing untracked cases plus its 8 new ones). The wiring is
+load-bearing and the coordinator measured it: deleting **only** the consumer line in that room gives
+**698/701, exit 1**, and the three cases that go red are
+`cli_directory_appends_exact_dotnet_lines`, `inconsistent_cli_extent_is_refused_by_name_in_inspect` and
+`truncated_metadata_stream_names_the_unread_header_in_inspect`, panicking at `core/investigation.rs:444`/:459/:490.
+`pe_without_cli_directory_keeps_inspect_text` survives that mutant — it is a preservation guard, not a
+wiring witness — exactly as the seat predicted. Still open from that seat: the `Some(String::new())`
+substitution mutant, and the absence of any aggregate output/work cap charged against the inspect budget for
+a large PE carrying directory 14 (the visible caps are the metadata table cap, the metadata stream cap and
+the method row cap), with no cancellation hook inside the CLI parser.
+
+The second `leg()` exception-swallow instance is now censused: `if name not in evaluated` appears at
+`verification/rrsi_loop.py:77/:405/:440` and `verification/self_rebuild.py:162/:276` — five sites in two
+files, no others. A `selfreb` lane owns `self_rebuild.py`; `rrsi_loop.py`'s copy rides with the GAP2 lane.
+A fifth lane targets GAP4 stage 2's dead typed surface: `Observation.xrefs` (`core/control_flow.rs:6`) is
+computed at :294 and printed at :295 but never read as a field (`warning: field xrefs is never read`), and
+`binary_declarations::derive` (`core/binary_declarations.rs:45`) emits only mappings, classifications and
+relocations even though that projection is production-live (`core/binary_evidence.rs:50`/:81,
+`core/reconstruction.rs:12`) — so cross-reference edges reach the prose but never the typed graph.
+
+The delivered record is unchanged this window: 71 groups, 4,215 checks, 67 pass, 4 unavailable, still backed
+by the 09:23:49 mixed-provenance binary. A single sweep on a settled tree must supersede it, and that sweep
+is gated behind five in-flight lanes plus the signed-APK inputs that keep `apk_alignment` and
+`turn_background` unavailable.
 
 ## Historical baseline audit (original text)
 
