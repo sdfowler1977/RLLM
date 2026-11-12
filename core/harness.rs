@@ -515,8 +515,8 @@ pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
    let mut value=improvement::evaluate(st,get(&run,"response_checks"),reply);
    if value!=Null{put(&mut value,"context",get(&run,"response_context").clone());}
    if phase=="baseline"&&value!=Null{
-    let task=text(&run,"task");let verifier=improvement::verifier_key(get(&run,"response_checks"));
-    improvement::record_base(&mut run,&task,&verifier,number(&value,"passed"));
+    let task_key=improvement::task_key(&text(&run,"task"));let verifier=improvement::verifier_key(get(&run,"response_checks"));
+    improvement::record_base(&mut run,&task_key,&verifier,number(&value,"passed"));
    }
    put(&mut run,result,s(reply));put(&mut run,score,value);put(&mut run,"phase",s(next));
    if next=="review"{return complete_refinement_round(st,run);}
@@ -550,7 +550,7 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
  let digest=refinement_digest(run);
  let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
  let (budget,remaining)=crate::rrsi::budget_for(&records,&digest,round);
- let floor=improvement::noise_floor(run,&text(run,"task"),&improvement::verifier_key(get(run,"response_checks")));
+ let floor=improvement::noise_floor(run,&improvement::task_key(&text(run,"task")),&improvement::verifier_key(get(run,"response_checks")));
  let new_len=selected_text.len() as u64;
  let costs=crate::rrsi::incumbent_cost(&records,&digest).map(|before|(before,new_len));
  let decision=improvement::acceptance(reference,selected,floor,costs.map(|pair|pair.0),costs.map(|pair|pair.1));
@@ -710,8 +710,8 @@ pub(super) fn evaluation_reply(st:&mut Json,reply:Option<&str>)->Result<Json>{
  if score==Null{return Err("The captured evaluation checks are unavailable".into());}
  put(&mut score,"context",get(&run,"evaluation_context").clone());
  if phase=="evaluation_base"{
-  let task=text(get(&run,"evaluation"),"task");let verifier=improvement::verifier_key(checks);
-  improvement::record_base(&mut run,&task,&verifier,number(&score,"passed"));
+  let task_key=improvement::task_key(&text(get(&run,"evaluation"),"task"));let verifier=improvement::verifier_key(checks);
+  improvement::record_base(&mut run,&task_key,&verifier,number(&score,"passed"));
   put(&mut run,"evaluation_base_score",score);
   Ok(queue_evaluation(st,run,"evaluation_candidate")?.unwrap_or(Null))
  }else{
@@ -1297,7 +1297,8 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   let st=configured();let checks=Arr((0..8).map(|i|s(&format!("c{i}"))).collect());
   let mut run=obj(vec![("mode",s("refine")),("phase",s("verify")),("task",s("acceptance task")),("chat",get(&st,"active").clone()),("agent",obj(vec![("name",s("General")),("instructions",s(prior)),("tools",s("read"))])),("baseline",s("baseline reply")),("probe",s("probe reply")),("replay",s("replay reply")),("baseline_score",baseline),("probe_score",probe),("replay_score",replay),("composition",s(composition)),("candidate",s(candidate)),("response_checks",checks.clone()),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(false)),("run_digest",s(POLICY_RUN)),("edit_ledger",s(ledger)),("edit_ledger_root",s(&ledger_root())),("edit_ledger_path",s("edits.jsonl")),("observations",Arr(vec![])),("tool_evidence",Arr(vec![])),("first_refinement",first)]);
   let verifier=improvement::verifier_key(&checks);
-  for passed in bases{improvement::record_base(&mut run,"acceptance task",&verifier,*passed);}
+  let task_key=improvement::task_key("acceptance task");
+  for passed in bases{improvement::record_base(&mut run,&task_key,&verifier,*passed);}
   (st,run)
  }
  fn settled_run(st:&mut Json,run:Json)->Json{
@@ -1334,15 +1335,36 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert!(get(&row,"noise_floor")!=&Null);
   assert!(!text(&row,"decision").contains("noise floor")&&!text(&row,"decision").contains("cost rose"));
  }
+ fn assert_rows_keep_keys(held:&Json,canary:&str){
+  // The run still names its own task for the lesson. Acceptance rows keep only digests.
+  assert_eq!(held.string().matches("acceptance task").count(),1);
+  let mut stripped=held.clone();put(&mut stripped,"task",Null);
+  let body=stripped.string();
+  assert!(!body.contains("acceptance task")&&!body.contains(canary),"{body}");
+  let rows=array(held,"base_evaluations");
+  assert!(rows.len()>=2);
+  assert_eq!(rows.iter().filter(|row|text(row,"task_key")==improvement::task_key("acceptance task")).count(),2);
+  for row in &rows{
+   assert_eq!(text(row,"task_key").len(),64);
+   assert_eq!(text(row,"verifier").len(),64);
+   assert_eq!(get(row,"task"),&Null);
+   assert!(!row.string().contains("acceptance task")&&!row.string().contains(canary));
+  }
+ }
  #[test] fn noise_floor_admits_only_a_gain_above_the_recorded_spread(){
   let k=2usize;
-  let (mut floor_state,floor_run)=policy_run(2,low_bits(0),low_bits(k),low_bits(k),"gain of k","gain of k","old","",&[0,k],Null);
+  let canary="CANARY_TASK_BODY_must_not_be_retained";
+  let (mut floor_state,mut floor_run)=policy_run(2,low_bits(0),low_bits(k),low_bits(k),"gain of k","gain of k","old","",&[0,k],Null);
+  let verifier=improvement::verifier_key(get(&floor_run,"response_checks"));
+  improvement::record_base(&mut floor_run,&improvement::task_key(canary),&verifier,9);
   let refused=settled_run(&mut floor_state,floor_run);let row=last_edit(&refused);
   assert_eq!(text(&row,"verdict"),"rejected");
   assert_eq!(text(&row,"decision"),format!("refused because the gain {k} does not exceed the noise floor {k}"));
   assert_eq!(text(&refused,"round_note"),text(&row,"decision"));
   assert_eq!(number(&row,"noise_floor"),k);
   assert_eq!(get(&refused,"first_refinement"),&Null);
+  assert!(!refused.string().contains(canary));
+  assert_rows_keep_keys(&refused,canary);
   let (mut above_state,above_run)=policy_run(2,low_bits(0),low_bits(k+1),low_bits(k+1),"gain of k plus one","gain of k plus one","old","",&[0,k],Null);
   let admitted=settled_run(&mut above_state,above_run);let row=last_edit(&admitted);
   assert_eq!(text(&row,"verdict"),"accepted");
@@ -1350,6 +1372,7 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert!(!text(&admitted,"round_note").contains("noise floor"));
   assert!(get(&admitted,"first_refinement")!=&Null);
   assert_eq!(number(&row,"noise_floor"),k);
+  assert_rows_keep_keys(&admitted,canary);
   let (mut one_state,one_run)=policy_run(2,low_bits(1),low_bits(1),low_bits(1),"no gain","no gain","old","",&[0],Null);
   let (mut zero_state,zero_run)=policy_run(2,low_bits(1),low_bits(1),low_bits(1),"no gain","no gain","old","",&[],Null);
   let one=settled_run(&mut one_state,one_run);let zero=settled_run(&mut zero_state,zero_run);

@@ -166,16 +166,22 @@ pub(super) fn verifier_key(checks: &Json) -> String {
     harness_rules::digest(checks)
 }
 
-pub(super) fn record_base(run: &mut Json, task: &str, verifier: &str, passed: usize) {
-    if task.is_empty() || verifier.is_empty() { return; }
+/// Digest of the task body. Base rows store this key, never the body.
+pub(super) fn task_key(task: &str) -> String {
+    if task.is_empty() { return String::new(); }
+    harness_rules::digest(&s(task))
+}
+
+pub(super) fn record_base(run: &mut Json, task_key: &str, verifier: &str, passed: usize) {
+    if task_key.is_empty() || verifier.is_empty() { return; }
     let mut rows = array(run, "base_evaluations");
-    rows.push(obj(vec![("task", s(task)), ("verifier", s(verifier)), ("passed", Num(passed.to_string()))]));
+    rows.push(obj(vec![("task_key", s(task_key)), ("verifier", s(verifier)), ("passed", Num(passed.to_string()))]));
     put(run, "base_evaluations", Arr(rows));
 }
 
-pub(super) fn noise_floor(run: &Json, task: &str, verifier: &str) -> u64 {
+pub(super) fn noise_floor(run: &Json, task_key: &str, verifier: &str) -> u64 {
     let scores: Vec<u64> = array(run, "base_evaluations").into_iter().filter(|row| {
-        text(row, "task") == task && text(row, "verifier") == verifier
+        text(row, "task_key") == task_key && text(row, "verifier") == verifier
     }).map(|row| number(&row, "passed") as u64).collect();
     if scores.len() < 2 { return 0; }
     let mut spread = 0u64;
