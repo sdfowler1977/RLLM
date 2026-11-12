@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T17:2Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T18:0Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -7,11 +7,14 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **638/638 cases plus 55 isolated application cases, exit 0**, measured with the pinned
+  report bytes): **650/650 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
+  69-group record is backed by 638/638, measured at `c34b170`), measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the 638 count is the tree at `c34b170`: 597 at `600e44d`,
   +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
   cases in `a9c62c5`, +4 refine-workspace cases in `5b898cd`, +9 call-edge/cross-reference cases in `a2a976e`,
-  +4 durable-successor cases in `12cdc6b`, +5 cross-reference cap-disclosure cases in `c34b170`; the sums were
+  +4 durable-successor cases in `12cdc6b`, +5 cross-reference cap-disclosure cases in `c34b170`; continued by
+  +4 in `4758d28` → 642 and +7 in `5c93aed` → 645, then 649 re-measured in a room at `e4b7452` — that +4 was not
+  re-derived per commit — and +1 in `98fb0d9` → 650; the sums were
   re-derived by counting added `#[test]` lines per commit with `git show`, which is why `3e5eda1` (+3) and
   `112e251` (+1) are absent from the chain — those are `tools/` package-test legs, not core unit cases; every delta was
   re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
@@ -1325,6 +1328,60 @@ test-only scratch-repo helpers while production git stays on `git_run` → `exec
 `apply_accepted`'s guard order is size/NUL → slot path → digest compare → write → read-back. One limitation is
 recorded rather than papered over: the digest compare and the write are not atomic (no rename, no `O_EXCL`), so
 a writer landing between them is not caught — acceptable for this single-process route, but not atomicity.
+
+## The unit line is re-pinned at 649, one lane's cap tests land, and the resume gap is the only red — 2026-11-12T17:3Z–18:0Z
+
+The carried case count was stale. Measured in a `git archive HEAD` room at `e4b7452`, the sanctioned line is
+**649/649 cases plus 55 isolated application cases**, not the 645 I had been carrying since `5c93aed`. The room
+number is HEAD's own: `tools/build-units.sh` resolves `project_dir` from `$0/..`, and `tooling/env.sh` exports
+toolchain paths only (`CLIENT_RUST` etc., derived from its own directory) — neither pins the project root, so a
+room cannot silently compile the main tree. The tracked-`core/` marker census is 646 while the case count is
+649, which is the same lesson as before: markers are a per-file *delta* instrument, never a case total. The
++4 over 645 came from commits after `5c93aed` and was **not** re-derived per commit.
+
+`xrefo` landed as `98fb0d9` (`core/control_flow.rs` only): room 649 → **650/650 + 55**, and the
+`control_flow::tests` filter selects 14 cases where the file holds 13 markers at HEAD. Its leg A is a negative
+result, reported as such instead of being papered over: the `(Some(_),Some(_))` disagree arm at
+`core/control_flow.rs:75` is unreachable. I proved that algebraically rather than trusting the lane's sweep —
+`Value::coordinate` builds `{bits, known: u64::MAX, relative: true}` (`core/instruction.rs:70`) and `full()`
+only re-tests `known == u64::MAX` (`:75`), while `coordinate_delta` is the same `checked_sub`/`checked_add`
+as `displaced` (`:146`, `core/control_flow.rs:35`), so `coordinate_target` is the identity on `displaced` and
+the two arms can never disagree. The lane's sweep (744,154,436 agree / 338,238,612 overflow / **0 disagree**
+across every B/BL imm26, B.cond/CBZ imm19 and TBZ imm14 at 16 program counters) corroborates it but is only
+sample evidence; the algebra is the load-bearing witness.
+
+The 71-group census is de-risked on the main tree: `tools` → runner → `self_rebuild PASS (exit 0, 1s,
+8 checks)` with `INVENTORY DRIFT: the delivered report counts 69 groups while the runner has 71`, i.e. the
+packager inventories accept the 71st group while the delivered record still describes 69.
+
+`k2`'s rewritten `rrsi_loop` group was verified the same way every other lane was: a fresh `git archive HEAD`
+room with only `verification/rrsi_loop.py` plus the four census files copied in. Units stayed at **649/649 + 55**
+(correct — the lane changes no `core/` file), and after building tools, product and runner *inside* the room:
+`self_rebuild PASS (exit 0, 1s, 8 checks)`, `rrsi_loop FAIL (exit 1, 0s, 6 checks)`, `summary: 1 pass, 1 fail,
+0 unavailable of 71 groups`. Exactly one leg is red — `files alone rebuild the resumed phase and decision` —
+and the gap is real, re-measured at HEAD: `rrsi::resume_run` exists at `core/rrsi.rs:1374` with its only two
+callers at `:2516` and `:2556`, both unit tests.
+
+Audit adjudication for `k2`: the seat read the whole 17.7 KB group and CONFIRMED all six legs as substantive,
+quoting the independent digest recomputation (`body={k:row[k] for k in row if k!='revision'}` then
+`sha256(canonical(body))`) and the `previous`-chain assertion, and it specifically rejected the worry that the
+red leg could pass on bad wiring — it requires the recorded hypothesis in the prompt *and* a non-`probe` refusal
+naming the component and round. Two limitations are recorded rather than hidden: the refine-entry leg exercises
+only the *absent*-source digest case (`rllm-harness.txt` missing), so a non-empty source digest is untested; and
+the resume leg pins exact prompt markers and exact refusal wording, which is spec brittleness, not vacuity. The
+legs it could not measure from a diff (the live ledger naming, the single-red run, the unit gate) are the ones I
+measured above.
+
+Commit interlock, deliberately: the group and the 71-group census stay uncommitted until the `resume` product
+fix lands, because `tools/harness.rs:1047` publishes only when `problems` and `failed` are empty — a FAILING
+group would block the record, so committing them alone trades one drift line for a blocked publish.
+
+Lanes in flight: `harq` (new `core/har_evidence.rs` + `core/lib.rs` mod + a consumer in
+`core/observation_records.rs`, GAP4 stage 5), `resume` (`core/rrsi.rs`), `pkgp5` (`tools/package.rs` parity
+census), and `js3` (GAP4 stage 3, JS/Electron observation — measured absent before dispatch: `grep -rli
+"electron|asar|source map|sourcemap" core/` returns nothing, and the only `javascript` hits in `core/` are web
+MIME handling). GAP4 stages 1 and 2 and the `pe_declarations` connected witness are already landed, so stage 3
+is the next real slice, dispatched with a consumer wired in the same change.
 
 ## Historical baseline audit (original text)
 
