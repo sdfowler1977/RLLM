@@ -160,6 +160,11 @@ fn xref_text(set:&CrossReferences)->String{
  let _=xref_line(&mut out,"AArch64 calls and cross-references");
  let _=xref_line(&mut out,"Scope: direct targets that displaced() and coordinate arithmetic resolve to the same address. Indirect and authenticated targets are unknown and are not guessed. Each resolved target is passed through mapped().");
  if let Some(reason)=set.refusal{let _=xref_line(&mut out,&format!("Refusal: {reason}."));}
+ // The refusal field keeps the first cap. A later cap still names itself in the report.
+ let unknown_total=set.symbols.iter().fold(0u64,|total,symbol|total.saturating_add(symbol.unknown));
+ if unknown_total>set.unknowns.len() as u64&&!out.contains(XREF_UNKNOWN_CAP){let _=xref_line(&mut out,&format!("Refusal: {XREF_UNKNOWN_CAP}."));}
+ let lists_cut=set.symbols.iter().any(|symbol|{let incoming=set.edges.iter().filter(|edge|edge.to_pc==symbol.address).count();let outgoing=set.edges.iter().filter(|edge|edge.kind==XrefKind::Call&&edge.from_pc==symbol.address).count();incoming>symbol.incoming.len()||outgoing>symbol.outgoing_calls.len()});
+ if lists_cut&&!out.contains(XREF_LIST_CAP){let _=xref_line(&mut out,&format!("Refusal: {XREF_LIST_CAP}."));}
  let _=xref_line(&mut out,&format!("Edges {}; stored unknowns {}; symbols {}.",set.edges.len(),set.unknowns.len(),set.symbols.len()));
  for edge in &set.edges{if !xref_line(&mut out,&format!("Edge {} from 0x{:x} to 0x{:x}; {}.",edge.kind.name(),edge.from_pc,edge.to_pc,edge.region)){break;}}
  for unknown in &set.unknowns{if !xref_line(&mut out,&format!("Unknown {} at 0x{:x}: {}.",unknown.kind.name(),unknown.from_pc,unknown.reason)){break;}}
@@ -381,5 +386,90 @@ pub(super) fn observe(data:&[u8],regions:&[Region],inventory_complete:bool,label
   assert_eq!(set.symbols.iter().find(|s|s.address==0x1008).unwrap().name.as_deref(),Some("main"));
   let capped=elf_function_symbols(&image(CODE_SYMBOL_MAX+1));assert_eq!(capped.symbols.len(),CODE_SYMBOL_MAX);assert_eq!(capped.refusal,Some(CODE_SYMBOL_CAP));
   assert!(elf_function_symbols(&[0x94,0,0,0]).symbols.is_empty());
+ }
+ #[test]fn encoded_bl_signs_agree_and_record_the_same_address(){
+  let offset_of=|branch:Branch|->i64{match branch{Branch::Direct{offset,..}=>offset,_=>panic!("test encoding was not direct")}};
+  let positive=must(0x94000001);let negative=must(0x97ff_ffff);
+  let (pos,neg)=(offset_of(positive),offset_of(negative));
+  assert_eq!((pos,neg),(4,-4));
+  let sites=[(0x1000u64,positive),(0x1004,negative)];
+  for &(pc,branch) in &sites{
+   let offset=offset_of(branch);let agreed=displaced(pc,offset);
+   assert_eq!(agreed,super::super::instruction::coordinate_target(pc,offset));
+   assert!(agreed.is_some());
+  }
+  let set=cross_references(&sites,&[region()],&[]);
+  assert!(set.refusal.is_none()&&set.unknowns.is_empty()&&set.edges.len()==2);
+  assert_eq!((set.edges[0].from_pc,set.edges[0].to_pc,set.edges[0].kind),(0x1000,0x1004,XrefKind::Call));
+  assert_eq!((set.edges[1].from_pc,set.edges[1].to_pc,set.edges[1].kind),(0x1004,0x1000,XrefKind::Call));
+  let text=xref_text(&set);
+  assert!(text.contains("Edge call from 0x1000 to 0x1004")&&text.contains("Edge call from 0x1004 to 0x1000"));
+  assert!(!text.contains("disagree"));
+  for word in [0x9400_0000u32,0x95ff_ffff,0x9600_0000,0x97ff_ffff]{
+   let offset=offset_of(must(word));
+   for pc in [0u64,0x1000,u64::MAX]{assert_eq!(displaced(pc,offset),super::super::instruction::coordinate_target(pc,offset));}
+  }
+  let far_offset=offset_of(must(0x95ff_ffff));
+  let far_to=displaced(0x1000,far_offset).unwrap();
+  assert_eq!(far_to,super::super::instruction::coordinate_target(0x1000,far_offset).unwrap());
+  let far=cross_references(&[(0x1000,must(0x95ff_ffff))],&[region()],&[]);
+  assert!(far.unknowns.is_empty()&&far.edges.len()==1&&far.edges[0].to_pc==far_to&&!far.edges[0].region.is_empty());
+  let overflow=cross_references(&[(0x1000,must(0x9600_0000))],&[region()],&[]);
+  assert!(overflow.edges.is_empty()&&overflow.unknowns.len()==1);
+  assert!(overflow.unknowns[0].reason.contains("overflow")&&!overflow.unknowns[0].reason.contains("disagree"));
+ }
+ #[test]fn unknown_cap_names_the_refusal_in_the_report(){
+  let branch=must(0xd61f0020);
+  let under=(0..XREF_MAX).map(|i|(0x1000+i as u64*4,branch)).collect::<Vec<_>>();
+  let under_set=cross_references(&under,&[region()],&[]);
+  assert_eq!(under_set.unknowns.len(),XREF_MAX);assert!(under_set.refusal.is_none());
+  assert!(!xref_text(&under_set).contains(XREF_UNKNOWN_CAP));
+  let over=(0..=XREF_MAX).map(|i|(0x1000+i as u64*4,branch)).collect::<Vec<_>>();
+  let set=cross_references(&over,&[region()],&[]);
+  assert!(set.edges.is_empty());assert_eq!(set.unknowns.len(),XREF_MAX);assert_eq!(set.refusal,Some(XREF_UNKNOWN_CAP));
+  let text=xref_text(&set);
+  assert!(text.contains("Refusal: cross-reference unknown cap."));
+  assert!(text.contains("stored unknowns 64"));
+  assert!(text.len()<=XREF_OUTPUT);
+ }
+ #[test]fn symbol_list_cap_names_the_refusal_in_the_report(){
+  let sites=(0..XREF_SYMBOL_LIST+1).map(|i|{let imm=0x400-i as u32;(0x1000+i as u64*4,must(0x94000000|imm))}).collect::<Vec<_>>();
+  let set=cross_references(&sites,&[region()],&[]);
+  assert_eq!(set.refusal,Some(XREF_LIST_CAP));assert_eq!(set.edges.len(),XREF_SYMBOL_LIST+1);
+  let callee=set.symbols.iter().find(|s|s.address==0x2000).unwrap();
+  assert_eq!(callee.incoming.len(),XREF_SYMBOL_LIST);
+  let text=xref_text(&set);
+  assert!(text.contains("Refusal: cross-reference symbol list cap."));
+  assert!(text.contains("incoming references 8 ("));
+  assert!(!text.contains(XREF_OUTPUT_CAP));
+  assert!(text.len()<=XREF_OUTPUT);
+ }
+ #[test]fn output_cap_names_itself_when_the_report_is_cut(){
+  let name="callee-name-".repeat(400);
+  let symbols=[CodeSymbol{name_display:name.clone(),value:0x1004,size:4}];
+  let set=cross_references(&[(0x1000,must(0x94000001))],&[region()],&symbols);
+  assert!(set.refusal.is_none());assert_eq!(set.edges.len(),1);assert_eq!(set.symbols.len(),2);
+  let text=xref_text(&set);
+  assert!(text.contains("\ncross-reference output cap\n"));
+  assert!(text.len()<=XREF_OUTPUT);
+  assert!(!text.contains(&name));
+  assert_eq!(text.lines().filter(|line|line.starts_with("Symbol ")).count(),1);
+  assert!(text.contains("symbols 2."));
+ }
+ #[test]fn later_caps_are_named_beside_the_first_refusal(){
+  let base=0x1_0000_0000_0000u64;let target=base+(XREF_MAX as u64+2)*4;let mut sites=Vec::new();
+  for i in 0..=XREF_MAX{let pc=base+i as u64*4;let imm=((target-pc)/4) as u32;sites.push((pc,must(0x9400_0000|imm)));}
+  for i in 0..=XREF_MAX{sites.push((0x2_0000_0000_0000+i as u64*4,must(0xd61f0020)));}
+  let set=cross_references(&sites,&[],&[]);
+  assert_eq!(set.refusal,Some(XREF_EDGE_CAP));
+  assert_eq!(set.edges.len(),XREF_MAX);assert_eq!(set.unknowns.len(),XREF_MAX);
+  let callee=set.symbols.iter().find(|s|s.address==target).unwrap();
+  assert_eq!(callee.incoming.len(),XREF_SYMBOL_LIST);
+  let text=xref_text(&set);
+  assert!(text.contains("Refusal: cross-reference edge cap."));
+  assert!(text.contains("Refusal: cross-reference unknown cap."));
+  assert!(text.contains("Refusal: cross-reference symbol list cap."));
+  assert!(text.contains("\ncross-reference output cap\n"));
+  assert!(text.len()<=XREF_OUTPUT);
  }
 }
