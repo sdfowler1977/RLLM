@@ -1976,6 +1976,23 @@ today, then give the chain a durable high-water that survives `exec`.
 theirs is committed. The connected record is still the pre-`436b281` one (71 groups / 4,215 checks / 67 pass / 4
 unavailable); the sweep needs the primary tree, a clean tree and one quiet run, so it is queued behind these lanes.
 
+## The successor chain gets attacked before its anchor exists, and the two runners' inventories turn out to be exactly equal — 2026-11-13T11:2Z–12:1Z (program clock)
+
+Lane `g1s4` was still writing when its turn came up, so I attacked the **committed** chain (`c396323`) instead of waiting: `core/self_build.rs` read out of git (`git show c396323:core/self_build.rs`), not the lane's working copy. Every citation below is a line number in those committed bytes.
+
+**Six accepted attacks — the yardstick `g1s4` is measured against.** None is refused today:
+
+1. **Truncate** the companion to an earlier valid prefix. The tip is derived from the file — `let tip = rows.last().map(|row| text(row, "revision")).unwrap_or_default();` (`:999`) — so a shorter retained prefix reads green.
+2. **Replace** the companion with a different internally valid chain. Every check is local to one row and its immediate predecessor (`durable_successor_rows`, `:1446`); no expected tip is supplied at the call site (`:1035`).
+3. **Delete** the companion in a fresh process while the main journal still has rows. The only refusal is `if journal_has_rows && companion_tracked(&companion)` (`:993`), and `companion_tracked` walks the in-process table (`:1002`); after a restart there is no entry, so deletion reads as an empty witness.
+4. **Roll back and re-append** a different valid suffix. No monotonic anchor exists, so a truncated-then-reextended chain verifies.
+5. **A syntactically valid but unrelated `parent`.** `handoff` checks only its shape — `digest_text(&text(value, "parent"))?;` (`:1031`) — and never compares it with the tip it reads at `:1035`. Confirmed independently: across `core/`, `successor_tip` appears **only** inside `self_build.rs` (`:1035`, `:1041`, and tests) — no product reader anywhere else. That is the same defect shape as GAP3's `library_index`: a field published into a receipt and never acted upon.
+6. **Empty-witness conflation.** `(0, "")` is returned for an empty `journal` field, for a missing untracked companion, and for a companion that exists but is zero-length, so the receipt cannot distinguish "no successor" from "successor witness gone".
+
+**Two more seat findings refuted against the code.** (a) "Metadata/content substitution race between `symlink_metadata` and `open`": `journal_lines` opens with `NOFOLLOW` and hands that descriptor to `read_fd`, which `fstat`s it, reads `max + 1` and refuses `"file changed while reading"` when the byte count differs — a swap fails closed instead of adopting foreign bytes. (b) "The comment conflicts with the implementation": `The in-process table is not consulted.` (`:1445`) is the doc comment of `durable_successor_rows` (`:1446`), which genuinely never consults the table; the process-local refusal lives in a different function, `successor_witness`. (`companion_tracked` exact-path equality and `journal_lines` bounds were already refuted in the previous block and hold here: `locate` rebuilds the path component-by-component and refuses a symlink at every component in both modes, so the witness path `locate(root, &journal_rel, false)` cannot diverge from the tracked `Some(successor_journal_path(&locate(root, &journal_rel, true)?))` stored at `:1682`.)
+
+**The two runner inventories are equal, and the publisher's Python ceiling has zero slack.** Measured on this tree: `tools/checks.py`'s group list is 71 names and `tools/harness.rs`'s `GROUPS` is 71 names, order-identical, symmetric difference empty — the interlock at `checks.py:50-51` actually passes rather than merely existing. The `verification/` census is 73 `.py` files = 71 groups + the one declared helper (`transport`) + the one declared optional (`live_web`), with zero unwired files and zero declared-but-missing files. `tools/package.rs` pins `VERIFICATION_PY_FILE_CEILING = 73`. Those two numbers are now identical, so **adding a connected verification group refuses `publish` until a Python file retires**: a new group is not free, and the retirement order matters (lane `gatesel` retires `checks.py --units` first).
+
 ## Historical baseline audit (original text)
 
 # Release audit
