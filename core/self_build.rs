@@ -7,8 +7,10 @@ use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 const NOFOLLOW: i32 = 131072;
@@ -706,6 +708,7 @@ pub(crate) fn journal(value: &Json) -> Result<Json> {
             "successor_binary",
             "successor_args",
             "job",
+            "job_source",
             "instruction",
             "source_digest",
             "journal",
@@ -901,6 +904,9 @@ pub(crate) fn validate(args: &Json) -> Result<()> {
     if text(args, "instruction").len() > INSTRUCTION_MAX {
         return Err(format!("instruction exceeds {INSTRUCTION_MAX} bytes"));
     }
+    let (carried_job, carried_instruction) = inherited();
+    bound_carried(&text(args, "job"), &carried_job, JOB_MAX, "job")?;
+    bound_carried(&text(args, "instruction"), &carried_instruction, INSTRUCTION_MAX, "instruction")?;
     Ok(())
 }
 pub(crate) fn approve(pending: &Json) -> Result<()> {
@@ -1030,6 +1036,9 @@ fn append_journal_revision(
     rollback_digest: &str,
     gate_output: &str,
     spawned: Option<(u64, Vec<String>)>,
+    job: &str,
+    instruction: &str,
+    job_source: &str,
 ) -> Result<String> {
     let gate = parse_gate(gate_output)?;
     if !gate.green {
@@ -1056,8 +1065,9 @@ fn append_journal_revision(
         ("mode", s(&mode)),
         ("argv", Arr(argv)),
         ("binary_digest", s(&build_digest)),
-        ("job", s(&text(args, "job"))),
-        ("instruction", s(&text(args, "instruction"))),
+        ("job", s(job)),
+        ("job_source", s(job_source)),
+        ("instruction", s(instruction)),
     ];
     if mode == "spawn" {
         successor_fields.push(("env", Arr(handed.iter().map(|name| s(name)).collect())));
@@ -1108,12 +1118,127 @@ fn sanctioned_child(
         _ => Err("builder is not one of the sanctioned commands".into()),
     }
 }
+fn inherited() -> (String, String) {
+    (
+        std::env::var("RLLM_SELF_JOB").unwrap_or_default(),
+        std::env::var("RLLM_SELF_INSTRUCTION").unwrap_or_default(),
+    )
+}
+fn effective(supplied: &str, carried: &str) -> (String, &'static str) {
+    if !supplied.is_empty() {
+        (supplied.to_string(), "caller")
+    } else if !carried.is_empty() {
+        (carried.to_string(), "inherited")
+    } else {
+        (String::new(), "none")
+    }
+}
+fn bound_carried(supplied: &str, carried: &str, limit: usize, noun: &str) -> Result<(String, &'static str)> {
+    let (value, source) = effective(supplied, carried);
+    if source == "inherited" && value.len() > limit {
+        return Err(format!("inherited {noun} exceeds {limit} bytes"));
+    }
+    Ok((value, source))
+}
+
+struct Tracked {
+    child: Option<std::process::Child>,
+    job: String,
+    job_source: String,
+    mode: String,
+    exit: Option<i32>,
+}
+static SUCCESSORS: OnceLock<Mutex<BTreeMap<u64, Tracked>>> = OnceLock::new();
+fn successors() -> std::sync::MutexGuard<'static, BTreeMap<u64, Tracked>> {
+    SUCCESSORS
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+fn track(child: std::process::Child, job: &str, job_source: &str, mode: &str) -> u64 {
+    let pid = u64::from(child.id());
+    successors().insert(
+        pid,
+        Tracked {
+            child: Some(child),
+            job: job.to_string(),
+            job_source: job_source.to_string(),
+            mode: mode.to_string(),
+            exit: None,
+        },
+    );
+    pid
+}
+// The exit status is not recorded on disk.
+fn reap() -> usize {
+    let mut table = successors();
+    let mut exited = 0usize;
+    for tracked in table.values_mut() {
+        if tracked.mode != "spawn" || tracked.child.is_none() {
+            continue;
+        }
+        let status = {
+            let Some(child) = tracked.child.as_mut() else { continue };
+            match child.try_wait() {
+                Ok(status) => status,
+                Err(_) => continue,
+            }
+        };
+        let Some(status) = status else { continue };
+        tracked.exit = status.code();
+        tracked.child = None;
+        exited += 1;
+    }
+    exited
+}
+pub(crate) fn successor_states() -> Vec<Json> {
+    successors()
+        .iter()
+        .map(|(pid, tracked)| {
+            let running = tracked.child.is_some() && tracked.mode == "spawn";
+            obj(vec![
+                ("pid", n(*pid)),
+                ("job", s(&tracked.job)),
+                ("job_source", s(&tracked.job_source)),
+                ("running", Bool(running)),
+                (
+                    "exit",
+                    if running {
+                        Null
+                    } else {
+                        match tracked.exit {
+                            Some(code) => Num(code.to_string()),
+                            None => Null,
+                        }
+                    },
+                ),
+            ])
+        })
+        .collect()
+}
+fn with_reaped(receipt: String, reaped: usize) -> String {
+    if reaped == 0 {
+        receipt
+    } else {
+        format!("{receipt} reaped {reaped} successor(s)")
+    }
+}
+
 pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Result<String> {
+    let reaped = reap();
     if cancelled() {
         return Err("self-build cancelled".into());
     }
     let args = get(value, "args");
     validate(args)?;
+    let (carried_job, carried_instruction) = inherited();
+    let (job, job_source) = bound_carried(&text(args, "job"), &carried_job, JOB_MAX, "job")?;
+    let (instruction, _) = bound_carried(
+        &text(args, "instruction"),
+        &carried_instruction,
+        INSTRUCTION_MAX,
+        "instruction",
+    )?;
     let reload = text(args, "reload");
     if !reload.is_empty() && reload != "exec" && reload != "spawn" {
         return Err("reload must be exec, spawn, or empty".into());
@@ -1162,21 +1287,36 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
     let revision = if journal_rel.is_empty() || reload == "spawn" {
         String::new()
     } else {
-        append_journal_revision(root, args, &source_digest, &rollback_digest, &gate_text, None)?
+        append_journal_revision(
+            root,
+            args,
+            &source_digest,
+            &rollback_digest,
+            &gate_text,
+            None,
+            &job,
+            &instruction,
+            job_source,
+        )?
     };
     if reload == "exec" || reload == "spawn" {
         if parse_gate(&gate_text).map(|gate| gate.green).unwrap_or(false) == false {
             return Err("reload refused unless the unit gate is green".into());
         }
         let binary = resolve_file(root, &text(args, "binary"))?;
+        let mut carried_env = Vec::new();
+        if !job.is_empty() {
+            carried_env.push(("RLLM_SELF_JOB", job.as_str()));
+        }
+        if !instruction.is_empty() {
+            carried_env.push(("RLLM_SELF_INSTRUCTION", instruction.as_str()));
+        }
         if reload == "exec" {
-            super::execution::exec_replace(&binary, &[], root, &[])?;
+            super::execution::exec_replace(&binary, &[], root, &carried_env)?;
         }
         let successor_args = strings(args, "successor_args")?;
         let mut child = Command::new(&binary);
         child.current_dir(root).stdin(Stdio::null()).args(&successor_args);
-        let job = text(args, "job");
-        let instruction = text(args, "instruction");
         let mut handed = Vec::new();
         if !job.is_empty() {
             child.env("RLLM_SELF_JOB", &job);
@@ -1187,7 +1327,7 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
             handed.push("RLLM_SELF_INSTRUCTION".to_string());
         }
         let child = child.spawn().map_err(|error| format!("successor spawn failed: {error}"))?;
-        let pid = u64::from(child.id());
+        let pid = track(child, &job, job_source, "spawn");
         let revision = if journal_rel.is_empty() {
             String::new()
         } else {
@@ -1198,13 +1338,17 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
                 &rollback_digest,
                 &gate_text,
                 Some((pid, handed)),
+                &job,
+                &instruction,
+                job_source,
             )?
         };
         if revision.is_empty() {
-            return Ok(format!("{saved} successor pid {pid}"));
+            return Ok(with_reaped(format!("{saved} successor pid {pid}"), reaped));
         }
-        return Ok(format!(
-            "{saved} recorded revision {revision} in {journal_rel} successor pid {pid}"
+        return Ok(with_reaped(
+            format!("{saved} recorded revision {revision} in {journal_rel} successor pid {pid}"),
+            reaped,
         ));
     }
     if !revision.is_empty() {
@@ -1214,11 +1358,14 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
             receipt.push(' ');
             receipt.push_str(gate);
         }
-        Ok(receipt)
+        Ok(with_reaped(receipt, reaped))
     } else if gate_text.is_empty() {
-        Ok(format!("{saved} self-build reviewed; no builder was requested"))
+        Ok(with_reaped(
+            format!("{saved} self-build reviewed; no builder was requested"),
+            reaped,
+        ))
     } else {
-        Ok(format!("{saved} {gate_text}"))
+        Ok(with_reaped(format!("{saved} {gate_text}"), reaped))
     }
 }
 
@@ -2059,5 +2206,345 @@ mv "$tmp" "$1.done"
             get(successor, "env"), &Null,
             "exec must not claim it handed environment variables to a spawned child"
         );
+    }
+
+    fn wait_dead(pid: u64) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let path = format!("/proc/{pid}/stat");
+        loop {
+            match fs::read_to_string(&path) {
+                Err(_) => return,
+                Ok(text) => {
+                    if let Some(end) = text.rfind(')') {
+                        let state = text[end + 1..].split_whitespace().next().unwrap_or("");
+                        if state == "Z" || state == "X" {
+                            return;
+                        }
+                    }
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("successor {pid} did not exit");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    fn tracked_state(pid: u64) -> Json {
+        let want = Num(pid.to_string());
+        successor_states()
+            .into_iter()
+            .find(|row| get(row, "pid") == &want)
+            .unwrap_or_else(|| panic!("missing successor {pid}"))
+    }
+
+    #[test]
+    fn effective_identity_prefers_the_caller_then_the_carried_value() {
+        assert_eq!(effective("caller-job", "carried-job"), ("caller-job".into(), "caller"));
+        assert_eq!(effective("", "carried-job"), ("carried-job".into(), "inherited"));
+        assert_eq!(effective("", ""), (String::new(), "none"));
+        assert_eq!(
+            bound_carried("", &"j".repeat(JOB_MAX + 1), JOB_MAX, "job").unwrap_err(),
+            "inherited job exceeds 256 bytes"
+        );
+        assert_eq!(
+            bound_carried("", &"i".repeat(INSTRUCTION_MAX + 1), INSTRUCTION_MAX, "instruction").unwrap_err(),
+            "inherited instruction exceeds 16384 bytes"
+        );
+        assert_eq!(bound_carried("kept", &"j".repeat(JOB_MAX + 1), JOB_MAX, "job").unwrap().1, "caller");
+        assert!(bound_carried("", &"j".repeat(JOB_MAX), JOB_MAX, "job").is_ok());
+    }
+
+    #[test]
+    fn tracked_quiet_row_records_job_source_none() {
+        let _ = reap();
+        let scratch = Scratch::new("job-source-none");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        write(&root.join("bin"), b"not a program\n");
+        green_builder(root);
+        let content = "fn a() { let _ = 1; }\n";
+        let live = || false;
+        let receipt = run(root, &journal_request(content, "", Vec::new()), &live).unwrap();
+        let stored = rows(&root.join("self/journal.jsonl"));
+        assert_eq!(stored.len(), 1);
+        addressed(&stored[0]);
+        let successor = get(&stored[0], "successor");
+        assert_eq!(text(successor, "mode"), "none");
+        assert_eq!(text(successor, "job_source"), "none");
+        assert_eq!(get(successor, "job"), &s(""));
+        assert_eq!(get(successor, "instruction"), &s(""));
+        assert_eq!(get(successor, "env"), &Null);
+        let expected = format!(
+            "Saved {} bytes to src/lib.rs. recorded revision {} in self/journal.jsonl Rust cases passed: 2/2; isolated application cases: 1",
+            content.len(),
+            text(&stored[0], "revision")
+        );
+        assert_eq!(receipt, expected);
+    }
+
+    #[test]
+    fn tracked_carried_identity_is_recorded_and_handed_to_the_successor() {
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _lock = LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                std::env::remove_var("RLLM_SELF_JOB");
+                std::env::remove_var("RLLM_SELF_INSTRUCTION");
+            }
+        }
+        let _clear = Clear;
+        let _ = reap();
+        let scratch = Scratch::new("carried");
+        let root = scratch.path();
+        let original = "fn a() {}\n";
+        write(&root.join("src/lib.rs"), original.as_bytes());
+        executable(&root.join("bin"), SUCCESSOR_SCRIPT.as_bytes());
+        green_builder(root);
+        let live = || false;
+        std::env::set_var("RLLM_SELF_JOB", "carried-job");
+        std::env::set_var("RLLM_SELF_INSTRUCTION", "carried-instruction");
+        let first = "fn a() { let _ = 1; }\n";
+        let first_proof = root.join("proof-inherited");
+        let receipt = run(
+            root,
+            &spawn_fields(
+                first,
+                original,
+                "",
+                vec![("successor_args", Arr(vec![s(first_proof.to_str().unwrap()), s("continue")]))],
+            ),
+            &live,
+        )
+        .unwrap();
+        assert!(!receipt.contains("reaped"), "{receipt}");
+        let stored = rows(&root.join("self/journal.jsonl"));
+        let successor = get(&stored[0], "successor");
+        assert_eq!(text(successor, "job_source"), "inherited");
+        assert_eq!(text(successor, "job"), "carried-job");
+        assert_eq!(text(successor, "instruction"), "carried-instruction");
+        assert_eq!(
+            get(successor, "env").array().unwrap(),
+            &vec![s("RLLM_SELF_JOB"), s("RLLM_SELF_INSTRUCTION")]
+        );
+        let Num(first_pid) = get(successor, "pid") else { panic!("successor pid is not a number") };
+        let first_pid_num = first_pid.parse::<u64>().unwrap();
+        let running = tracked_state(first_pid_num);
+        assert_eq!(get(&running, "running"), &Bool(true));
+        assert_eq!(get(&running, "exit"), &Null);
+        assert_eq!(text(&running, "job"), "carried-job");
+        assert_eq!(text(&running, "job_source"), "inherited");
+        let dumped = wait_bytes(&PathBuf::from(format!("{}.done", first_proof.display())));
+        let parts: Vec<&[u8]> = dumped.split(|byte| *byte == 0).collect();
+        assert_eq!(parts[2], b"carried-job");
+        assert_eq!(parts[3], b"carried-instruction");
+        assert_eq!(parts[4], b"job-set");
+        assert_eq!(parts[5], b"instruction-set");
+        wait_dead(first_pid_num);
+        let second = "fn a() { let _ = 2; }\n";
+        let second_proof = root.join("proof-caller");
+        let receipt = run(
+            root,
+            &spawn_fields(
+                second,
+                first,
+                &text(&stored[0], "revision"),
+                vec![
+                    ("job", s("caller-job")),
+                    ("instruction", s("caller-instruction")),
+                    ("successor_args", Arr(vec![s(second_proof.to_str().unwrap()), s("continue")])),
+                ],
+            ),
+            &live,
+        )
+        .unwrap();
+        assert!(receipt.ends_with(" reaped 1 successor(s)"), "{receipt}");
+        let stored = rows(&root.join("self/journal.jsonl"));
+        assert_eq!(stored.len(), 2);
+        let successor = get(&stored[1], "successor");
+        assert_eq!(text(successor, "job_source"), "caller");
+        assert_eq!(text(successor, "job"), "caller-job");
+        assert_eq!(text(successor, "instruction"), "caller-instruction");
+        assert_eq!(
+            get(successor, "env").array().unwrap(),
+            &vec![s("RLLM_SELF_JOB"), s("RLLM_SELF_INSTRUCTION")]
+        );
+        let dumped = wait_bytes(&PathBuf::from(format!("{}.done", second_proof.display())));
+        let parts: Vec<&[u8]> = dumped.split(|byte| *byte == 0).collect();
+        assert_eq!(parts[2], b"caller-job");
+        assert_eq!(parts[3], b"caller-instruction");
+        let Num(second_pid) = get(successor, "pid") else { panic!("successor pid is not a number") };
+        wait_dead(second_pid.parse::<u64>().unwrap());
+        let finished = tracked_state(first_pid_num);
+        assert_eq!(get(&finished, "running"), &Bool(false));
+        assert_eq!(get(&finished, "exit"), &Num("0".into()));
+        let before = fs::read(root.join("src/lib.rs")).unwrap();
+        assert_eq!(before, second.as_bytes());
+        std::env::set_var("RLLM_SELF_JOB", "j".repeat(JOB_MAX + 1));
+        std::env::set_var("RLLM_SELF_INSTRUCTION", "short");
+        let refused = obj(vec![(
+            "args",
+            obj(vec![
+                ("path", s("src/lib.rs")),
+                ("content", s("fn a() { let _ = 3; }\n")),
+                ("previous_exists", Bool(true)),
+                ("approved_previous", s(second)),
+            ]),
+        )]);
+        let error = run(root, &refused, &live).unwrap_err();
+        assert_eq!(error, "inherited job exceeds 256 bytes");
+        assert_eq!(fs::read(root.join("src/lib.rs")).unwrap(), before);
+        assert_eq!(rows(&root.join("self/journal.jsonl")).len(), 2);
+        let caller_over = obj(vec![(
+            "args",
+            obj(vec![
+                ("path", s("src/lib.rs")),
+                ("content", s("fn a() { let _ = 3; }\n")),
+                ("previous_exists", Bool(true)),
+                ("approved_previous", s(second)),
+                ("job", s(&"j".repeat(JOB_MAX + 1))),
+            ]),
+        )]);
+        let error = run(root, &caller_over, &live).unwrap_err();
+        assert_eq!(error, "job exceeds 256 bytes");
+        assert_eq!(fs::read(root.join("src/lib.rs")).unwrap(), before);
+        std::env::set_var("RLLM_SELF_JOB", "ok");
+        std::env::set_var("RLLM_SELF_INSTRUCTION", "i".repeat(INSTRUCTION_MAX + 1));
+        let error = run(root, &refused, &live).unwrap_err();
+        assert_eq!(error, "inherited instruction exceeds 16384 bytes");
+        assert_eq!(fs::read(root.join("src/lib.rs")).unwrap(), before);
+        assert_eq!(rows(&root.join("self/journal.jsonl")).len(), 2);
+    }
+
+    #[test]
+    fn tracked_reap_reports_an_exited_successor_once() {
+        let _ = reap();
+        let scratch = Scratch::new("reap");
+        let hold_path = scratch.path().join("hold");
+        let quick_pid = track(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg("exit 5")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            "done-job",
+            "inherited",
+            "spawn",
+        );
+        let hold_pid = track(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg("while [ ! -f \"$1\" ]; do sleep 0.05; done; exit 4")
+                .arg("sh")
+                .arg(&hold_path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            "held-job",
+            "caller",
+            "spawn",
+        );
+        wait_dead(quick_pid);
+        assert_eq!(get(&tracked_state(quick_pid), "running"), &Bool(true));
+        assert_eq!(get(&tracked_state(quick_pid), "exit"), &Null);
+        assert_eq!(get(&tracked_state(hold_pid), "running"), &Bool(true));
+        assert_eq!(get(&tracked_state(hold_pid), "exit"), &Null);
+        assert_eq!(text(&tracked_state(hold_pid), "job"), "held-job");
+        assert_eq!(text(&tracked_state(hold_pid), "job_source"), "caller");
+        assert_eq!(reap(), 1);
+        assert_eq!(reap(), 0);
+        assert_eq!(get(&tracked_state(quick_pid), "running"), &Bool(false));
+        assert_eq!(get(&tracked_state(quick_pid), "exit"), &Num("5".into()));
+        assert_eq!(text(&tracked_state(quick_pid), "job"), "done-job");
+        assert_eq!(text(&tracked_state(quick_pid), "job_source"), "inherited");
+        assert_eq!(get(&tracked_state(hold_pid), "running"), &Bool(true));
+        assert_eq!(get(&tracked_state(hold_pid), "exit"), &Null);
+        write(&hold_path, b"go");
+        wait_dead(hold_pid);
+        assert_eq!(reap(), 1);
+        assert_eq!(reap(), 0);
+        assert_eq!(get(&tracked_state(hold_pid), "running"), &Bool(false));
+        assert_eq!(get(&tracked_state(hold_pid), "exit"), &Num("4".into()));
+    }
+
+    #[test]
+    fn tracked_reaped_text_appears_only_after_a_successor_exits() {
+        let _ = reap();
+        let scratch = Scratch::new("reaped-text");
+        let root = scratch.path();
+        let original = "fn a() {}\n";
+        write(&root.join("src/lib.rs"), original.as_bytes());
+        executable(&root.join("bin"), SUCCESSOR_SCRIPT.as_bytes());
+        green_builder(root);
+        let live = || false;
+        let first = "fn a() { let _ = 1; }\n";
+        let quiet = run(
+            root,
+            &obj(vec![(
+                "args",
+                obj(vec![
+                    ("path", s("src/lib.rs")),
+                    ("content", s(first)),
+                    ("previous_exists", Bool(true)),
+                    ("approved_previous", s(original)),
+                ]),
+            )]),
+            &live,
+        )
+        .unwrap();
+        let quiet_expected = format!(
+            "Saved {} bytes to src/lib.rs. self-build reviewed; no builder was requested",
+            first.len()
+        );
+        assert_eq!(quiet, quiet_expected);
+        let second = "fn a() { let _ = 2; }\n";
+        let proof = root.join("proof-reap");
+        let spawned = run(
+            root,
+            &spawn_fields(
+                second,
+                first,
+                "",
+                vec![("successor_args", Arr(vec![s(proof.to_str().unwrap()), s("continue")]))],
+            ),
+            &live,
+        )
+        .unwrap();
+        let stored = rows(&root.join("self/journal.jsonl"));
+        let Num(pid) = get(get(&stored[0], "successor"), "pid") else { panic!("successor pid is not a number") };
+        let spawned_expected = format!(
+            "Saved {} bytes to src/lib.rs. recorded revision {} in self/journal.jsonl successor pid {pid}",
+            second.len(),
+            text(&stored[0], "revision")
+        );
+        assert_eq!(spawned, spawned_expected);
+        assert!(!spawned.contains("reaped"), "{spawned}");
+        wait_bytes(&PathBuf::from(format!("{}.done", proof.display())));
+        wait_dead(pid.parse::<u64>().unwrap());
+        let third = "fn a() { let _ = 3; }\n";
+        let again = run(
+            root,
+            &obj(vec![(
+                "args",
+                obj(vec![
+                    ("path", s("src/lib.rs")),
+                    ("content", s(third)),
+                    ("previous_exists", Bool(true)),
+                    ("approved_previous", s(second)),
+                ]),
+            )]),
+            &live,
+        )
+        .unwrap();
+        let again_base = format!(
+            "Saved {} bytes to src/lib.rs. self-build reviewed; no builder was requested",
+            third.len()
+        );
+        assert_eq!(again, format!("{again_base} reaped 1 successor(s)"));
     }
 }
