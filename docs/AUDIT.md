@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T15:5Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T16:1Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -1133,6 +1133,41 @@ The F audit's two missing legs are queued as GAP3 work: `approval_root` provenan
 worktree as the workspace, plus symlink/relative-path variants) and a production-dispatch witness that the live
 refine action reaches the entry that now puts `workspace` on the task run — the latter is exactly what the
 connected RRSI-loop group has to supply.
+
+**The full check on `HEAD` bytes is green again.** Re-run in a `git archive` room of `4d60911`:
+units **exit 0**, unit gate **620/620 + 55 exit 0**, `bash tools/build-tools.sh` **three consecutive runs exit
+0 with a `Text file busy` count of 0**, harness runner **exit 0**. The sweep leg in that room reported
+`0 pass, 0 fail, 70 unavailable of 70 groups` because the room had no product binary — and it again published a
+hollow record (`delivered record written: 70 groups, 0 checks`), so the room copy's counts went to zero while
+the delivered record stayed at `7250328b…`. The runner printed
+`INVENTORY DRIFT: the delivered report counts 69 groups while the runner has 70`, which is the honest way to
+learn that the record has not been republished yet. A sweep with real group counts needs the product binary in
+the same tree, so it runs once in the main tree after the current lanes land.
+
+### Gap 4's cross-reference layer lands, and an audit's REFUTED verdict is itself refuted — 2026-11-12T16:1Z
+
+`a2a976e` adds call edges and cross-references to native binary analysis, implemented in Rust inside the product
+(no `objdump`/`readelf`/`nm`/`addr2line` anywhere — measured, not assumed). A direct edge is kept only when two
+independent resolution routes agree on the same address; disagreement and overflow become unknowns that state
+their reason, and `BR`/`BLR`/`RET` plus register-authenticated forms are unknowns rather than guessed edges.
+Verified alone in a room of `HEAD` plus its three files: **629/629 cases + 55**, which matches the `#[test]`
+marker census in tracked `core/` (629) exactly.
+
+The MiniMax seat on that diff returned **REFUTED**, and its reasoning was mostly about evidence scope rather than
+about the code, so each of its objections was checked against the tree instead of accepted:
+- "the PE AArch64 production path is not shown" — **refuted by measurement**: `core/pe_observation.rs:126` calls
+  `super::control_flow::analyze(...)`, and `core/pe_observation.rs:105` passes a
+  `super::control_flow::Observation` through the PE observe path. The diff simply did not contain those files.
+- "the exact production chain through `investigation.rs` and `elf_observation::observe_with_cancel` is not shown" —
+  **refuted by measurement**: `core/investigation.rs:102–103` reaches `elf_observation::observe_with_cancel` /
+  `analyze_with_cancel`, and `core/elf_observation.rs:166` calls `control_flow::observe` and appends
+  `context.report` onto the observation text, exactly as claimed.
+- "the unresolved-disagreement route is not exercised by a test" — **correct and kept**: the existing
+  `unresolved_direct_target_is_unknown_not_an_edge` (`core/control_flow.rs:341`) drives the *overflow* arm
+  (`reason.contains("overflow")`), so the `(Some(_),Some(_))` disagree arm at `core/control_flow.rs:75` had no
+  coverage, meaning the two-rules-must-agree invariant could regress silently. A follow-up lane (`bg_8d39f05e`)
+  is closing it and is additionally required to prove that every output cap discloses its own truncation, so a
+  partial call graph cannot be read as a complete one.
 
 ## Historical baseline audit (original text)
 
