@@ -970,16 +970,37 @@ fn run_log(pid: u64, argv: &[String], binary_digest: &str, source_digest: &str) 
         ),
     ])
 }
-/// The successor file beside `journal`. No journal, and a missing companion, are
-/// the empty witness. This does not consult the in-process table.
+/// The successor file beside `journal`. An empty journal value, a missing
+/// journal, and a journal with no rows are the empty witness. A missing
+/// companion is refused when that journal has a row and this process has a
+/// tracked entry whose witness path is the companion. The table is process
+/// memory: after a restart there is no entry, and the read keeps the empty
+/// witness. This read does not create the companion and does not append a row.
 fn successor_witness(root: &Path, value: &Json) -> Result<(u64, String)> {
     let journal_rel = text(value, "journal");
     if journal_rel.is_empty() {
         return Ok((0, String::new()));
     }
-    let rows = durable_successor_rows(&locate(root, &journal_rel, false)?)?;
+    let journal = locate(root, &journal_rel, false)?;
+    let companion = successor_journal_path(&journal);
+    let companion_missing = match fs::symlink_metadata(&companion) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => return Err(error.to_string()),
+        Ok(_) => false,
+    };
+    if companion_missing {
+        let journal_has_rows = !journal_lines(&journal)?.is_empty();
+        if journal_has_rows && companion_tracked(&companion) {
+            return Err("successor journal is missing beside a journal that has rows; the companion was not created".into());
+        }
+        return Ok((0, String::new()));
+    }
+    let rows = durable_successor_rows(&journal)?;
     let tip = rows.last().map(|row| text(row, "revision")).unwrap_or_default();
     Ok((rows.len() as u64, tip))
+}
+fn companion_tracked(companion: &Path) -> bool {
+    successors().values().any(|tracked| tracked.journal.as_deref() == Some(companion))
 }
 
 pub(crate) fn handoff(value: &Json) -> Result<Json> {
@@ -1009,8 +1030,8 @@ pub(crate) fn handoff(value: &Json) -> Result<Json> {
     }
     digest_text(&text(value, "parent"))?;
     digest_text(&text(value, "revision"))?;
-    // The chain is the file beside `journal`. Refuse that file's sentence before exec.
-    // `successors` is the live table and does not supply the tip.
+    // The chain tip is the file beside `journal`. The live table does not supply the tip.
+    // A missing companion is refused only when that table has an entry for the companion.
     let (successor_rows, successor_tip) = successor_witness(&root, value)?;
     let mut argv = vec![binary.to_string_lossy().into_owned()];
     argv.extend(strings(value, "args")?);
@@ -1337,6 +1358,10 @@ struct Tracked {
     job_source: String,
     mode: String,
     exit: Option<i32>,
+    signal: Option<i32>,
+    /// `try_wait` has already observed an exit. Later reads and `reap` use `exit`
+    /// and `signal`. They do not wait again.
+    exit_observed: bool,
     journal: Option<PathBuf>,
 }
 static SUCCESSORS: OnceLock<Mutex<BTreeMap<u64, Tracked>>> = OnceLock::new();
@@ -1365,6 +1390,8 @@ fn track_with(
             job_source: job_source.to_string(),
             mode: mode.to_string(),
             exit: None,
+            signal: None,
+            exit_observed: false,
             journal,
         },
     );
@@ -1438,8 +1465,15 @@ pub(crate) fn durable_successor_rows(journal: &Path) -> Result<Vec<Json>> {
     }
     Ok(rows)
 }
+fn remember_exit(tracked: &mut Tracked, status: std::process::ExitStatus) {
+    tracked.exit = status.code();
+    tracked.signal = std::os::unix::process::ExitStatusExt::signal(&status);
+    tracked.exit_observed = true;
+}
 // A spawn that carried a journal path appends its exit beside that journal.
 // A spawn with no journal stays in memory, and a refused command writes nothing.
+// When the view has already stored an exit, that stored exit is the one recorded.
+// `Child::try_wait` promises only the result of the call that observed the exit.
 fn reap() -> Result<usize> {
     let mut table = successors();
     let mut ready = Vec::new();
@@ -1447,21 +1481,18 @@ fn reap() -> Result<usize> {
         if tracked.mode != "spawn" || tracked.child.is_none() {
             continue;
         }
-        let status = {
-            let Some(child) = tracked.child.as_mut() else { continue };
-            match child.try_wait() {
-                Ok(status) => status,
-                Err(_) => continue,
-            }
-        };
-        let Some(status) = status else { continue };
-        ready.push((
-            *pid,
-            tracked.job.clone(),
-            tracked.journal.clone(),
-            status.code(),
-            std::os::unix::process::ExitStatusExt::signal(&status),
-        ));
+        if !tracked.exit_observed {
+            let status = {
+                let Some(child) = tracked.child.as_mut() else { continue };
+                match child.try_wait() {
+                    Ok(status) => status,
+                    Err(_) => continue,
+                }
+            };
+            let Some(status) = status else { continue };
+            remember_exit(tracked, status);
+        }
+        ready.push((*pid, tracked.job.clone(), tracked.journal.clone(), tracked.exit, tracked.signal));
     }
     let mut exited = 0usize;
     for (pid, job, journal, code, signal) in ready {
@@ -1482,27 +1513,47 @@ fn reap() -> Result<usize> {
     }
     Ok(exited)
 }
+/// Stores an exit the first time `try_wait` observes one. The wait does not
+/// append a journal row and leaves the child in the table. A later read uses
+/// the stored exit and does not wait again.
+fn observe_exit(tracked: &mut Tracked) -> bool {
+    if tracked.exit_observed {
+        return true;
+    }
+    if tracked.mode != "spawn" {
+        return false;
+    }
+    let Some(child) = tracked.child.as_mut() else {
+        return false;
+    };
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            remember_exit(tracked, status);
+            true
+        }
+        _ => false,
+    }
+}
 pub(crate) fn successor_states() -> Vec<Json> {
     successors()
-        .iter()
+        .iter_mut()
         .map(|(pid, tracked)| {
-            let running = tracked.child.is_some() && tracked.mode == "spawn";
+            let exited = observe_exit(tracked);
+            let running = tracked.child.is_some() && tracked.mode == "spawn" && !exited;
+            let exit = if running {
+                Null
+            } else {
+                match tracked.exit {
+                    Some(code) => Num(code.to_string()),
+                    None => Null,
+                }
+            };
             obj(vec![
                 ("pid", n(*pid)),
                 ("job", s(&tracked.job)),
                 ("job_source", s(&tracked.job_source)),
                 ("running", Bool(running)),
-                (
-                    "exit",
-                    if running {
-                        Null
-                    } else {
-                        match tracked.exit {
-                            Some(code) => Num(code.to_string()),
-                            None => Null,
-                        }
-                    },
-                ),
+                ("exit", exit),
             ])
         })
         .collect()
@@ -2085,6 +2136,8 @@ mod checks {
         write(&root.join("src/lib.rs"), b"fn shipped() {}\n");
         write(&root.join("next-bin"), b"successor-image");
         write(&root.join("self/journal.jsonl"), b"{\"schema\":\"1\"}\n");
+        // Present and empty: this handoff is a digest skip, not a vanished chain.
+        write(&successor_journal_path(&root.join("self/journal.jsonl")), b"");
         let mut rollback = vec![7u8; 4 * 1024 * 1024 + 4096];
         for (index, byte) in rollback.iter_mut().enumerate() {
             *byte = (index % 251) as u8;
@@ -2781,8 +2834,8 @@ mv "$tmp" "$1.done"
             "spawn",
         );
         wait_dead(quick_pid);
-        assert_eq!(get(&tracked_state(quick_pid), "running"), &Bool(true));
-        assert_eq!(get(&tracked_state(quick_pid), "exit"), &Null);
+        assert_eq!(get(&tracked_state(quick_pid), "running"), &Bool(false));
+        assert_eq!(get(&tracked_state(quick_pid), "exit"), &Num("5".into()));
         assert_eq!(get(&tracked_state(hold_pid), "running"), &Bool(true));
         assert_eq!(get(&tracked_state(hold_pid), "exit"), &Null);
         assert_eq!(text(&tracked_state(hold_pid), "job"), "held-job");
@@ -3798,6 +3851,135 @@ mv "$tmp" "$1.done"
     }
 
     #[test]
+    fn handoff_reads_an_empty_journal_file_with_no_successor_journal_as_an_empty_witness() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("handoff-empty-journal");
+        let root = scratch.path();
+        let journal = root.join("self/journal.jsonl");
+        let companion = successor_journal_path(&journal);
+        write(&journal, b"\n");
+        assert!(!companion.exists());
+        let seen = handoff_at(root, false).unwrap();
+        assert_eq!(get(&seen, "successor_rows"), &n(0));
+        assert_eq!(text(&seen, "successor_tip"), "");
+        assert_eq!(get(&seen, "executed"), &Bool(false));
+        assert!(!companion.exists(), "reading an empty journal created a successor journal");
+        assert_eq!(fs::read(&journal).unwrap(), b"\n");
+    }
+
+    #[test]
+    fn handoff_refuses_a_vanished_successor_journal_beside_a_journal_with_rows() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("handoff-vanished");
+        let root = scratch.path();
+        let journal = root.join("self/journal.jsonl");
+        let companion = successor_journal_path(&journal);
+        let journal_bytes = b"{\"schema\":\"1\"}\n";
+        write(&journal, journal_bytes);
+        write(&companion, b"{\"schema\":\"1\",\"event\":\"spawn\"}\n");
+        let pid = track_with(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg("exit 0")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            "vanished-job",
+            "caller",
+            "spawn",
+            Some(companion.clone()),
+        );
+        wait_dead(pid);
+        fs::remove_file(&companion).unwrap();
+        assert!(!companion.exists());
+        assert!(
+            successors().values().any(|tracked| tracked.journal.as_deref() == Some(companion.as_path())),
+            "the refusal fixture has no tracked companion"
+        );
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        let proof = root.join("not-executed");
+        executable(
+            &root.join("bin"),
+            format!("#!/bin/sh\nprintf x > '{}'\n", proof.display()).as_bytes(),
+        );
+        let missing = "successor journal is missing beside a journal that has rows; the companion was not created";
+        let refused = |confirmed: bool| {
+            match handoff(&obj(vec![
+                ("root", s(root.to_str().unwrap())),
+                ("binary", s(root.join("bin").to_str().unwrap())),
+                ("journal", s("self/journal.jsonl")),
+                ("review_confirmed", Bool(confirmed)),
+            ])) {
+                Err(error) => error,
+                Ok(_) => String::new(),
+            }
+        };
+        assert_eq!(refused(false), missing);
+        assert_eq!(refused(true), missing);
+        assert!(!companion.exists(), "a vanished successor journal was recreated");
+        assert!(!proof.exists(), "a vanished successor journal still exec'd the successor");
+        assert_eq!(fs::read(&journal).unwrap(), journal_bytes);
+    }
+
+    fn handoff_exec_with_unrelated_journal_rows() {
+        let root = PathBuf::from(std::env::var("RLLM_EXEC_ROOT").unwrap());
+        let proof = std::env::var("RLLM_EXEC_PROOF").unwrap();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        let script = format!("#!/bin/sh\nprintf '%s\\n' \"$1\" > '{proof}'\n");
+        executable(&root.join("bin"), script.as_bytes());
+        let journal = root.join("self/journal.jsonl");
+        write(&journal, b"{\"schema\":\"1\",\"note\":\"unrelated\"}\n");
+        assert!(!successor_journal_path(&journal).exists());
+        assert!(successors().is_empty(), "a fresh process tracked a successor");
+        let result = handoff(&obj(vec![
+            ("root", s(root.to_str().unwrap())),
+            ("binary", s(root.join("bin").to_str().unwrap())),
+            ("args", Arr(vec![s("continue")])),
+            ("journal", s("self/journal.jsonl")),
+            ("review_confirmed", Bool(true)),
+        ]));
+        panic!("handoff exec returned {result:?}");
+    }
+
+    #[test]
+    fn handoff_review_confirmed_execs_when_unrelated_journal_rows_have_no_tracked_successor() {
+        let _isolate = isolate();
+        if std::env::var("RLLM_SELF_BUILD_PROBE").ok().as_deref() == Some("handoff-exec-unrelated") {
+            handoff_exec_with_unrelated_journal_rows();
+            return;
+        }
+        let scratch = Scratch::new("handoff-unrelated");
+        let root = scratch.path();
+        let journal = root.join("self/journal.jsonl");
+        let companion = successor_journal_path(&journal);
+        write(&journal, b"{\"schema\":\"1\",\"note\":\"unrelated\"}\n");
+        assert!(!companion.exists());
+        assert!(successors().is_empty());
+        let seen = handoff_at(root, false).unwrap();
+        assert_eq!(get(&seen, "successor_rows"), &n(0));
+        assert_eq!(text(&seen, "successor_tip"), "");
+        assert_eq!(get(&seen, "executed"), &Bool(false));
+        assert!(get(&seen, "successors").array().unwrap().is_empty());
+        assert!(!companion.exists(), "reading unrelated journal rows created a successor journal");
+        assert_eq!(fs::read(&journal).unwrap(), b"{\"schema\":\"1\",\"note\":\"unrelated\"}\n");
+        let proof = root.join("unrelated-proof");
+        let output = test_child(
+            &[
+                ("RLLM_SELF_BUILD_PROBE", "handoff-exec-unrelated"),
+                ("RLLM_EXEC_ROOT", root.to_str().unwrap()),
+                ("RLLM_EXEC_PROOF", proof.to_str().unwrap()),
+            ],
+            "self_build::checks::handoff_review_confirmed_execs_when_unrelated_journal_rows_have_no_tracked_successor",
+        );
+        let body = fs::read_to_string(&proof).unwrap_or_else(|error| panic!("{error}\n{}", child_text(&output)));
+        assert_eq!(body, "continue\n", "{}", child_text(&output));
+        assert!(output.status.success(), "{}", child_text(&output));
+        assert!(!companion.exists(), "an untracked journal created a successor journal");
+    }
+
+    #[test]
     fn handoff_successor_view_separates_a_running_spawn_from_a_reaped_exit() {
         let _isolate = isolate();
         let scratch = Scratch::new("handoff-state");
@@ -3837,9 +4019,121 @@ mv "$tmp" "$1.done"
         assert_eq!(get(&seen, "successor_rows"), &n(0));
     }
 
+    #[test]
+    fn handoff_reports_a_killed_successor_as_not_running_before_reap() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("handoff-killed");
+        let root = scratch.path();
+        let journal = root.join("self/journal.jsonl");
+        let witness = successor_journal_path(&journal);
+        assert!(!witness.exists());
+        let pid = track_with(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg("trap 'exit 9' TERM; while :; do sleep 0.05; done")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            "killed-job",
+            "caller",
+            "spawn",
+            Some(witness.clone()),
+        );
+        assert!(
+            Command::new("/bin/kill").arg("-TERM").arg(pid.to_string()).status().unwrap().success(),
+            "kill did not signal the successor"
+        );
+        wait_dead(pid);
+        let seen = handoff_at(root, false).unwrap();
+        let state = viewed_state(&seen, pid);
+        assert_eq!(get(&state, "running"), &Bool(false));
+        assert_eq!(get(&state, "exit"), &n(9));
+        assert_eq!(text(&state, "job"), "killed-job");
+        assert_eq!(text(&state, "job_source"), "caller");
+        assert_eq!(get(&seen, "successor_rows"), &n(0));
+        assert_eq!(text(&seen, "successor_tip"), "");
+        assert!(!witness.exists(), "reading the handoff appended a successor journal row");
+        assert_eq!(reap().unwrap(), 1);
+        let rows = durable_successor_rows(&journal).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(text(&rows[0], "event"), "reap");
+        assert_eq!(get(&rows[0], "exit"), &n(9));
+        assert_eq!(get(&rows[0], "signal"), &Null);
+        assert_eq!(text(&rows[0], "job"), "killed-job");
+        let finished = tracked_state(pid);
+        assert_eq!(get(&finished, "running"), &Bool(false));
+        assert_eq!(get(&finished, "exit"), &n(9));
+        let again = handoff_at(root, false).unwrap();
+        let reread = viewed_state(&again, pid);
+        assert_eq!(get(&reread, "running"), &Bool(false));
+        assert_eq!(get(&reread, "exit"), &n(9));
+        assert_eq!(text(&reread, "job"), "killed-job");
+    }
+
+    #[test]
+    fn reap_uses_the_exit_stored_by_the_view() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("stored-exit");
+        let root = scratch.path();
+        let journal = root.join("self/journal.jsonl");
+        let witness = successor_journal_path(&journal);
+        let pid = track_with(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg("exit 9")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            "stored-job",
+            "caller",
+            "spawn",
+            Some(witness.clone()),
+        );
+        wait_dead(pid);
+        let state = tracked_state(pid);
+        assert_eq!(get(&state, "running"), &Bool(false));
+        assert_eq!(get(&state, "exit"), &n(9));
+        assert!(!witness.exists(), "the view appended a successor journal row");
+        let replacement = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 4")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let replacement_pid = u64::from(replacement.id());
+        wait_dead(replacement_pid);
+        {
+            let mut table = successors();
+            let tracked = table.get_mut(&pid).unwrap();
+            assert!(tracked.exit_observed, "the view did not store the exit");
+            assert_eq!(tracked.exit, Some(9));
+            assert_eq!(tracked.signal, None);
+            tracked.child = Some(replacement);
+        }
+        assert_eq!(reap().unwrap(), 1);
+        assert_eq!(reap().unwrap(), 0);
+        let rows = durable_successor_rows(&journal).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(text(&rows[0], "event"), "reap");
+        assert_eq!(get(&rows[0], "exit"), &n(9));
+        assert_eq!(get(&rows[0], "signal"), &Null);
+        assert_eq!(text(&rows[0], "job"), "stored-job");
+        assert_eq!(get(&rows[0], "pid"), &n(pid));
+        let finished = tracked_state(pid);
+        assert_eq!(get(&finished, "running"), &Bool(false));
+        assert_eq!(get(&finished, "exit"), &n(9));
+    }
+
     fn handoff_exec_reaches_the_successor() {
         let root = PathBuf::from(std::env::var("RLLM_EXEC_ROOT").unwrap());
         let proof = std::env::var("RLLM_EXEC_PROOF").unwrap();
+        let tampered = std::env::var("RLLM_SELF_BUILD_PROBE").ok().as_deref() == Some("handoff-exec-tampered");
         write(&root.join("src/lib.rs"), b"fn a() {}\n");
         let script = format!("#!/bin/sh\nprintf '%s\\n' \"$1\" > '{proof}'\n");
         executable(&root.join("bin"), script.as_bytes());
@@ -3847,6 +4141,22 @@ mv "$tmp" "$1.done"
         let witness = successor_journal_path(&journal);
         append_spawn_row(&witness, 11, "job-a", &sha256(b"source-a"), "spawn").unwrap();
         append_reap_row(&witness, 11, "job-a", Some(0), None).unwrap();
+        if tampered {
+            let mut lines = successor_lines(&journal);
+            let before = parse(&lines[1]).unwrap();
+            let revision = text(&before, "revision");
+            let marker = "\"job\":\"job-a\"";
+            let at = lines[1].find(marker).expect("reap payload job");
+            let mut bytes = lines[1].clone().into_bytes();
+            let index = at + marker.len() - 2;
+            assert_eq!(bytes[index], b'a');
+            bytes[index] = b'b';
+            lines[1] = String::from_utf8(bytes).unwrap();
+            let after = parse(&lines[1]).unwrap();
+            assert_eq!(text(&after, "revision"), revision);
+            assert_ne!(revision, sha256(without_revision(&after).unwrap().string().as_bytes()));
+            store_successor_lines(&journal, &lines);
+        }
         let result = handoff(&obj(vec![
             ("root", s(root.to_str().unwrap())),
             ("binary", s(root.join("bin").to_str().unwrap())),
@@ -3854,18 +4164,46 @@ mv "$tmp" "$1.done"
             ("journal", s("self/journal.jsonl")),
             ("review_confirmed", Bool(true)),
         ]));
+        if tampered {
+            match result {
+                Err(error) if error == "successor journal row is not content-addressed" => {
+                    panic!("refused before exec: {error}");
+                }
+                other => panic!("handoff exec returned {other:?}"),
+            }
+        }
         panic!("handoff exec returned {result:?}");
+    }
+    fn assert_confirmed_exec_refuses_a_tampered_journal(name: &str, exact: &str) {
+        let scratch = Scratch::new(name);
+        let proof = scratch.path().join("tampered-proof");
+        let output = test_child(
+            &[
+                ("RLLM_SELF_BUILD_PROBE", "handoff-exec-tampered"),
+                ("RLLM_EXEC_ROOT", scratch.path().to_str().unwrap()),
+                ("RLLM_EXEC_PROOF", proof.to_str().unwrap()),
+            ],
+            exact,
+        );
+        let detail = child_text(&output);
+        assert!(!proof.exists(), "tampered chain still exec'd the successor\n{detail}");
+        assert!(detail.contains("successor journal row is not content-addressed"), "{detail}");
+        assert!(!detail.contains("successor exec failed"), "{detail}");
+        assert!(!output.status.success(), "{detail}");
     }
 
     #[test]
     fn handoff_review_confirmed_execs_the_binary_after_a_valid_chain() {
         let _isolate = isolate();
-        if std::env::var("RLLM_SELF_BUILD_PROBE").ok().as_deref() == Some("handoff-exec") {
-            handoff_exec_reaches_the_successor();
-            return;
+        match std::env::var("RLLM_SELF_BUILD_PROBE").ok().as_deref() {
+            Some("handoff-exec") | Some("handoff-exec-tampered") => {
+                handoff_exec_reaches_the_successor();
+                return;
+            }
+            _ => {}
         }
         let scratch = Scratch::new("handoff-exec");
-        let proof = scratch.path().join("proof");
+        let proof = scratch.path().join("valid-proof");
         let output = test_child(
             &[
                 ("RLLM_SELF_BUILD_PROBE", "handoff-exec"),
@@ -3877,5 +4215,22 @@ mv "$tmp" "$1.done"
         let body = fs::read_to_string(&proof).unwrap_or_else(|error| panic!("{error}\n{}", child_text(&output)));
         assert_eq!(body, "continue\n", "{}", child_text(&output));
         assert!(output.status.success(), "{}", child_text(&output));
+        assert_confirmed_exec_refuses_a_tampered_journal(
+            "handoff-exec-tampered",
+            "self_build::checks::handoff_review_confirmed_execs_the_binary_after_a_valid_chain",
+        );
+    }
+
+    #[test]
+    fn handoff_review_confirmed_refuses_exec_on_a_tampered_successor_journal() {
+        let _isolate = isolate();
+        if std::env::var("RLLM_SELF_BUILD_PROBE").ok().as_deref() == Some("handoff-exec-tampered") {
+            handoff_exec_reaches_the_successor();
+            return;
+        }
+        assert_confirmed_exec_refuses_a_tampered_journal(
+            "handoff-exec-refuse",
+            "self_build::checks::handoff_review_confirmed_refuses_exec_on_a_tampered_successor_journal",
+        );
     }
 }
