@@ -899,5 +899,28 @@
     "selfreb (verification/self_rebuild.py leg() swallow + report shape)",
     "gap2e (core/improvement.rs, core/rrsi.rs, core/harness.rs, verification/rrsi_loop.py)",
     "natx (core/binary_declarations.rs typed cross-references; must clear the 'field xrefs is never read' product warning by consuming Observation.xrefs)"
-  ]
+  ],
+  "gap2_rounds_ceiling_interlocks": {
+    "status": "coordinator census, feeds the gap2e adjudication",
+    "validator": "core/improvement.rs:113-119 accepts only 1/2; 'Select one or up to two refinement rounds' is asserted only at verification/rrsi_loop.py:382 (plus the scope prose at :448)",
+    "route_blockers": [
+      "core/harness.rs:967 'let iterative=number(&run,\"refinement_rounds\")==2;' - equality, not >=, so a rounds=3 run would not take the iterative path",
+      "core/harness.rs:1053 'number(run,\"refinement_rounds\")==2 && get(run,\"first_refinement\")!=&Null' - same equality gating the second-round affordance"
+    ],
+    "ui": "core/harness.rs:350 offers only ('One round','1') and ('Up to two rounds (requires response checks)','2'); the label appears nowhere else in core/verification/platform/tools, so it can be extended freely",
+    "other_call_sites": "verification/hosted_phases.py:193/:231/:262/:279 pass '2' or '1' and stay valid; verification/rrsi_loop.py:193/:254/:311/:332/:344 pass '2', :307 passes '3' expecting refusal",
+    "adjudication_rule": "a lane that only widens refinement_rounds leaves :967/:1053 equality in place, so a 3-round run still never takes the iterative path; the rrsi_loop 3-round leg is the witness that catches it"
+  },
+  "dotnet_landed_28b29d3": {
+    "status": "committed",
+    "files": "core/dotnet_evidence.rs (new, 1455 lines) core/investigation.rs core/lib.rs",
+    "witness": "room of 436b281 + those three files: 701/701 + 55 isolated, exit 0",
+    "mutation": "consumer line deleted -> 698/701 exit 1; red cases cli_directory_appends_exact_dotnet_lines, inconsistent_cli_extent_is_refused_by_name_in_inspect, truncated_metadata_stream_names_the_unread_header_in_inspect at investigation.rs:444/:459/:490; pe_without_cli_directory_keeps_inspect_text survives (preservation guard)",
+    "r1_leg_measured": "core/dotnet_evidence.rs contains 0 Command::new, 0 std::env, 0 network, 0 file writes, 0 unsafe, 0 extern \"C\", 0 read_dir, 0 clock reads - pure byte parsing",
+    "open_from_seat": [
+      "Some(String::new()) substitution mutant",
+      "no aggregate output/work cap charged against the inspect budget for a large PE with directory 14",
+      "no cancellation hook inside the CLI parser"
+    ]
+  }
 }
