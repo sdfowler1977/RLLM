@@ -34,6 +34,7 @@ use super::*;
 #[path="inquiry.rs"] mod inquiry;
 #[path="experiment_records.rs"] mod experiment_records;
 #[path="reconstruction.rs"] mod reconstruction;
+#[path="behaviour_spec.rs"] mod behaviour_spec;
 #[path="file_evidence.rs"] mod file_evidence;
 #[path="incremental_digest.rs"] mod incremental_digest;
 #[path="exploration.rs"] mod exploration;
