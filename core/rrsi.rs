@@ -8,7 +8,7 @@
 use super::*;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 const NOFOLLOW: i32 = 131072;
@@ -182,7 +182,9 @@ fn validate_fields(value: &Json, expected_run: &str) -> Result<()> {
     let unscored = refused
         || (score_missing(value)
             && (decision_text.starts_with("refused because component ")
-                || decision_text.starts_with("workspace is not")));
+                || decision_text.starts_with("workspace is not")
+                // Distinct from the work-tree sentence, and still written before any score exists.
+                || decision_text == "workspace identity does not match the approved root"));
     if refused && !score_missing(value) {
         return Err("a leakage refusal must not record a score".into());
     }
@@ -1519,7 +1521,7 @@ fn path_has_slot(path: &Path) -> bool {
     path.components().any(|component| component.as_os_str() == ".rllm-worktrees")
 }
 
-pub(crate) fn require_worktree_root(workspace: &Path) -> Result<GitRoot> {
+fn locate_worktree(workspace: &Path) -> Result<PathBuf> {
     let meta = match fs::symlink_metadata(workspace) {
         Ok(meta) if !meta.file_type().is_symlink() && meta.is_dir() => meta,
         _ => return Err("workspace is not the root of a git work tree".into()),
@@ -1528,17 +1530,27 @@ pub(crate) fn require_worktree_root(workspace: &Path) -> Result<GitRoot> {
     if path_has_slot(workspace) {
         return Err("workspace is not the root of a git work tree".into());
     }
-    let git_dir = workspace.join(".git");
+    // A relative --git-dir is resolved from the work-tree directory, so git has
+    // to see the canonical directory rather than the spelling the caller used.
+    let wanted = fs::canonicalize(workspace).map_err(|error| error.to_string())?;
+    if path_has_slot(&wanted) {
+        return Err("workspace is not the root of a git work tree".into());
+    }
+    let git_dir = wanted.join(".git");
     match fs::symlink_metadata(&git_dir) {
         Ok(meta) if !meta.file_type().is_symlink() && meta.is_dir() => {}
         _ => return Err("workspace is not the root of a git work tree".into()),
     }
-    let inside = git_ok(&git_dir, workspace, &["rev-parse", "--is-inside-work-tree"])?;
+    Ok(wanted)
+}
+
+fn finish_worktree(wanted: PathBuf) -> Result<GitRoot> {
+    let git_dir = wanted.join(".git");
+    let inside = git_ok(&git_dir, &wanted, &["rev-parse", "--is-inside-work-tree"])?;
     if inside.stdout.trim() != "true" {
         return Err("workspace is not the root of a git work tree".into());
     }
-    let top = git_ok(&git_dir, workspace, &["rev-parse", "--show-toplevel"])?;
-    let wanted = fs::canonicalize(workspace).map_err(|error| error.to_string())?;
+    let top = git_ok(&git_dir, &wanted, &["rev-parse", "--show-toplevel"])?;
     let got = fs::canonicalize(Path::new(top.stdout.trim())).map_err(|error| error.to_string())?;
     if wanted != got || path_has_slot(&wanted) {
         return Err("workspace is not the root of a git work tree".into());
@@ -1548,9 +1560,37 @@ pub(crate) fn require_worktree_root(workspace: &Path) -> Result<GitRoot> {
     if !commit_hex(&head) {
         return Err("workspace HEAD is not a commit".into());
     }
-    let git_dir = wanted.join(".git");
     ignore_worktrees(&git_dir)?;
     Ok(GitRoot { workspace: wanted, git_dir, head })
+}
+
+pub(crate) fn workspace_text(root: &GitRoot) -> Result<String> {
+    path_text(&root.workspace)
+}
+
+pub(crate) fn workspace_identity(path: &Path) -> Result<String> {
+    let meta = fs::metadata(path).map_err(|error| error.to_string())?;
+    if !meta.is_dir() {
+        return Err("workspace is not the root of a git work tree".into());
+    }
+    Ok(format!("{}:{}", meta.dev(), meta.ino()))
+}
+
+/// Resolve `workspace` and, when `recorded` is non-empty, require that inode.
+/// An identity mismatch returns before git runs, so the other tree is not touched.
+pub(crate) fn require_recorded_worktree(workspace: &Path, recorded: &str) -> Result<GitRoot> {
+    let wanted = locate_worktree(workspace)?;
+    if !recorded.is_empty() {
+        let identity = workspace_identity(&wanted)?;
+        if identity != recorded {
+            return Err("workspace identity does not match the approved root".into());
+        }
+    }
+    finish_worktree(wanted)
+}
+
+pub(crate) fn require_worktree_root(workspace: &Path) -> Result<GitRoot> {
+    require_recorded_worktree(workspace, "")
 }
 
 fn slot_path(workspace: &Path, slot: usize) -> PathBuf {
@@ -2485,6 +2525,148 @@ mod checks {
         assert_eq!(git_text(&repo, &["rev-parse", "HEAD"]), before);
         let listed = git_text(&repo, &["worktree", "list", "--porcelain"]);
         assert!(!listed.contains(".rllm-worktrees"), "{listed}");
+    }
+
+    fn relative_to_cwd(target: &Path) -> String {
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let target = target.canonicalize().unwrap();
+        let cwd_parts: Vec<_> = cwd.components().collect();
+        let target_parts: Vec<_> = target.components().collect();
+        let mut shared = 0;
+        while shared < cwd_parts.len() && shared < target_parts.len() && cwd_parts[shared] == target_parts[shared] {
+            shared += 1;
+        }
+        let mut relative = PathBuf::new();
+        for _ in shared..cwd_parts.len() {
+            relative.push("..");
+        }
+        for part in &target_parts[shared..] {
+            relative.push(part.as_os_str());
+        }
+        let text = relative.to_str().unwrap().to_string();
+        assert!(relative.is_relative(), "{text}");
+        assert!(!text.starts_with('/'), "{text}");
+        text
+    }
+
+    fn exclude_body(repo: &Path) -> String {
+        let exclude = repo.join(".git").join("info").join("exclude");
+        if exclude.exists() {
+            fs::read_to_string(exclude).unwrap()
+        } else {
+            String::new()
+        }
+    }
+
+    #[test]
+    fn relative_worktree_spelling_resolves_to_the_canonical_root() {
+        let (_scratch, repo) = git_scratch();
+        let canonical = repo.canonicalize().unwrap();
+        let identity = workspace_identity(&canonical).unwrap();
+        let relative = PathBuf::from(relative_to_cwd(&canonical));
+        assert_ne!(relative, canonical);
+        let bound = require_recorded_worktree(&relative, &identity).unwrap();
+        assert_eq!(bound.workspace, canonical);
+        assert_eq!(workspace_identity(&bound.workspace).unwrap(), identity);
+        let unbound = require_recorded_worktree(&relative, "").unwrap();
+        assert_eq!(unbound.workspace, canonical);
+    }
+
+    #[test]
+    fn lexical_worktree_spellings_resolve_to_the_same_root() {
+        let (_scratch, repo) = git_scratch();
+        let canonical = repo.canonicalize().unwrap();
+        let identity = workspace_identity(&canonical).unwrap();
+        let name = canonical.file_name().unwrap().to_str().unwrap();
+        let spellings = [
+            PathBuf::from(format!("{}/", canonical.display())),
+            PathBuf::from(format!("{}/./.", canonical.display())),
+            PathBuf::from(format!("{canonical}/../{name}", canonical = canonical.display())),
+        ];
+        for spelling in spellings {
+            let spelling_text = spelling.to_str().unwrap();
+            assert_ne!(spelling_text, canonical.to_str().unwrap(), "{spelling_text}");
+            let bound = require_recorded_worktree(Path::new(spelling_text), &identity).unwrap();
+            assert_eq!(bound.workspace, canonical, "{spelling_text}");
+            assert_eq!(workspace_identity(&bound.workspace).unwrap(), identity);
+        }
+    }
+
+    #[test]
+    fn symlinked_parent_resolves_to_the_real_worktree() {
+        let (scratch, repo) = git_scratch();
+        let canonical = repo.canonicalize().unwrap();
+        let identity = workspace_identity(&canonical).unwrap();
+        let link = scratch.0.join("link-parent");
+        std::os::unix::fs::symlink(repo.parent().unwrap(), &link).unwrap();
+        let via = link.join(repo.file_name().unwrap());
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(!fs::symlink_metadata(&via).unwrap().file_type().is_symlink());
+        assert_ne!(via.canonicalize().unwrap(), via);
+        let bound = require_recorded_worktree(&via, &identity).unwrap();
+        assert_eq!(bound.workspace, canonical);
+        assert_eq!(workspace_identity(&via).unwrap(), identity);
+        assert!(!bound.workspace.components().any(|component| component.as_os_str() == "link-parent"));
+    }
+
+    #[test]
+    fn recorded_identity_refuses_a_different_worktree_without_writing_exclude() {
+        let (_keep_a, repo_a) = git_scratch();
+        let (_keep_b, repo_b) = git_scratch();
+        let identity_a = workspace_identity(&repo_a.canonicalize().unwrap()).unwrap();
+        let identity_b = workspace_identity(&repo_b.canonicalize().unwrap()).unwrap();
+        assert_ne!(identity_a, identity_b);
+        let refused = match require_recorded_worktree(&repo_b, &identity_a) {
+            Err(error) => error,
+            Ok(_) => panic!("a different work tree was accepted"),
+        };
+        assert_eq!(refused, "workspace identity does not match the approved root");
+        assert!(!exclude_body(&repo_b).contains(".rllm-worktrees/"), "{}", exclude_body(&repo_b));
+        assert!(!repo_b.join(".git").join("rllm-empty-hooks").exists());
+        assert!(!repo_b.join("rllm-harness.txt").exists());
+        let bound = require_recorded_worktree(&repo_b, &identity_b).unwrap();
+        assert_eq!(bound.workspace, repo_b.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn identity_mismatch_seals_without_scores_and_a_longer_sentence_does_not() {
+        let decision = "workspace identity does not match the approved root";
+        let row = unscored("skills", "bind the approved root", &diff_digest("old", "new"), 4, 4, 1, RUN, "", decision).unwrap();
+        assert_eq!(text(&row, "decision"), decision);
+        assert_eq!(text(&row, "verdict"), "rejected");
+        assert_eq!(get(&row, "score_before"), &Null);
+        assert_eq!(get(&row, "score_after"), &Null);
+        let widened = match unscored("skills", "bind the approved root", &diff_digest("old", "new"), 4, 4, 1, RUN, "", "workspace identity does not match the approved root extra") {
+            Err(error) => error,
+            Ok(_) => panic!("a longer identity sentence sealed without scores"),
+        };
+        assert_eq!(widened, "score_before must be a number");
+    }
+
+    #[test]
+    fn a_file_is_not_a_worktree_root() {
+        let scratch = Scratch::new();
+        let file = scratch.0.join("not-a-root");
+        fs::write(&file, b"kept-bytes").unwrap();
+        let refused = match require_recorded_worktree(&file, "9:9") {
+            Err(error) => error,
+            Ok(_) => panic!("a file was accepted as a work tree"),
+        };
+        assert_eq!(refused, "workspace is not the root of a git work tree");
+        assert_eq!(fs::read(&file).unwrap(), b"kept-bytes");
+    }
+
+    #[test]
+    fn a_missing_path_is_not_a_worktree_root() {
+        let scratch = Scratch::new();
+        let missing = scratch.0.join("missing-root");
+        assert!(!missing.exists());
+        let refused = match require_recorded_worktree(&missing, "9:9") {
+            Err(error) => error,
+            Ok(_) => panic!("a missing path was accepted as a work tree"),
+        };
+        assert_eq!(refused, "workspace is not the root of a git work tree");
+        assert!(!missing.exists());
     }
 
     #[test]

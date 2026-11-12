@@ -434,7 +434,7 @@ pub(super) fn event_for(st:&mut Json,a:&str,inputs:&Json)->Result<Json>{
  "capture_file"=>{let mut args=get(st,"edit").clone();if boolean(&args,"capture_scripts"){put(&mut args,"scripts",s("inline"));}let pending=obj(vec![("tool",s("capture")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "compare_files"=>{if text(st,"dialog")!="investigation"{return Err("Open File investigation before comparing paths".into());}if interaction::locked(st){return Err("Finish or cancel the current operation before comparing paths".into());}let e=get(st,"edit");let mut args=obj(vec![("path",s(&text(e,"path"))),("other",s(&text(e,"other")))]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("compare")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "inspect_file"=>{let e=get(st,"edit");let mut args=obj(vec![("path",get(e,"path").clone())]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("inspect")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
- "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));let mut task_run=obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]);if a=="refine"{let workspace=text(st,"approval_root");if !workspace.is_empty(){put(&mut task_run,"workspace",s(&workspace));if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&workspace)){put(&mut task_run,"source_digest",s(&digest));}}resume_durable_ledger(&mut task_run)?;}put(&mut next,"task_run",task_run);if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
+ "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));let mut task_run=obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]);if a=="refine"{let workspace=text(st,"approval_root");if !workspace.is_empty(){match crate::rrsi::require_recorded_worktree(std::path::Path::new(&workspace),&text(st,"approval_root_identity")){Ok(root)=>{let bound=crate::rrsi::workspace_text(&root)?;put(&mut task_run,"workspace",s(&bound));if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&bound)){put(&mut task_run,"source_digest",s(&digest));}}Err(_)=>{put(&mut task_run,"workspace",s(&workspace));}}}resume_durable_ledger(&mut task_run)?;}put(&mut next,"task_run",task_run);if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
  "refinement_review"|"refinement_discard_review"=>{
   completed_refinement(st)?;
   put(st,"dialog",s(a));
@@ -779,7 +779,7 @@ fn evaluate_pool(st:&Json,run:&mut Json,candidates:&[String],probes:&[String])->
  }
  if !probes.is_empty()&&probes.len()!=candidates.len(){return Err("pool probes must match the candidate count".into());}
  let workspace=text(run,"workspace");
- let git=if workspace.is_empty(){None}else{match crate::rrsi::require_worktree_root(std::path::Path::new(&workspace)){
+ let git=if workspace.is_empty(){None}else{match crate::rrsi::require_recorded_worktree(std::path::Path::new(&workspace),&text(st,"approval_root_identity")){
   Ok(root)=>Some(root),
   Err(error)=>{
    let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
@@ -2329,6 +2329,194 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   event_for(&mut st,"compact",&Null).unwrap();
   assert_eq!(text(get(&st,"task_run"),"mode"),"compact");
   assert_eq!(get(get(&st,"task_run"),"workspace"),&Null);
+ }
+ fn provenance_inputs()->Json{
+  obj(vec![("task",s("approval root provenance task")),("response_check_method",s("json_fields")),("response_checks",s("{\"/answer\":\"\"}"))])
+ }
+ fn canonical_text(path:&std::path::Path)->String{path.canonicalize().unwrap().to_str().unwrap().to_string()}
+ fn relative_to_cwd(target:&std::path::Path)->String{
+  let cwd=std::env::current_dir().unwrap().canonicalize().unwrap();
+  let target=target.canonicalize().unwrap();
+  let cwd_parts:Vec<_>=cwd.components().collect();
+  let target_parts:Vec<_>=target.components().collect();
+  let mut shared=0;
+  while shared<cwd_parts.len()&&shared<target_parts.len()&&cwd_parts[shared]==target_parts[shared]{shared+=1;}
+  let mut relative=std::path::PathBuf::new();
+  for _ in shared..cwd_parts.len(){relative.push("..");}
+  for part in &target_parts[shared..]{relative.push(part.as_os_str());}
+  let text=relative.to_str().unwrap().to_string();
+  assert!(relative.is_relative()&&!text.starts_with('/'),"{text}");
+  text
+ }
+ fn bind_approval(st:&mut Json,path:&str,identity:&str){
+  put(st,"approval_root",s(path));
+  put(st,"approval_root_identity",s(identity));
+ }
+ fn drive_pool(st:&mut Json,ledger:&std::path::Path)->Json{
+  park_ledger(st,ledger);
+  put(st,"busy",Bool(false));
+  model_reply(st,"baseline answer").unwrap();
+  put(st,"busy",Bool(false));
+  model_reply(st,"candidates: 1\n{\"answer\":\"\"}").unwrap();
+  settled_pool(st)
+ }
+ fn evolve_ref_exists(repo:&std::path::Path)->bool{
+  std::process::Command::new("git").args(["show-ref","--verify","--quiet",&format!("refs/heads/{}",crate::rrsi::EVOLVE_BRANCH)]).current_dir(repo).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").status().unwrap().success()
+ }
+ fn assert_bound_root(st:&Json,canonical:&str,identity:&str){
+  let run=get(st,"task_run");
+  assert_eq!(text(run,"workspace"),canonical);
+  assert_eq!(text(run,"source_digest"),crate::rrsi::source_digest(std::path::Path::new(canonical)).unwrap());
+  assert_eq!(crate::rrsi::workspace_identity(std::path::Path::new(canonical)).unwrap(),identity);
+ }
+ #[test] fn refine_entry_resolves_a_relative_approval_root_and_applies_there(){
+  let scratch=GitScratch::new();
+  let canonical=canonical_text(&scratch.repo);
+  let identity=crate::rrsi::workspace_identity(std::path::Path::new(&canonical)).unwrap();
+  let spelling=relative_to_cwd(std::path::Path::new(&canonical));
+  assert_ne!(spelling,canonical);
+  let before=git_text(&scratch.repo,&["rev-parse","HEAD"]);
+  let mut st=configured();
+  bind_approval(&mut st,&spelling,&identity);
+  event_for(&mut st,"refine",&provenance_inputs()).unwrap();
+  assert_eq!(text(&st,"approval_root"),spelling);
+  assert_bound_root(&st,&canonical,&identity);
+  let settled=drive_pool(&mut st,&scratch.root);
+  let rows=pool_rows(&settled);
+  assert_eq!(rows.len(),1,"{} {}",text(&settled,"edit_ledger_error"),text(&settled,"round_note"));
+  assert_eq!(text(&rows[0],"branch"),crate::rrsi::EVOLVE_BRANCH);
+  assert_eq!(std::fs::read(std::path::Path::new(&canonical).join("rllm-harness.txt")).unwrap(),b"{\"answer\":\"\"}");
+  assert_eq!(git_text(&scratch.repo,&["rev-parse","HEAD"]),before);
+  assert_eq!(git_text(&scratch.repo,&["rev-parse",&format!("refs/heads/{}",crate::rrsi::EVOLVE_BRANCH)]),text(&rows[0],"commit"));
+ }
+ #[test] fn refine_entry_resolves_trailing_dot_and_parent_spellings(){
+  let scratch=GitScratch::new();
+  let canonical=canonical_text(&scratch.repo);
+  let identity=crate::rrsi::workspace_identity(std::path::Path::new(&canonical)).unwrap();
+  let name=std::path::Path::new(&canonical).file_name().unwrap().to_str().unwrap();
+  let spellings=[format!("{canonical}/"),format!("{canonical}/./."),format!("{canonical}/../{name}")];
+  for spelling in spellings{
+   assert_ne!(spelling,canonical);
+   let mut st=configured();
+   bind_approval(&mut st,&spelling,&identity);
+   event_for(&mut st,"refine",&provenance_inputs()).unwrap();
+   assert_eq!(text(&st,"approval_root"),spelling);
+   assert_bound_root(&st,&canonical,&identity);
+  }
+ }
+ #[test] fn refine_entry_resolves_a_symlinked_parent_and_applies_there(){
+  let scratch=GitScratch::new();
+  let canonical=canonical_text(&scratch.repo);
+  let identity=crate::rrsi::workspace_identity(std::path::Path::new(&canonical)).unwrap();
+  let link=scratch.root.join("link-parent");
+  std::os::unix::fs::symlink(&scratch.root,&link).unwrap();
+  let via=link.join("repo");
+  assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+  assert!(!std::fs::symlink_metadata(&via).unwrap().file_type().is_symlink());
+  let spelling=via.to_str().unwrap().to_string();
+  assert_ne!(spelling,canonical);
+  let before=git_text(&scratch.repo,&["rev-parse","HEAD"]);
+  let mut st=configured();
+  bind_approval(&mut st,&spelling,&identity);
+  event_for(&mut st,"refine",&provenance_inputs()).unwrap();
+  assert_eq!(text(&st,"approval_root"),spelling);
+  assert_bound_root(&st,&canonical,&identity);
+  assert!(!text(get(&st,"task_run"),"workspace").contains("link-parent"));
+  let settled=drive_pool(&mut st,&scratch.root);
+  let rows=pool_rows(&settled);
+  assert_eq!(rows.len(),1,"{} {}",text(&settled,"edit_ledger_error"),text(&settled,"round_note"));
+  assert_eq!(std::fs::read(scratch.repo.join("rllm-harness.txt")).unwrap(),b"{\"answer\":\"\"}");
+  assert_eq!(git_text(&scratch.repo,&["rev-parse","HEAD"]),before);
+  assert!(evolve_ref_exists(&scratch.repo));
+ }
+ #[test] fn refine_entry_refuses_a_different_worktree_than_the_recorded_identity(){
+  let approved=GitScratch::new();
+  let foreign=GitScratch::new();
+  let identity=crate::rrsi::workspace_identity(&approved.repo.canonicalize().unwrap()).unwrap();
+  let foreign_identity=crate::rrsi::workspace_identity(&foreign.repo.canonicalize().unwrap()).unwrap();
+  assert_ne!(identity,foreign_identity);
+  let path=canonical_text(&foreign.repo);
+  let before=git_text(&foreign.repo,&["rev-parse","HEAD"]);
+  let approved_before=git_text(&approved.repo,&["rev-parse","HEAD"]);
+  let mut st=configured();
+  bind_approval(&mut st,&path,&identity);
+  event_for(&mut st,"refine",&provenance_inputs()).unwrap();
+  assert_eq!(text(get(&st,"task_run"),"workspace"),path);
+  assert!(text(get(&st,"task_run"),"source_digest").is_empty());
+  let settled=drive_pool(&mut st,&foreign.root);
+  assert_eq!(get(&settled,"incumbent_kept"),&Bool(true));
+  let rows=pool_rows(&settled);
+  assert_eq!(rows.len(),1,"{} {}",text(&settled,"edit_ledger_error"),text(&settled,"round_note"));
+  assert_eq!(text(&rows[0],"pool_status"),"refused:workspace identity does not match the approved root");
+  assert!(!foreign.repo.join("rllm-harness.txt").exists());
+  assert!(!foreign.repo.join(".rllm-worktrees").exists());
+  assert!(!evolve_ref_exists(&foreign.repo));
+  assert_eq!(git_text(&foreign.repo,&["rev-parse","HEAD"]),before);
+  assert_eq!(git_text(&foreign.repo,&["status","--porcelain"]),"");
+  let exclude=foreign.repo.join(".git").join("info").join("exclude");
+  let body=if exclude.exists(){std::fs::read_to_string(&exclude).unwrap()}else{String::new()};
+  assert!(!body.contains(".rllm-worktrees/"),"{body}");
+  assert!(!foreign.repo.join(".git").join("rllm-empty-hooks").exists());
+  assert_eq!(std::fs::read_to_string(foreign.repo.join("seed.txt")).unwrap(),"seed\n");
+  assert!(!approved.repo.join("rllm-harness.txt").exists());
+  assert_eq!(git_text(&approved.repo,&["rev-parse","HEAD"]),approved_before);
+ }
+ #[test] fn refine_entry_refuses_a_slot_directory_on_the_pool(){
+  let scratch=GitScratch::new();
+  let stale=scratch.repo.join(".rllm-worktrees").join("c0");
+  std::fs::create_dir_all(&stale).unwrap();
+  git_in(&stale,&["init","-b","main"]);
+  std::fs::write(stale.join("marker.txt"),"stale\n").unwrap();
+  git_in(&stale,&["add","--","marker.txt"]);
+  git_in(&stale,&["-c","user.name=RLLM","-c","user.email=rllm@localhost","commit","-m","stale"]);
+  let path=canonical_text(&stale);
+  let identity=crate::rrsi::workspace_identity(std::path::Path::new(&path)).unwrap();
+  let before=git_text(&stale,&["rev-parse","HEAD"]);
+  let mut st=configured();
+  bind_approval(&mut st,&path,&identity);
+  event_for(&mut st,"refine",&provenance_inputs()).unwrap();
+  assert_eq!(text(get(&st,"task_run"),"workspace"),path);
+  assert!(text(get(&st,"task_run"),"source_digest").is_empty());
+  let settled=drive_pool(&mut st,&scratch.root);
+  let rows=pool_rows(&settled);
+  assert_eq!(rows.len(),1,"{} {}",text(&settled,"edit_ledger_error"),text(&settled,"round_note"));
+  assert_eq!(text(&rows[0],"pool_status"),"refused:workspace is not the root of a git work tree");
+  assert_eq!(std::fs::read_to_string(stale.join("marker.txt")).unwrap(),"stale\n");
+  assert!(!stale.join("rllm-harness.txt").exists());
+  assert!(!evolve_ref_exists(&stale));
+  assert_eq!(git_text(&stale,&["rev-parse","HEAD"]),before);
+ }
+ #[test] fn refine_entry_refuses_an_approval_root_that_is_a_file(){
+  let scratch=PlainScratch::new();
+  let file=scratch.dir.join("not-a-root");
+  std::fs::write(&file,b"kept-bytes").unwrap();
+  let path=file.to_str().unwrap().to_string();
+  let mut st=configured();
+  bind_approval(&mut st,&path,"9:9");
+  event_for(&mut st,"refine",&provenance_inputs()).unwrap();
+  assert_eq!(text(get(&st,"task_run"),"workspace"),path);
+  assert!(text(get(&st,"task_run"),"source_digest").is_empty());
+  let settled=drive_pool(&mut st,&scratch.root);
+  let rows=pool_rows(&settled);
+  assert_eq!(rows.len(),1,"{} {}",text(&settled,"edit_ledger_error"),text(&settled,"round_note"));
+  assert_eq!(text(&rows[0],"pool_status"),"refused:workspace is not the root of a git work tree");
+  assert_eq!(std::fs::read(&file).unwrap(),b"kept-bytes");
+ }
+ #[test] fn refine_entry_refuses_an_approval_root_that_does_not_exist(){
+  let scratch=PlainScratch::new();
+  let missing=scratch.dir.join("missing-root");
+  let path=missing.to_str().unwrap().to_string();
+  assert!(!missing.exists());
+  let mut st=configured();
+  bind_approval(&mut st,&path,"9:9");
+  event_for(&mut st,"refine",&provenance_inputs()).unwrap();
+  assert_eq!(text(get(&st,"task_run"),"workspace"),path);
+  assert!(text(get(&st,"task_run"),"source_digest").is_empty());
+  let settled=drive_pool(&mut st,&scratch.root);
+  let rows=pool_rows(&settled);
+  assert_eq!(rows.len(),1,"{} {}",text(&settled,"edit_ledger_error"),text(&settled,"round_note"));
+  assert_eq!(text(&rows[0],"pool_status"),"refused:workspace is not the root of a git work tree");
+  assert!(!missing.exists());
  }
  fn copy_split(run:&mut Json,scored:&Json){
   for key in ["harness_digest","evolve_task_key","evolve_verifier","evolve_shape","held_out_task_key","held_out_verifier","ood_task_key","ood_verifier","ood_shape"]{
