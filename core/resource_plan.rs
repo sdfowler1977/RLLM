@@ -3,8 +3,8 @@
 use std::{fmt,ops::Range};
 use super::{html_document::{Document,Kind,Attribute},resource_url::{Url,resolve}};
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum Role{Stylesheet,ImagePng}
-#[derive(Clone,Debug)]pub struct Resource{pub role:Role,pub node:usize,pub target_span:Range<usize>,pub declared:String,pub resolved:Url,pub wire_url:String}
-#[derive(Clone,Debug)]pub struct InlineImage{pub declared:String}
+#[derive(Clone,Debug)]pub struct Resource{pub role:Role,pub node:usize,#[cfg(test)]pub target_span:Range<usize>,#[cfg(test)]pub declared:String,pub resolved:Url,#[cfg(test)]pub wire_url:String}
+#[derive(Clone,Debug)]pub struct InlineImage{#[cfg(test)]pub declared:String}
 #[derive(Clone,Debug,PartialEq,Eq)]pub enum StyleSlot{Inline{node:usize,span:Range<usize>},External{node:usize,resource:usize}}
 #[derive(Clone,Debug,PartialEq,Eq)]pub struct Note{pub node:usize,pub code:&'static str}
 #[derive(Clone,Debug)]pub struct Plan{pub retrieval_url:Url,pub document_base:Url,pub first_base_node:Option<usize>,pub resources:Vec<Resource>,pub inline_images:Vec<InlineImage>,pub styles:Vec<StyleSlot>,pub notes:Vec<Note>}
@@ -18,7 +18,7 @@ fn ancestor(doc:&Document,mut node:usize,name:&str)->bool{for _ in 0..65{let Som
 impl Plan{
  fn note(&mut self,node:usize,code:&'static str)->Result<()>{if self.notes.len()==128{return Err(PlanError{node,code:"resource-note-bound"});}self.notes.push(Note{node,code});Ok(())}
  fn style(&mut self,node:usize,slot:StyleSlot)->Result<()>{if self.styles.len()==32{return Err(PlanError{node,code:"stylesheet-count-bound"});}self.styles.push(slot);Ok(())}
- fn resource(&mut self,node:usize,role:Role,a:&Attribute)->Result<Option<usize>>{let value=trim(text(a));if value.is_empty(){self.note(node,"empty-resource-url")?;return Ok(None);}let url=match resolve(&self.document_base,value){Ok(v)=>v,Err(e)=>{self.note(node,e.code)?;return Ok(None)}};if self.resources.len()+self.inline_images.len()==128{return Err(PlanError{node,code:"resource-count-bound"});}let id=self.resources.len();self.resources.push(Resource{role,node,target_span:a.value_span.clone().unwrap_or_else(||a.span.clone()),declared:value.to_owned(),wire_url:url.wire_url(),resolved:url});Ok(Some(id))}
+ fn resource(&mut self,node:usize,role:Role,a:&Attribute)->Result<Option<usize>>{let value=trim(text(a));if value.is_empty(){self.note(node,"empty-resource-url")?;return Ok(None);}let url=match resolve(&self.document_base,value){Ok(v)=>v,Err(e)=>{self.note(node,e.code)?;return Ok(None)}};if self.resources.len()+self.inline_images.len()==128{return Err(PlanError{node,code:"resource-count-bound"});}let id=self.resources.len();self.resources.push(Resource{role,node,#[cfg(test)]target_span:a.value_span.clone().unwrap_or_else(||a.span.clone()),#[cfg(test)]declared:value.to_owned(),#[cfg(test)]wire_url:url.wire_url(),resolved:url});Ok(Some(id))}
 }
 pub fn plan(doc:&Document,final_retrieval_url:&Url)->Result<Plan>{
  if !doc.source_complete||doc.stopped_by_bound{return Err(PlanError{node:0,code:"incomplete-document-resource-plan"});}
@@ -27,7 +27,7 @@ pub fn plan(doc:&Document,final_retrieval_url:&Url)->Result<Plan>{
  for(node,n)in doc.nodes.iter().enumerate(){let Kind::Element{name,attributes,..}=&n.kind else{continue};
  if name=="meta"{if let Some(a)=attr(attributes,"charset"){if !trim(text(a)).eq_ignore_ascii_case("utf-8"){out.note(node,"document-charset-not-implemented")?;}}continue;}
  if !matches!(name.as_str(),"link"|"img"|"style"){continue;}if ancestor(doc,node,"template"){out.note(node,"inert-template-resource")?;continue;}
- if name=="img"{if ancestor(doc,node,"picture")||attr(attributes,"srcset").map(|a|!trim(text(a)).is_empty()).unwrap_or(false){out.note(node,"responsive-image-selection-not-implemented")?;continue;}if let Some(a)=attr(attributes,"src"){let value=trim(text(a));if value.starts_with("data:image/png;base64,"){if out.resources.len()+out.inline_images.len()==128{return Err(PlanError{node,code:"resource-count-bound"});}out.inline_images.push(InlineImage{declared:value.to_owned()});}else{out.resource(node,Role::ImagePng,a)?;}}else{out.note(node,"image-source-missing")?;}continue;}
+ if name=="img"{if ancestor(doc,node,"picture")||attr(attributes,"srcset").map(|a|!trim(text(a)).is_empty()).unwrap_or(false){out.note(node,"responsive-image-selection-not-implemented")?;continue;}if let Some(a)=attr(attributes,"src"){let value=trim(text(a));if value.starts_with("data:image/png;base64,"){if out.resources.len()+out.inline_images.len()==128{return Err(PlanError{node,code:"resource-count-bound"});}out.inline_images.push(InlineImage{#[cfg(test)]declared:value.to_owned()});}else{out.resource(node,Role::ImagePng,a)?;}}else{out.note(node,"image-source-missing")?;}continue;}
  if name=="link"{let rel=attr(attributes,"rel").map(text).unwrap_or("");let tokens:Vec<&str>=rel.split_ascii_whitespace().collect();if !tokens.iter().any(|v|v.eq_ignore_ascii_case("stylesheet")){continue;}if tokens.iter().any(|v|v.eq_ignore_ascii_case("alternate")){out.note(node,"alternate-stylesheet-not-selected")?;continue;}}
  if attr(attributes,"disabled").is_some(){out.note(node,"disabled-stylesheet")?;continue;}
  if attr(attributes,"title").map(|a|!text(a).is_empty()).unwrap_or(false){out.note(node,"named-stylesheet-set-not-implemented")?;continue;}

@@ -49,9 +49,11 @@ impl Report {
         let start=offset.min(self.occurrences.len());
         &self.occurrences[start..start.saturating_add(count).min(self.occurrences.len())]
     }
+    #[cfg(test)]
     pub fn children(&self, parent: usize) -> impl Iterator<Item=&Occurrence> {
         self.contains.iter().filter(move |e|e.parent==parent).map(|e|&self.occurrences[e.child])
     }
+    #[cfg(test)]
     pub fn find(&self, raw_path: &[u8]) -> Option<&Occurrence> {
         self.occurrences.binary_search_by(|o|o.path.as_slice().cmp(raw_path)).ok().map(|i|&self.occurrences[i])
     }
@@ -108,7 +110,8 @@ fn open_child(dir:&File,name:&[u8])->Result<File,String> {
 }
 
 // Linux/Android 64-bit dirent ABI used by both supported Android targets.
-#[repr(C)] struct Dirent { ino:u64, offset:i64, length:u16, kind:u8, name:[u8;256] }
+#[repr(C)] struct Dirent { ino:u64, offset:i64, length:u16, kind:u8, name:[u8;NAME_FIELD_BYTES] }
+const NAME_FIELD_BYTES: usize = 256;
 unsafe extern "C" {
     fn fdopendir(fd:i32)->*mut std::ffi::c_void;
     fn readdir(dir:*mut std::ffi::c_void)->*mut u8;
@@ -135,10 +138,10 @@ impl DirectoryEntries {
             let entry=unsafe{readdir(self.0)};
             if entry.is_null(){return if unsafe{*errno()}==0{Ok(None)}else{Err(std::io::Error::last_os_error().to_string())};}
             let bytes=entry.cast::<u8>();
-            let length=usize::from(unsafe{std::ptr::read_unaligned(bytes.add(16).cast::<u16>())});
+            let length=usize::from(unsafe{std::ptr::read_unaligned(bytes.add(core::mem::offset_of!(Dirent, length)).cast::<u16>())});
             if !(20..=280).contains(&length){return Err("Invalid native directory record length".into());}
-            let capacity=(length-19).min(256);
-            let names=unsafe{std::slice::from_raw_parts(bytes.add(19),capacity)};
+            let capacity=(length-core::mem::offset_of!(Dirent, name)).min(NAME_FIELD_BYTES);
+            let names=unsafe{std::slice::from_raw_parts(bytes.add(core::mem::offset_of!(Dirent, name)),capacity)};
             let end=names.iter().position(|b|*b==0).ok_or("Unterminated native directory name")?;
             let name=&names[..end];if name==b"."||name==b".."{continue;}return Ok(Some(name.to_vec()));
         }
@@ -389,6 +392,7 @@ where P:FnMut(&Path,Access)->Decision,C:Fn()->bool {
         let r=observe(&p,Path::new(""),&limits,&mut |path,a|{if a==Access::ReadHeader{let n=counts.entry(path.to_path_buf()).or_insert(0);*n+=1;if *n==2{return Decision::Deny;}}Decision::Allow},&||false).unwrap();
         assert_eq!(r.bytes_read,5);assert_eq!(r.sampled_bytes,0);assert!(r.occurrences.iter().all(|o|o.sample.is_none()));
         assert_eq!(std::mem::offset_of!(Dirent,name),19);
+        assert_eq!(std::mem::offset_of!(Dirent,length),16);
     }
 
     #[test] fn approved_root_identity_is_checked_before_any_policy_or_listing(){

@@ -21,9 +21,9 @@ impl fmt::Display for Origin{fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Resul
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub struct Url{scheme:Scheme,host:Host,port:u16,path:String,query:Option<String>,fragment:Option<String>}
 impl Url{
-    pub fn path(&self)->&str{&self.path}
-    pub fn query(&self)->Option<&str>{self.query.as_deref()}
-    pub fn fragment(&self)->Option<&str>{self.fragment.as_deref()}
+    #[cfg(test)] pub fn path(&self)->&str{&self.path}
+    #[cfg(test)] pub fn query(&self)->Option<&str>{self.query.as_deref()}
+    #[cfg(test)] pub fn fragment(&self)->Option<&str>{self.fragment.as_deref()}
     pub fn origin(&self)->Origin{Origin{scheme:self.scheme,host:self.host.clone(),port:self.port}}
     pub fn same_origin(&self,other:&Self)->bool{self.scheme==other.scheme&&self.port==other.port&&self.host==other.host}
     /// Origin-form HTTP target. Fragments never leave the client.

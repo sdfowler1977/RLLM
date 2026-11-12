@@ -32,7 +32,7 @@ pub(super) struct Issue {pub node:usize,pub code:&'static str}
 #[derive(Clone,Debug)]
 pub(super) struct LayoutResult {
     pub commands:Vec<Draw>,pub boxes:Vec<BoxGeometry>,pub issues:Vec<Issue>,
-    pub omitted_issues:usize,pub truncated:bool,pub approximate_metrics:bool,
+    pub omitted_issues:usize,pub truncated:bool,#[cfg(test)]pub approximate_metrics:bool,
     pub source_complete:bool,pub viewport_width:f64,pub content_width:f64,pub content_height:f64,
     pub bounds:Bounds,
     pub metric_provenance:String,pub validated_glyphs:usize,pub expanded_outline_points:usize,
@@ -255,7 +255,7 @@ pub(super) fn layout_with_images(document:&Document,styles:&[Style],viewport_wid
 }
 fn run<'a>(document:&'a Document,styles:&'a [Style],viewport_width:f64,metrics:TextMetrics,font:Option<&'a Face<'a>>,images:Option<&'a BTreeMap<usize,(u32,u32)>>)->Result<LayoutResult>{
     validate(document,styles,viewport_width,metrics)?;
-    let mut engine=Engine{doc:document,styles,metrics,font,images,chars:BTreeMap::new(),glyphs:BTreeMap::new(),text_used:0,out:LayoutResult{commands:Vec::new(),boxes:Vec::new(),issues:Vec::new(),omitted_issues:0,truncated:false,approximate_metrics:font.is_none(),source_complete:document.source_complete&&!document.stopped_by_bound&&document.parsed_bytes==document.examined_bytes,viewport_width,content_width:viewport_width,content_height:0.0,bounds:Bounds{x:0.0,y:0.0,width:viewport_width,height:0.0},metric_provenance:if font.is_some(){"caller-held TrueType hmtx advances/hhea baselines; validated unhinted outlines; no kerning or shaping".into()}else{format!("approximate uniform scalar advance ratio {}; not measured fonts",metrics.advance_ratio)},validated_glyphs:0,expanded_outline_points:0}};
+    let mut engine=Engine{doc:document,styles,metrics,font,images,chars:BTreeMap::new(),glyphs:BTreeMap::new(),text_used:0,out:LayoutResult{commands:Vec::new(),boxes:Vec::new(),issues:Vec::new(),omitted_issues:0,truncated:false,#[cfg(test)]approximate_metrics:font.is_none(),source_complete:document.source_complete&&!document.stopped_by_bound&&document.parsed_bytes==document.examined_bytes,viewport_width,content_width:viewport_width,content_height:0.0,bounds:Bounds{x:0.0,y:0.0,width:viewport_width,height:0.0},metric_provenance:if font.is_some(){"caller-held TrueType hmtx advances/hhea baselines; validated unhinted outlines; no kerning or shaping".into()}else{format!("approximate uniform scalar advance ratio {}; not measured fonts",metrics.advance_ratio)},validated_glyphs:0,expanded_outline_points:0}};
     if !engine.out.source_complete{engine.issue(0,"partial-source-layout-only");}
     if !document.issues.is_empty()||document.omitted_issues>0{engine.issue(0,"source-parser-issues-present");}
     let mut flow=Flow::new(0.0,viewport_width,0.0);engine.node(0,&mut flow,0)?;flow.flush();engine.observe(Bounds{x:0.0,y:flow.y,width:0.0,height:0.0})?;

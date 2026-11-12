@@ -160,6 +160,9 @@ pub fn inflate(bytes: &[u8], expected: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+// The product reads deflated members through `inflate`. No product path writes one.
+#[cfg(test)]
+mod writer {
 const WINDOW: usize = 32768;
 const CHUNK: usize = 65536;
 const HASH_BITS: usize = 15;
@@ -216,9 +219,9 @@ fn put_huff(out: &mut BitOut, code: u16, len: u8) {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Shape { Complete, Single, Empty, Bad }
+pub enum Shape { Complete, Single, Empty, Bad }
 
-fn code_shape(lengths: &[u8]) -> Shape {
+pub fn code_shape(lengths: &[u8]) -> Shape {
     let mut count = [0i32; 16];
     for &len in lengths {
         if len > 15 { return Shape::Bad; }
@@ -277,7 +280,7 @@ fn assign_balanced(lengths: &mut [u8], symbols: &[usize], max_bits: usize) -> bo
     true
 }
 
-fn huffman_lengths(freq: &[u64], max_bits: usize) -> Vec<u8> {
+pub fn huffman_lengths(freq: &[u64], max_bits: usize) -> Vec<u8> {
     let mut lengths = vec![0u8; freq.len()];
     let symbols: Vec<usize> = freq.iter().enumerate().filter(|(_, weight)| **weight > 0).map(|(index, _)| index).collect();
     let count = symbols.len();
@@ -595,7 +598,7 @@ fn lz77(data: &[u8]) -> Vec<Tok> {
     tokens
 }
 
-fn stored_blocks(data: &[u8]) -> Vec<u8> {
+pub fn stored_blocks(data: &[u8]) -> Vec<u8> {
     if data.is_empty() { return vec![0x01, 0x00, 0x00, 0xff, 0xff]; }
     let mut out = Vec::with_capacity(data.len() + data.len() / 65535 * 5 + 8);
     let mut offset = 0;
@@ -647,6 +650,10 @@ pub fn deflate(bytes: &[u8]) -> Vec<u8> {
     let compressed = compress_huffman(bytes);
     if compressed.len() < stored.len() { compressed } else { stored }
 }
+}
+
+#[cfg(test)]
+pub use writer::{code_shape, deflate, huffman_lengths, stored_blocks, Shape};
 
 #[cfg(test)]
 mod checks {

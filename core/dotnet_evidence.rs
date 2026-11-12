@@ -1135,6 +1135,7 @@ fn method_summary(methods: &MethodObs) -> String {
     }
 }
 
+#[cfg(test)]
 fn bodies_field(methods: &MethodObs) -> String {
     if methods.bodies_decoded == 0 {
         "not read".to_string()

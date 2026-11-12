@@ -9,6 +9,26 @@
     "snapshots": "/tmp/cdl1-snap/ (compression e6794985\u2026, directory_observation b4b2143b\u2026, dotnet_evidence a77c198b\u2026, page_layout 6f7a231a\u2026, resource_plan a5133fd0\u2026, resource_url 7de04fc6\u2026)",
     "status": "repair in flight (cdl2)"
   },
+  "cdl3_repair_witness_green": {
+    "counts": "Rust cases passed: 855/855; isolated application cases: 57",
+    "digests": {
+      "compression": "e67949859cde49dc03513bb0ba4fc97b344b93631077f0bc380784ab530d5d7c",
+      "directory_observation": "cce16257f40850e332dd0406a9c1f5abbfed4084833760a74390cf1ca1a9dbb0",
+      "dotnet_evidence": "a77c198bfdab93227e6725af3107e8b6ec46fa42dabbd95db4218adba9315df7",
+      "page_layout": "6f7a231a7c33588c632c1bbb3c8c1c3f619d48e7af56e8fa85832d3d4b442088",
+      "resource_plan": "a5133fd0a8a962d5a6f995bd861402d991a180439031941b73e2f3873a88f08f",
+      "resource_url": "7de04fc6768937b1b0bb30e3b5937c6aaecbf7f71585f664b8f1ef109886d53f"
+    },
+    "head_at_witness": "4122518",
+    "headless_rc": 0,
+    "neuter": "Dirent field swap room: Rust cases passed: 845/855",
+    "product_warning_lines": 3,
+    "room": "wcd2-N: git archive HEAD + the six files with cdl3 bytes, tooling symlinked, output/tools+output/headless only",
+    "seat": "accept-with-notes (/tmp/mm-cdlf.out); its one material note (NAME_FIELD_BYTES duplicated as 256 and 280) repaired by cdl3",
+    "units_rc": 0,
+    "units_warning_lines": 0,
+    "warning_sites": "2 --> RLLM/core/rrsi.rs"
+  },
   "cdl_witness_green_and_dirent_neuter_red": {
     "digest": "core/directory_observation.rs (cdl2 bytes) 3fa41981777e93ebdd7c5bd0188ffa9fdee2cab5514d6e1687016e8278aa6fc8 in /tmp/cdl1-snap",
     "room_N": "HEAD 4b0219e + the six cdl files: headless_rc=0, product_warning_lines=3 (2 --> RLLM/core/rrsi.rs + tally), units_rc=0, units_warning_lines=0, Rust cases passed: 855/855; isolated application cases: 57. /tmp/wcd.log",
