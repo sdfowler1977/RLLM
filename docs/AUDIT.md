@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T15:4Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T15:5Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -7,9 +7,10 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **611/611 cases plus 55 isolated application cases, exit 0**, measured with the pinned
-  `rustc 1.99.1` toolchain from `tooling/env.sh` (the 611 count is the tree at `63bf5c5`: 597 at `600e44d`,
-  +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`; both deltas were
+  report bytes): **620/620 cases plus 55 isolated application cases, exit 0**, measured with the pinned
+  `rustc 1.99.1` toolchain from `tooling/env.sh` (the 620 count is the tree at `5b898cd`: 597 at `600e44d`,
+  +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
+  cases in `a9c62c5`, +4 refine-workspace cases in `5b898cd`; every delta was
   re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
   `git archive f2a6ad8` plus its file, which is exactly the tree at `63bf5c5`. The earlier 517 tally was additionally reproduced on the
   drifted `rustc 1.95.0` build, `output/units` vs `output/units-pinned`, log `output/units-pinned.log`). A bare
@@ -19,12 +20,18 @@ their original counts and wording.
   never creates, and `capture_job::resource_checks` needs `CLIENT_CAPTURE_TEST_FONT` pointed at a real
   TrueType font. `tools/checks.py` now supplies that font itself instead of leaving the batch red.
 - Connected groups through `tools/harness.rs`: **65 passed, 0 failed, 4 unavailable of 69 groups**,
-  census clean, exit 0 (2026-11-12T10:1Z, after the four commits of this window; `verification/RESULTS.json`
-  came out byte-identical to the committed record — sha256 `7250328b5385…` — so the current source
-  reproduces the delivered record exactly). The runner
+  census clean, exit 0 (2026-11-12T10:1Z, after the four commits of that window; `verification/RESULTS.json`
+  came out byte-identical to the committed record — sha256 `7250328b5385…` — so the source at that point
+  reproduced the delivered record exactly). The runner
   reports a missing development input as `UNAVAILABLE` instead of charging it to the product, and a group
   whose own source guards an optional reference now runs with that comparison recorded as an unexercised
   leg instead of being blocked to a recorded `0`.
+  **That equivalence is now stale and the drift is measured, not assumed.** `2c6b792` registered
+  `self_rebuild`, so the runner declares **70** names while the delivered record still holds **69**, and the
+  runner says so: `INVENTORY DRIFT: the delivered report counts 69 groups while the runner has 70`. The record
+  will not be republished until a full sweep runs with every group executable and nothing failing, because
+  `tools/harness.rs:1047` refuses to publish otherwise; until then the record's `pe_declarations` leg (18) also
+  stays behind the 28 that group now runs.
 - `verification/RESULTS.json` now carries the current census: **69 groups, 65 passed, 4,185 checks
   executed**, with the 4 unavailable groups recorded as 0 plus their missing inputs and a
   `zero_count_disclosure` line (earlier revisions of this document described the record as holding
@@ -1086,6 +1093,46 @@ were confirmed by reading and by an actual run:
   three-slot cap makes round 2 abort — `commit_candidate` calls `remove_slot` on the same slot first, so
   `worktrees` stays ≤ 3 across rounds. The related point stands: an aborted round leaves its slot directories
   behind, and `require_worktree_root` (`core/rrsi.rs:1505`) treats a stale directory as usable.
+
+### Four verified lanes land; the tools stage is now green on a clean tree — 2026-11-12T15:5Z
+
+Every lane below was rebuilt **alone** in a `git archive` room holding only that lane's file, so each case
+delta is provably the lane's own, and nothing was committed before an audit was read in full.
+
+| Lane | File | Verified alone | Commit |
+|---|---|---|---|
+| H | `core/self_build.rs` | **616/616 + 55**, `self_rebuild` group **8/8** | `a9c62c5` |
+| E6 | `verification/self_rebuild.py` + 4 interlock files | census **69 → 70**, group runs in only-mode and full mode | `2c6b792` |
+| F+F2 | `core/harness.rs` | **620/620 + 55** | `5b898cd` |
+| I | `tools/gate.rs` | 3 consecutive tools builds exit 0, `Text file busy` count **0** | `3e5eda1` |
+| J | `tools/toolchain.rs` | clean room with **no `tooling/` at all**: all 8 tools, exit 0 | `112e251` |
+
+**The clean-tree tools defect was the real blocker, and it was not the race.** `tooling/` is gitignored
+(`.gitignore:14`), yet `tools/toolchain.rs:2133` read `tooling/env.sh` and unwrapped it, so on a tree with
+nothing untracked the toolchain tool's test panicked with `NotFound` and `tools/build-tools.sh` stopped before
+the tools listed after it — including `output/tools/gate`. That single panic is why the unit-gate tool, the
+harness runner and every connected group that needs the gate cannot be built from a clean checkout. Reproduced
+twice independently: in the room where `tooling/` was symlinked in, the toolchain leg passed (6 cases) and only
+the gate race remained; in the clean room, the fixed file built all eight tools and the toolchain leg reported
+7 cases.
+
+**The ETXTBSY race is more common than the first measurement suggested.** The follow-up run hit it in *two*
+tests of the same tool in one pass (`tools/gate.rs:576` and `:620`, `green_run_writes_report_and_gate_line` and
+`failed_batch_records_the_output_tail`), not one, and it reproduced again in the second tools build of the clean
+room while that file was still unfixed. The fix closes the fixture handle before setting its mode and retries
+only `ErrorKind::ExecutableFileBusy` / raw os error 26, at most five times, 5 ms apart.
+
+**Audits read this window (all read in full, none swallowed).** MiniMax seats over H, F, I and J returned
+PASS-WITH-CAVEATS with no BLOCKER or MAJOR, and no new external dependency in any of them — the only outside
+program anywhere near these paths remains the bounded `git` run reached from `core/rrsi.rs`, already recorded as
+an open R1 decision. Two MINOR coverage gaps are now open items rather than accepted silence:
+the gate retry is tested through the helper, not through `run_cmd`'s real spawn path; and the `tooling/env.sh`
+pin leg now runs only when that file exists, so a clean tree pins the *writer* instead of the checked-out file —
+acceptable because the sanctioned build environment is an installed tree, but stated rather than assumed.
+The F audit's two missing legs are queued as GAP3 work: `approval_root` provenance (a *valid but different* git
+worktree as the workspace, plus symlink/relative-path variants) and a production-dispatch witness that the live
+refine action reaches the entry that now puts `workspace` on the task run — the latter is exactly what the
+connected RRSI-loop group has to supply.
 
 ## Historical baseline audit (original text)
 
