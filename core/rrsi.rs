@@ -1,7 +1,10 @@
-//! Append-only edit ledger for one refinement run.
-//! Records the verdict the refine loop already reached. It does not choose that verdict.
+//! Append-only edit ledger for one refinement run, and the durable improvement
+//! library that later tasks read from the same store.
+//! The ledger records the verdict the refine loop already reached. It does not choose that verdict.
 //! Cost is the UTF-8 length of the instructions being replaced and of the proposal.
 //! A full line cap refuses the new record and leaves every existing line in place.
+//! The library file `experience.jsonl` is sealed with the same content digest and previous link.
+//! Each line is the index entry for the adopted harness and the lessons the ledger supports.
 use super::*;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -220,6 +223,11 @@ fn root_dir(value: &str) -> Result<PathBuf> {
         }
         Ok(_) => Ok(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() && !parent.exists() {
+                    fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+                }
+            }
             match fs::create_dir(&path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -318,7 +326,12 @@ pub(crate) fn diff_digest(before: &str, after: &str) -> String {
     digest(&bytes)
 }
 pub(crate) fn default_root() -> String {
-    std::env::temp_dir().join("rllm-rrsi").to_string_lossy().into_owned()
+    // Same directory the desktop host uses for saved state (`state.bin` and `key`).
+    let base = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        format!("{home}/.local/share")
+    });
+    PathBuf::from(base).join("rllm").to_string_lossy().into_owned()
 }
 pub(crate) fn edit(
     component: &str,
@@ -479,6 +492,425 @@ pub(crate) fn prompt_document(document: &str, run_digest: &str) -> Result<String
         }
     }
     Ok(section)
+}
+
+const LIBRARY_FILE: &str = "experience.jsonl";
+const LIBRARY_SCHEMA: &str = "library-1";
+const LIBRARY_PROMPT_MAX: usize = 4096;
+const LIBRARY_TASK_MAX: usize = 4096;
+const LIBRARY_HARNESS_MAX: usize = 12288;
+const LIBRARY_LESSON_MAX: usize = 3072;
+const LIBRARY_FALSIFIED_MAX: usize = 8;
+const LIBRARY_SHOWN: usize = 4;
+const LIBRARY_KEYS: &[&str] = &[
+    "kind",
+    "key",
+    "task",
+    "task_complete",
+    "harness",
+    "harness_digest",
+    "run_digest",
+    "falsified",
+    "untried",
+    "omitted_falsified",
+    "lesson",
+];
+const FALSIFIED_KEYS: &[&str] = &["component", "diff_digest", "hypothesis", "revision", "round"];
+
+fn library_gate() -> std::sync::MutexGuard<'static, ()> {
+    static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    GATE.lock().unwrap_or_else(|error| error.into_inner())
+}
+fn cut(value: &str, limit: usize) -> (String, bool) {
+    let mut end = value.len().min(limit);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    (value[..end].to_string(), end < value.len())
+}
+fn num_text(value: &Json, key: &str) -> String {
+    match get(value, key) {
+        Num(text) => text.clone(),
+        _ => String::new(),
+    }
+}
+fn library_lesson(falsified: &[Json], untried: &[String], omitted: usize) -> String {
+    let mut out = String::from("Lessons the sealed edit ledger supports: ");
+    if falsified.is_empty() {
+        out.push_str("no hypothesis was falsified. ");
+    } else {
+        out.push_str("falsified hypotheses were rejected by the measured checks: ");
+        for (index, item) in falsified.iter().enumerate() {
+            if index > 0 {
+                out.push_str("; ");
+            }
+            out.push_str(&format!(
+                "round {} {} revision {} diff {} ({})",
+                num_text(item, "round"),
+                text(item, "component"),
+                text(item, "revision"),
+                text(item, "diff_digest"),
+                text(item, "hypothesis")
+            ));
+        }
+        out.push_str(". ");
+        if omitted > 0 {
+            out.push_str(&format!(
+                "Earlier falsified entries remain in the edit ledger: {omitted}. "
+            ));
+        }
+    }
+    if untried.is_empty() {
+        out.push_str("Every listed component was tried.");
+    } else {
+        out.push_str("Components with no trial in this run: ");
+        out.push_str(&untried.join(", "));
+        out.push('.');
+    }
+    out
+}
+fn library_body(task: &str, harness: &str, ledger: &str, run_digest: &str) -> Result<Json> {
+    if task.is_empty() || task.contains('\0') {
+        return Err("improvement library task must be non-empty text".into());
+    }
+    if harness.trim().is_empty() || harness.contains('\0') {
+        return Err("improvement library harness must be non-empty text".into());
+    }
+    if !hex_digest(run_digest) {
+        return Err("improvement library requires the sealed run digest".into());
+    }
+    let records = if ledger.is_empty() {
+        Vec::new()
+    } else {
+        records_of(ledger)?
+    };
+    let rejected = falsified(&records, run_digest);
+    let omitted = rejected.len().saturating_sub(LIBRARY_FALSIFIED_MAX);
+    let mut shown = Vec::new();
+    for record in rejected.iter().rev().take(LIBRARY_FALSIFIED_MAX).rev() {
+        shown.push(obj(vec![
+            ("hypothesis", s(&clip(&text(record, "hypothesis"), PROMPT_HYPOTHESIS))),
+            ("revision", s(&text(record, "revision"))),
+            ("diff_digest", s(&text(record, "diff_digest"))),
+            ("component", s(&text(record, "component"))),
+            ("round", get(record, "round").clone()),
+        ]));
+    }
+    let untried: Vec<String> = untried_components(&records, run_digest)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let (task_text, task_cut) = cut(task, LIBRARY_TASK_MAX);
+    let (harness_text, _) = cut(harness, LIBRARY_HARNESS_MAX);
+    let (lesson, _) = cut(&library_lesson(&shown, &untried, omitted), LIBRARY_LESSON_MAX);
+    Ok(obj(vec![
+        ("kind", s("experience")),
+        ("key", s(&digest(task.as_bytes()))),
+        ("task", s(&task_text)),
+        ("task_complete", Bool(!task_cut)),
+        ("harness", s(&harness_text)),
+        ("harness_digest", s(&digest(harness_text.as_bytes()))),
+        ("run_digest", s(run_digest)),
+        ("falsified", Arr(shown)),
+        ("untried", Arr(untried.into_iter().map(|name| s(&name)).collect())),
+        ("omitted_falsified", n(omitted as u64)),
+        ("lesson", s(&lesson)),
+    ]))
+}
+fn validate_library(value: &Json) -> Result<()> {
+    if text(value, "kind") != "experience" {
+        return Err("improvement library record kind must be experience".into());
+    }
+    let key = text(value, "key");
+    if !hex_digest(&key) {
+        return Err("library index key must be 64 lowercase hexadecimal characters".into());
+    }
+    let task = text(value, "task");
+    if task.is_empty() || task.len() > LIBRARY_TASK_MAX || task.contains('\0') {
+        return Err("library task must be non-empty text within the record cap".into());
+    }
+    match get(value, "task_complete") {
+        Bool(true) if key != digest(task.as_bytes()) => {
+            return Err("library index key does not match the stored task".into());
+        }
+        Bool(_) => {}
+        _ => return Err("library task_complete must be a boolean".into()),
+    }
+    let harness = text(value, "harness");
+    if harness.is_empty() || harness.len() > LIBRARY_HARNESS_MAX || harness.contains('\0') {
+        return Err("library harness must be non-empty text within the record cap".into());
+    }
+    let harness_digest = text(value, "harness_digest");
+    if !hex_digest(&harness_digest) || harness_digest != digest(harness.as_bytes()) {
+        return Err("library harness digest does not match the stored harness".into());
+    }
+    if !hex_digest(&text(value, "run_digest")) {
+        return Err("library run_digest must be 64 lowercase hexadecimal characters".into());
+    }
+    let falsified = match get(value, "falsified") {
+        Arr(items) => items,
+        _ => return Err("library falsified must be an array".into()),
+    };
+    if falsified.len() > LIBRARY_FALSIFIED_MAX {
+        return Err("library falsified list exceeds its cap".into());
+    }
+    for item in falsified {
+        only_keys(item, FALSIFIED_KEYS)?;
+        let hypothesis = text(item, "hypothesis");
+        if hypothesis.is_empty() || hypothesis.len() > PROMPT_HYPOTHESIS + 3 || hypothesis.contains('\0') {
+            return Err("falsified hypothesis must be bounded text".into());
+        }
+        if !hex_digest(&text(item, "revision")) || !hex_digest(&text(item, "diff_digest")) {
+            return Err("falsified entry digest must be 64 lowercase hexadecimal characters".into());
+        }
+        let component = text(item, "component");
+        if component.is_empty() || component.len() > 64 || component.contains('\0') {
+            return Err("falsified component must be bounded text".into());
+        }
+        let round = number_field(item, "round")?;
+        if !(1..=1024).contains(&round) {
+            return Err("falsified round is outside 1..=1024".into());
+        }
+    }
+    let untried = match get(value, "untried") {
+        Arr(items) => items,
+        _ => return Err("library untried must be an array".into()),
+    };
+    if untried.len() > COMPONENTS.len() {
+        return Err("library untried list exceeds its cap".into());
+    }
+    let mut seen = Vec::new();
+    for item in untried {
+        let name = item.text().map_err(|_| "untried component must be text".to_string())?;
+        if name.is_empty() || name.len() > 64 || seen.iter().any(|seen: &String| seen == name) {
+            return Err("untried component must be bounded unique text".into());
+        }
+        seen.push(name.to_string());
+    }
+    let omitted = number_field(value, "omitted_falsified")?;
+    if omitted > 1024 {
+        return Err("omitted falsified count is outside the record cap".into());
+    }
+    let lesson = text(value, "lesson");
+    if lesson.is_empty() || lesson.len() > LIBRARY_LESSON_MAX || lesson.contains('\0') {
+        return Err("library lesson must be non-empty text within the record cap".into());
+    }
+    Ok(())
+}
+fn seal_library(lines: &[Json], entry: &Json) -> Result<String> {
+    only_keys(entry, LIBRARY_KEYS)?;
+    validate_library(entry)?;
+    if lines.len() >= LINE_CAP {
+        return Err("improvement library line cap reached; history was kept and no line was dropped".into());
+    }
+    let previous = match lines.last() {
+        Some(tail) => text(tail, "revision"),
+        None => String::new(),
+    };
+    let mut record = entry.clone();
+    put(&mut record, "schema", s(LIBRARY_SCHEMA));
+    put(&mut record, "previous", s(&previous));
+    let revision = digest(body_without_revision(&record)?.string().as_bytes());
+    put(&mut record, "revision", s(&revision));
+    let line = record.string();
+    if line.len() > RECORD_MAX || line.contains('\n') {
+        return Err("improvement library record exceeds the record cap; history was kept and no line was dropped".into());
+    }
+    Ok(line)
+}
+fn linked_library(value: &Json, expected: &str) -> Result<String> {
+    let mut keys = LIBRARY_KEYS.to_vec();
+    keys.extend(["schema", "previous", "revision"]);
+    only_keys(value, &keys)?;
+    if text(value, "schema") != LIBRARY_SCHEMA {
+        return Err("improvement library record schema is not library-1; existing history was left unchanged".into());
+    }
+    if text(value, "previous") != expected {
+        return Err("library previous link does not match the preceding record; existing history was left unchanged".into());
+    }
+    let revision = text(value, "revision");
+    if !hex_digest(&revision) {
+        return Err("library record is missing its content digest; existing history was left unchanged".into());
+    }
+    let actual = digest(body_without_revision(value)?.string().as_bytes());
+    if revision != actual {
+        return Err("library record digest does not match its body; existing history was left unchanged".into());
+    }
+    validate_library(value)?;
+    Ok(revision)
+}
+fn parse_library(lines: &[String]) -> Result<Vec<Json>> {
+    if lines.len() > LINE_CAP {
+        return Err("improvement library exceeds its line cap; history was kept and no line was dropped".into());
+    }
+    let mut records = Vec::with_capacity(lines.len());
+    let mut previous = String::new();
+    for line in lines {
+        if line.is_empty() {
+            return Err("library contains a blank line; existing history was left unchanged".into());
+        }
+        if line.len() > RECORD_MAX {
+            return Err("library record exceeds the record cap; existing history was left unchanged".into());
+        }
+        let value = parse(line).map_err(|_| {
+            "library record is not one JSON object; existing history was left unchanged".to_string()
+        })?;
+        previous = linked_library(&value, &previous)?;
+        records.push(value);
+    }
+    Ok(records)
+}
+fn load_library_text(document: &str) -> Result<Vec<Json>> {
+    if document.len() as u64 > FILE_MAX {
+        return Err("improvement library exceeds its size cap; existing history was left unchanged".into());
+    }
+    if !document.is_empty() && !document.ends_with('\n') {
+        return Err("improvement library document is torn; existing history was left unchanged".into());
+    }
+    parse_library(&document.lines().map(str::to_string).collect::<Vec<_>>())
+}
+fn index_of(record: &Json) -> Json {
+    obj(vec![
+        ("key", s(&text(record, "key"))),
+        ("revision", s(&text(record, "revision"))),
+        ("run_digest", s(&text(record, "run_digest"))),
+    ])
+}
+fn load_experience_unlocked(root: &str) -> Result<Vec<Json>> {
+    load_library_text(&load_file(root, LIBRARY_FILE)?)
+}
+pub(crate) fn library_index(records: &[Json]) -> Vec<Json> {
+    records.iter().map(index_of).collect()
+}
+pub(crate) fn load_experience(root: &str) -> Result<Vec<Json>> {
+    let _gate = library_gate();
+    load_experience_unlocked(root)
+}
+pub(crate) fn append_experience(root: &str, task: &str, harness: &str, ledger: &str, run_digest: &str) -> Result<Json> {
+    let entry = library_body(task, harness, ledger, run_digest)?;
+    let _gate = library_gate();
+    let path = ledger_path(root, LIBRARY_FILE)?;
+    let document = read_bounded(&path)?;
+    let existing = load_library_text(&document)?;
+    if let Some(prior) = existing.iter().rev().find(|record| {
+        text(record, "run_digest") == run_digest
+            && text(record, "key") == text(&entry, "key")
+            && text(record, "harness_digest") == text(&entry, "harness_digest")
+    }) {
+        let mut saved = outcome(existing.len(), &text(prior, "revision"), None);
+        put(&mut saved, "key", s(&text(prior, "key")));
+        put(&mut saved, "index", index_of(prior));
+        return Ok(saved);
+    }
+    let line = seal_library(&existing, &entry)?;
+    if document.len().saturating_add(line.len()).saturating_add(1) as u64 > FILE_MAX {
+        return Err("improvement library exceeds its size cap; history was kept and no line was dropped".into());
+    }
+    let before = document.clone();
+    append_line(&path, &line)?;
+    let after = read_bounded(&path)?;
+    if !after.starts_with(&before) || after.len() != before.len() + line.len() + 1 {
+        return Err("improvement library append did not preserve existing history".into());
+    }
+    let revision = revision_of(&line)?;
+    let sealed = parse(&line)?;
+    let mut saved = outcome(existing.len() + 1, &revision, None);
+    put(&mut saved, "key", get(&entry, "key").clone());
+    put(&mut saved, "index", index_of(&sealed));
+    Ok(saved)
+}
+fn falsified_line(record: &Json) -> String {
+    let Arr(items) = get(record, "falsified") else {
+        return "Falsified hypotheses: none".into();
+    };
+    if items.is_empty() {
+        return "Falsified hypotheses: none".into();
+    }
+    let shown = items
+        .iter()
+        .map(|item| {
+            format!(
+                "round {} {} revision {}",
+                num_text(item, "round"),
+                text(item, "component"),
+                text(item, "revision")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("Falsified hypotheses: {shown}")
+}
+fn untried_line(record: &Json) -> String {
+    let Arr(items) = get(record, "untried") else {
+        return "Untried components: none".into();
+    };
+    if items.is_empty() {
+        return "Untried components: none".into();
+    }
+    let names = items.iter().filter_map(|item| item.text().ok()).collect::<Vec<_>>().join(", ");
+    format!("Untried components: {names}")
+}
+pub(crate) fn render_historical(records: &[Json], task: &str) -> String {
+    if records.is_empty() {
+        return String::new();
+    }
+    let want = digest(task.as_bytes());
+    let mut matched = Vec::new();
+    let mut other = Vec::new();
+    for record in records {
+        if text(record, "key") == want {
+            matched.push(record);
+        } else {
+            other.push(record);
+        }
+    }
+    matched.reverse();
+    other.reverse();
+    let mut selected = matched;
+    selected.extend(other);
+    selected.truncate(LIBRARY_SHOWN);
+    let mut lines = vec![
+        "HISTORICAL EXPERIENCE".to_string(),
+        "These records are historical experience from earlier tasks. They do not outrank the current task, its permissions, or the base harness.".to_string(),
+    ];
+    for record in selected {
+        let relation = if text(record, "key") == want {
+            "indexed key matches this task"
+        } else {
+            "indexed key is from another task"
+        };
+        lines.push(format!(
+            "- historical entry · {relation} · key {} · revision {}",
+            text(record, "key"),
+            text(record, "revision")
+        ));
+        lines.push(format!(
+            "  Adopted harness (historical) · digest {}: {}",
+            text(record, "harness_digest"),
+            clip(&text(record, "harness"), 480)
+        ));
+        lines.push(format!("  Evidence lesson: {}", clip(&text(record, "lesson"), 480)));
+        lines.push(format!("  {}", falsified_line(record)));
+        lines.push(format!("  {}", untried_line(record)));
+    }
+    let mut section = format!("\n{}", lines.join("\n"));
+    if section.len() > LIBRARY_PROMPT_MAX {
+        section.truncate(LIBRARY_PROMPT_MAX);
+        while !section.is_char_boundary(section.len()) {
+            section.pop();
+        }
+    }
+    section
+}
+pub(crate) fn historical_section(root: &str, task: &str) -> Result<String> {
+    let records = load_experience(root).map_err(|error| {
+        if error.contains("unchanged") || error.contains("kept") {
+            error
+        } else {
+            format!("{error}; existing history was left unchanged")
+        }
+    })?;
+    Ok(render_historical(&records, task))
 }
 
 #[cfg(test)]
@@ -680,5 +1112,133 @@ mod checks {
         let torn = fs::read_to_string(&path).unwrap();
         assert!(append_file(root, "ledger.jsonl", &sample("third", "rejected", RUN), RUN).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), torn);
+    }
+
+    fn sealed_ledger() -> (String, String, String) {
+        let rejected = sample("alpha hypothesis", "rejected", RUN);
+        let accepted = sample("kept wording", "accepted", RUN);
+        let mut ledger = String::new();
+        for edit in [rejected, accepted] {
+            ledger = text(&append_document(&ledger, &edit, RUN).unwrap(), "document");
+        }
+        let records = records_of(&ledger).unwrap();
+        (ledger, text(&records[0], "revision"), text(&records[0], "diff_digest"))
+    }
+
+    #[test]
+    fn library_entry_round_trips_with_the_sealed_digest() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let (ledger, rejected_revision, rejected_diff) = sealed_ledger();
+        let task = "task t";
+        let harness = "adopted harness";
+        let saved = append_experience(root, task, harness, &ledger, RUN).unwrap();
+        let revision = text(&saved, "revision");
+        let later = append_experience(root, "task t+1", "next harness", "", OTHER).unwrap();
+        let loaded = load_experience(root).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(text(&loaded[0], "revision"), revision);
+        assert_eq!(text(&loaded[0], "harness"), harness);
+        assert_eq!(text(&loaded[0], "harness_digest"), digest(harness.as_bytes()));
+        assert_eq!(text(&loaded[1], "revision"), text(&later, "revision"));
+        assert_eq!(text(&loaded[1], "harness_digest"), digest(b"next harness"));
+        let falsified = match get(&loaded[0], "falsified") {
+            Arr(items) => items.clone(),
+            other => panic!("falsified list missing: {other:?}"),
+        };
+        assert_eq!(falsified.len(), 1);
+        assert_eq!(text(&falsified[0], "hypothesis"), "alpha hypothesis");
+        assert_eq!(text(&falsified[0], "revision"), rejected_revision);
+        assert_eq!(text(&falsified[0], "diff_digest"), rejected_diff);
+        let untried = match get(&loaded[0], "untried") {
+            Arr(items) => items.iter().map(|item| item.text().unwrap().to_string()).collect::<Vec<_>>(),
+            other => panic!("untried list missing: {other:?}"),
+        };
+        assert!(untried.iter().any(|name| name == "tools"));
+        assert!(untried.iter().all(|name| name != "prompt"));
+        let index = library_index(&loaded);
+        assert_eq!(text(&index[0], "key"), library_key_of(task));
+        assert_eq!(text(&index[0], "revision"), revision);
+        assert_eq!(text(&index[1], "key"), digest(b"task t+1"));
+        assert_eq!(text(&index[1], "revision"), text(&later, "revision"));
+        assert_eq!(text(get(&saved, "index"), "revision"), revision);
+        let again = load_experience(root).unwrap();
+        assert_eq!(text(&again[0], "revision"), revision);
+        assert_eq!(text(&again[0], "harness_digest"), digest(harness.as_bytes()));
+        let section = historical_section(root, task).unwrap();
+        assert!(section.contains(&revision), "{section}");
+        assert!(section.contains(&rejected_revision), "{section}");
+    }
+
+    fn library_key_of(task: &str) -> String {
+        digest(task.as_bytes())
+    }
+
+    #[test]
+    fn tampered_library_line_is_refused() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        append_experience(root, "task t", "adopted harness", "", RUN).unwrap();
+        let path = scratch.0.join("experience.jsonl");
+        let original = fs::read_to_string(&path).unwrap();
+        let mut tampered = original.clone();
+        let at = tampered.find("adopted").unwrap();
+        tampered.replace_range(at..at + 1, "x");
+        fs::write(&path, &tampered).unwrap();
+        let error = load_experience(root).unwrap_err();
+        assert!(error.contains("digest"), "{error}");
+        assert!(error.contains("unchanged"), "{error}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), tampered);
+        let refused = historical_section(root, "task t").unwrap_err();
+        assert!(refused.contains("digest"), "{refused}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), tampered);
+        let append_error = append_experience(root, "task t+1", "next harness", "", OTHER).unwrap_err();
+        assert!(append_error.contains("unchanged"), "{append_error}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), tampered);
+        assert!(load_experience(root).is_err());
+    }
+
+    #[test]
+    fn library_line_cap_keeps_existing_history() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let path = scratch.0.join("experience.jsonl");
+        for index in 0..LINE_CAP {
+            append_experience(root, &format!("task {index}"), &format!("harness {index}"), "", RUN).unwrap();
+        }
+        let before = fs::read_to_string(&path).unwrap();
+        assert_eq!(before.lines().count(), LINE_CAP);
+        let error = append_experience(root, "one past the cap", "extra harness", "", RUN).unwrap_err();
+        assert!(error.contains("history was kept and no line was dropped"), "{error}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        assert_eq!(load_experience(root).unwrap().len(), LINE_CAP);
+        let kept = historical_section(root, "task 0").unwrap();
+        assert!(kept.contains("HISTORICAL EXPERIENCE"), "{kept}");
+        assert!(kept.len() <= LIBRARY_PROMPT_MAX);
+    }
+
+    #[test]
+    fn historical_section_is_bounded_and_labelled_as_experience() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let harness = format!("{}ENDHARNESS", "H".repeat(2000));
+        for index in 0..4 {
+            append_experience(root, "same task", &format!("{harness}-{index}"), "", RUN).unwrap();
+        }
+        let section = historical_section(root, "same task").unwrap();
+        assert!(section.contains("HISTORICAL EXPERIENCE"), "{section}");
+        assert!(section.contains("historical experience"), "{section}");
+        assert!(section.contains("do not outrank the current task"), "{section}");
+        assert!(section.contains("indexed key matches this task"), "{section}");
+        assert!(!section.contains("do not propose these again"), "{section}");
+        assert!(!section.contains("ENDHARNESS"), "{section}");
+        assert!(!section.contains(&"H".repeat(1000)), "{section}");
+        assert!(section.len() <= LIBRARY_PROMPT_MAX, "{}", section.len());
+        let later = historical_section(root, "a different later task").unwrap();
+        assert!(later.contains("HISTORICAL EXPERIENCE"), "{later}");
+        assert!(later.contains("do not outrank the current task"), "{later}");
+        assert!(later.contains("indexed key is from another task"), "{later}");
+        assert!(later.len() <= LIBRARY_PROMPT_MAX);
+        assert!(!later.contains("ENDHARNESS"), "{later}");
     }
 }

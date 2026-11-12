@@ -82,6 +82,26 @@ fn refinement_ledger_section(run:&Json)->String{
   Err(_)=>"\nEDIT HISTORY\nThe edit ledger could not be read. Existing history was left unchanged.".into(),
  }
 }
+fn historical_experience(run:&Json)->String{
+ let root=if text(run,"edit_ledger_root").is_empty(){crate::rrsi::default_root()}else{text(run,"edit_ledger_root")};
+ match crate::rrsi::historical_section(&root,&text(run,"task")){
+  Ok(section)=>section,
+  Err(error)=>format!("\nHISTORICAL EXPERIENCE\n{error}"),
+ }
+}
+fn record_settled_library(run:&mut Json){
+ let harness=text(run,"composition");if harness.trim().is_empty(){return;}
+ let run_digest=refinement_digest(run);
+ if text(run,"edit_ledger_root").is_empty(){put(run,"edit_ledger_root",s(&crate::rrsi::default_root()));}
+ let root=text(run,"edit_ledger_root");
+ let document=text(run,"edit_ledger");
+ let file=crate::rrsi::load_file(&root,&text(run,"edit_ledger_path")).unwrap_or_default();
+ let ledger=if !file.is_empty()&&file==document{file}else{document};
+ match crate::rrsi::append_experience(&root,&text(run,"task"),&harness,&ledger,&run_digest){
+  Ok(saved)=>{put(run,"library_revision",get(&saved,"revision").clone());put(run,"library_key",get(&saved,"key").clone());},
+  Err(error)=>put(run,"library_error",s(&error)),
+ }
+}
 pub(super) fn active_agent(st:&Json)->Json{array(st,"agents").get(interaction::agent_index(st)).cloned().unwrap_or(obj(vec![("name",s("General")),("instructions",s("")),("tools",s(&TOOLS.join(",")))]))}
 pub(super) fn route(st: &Json, role: &str) -> Result<usize> {
     if role=="subagent"&&get(get(st,"task_run"),"connection")!=&Null{return Ok(number(get(st,"task_run"),"connection"));}
@@ -451,6 +471,7 @@ pub(super) fn request_messages(st:&Json,mut messages:Vec<Json>)->Result<Vec<Json
   if get(run,"baseline_score")!=&Null{prompt.push_str(&format!("\nAPP RESPONSE CHECK OUTCOMES\n{}\nUse partial progress to target the next rewrite. Reserve completion for all required checks.",improvement::refinement_summary(run)));}
   prompt.push_str(&lesson_data(run));
   prompt.push_str(&refinement_ledger_section(run));
+  prompt.push_str(&historical_experience(run));
  }
  let mut messages=vec![obj(vec![("role",s("system")),("content",s(&system))]),obj(vec![("role",s("user")),("content",s(&prompt))])];
  if phase=="compact"{for mut original in array(&chat(st),"messages").into_iter().take(number(run,"count")){mcp_history::project(&mut original);let images=crate::attachments::images(&original)?;let mut item=obj(vec![("role",s("user")),("content",s(&format!("Original {} message:\n{}",text(&original,"role"),text(&original,"content"))))]);if !images.is_empty(){put(&mut item,"attachments",Arr(images));}messages.push(item);}}
@@ -632,7 +653,7 @@ fn finish_refinement(st:&mut Json,mut run:Json)->Result<Option<Json>>{
   evidence.push_str(&format!("\nFirst round tested reply{}\n{first}",if clipped{" (excerpt)"}else{""}));
  }
  if boolean(&run,"evaluation_requested"){evidence.push_str("\nSeparate evaluation outcomes\n");evidence.push_str(&improvement::evaluation_summary(&run));}
- put(&mut run,"evidence",s(&evidence));put(&mut run,"phase",s("review"));put(&mut run,"evaluation",Null);put(&mut run,"evaluation_next",Null);put(&mut run,"evaluation_context",Null);put(&mut run,"response_checks",Null);
+ put(&mut run,"evidence",s(&evidence));record_settled_library(&mut run);put(&mut run,"phase",s("review"));put(&mut run,"evaluation",Null);put(&mut run,"evaluation_next",Null);put(&mut run,"evaluation_context",Null);put(&mut run,"response_checks",Null);
  let mut next=st.clone();put(&mut next,"refinement_pending",run);reset_task(&mut next);
  put(&mut next,"dialog",s("refinement_review"));put(&mut next,"notice",s("Refinement ready for review; existing agent unchanged"));
  refinement_room(&next)?;*st=next;Ok(Some(Null))
