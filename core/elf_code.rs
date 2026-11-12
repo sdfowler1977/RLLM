@@ -2,7 +2,7 @@
 use super::*;
 const RECORDS:u64=2048;
 const RELOCATIONS:u64=128;
-#[derive(Default)]pub(super) struct Context{pub data:Vec<(u64,u64)>,pub report:String,pub classifications:Vec<super::super::control_flow::Classification>,pub classifications_complete:bool,pub relocations:Vec<super::super::control_flow::Relocation>,pub relocations_complete:bool}
+#[derive(Default)]pub(super) struct Context{pub data:Vec<(u64,u64)>,pub report:String,pub classifications:Vec<super::super::control_flow::Classification>,pub classifications_complete:bool,pub relocations:Vec<super::super::control_flow::Relocation>,pub relocations_complete:bool,pub symbols:Vec<super::super::control_flow::CodeSymbol>}
 fn mapping_name(name:&str)->Option<bool>{if name=="$x"||name.starts_with("$x."){Some(true)}else if name=="$d"||name.starts_with("$d."){Some(false)}else{None}}
 fn relocation_name(kind:u32)->&'static str{match kind{0=>"NONE",257=>"ABS64",258=>"ABS32",259=>"ABS16",260=>"PREL64",261=>"PREL32",262=>"PREL16",273=>"LD_PREL_LO19",274=>"ADR_PREL_LO21",275=>"ADR_PREL_PG_HI21",276=>"ADR_PREL_PG_HI21_NC",277=>"ADD_ABS_LO12_NC",278=>"LDST8_ABS_LO12_NC",279=>"TSTBR14",280=>"CONDBR19",282=>"JUMP26",283=>"CALL26",284=>"LDST16_ABS_LO12_NC",285=>"LDST32_ABS_LO12_NC",286=>"LDST64_ABS_LO12_NC",299=>"LDST128_ABS_LO12_NC",1024=>"COPY",1025=>"GLOB_DAT",1026=>"JUMP_SLOT",1027=>"RELATIVE",1032=>"IRELATIVE",_=>"uninterpreted relocation code"}}
 fn symbol(reader:&Reader<'_>,header:&Header,table:Section,index:u64)->Option<(String,u8,u16,u64)>{
@@ -12,6 +12,12 @@ fn symbol(reader:&Reader<'_>,header:&Header,table:Section,index:u64)->Option<(St
  Some((name,reader.slice(at+4,1)?[0],reader.u16(at+6)?,reader.u64(at+8)?))
 }
 fn line(out:&mut String,row:String){if out.len()+row.len()+1<10800{out.push_str(&row);out.push('\n');}}
+fn publish_code_symbols(data:&[u8],out:&mut String)->Vec<super::super::control_flow::CodeSymbol>{
+ let read=super::super::control_flow::elf_function_symbols(data);
+ for symbol in &read.symbols{line(out,format!("Code symbol \"{}\" at declared value 0x{:x}, size {}. Outgoing calls, incoming references and unknown counts for this address are in the decoded-word cross-reference section.",symbol.name_display,symbol.value,symbol.size));}
+ if let Some(reason)=read.refusal{line(out,format!("Refusal: {reason}."));}
+ read.symbols
+}
 pub(super) fn inspect(reader:&Reader<'_>,header:&Header,kind:u16,sh_valid:bool,regions:&[super::super::control_flow::Region],cancelled:&impl Fn()->bool)->Result<Context,String>{
  let mut out=String::from("ELF AArch64 code/data and relocation declarations\nInput: original held source bytes. Mapping classifications require a complete bounded symbol inventory; missing/stripped metadata keeps encoding candidates available, with code/data unknown. Bounds:64 section headers,2048 total mapping-symbol records,128 relocation records,256-byte names, independent12KiB report.\n");
  if !matches!(kind,1|2|3){return Ok(Context{report:out+"ELF type is outside relocatable/executable/shared-object metadata scope; mapping-symbol and relocation semantics unresolved.\n",..Default::default()});}
@@ -70,5 +76,27 @@ pub(super) fn inspect(reader:&Reader<'_>,header:&Header,kind:u16,sh_valid:bool,r
   }
  }
  let _=writeln!(out,"Observed {relocations} relocation records; unavailable/bounded tables{incomplete}. Report rows may be omitted under the12KiB bound. Unobserved/stripped sections do not establish absence. Dynamic relocation streams, implicit addend extraction, linker relaxation, symbol interposition, IFUNC/TLS, runtime fixups and dependency resolution remain unresolved. All graph/IR facts describe stored encodings before any relocation.");
- Ok(Context{data,report:out,classifications,classifications_complete:complete,relocations:facts,relocations_complete:!incomplete})
+ if cancelled(){return Err("Inspection cancelled during ELF code symbols".into());}
+ let symbols=publish_code_symbols(reader.bytes,&mut out);
+ Ok(Context{data,report:out,classifications,classifications_complete:complete,relocations:facts,relocations_complete:!incomplete,symbols})
+}
+#[cfg(test)]mod tests{
+ use super::*;
+ fn function_image()->Vec<u8>{
+  let shoff=64u64;let sym_off=shoff+3*64;let str_off=sym_off+24;let mut data=vec![0u8;str_off as usize+6];
+  data[..4].copy_from_slice(b"\x7fELF");data[4]=2;data[5]=1;data[6]=1;data[18..20].copy_from_slice(&183u16.to_le_bytes());
+  data[40..48].copy_from_slice(&shoff.to_le_bytes());data[58..60].copy_from_slice(&64u16.to_le_bytes());data[60..62].copy_from_slice(&3u16.to_le_bytes());
+  let put=|data:&mut [u8],at:usize,kind:u32,offset:u64,size:u64,link:u32,entry:u64|{data[at+4..at+8].copy_from_slice(&kind.to_le_bytes());data[at+24..at+32].copy_from_slice(&offset.to_le_bytes());data[at+32..at+40].copy_from_slice(&size.to_le_bytes());data[at+40..at+44].copy_from_slice(&link.to_le_bytes());data[at+56..at+64].copy_from_slice(&entry.to_le_bytes());};
+  put(&mut data,shoff as usize+64,2,sym_off,24,2,24);put(&mut data,shoff as usize+128,3,str_off,6,0,0);
+  data[sym_off as usize..sym_off as usize+4].copy_from_slice(&1u32.to_le_bytes());data[sym_off as usize+4]=2;data[sym_off as usize+6..sym_off as usize+8].copy_from_slice(&1u16.to_le_bytes());
+  data[sym_off as usize+8..sym_off as usize+16].copy_from_slice(&0x1008u64.to_le_bytes());data[sym_off as usize+16..sym_off as usize+24].copy_from_slice(&4u64.to_le_bytes());
+  data[str_off as usize]=0;data[str_off as usize+1..str_off as usize+5].copy_from_slice(b"main");data[str_off as usize+5]=0;data
+ }
+ #[test]fn code_symbol_line_names_the_address_used_by_cross_references(){
+  let mut out=String::new();let symbols=publish_code_symbols(&function_image(),&mut out);
+  assert_eq!(symbols.len(),1);assert_eq!(symbols[0].name_display,"main");assert_eq!(symbols[0].value,0x1008);
+  assert!(out.contains("Code symbol \"main\" at declared value 0x1008"));
+  assert!(out.contains("decoded-word cross-reference section"));
+  let mut empty=String::new();assert!(publish_code_symbols(b"\x7fELF", &mut empty).is_empty());assert!(empty.is_empty());
+ }
 }

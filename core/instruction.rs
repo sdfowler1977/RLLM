@@ -144,6 +144,9 @@ fn product(a:Value,b:Value,wide:bool)->Value{
 }
 fn shift_name(n:u8)->&'static str{match n{0=>"LSL",1=>"LSR",2=>"ASR",_=>"ROR"}}
 fn coordinate_delta(pc:u64,delta:i64)->Option<Value>{if delta<0{pc.checked_sub(delta.unsigned_abs())}else{pc.checked_add(delta as u64)}.map(Value::coordinate)}
+/// Address of a PC-relative encoding when coordinate arithmetic succeeds.
+/// The cross-reference pass accepts a direct target only when this agrees with `displaced`.
+pub(super) fn coordinate_target(pc:u64,delta:i64)->Option<u64>{coordinate_delta(pc,delta).and_then(|value|value.full().filter(|value|value.relative).map(|value|value.bits))}
 fn arithmetic_bits(a:Value,b:Value,wide:bool,subtract:bool)->(Value,Option<Flags>){arithmetic_carry_bits(a,b,wide,subtract,if subtract{2}else{1})}
 fn arithmetic_carry_bits(a:Value,b:Value,wide:bool,subtract:bool,mut carry:u8)->(Value,Option<Flags>){
  let width=if wide{64}else{32};let(mut bits,mut known)=(0u64,0u64);let mut overflow=0u8;
