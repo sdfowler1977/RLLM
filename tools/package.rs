@@ -8,8 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const USAGE: &str = "\
@@ -390,13 +392,116 @@ fn fit_u32(value: usize, what: &str) -> Result<u32, String> {
     u32::try_from(value).map_err(|_| refuse(&format!("source zip exceeds ZIP32 limits ({what})")))
 }
 
+// glibc struct tm. localtime_r fills it; only the calendar fields are read.
+#[repr(C)]
+struct LocalTm {
+    tm_sec: i32,
+    tm_min: i32,
+    tm_hour: i32,
+    tm_mday: i32,
+    tm_mon: i32,
+    tm_year: i32,
+    tm_wday: i32,
+    tm_yday: i32,
+    tm_isdst: i32,
+    tm_gmtoff: i64,
+    tm_zone: *const i8,
+}
+
+extern "C" {
+    fn localtime_r(timep: *const i64, result: *mut LocalTm) -> *mut LocalTm;
+}
+
+struct MemberStamp {
+    dos_time: u16,
+    dos_date: u16,
+    external_attr: u32,
+}
+
+fn zip_flags(name: &str) -> u16 {
+    if name.is_ascii() { 0 } else { 0x0800 }
+}
+
+fn dos_from_parts(year: i32, month: i32, day: i32, hour: i32, minute: i32, second: i32) -> Result<(u16, u16), String> {
+    if !(1980..=2107).contains(&year) || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Err(refuse(&format!("ZIP does not support timestamp {year:04}-{month:02}-{day:02}")));
+    }
+    if !(0..=23).contains(&hour) || !(0..=59).contains(&minute) || !(0..=61).contains(&second) {
+        return Err(refuse(&format!("ZIP does not support timestamp {hour:02}:{minute:02}:{second:02}")));
+    }
+    let date = ((year - 1980) << 9) | (month << 5) | day;
+    let time = (hour << 11) | (minute << 5) | (second / 2);
+    Ok((time as u16, date as u16))
+}
+
+fn dos_stamp(when: SystemTime) -> Result<(u16, u16), String> {
+    let secs = match when.duration_since(UNIX_EPOCH) {
+        Ok(duration) => i64::try_from(duration.as_secs()).map_err(|_| refuse("ZIP does not support timestamp"))?,
+        Err(_) => return Err(refuse("ZIP does not support timestamps before 1980")),
+    };
+    let mut tm = LocalTm {
+        tm_sec: 0,
+        tm_min: 0,
+        tm_hour: 0,
+        tm_mday: 0,
+        tm_mon: 0,
+        tm_year: 0,
+        tm_wday: 0,
+        tm_yday: 0,
+        tm_isdst: 0,
+        tm_gmtoff: 0,
+        tm_zone: std::ptr::null(),
+    };
+    // POSIX localtime_r, same conversion Python's time.localtime uses for ZipInfo.
+    let ptr = unsafe { localtime_r(&secs, &mut tm) };
+    if ptr.is_null() {
+        return Err(refuse("ZIP does not support timestamp"));
+    }
+    dos_from_parts(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec)
+}
+
+fn created_file_mode() -> u32 {
+    static MODE: OnceLock<u32> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        let path = env::temp_dir().join(format!("rllm-package-mode-{}", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let mode = fs::File::create(&path).and_then(|_| fs::metadata(&path)).map(|meta| meta.permissions().mode()).unwrap_or(0o100644);
+        let _ = fs::remove_file(&path);
+        mode
+    })
+}
+
+fn member_stamp(root: &Path, relative: &str, rewritten_at: Option<SystemTime>) -> Result<MemberStamp, String> {
+    let path = root.join(relative);
+    let existing = fs::metadata(&path).ok();
+    let mode = existing.as_ref().map(|meta| meta.permissions().mode()).unwrap_or_else(created_file_mode);
+    let when = if let Some(now) = rewritten_at {
+        now
+    } else if let Some(meta) = existing {
+        meta.modified().map_err(|_| refuse(&format!("{relative} mtime")))?
+    } else {
+        return Err(refuse(&format!("{relative} absent")));
+    };
+    let (dos_time, dos_date) = dos_stamp(when)?;
+    Ok(MemberStamp { dos_time, dos_date, external_attr: (mode & 0xFFFF) << 16 })
+}
+
+#[cfg(test)]
 fn archive_bytes(members: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
+    let stamped = members
+        .iter()
+        .map(|(name, bytes)| (name.clone(), bytes.clone(), MemberStamp { dos_time: 0, dos_date: 0x0021, external_attr: 0 }))
+        .collect::<Vec<_>>();
+    write_zip(&stamped)
+}
+
+fn write_zip(members: &[(String, Vec<u8>, MemberStamp)]) -> Result<Vec<u8>, String> {
     if members.len() > u16::MAX as usize {
         return Err(refuse("source zip exceeds ZIP32 entry count"));
     }
     let mut body = Vec::new();
     let mut directory = Vec::new();
-    for (name, plain) in members {
+    for (name, plain, stamp) in members {
         if name.len() > u16::MAX as usize {
             return Err(refuse(&format!("{name} exceeds ZIP32 name length")));
         }
@@ -406,12 +511,13 @@ fn archive_bytes(members: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
         let comp_len = fit_u32(compressed.len(), name)?;
         let offset = fit_u32(body.len(), name)?;
         let name_bytes = name.as_bytes();
+        let flags = zip_flags(name);
         push_u32(&mut body, 0x0403_4b50);
         push_u16(&mut body, 20);
-        push_u16(&mut body, 0x0800);
+        push_u16(&mut body, flags);
         push_u16(&mut body, 8);
-        push_u16(&mut body, 0);
-        push_u16(&mut body, 0x0021);
+        push_u16(&mut body, stamp.dos_time);
+        push_u16(&mut body, stamp.dos_date);
         push_u32(&mut body, crc);
         push_u32(&mut body, comp_len);
         push_u32(&mut body, plain_len);
@@ -422,10 +528,10 @@ fn archive_bytes(members: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
         push_u32(&mut directory, 0x0201_4b50);
         push_u16(&mut directory, 0x0314);
         push_u16(&mut directory, 20);
-        push_u16(&mut directory, 0x0800);
+        push_u16(&mut directory, flags);
         push_u16(&mut directory, 8);
-        push_u16(&mut directory, 0);
-        push_u16(&mut directory, 0x0021);
+        push_u16(&mut directory, stamp.dos_time);
+        push_u16(&mut directory, stamp.dos_date);
         push_u32(&mut directory, crc);
         push_u32(&mut directory, comp_len);
         push_u32(&mut directory, plain_len);
@@ -434,7 +540,7 @@ fn archive_bytes(members: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
         push_u16(&mut directory, 0);
         push_u16(&mut directory, 0);
         push_u16(&mut directory, 0);
-        push_u32(&mut directory, 0);
+        push_u32(&mut directory, stamp.external_attr);
         push_u32(&mut directory, offset);
         directory.extend_from_slice(name_bytes);
     }
@@ -1122,6 +1228,7 @@ const HYPHEN_PAIRS: &[&str] = &[
     "mcp_continuation",
     "mcp_history",
     "self_rebuild",
+    "rrsi_loop",
 ];
 
 fn report_pairs() -> Vec<(String, String)> {
@@ -1716,6 +1823,14 @@ struct Plan {
     signature: PathBuf,
     preview: String,
     printed: String,
+    rewritten_at: SystemTime,
+}
+
+fn rewritten_output(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("RESULTS.json" | "NOTES.md" | "STATUS.md" | "project-progress.md" | "README.md" | "PUBLICATION-MANIFEST.json")
+    )
 }
 
 impl Plan {
@@ -1727,6 +1842,10 @@ impl Plan {
                 }
             }
             fs::write(&artifact.path, &artifact.bytes).map_err(|_| refuse(&format!("{} unwritable", artifact.path.display())))?;
+            if rewritten_output(&artifact.path) {
+                let file = fs::File::options().write(true).open(&artifact.path).map_err(|_| refuse(&format!("{} mtime", artifact.path.display())))?;
+                file.set_modified(self.rewritten_at).map_err(|_| refuse(&format!("{} mtime", artifact.path.display())))?;
+            }
         }
         run_signature(&self.signature, &self.apk.path)?;
         for artifact in &self.after {
@@ -2026,8 +2145,14 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
     let manifest_bytes = json_text(&manifest).into_bytes();
     member_bytes.push(("PUBLICATION-MANIFEST.json".into(), manifest_bytes.clone()));
     member_bytes.sort_by(|left, right| cmp_rel(&left.0, &right.0));
-    let zip_members: Vec<(String, Vec<u8>)> = member_bytes.iter().map(|(relative, bytes)| (format!("RLLM/{relative}"), bytes.clone())).collect();
-    let zip_bytes = archive_bytes(&zip_members)?;
+    let rewritten_at = SystemTime::now();
+    let mut zip_members = Vec::with_capacity(member_bytes.len());
+    for (relative, bytes) in &member_bytes {
+        let rewritten = relative == "PUBLICATION-MANIFEST.json" || overlay.contains_key(relative);
+        let stamp = member_stamp(root, relative, rewritten.then_some(rewritten_at))?;
+        zip_members.push((format!("RLLM/{relative}"), bytes.clone(), stamp));
+    }
+    let zip_bytes = write_zip(&zip_members)?;
     let opened = read_archive(&zip_bytes).map_err(|err| refuse(&format!("{source_name} {err}")))?;
     if opened.len() != file_records_len(&manifest) {
         return Err(refuse(&format!("{source_name} member count")));
@@ -2099,7 +2224,7 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
         push_preview(&mut preview, &artifact.path, &artifact.bytes);
     }
     preview.push_str(&format!("would run: {} {}\n", signature.display(), published_path.display()));
-    Ok(Plan { before, apk: apk_artifact, after, signature, preview, printed })
+    Ok(Plan { before, apk: apk_artifact, after, signature, preview, printed, rewritten_at })
 }
 
 fn file_records_len(manifest: &Json) -> usize {
@@ -2267,12 +2392,12 @@ mod checks {
         let root = project_root().unwrap();
         let source = fs::read_to_string(root.join("tools/checks.py")).unwrap();
         let names = parse_names_list(&source).unwrap();
-        assert_eq!(names.len(), 70, "{}", names.len());
+        assert_eq!(names.len(), 71, "{}", names.len());
         assert_eq!(names.first().map(String::as_str), Some("provider_process"));
-        assert_eq!(names.last().map(String::as_str), Some("self_rebuild"));
+        assert_eq!(names.last().map(String::as_str), Some("rrsi_loop"));
         duplicate_groups(&names).unwrap();
         pairs_cover(&names).unwrap();
-        assert_eq!(report_pairs().len(), 70);
+        assert_eq!(report_pairs().len(), 71);
     }
 
     #[test]
@@ -2617,7 +2742,7 @@ mod checks {
         assert!(root.join("output/checks/packaged.json").is_file());
         let notes = fs::read_to_string(root.join("release/NOTES.md")).unwrap();
         assert!(notes.contains("Auto chooses a direct reply"), "{notes}");
-        assert!(notes.contains("70/70 connected groups passed"), "{notes}");
+        assert!(notes.contains("71/71 connected groups passed"), "{notes}");
         assert!(notes.contains("4 Rust cases from the full suite"), "{notes}");
         let readme = fs::read_to_string(root.join("README.md")).unwrap();
         assert!(readme.contains("Current signed candidate 7"), "{readme}");
@@ -2627,5 +2752,103 @@ mod checks {
         let opened = read_archive(&fs::read(destination.join(zip_name)).unwrap()).unwrap();
         assert!(opened.iter().any(|(name, data)| name == "RLLM/AndroidManifest.xml" && data == b"manifest"));
         assert!(printed.contains("signed candidate; acceptance incomplete"), "{printed}");
+    }
+
+    #[test]
+    fn dos_parts_pack_the_zip_clock() {
+        assert_eq!(dos_from_parts(2026, 11, 12, 8, 47, 2).unwrap(), (0x45e1, 0x5d6c));
+        assert_eq!(dos_from_parts(2026, 11, 12, 8, 47, 3).unwrap().0, 0x45e1);
+        assert!(dos_from_parts(1979, 1, 1, 0, 0, 0).unwrap_err().contains("before 1980") || dos_from_parts(1979, 1, 1, 0, 0, 0).unwrap_err().contains("ZIP does not support"));
+    }
+
+    #[test]
+    fn zip_headers_record_stamp_mode_and_utf8_bit() {
+        let members = vec![
+            ("RLLM/a.txt".into(), b"hello".to_vec(), MemberStamp { dos_time: 0x45e1, dos_date: 0x5d6c, external_attr: 0x81b4_0000 }),
+            ("RLLM/café.txt".into(), b"c".to_vec(), MemberStamp { dos_time: 0x45e1, dos_date: 0x5d6c, external_attr: 0x81a4_0000 }),
+        ];
+        let archive = write_zip(&members).unwrap();
+        let ascii = zip_header(&archive, "RLLM/a.txt");
+        assert_eq!(ascii.flag, 0, "ascii names leave the UTF-8 flag clear");
+        assert_eq!((ascii.time, ascii.date, ascii.external_attr), (0x45e1, 0x5d6c, 0x81b4_0000));
+        let utf = zip_header(&archive, "RLLM/café.txt");
+        assert_eq!(utf.flag, 0x0800);
+        assert_eq!(utf.external_attr, 0x81a4_0000);
+    }
+
+    struct ZipHeader {
+        flag: u16,
+        time: u16,
+        date: u16,
+        external_attr: u32,
+    }
+
+    fn zip_header(data: &[u8], name: &str) -> ZipHeader {
+        let bytes = name.as_bytes();
+        let mut flag = None;
+        let mut time = 0;
+        let mut date = 0;
+        let mut external_attr = 0;
+        let mut start = 0;
+        while let Some(at) = data[start..].windows(bytes.len()).position(|window| window == bytes) {
+            let pos = start + at;
+            if pos >= 30 && data[pos - 30..pos - 26] == [0x50, 0x4b, 0x03, 0x04] {
+                flag = Some(u16::from_le_bytes(data[pos - 24..pos - 22].try_into().unwrap()));
+                time = u16::from_le_bytes(data[pos - 20..pos - 18].try_into().unwrap());
+                date = u16::from_le_bytes(data[pos - 18..pos - 16].try_into().unwrap());
+            }
+            if pos >= 46 && data[pos - 46..pos - 42] == [0x50, 0x4b, 0x01, 0x02] {
+                external_attr = u32::from_le_bytes(data[pos - 8..pos - 4].try_into().unwrap());
+            }
+            start = pos + 1;
+        }
+        ZipHeader { flag: flag.expect(name), time, date, external_attr }
+    }
+
+    #[test]
+    fn published_zip_uses_source_mtime_and_mode() {
+        let (_dir, root) = fixture();
+        fs::create_dir_all(root.join("notes")).unwrap();
+        fs::write(root.join("notes/café.txt"), b"cafe\n").unwrap();
+        let destination = root.join("destination");
+        publish(&root, &destination, false, false).unwrap();
+        let zip_path = fs::read_dir(&destination)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("zip"))
+            .unwrap();
+        let archive = fs::read(&zip_path).unwrap();
+        let manifest = root.join("AndroidManifest.xml");
+        let meta = fs::metadata(&manifest).unwrap();
+        let (time, date) = dos_stamp(meta.modified().unwrap()).unwrap();
+        let header = zip_header(&archive, "RLLM/AndroidManifest.xml");
+        assert_eq!(header.flag, 0);
+        assert_eq!((header.time, header.date), (time, date));
+        assert_eq!(header.external_attr, (meta.permissions().mode() & 0xFFFF) << 16);
+        let cafe = zip_header(&archive, "RLLM/notes/café.txt");
+        assert_eq!(cafe.flag, 0x0800);
+        let cafe_meta = fs::metadata(root.join("notes/café.txt")).unwrap();
+        assert_eq!(cafe.external_attr, (cafe_meta.permissions().mode() & 0xFFFF) << 16);
+        let notes = zip_header(&archive, "RLLM/release/NOTES.md");
+        let notes_meta = fs::metadata(root.join("release/NOTES.md")).unwrap();
+        assert_eq!(notes.external_attr, (notes_meta.permissions().mode() & 0xFFFF) << 16);
+        let _ = fs::remove_dir_all(root.join("destination"));
+        let readme = fs::File::options().write(true).open(root.join("README.md")).unwrap();
+        let old = UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        readme.set_modified(old).unwrap();
+        drop(readme);
+        let outside = env::temp_dir().join(format!("rllm-pkg-readme-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&outside);
+        publish(&root, &outside, false, false).unwrap();
+        let zip_path = fs::read_dir(&outside)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("zip"))
+            .unwrap();
+        let archive = fs::read(&zip_path).unwrap();
+        let _ = fs::remove_dir_all(&outside);
+        let header = zip_header(&archive, "RLLM/README.md");
+        let (old_time, old_date) = dos_stamp(old).unwrap();
+        assert_ne!((header.time, header.date), (old_time, old_date), "rewritten README kept its pre-publish mtime");
     }
 }
