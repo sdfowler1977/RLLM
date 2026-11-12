@@ -1,6 +1,7 @@
 //! .NET metadata and CIL observations over inspected PE bytes.
-//! Counts and names come from the bytes. IL is not decoded.
-//! A tiny or full method header is classified from its flag byte. The instruction bytes are not read.
+//! Counts, names, and CIL instructions come from the bytes.
+//! A tiny or fat method header is classified from its flag byte.
+//! Instruction bytes are decoded up to the named caps. No behaviour is claimed.
 #[cfg(test)]
 use super::{obj, s, Json, Json::*};
 const TABLE_CAP: usize = 48;
@@ -23,8 +24,25 @@ const PARSE_WORK_CAP_NAME: &str = "dotnet parse work cap";
 const WORK_UNREAD: &str = "Refusal: dotnet parse work cap. Remaining streams, tables, rows, and names were not read.";
 const DECLARED_SIZE_CAP_NAME: &str = "dotnet declared size cap";
 const DECLARED_UNREAD: &str = "Refusal: dotnet declared size cap. The declared range was not scanned.";
-#[cfg(test)]
-const BODIES: &str = "not read";
+/// Instructions walked in one method body. The next instruction is not decoded.
+const INSTRUCTION_CAP: usize = 128;
+const INSTRUCTION_CAP_NAME: &str = "dotnet instruction cap";
+/// Method bodies whose code bytes are walked in one assembly.
+const BODY_DECODE_CAP: usize = 64;
+const BODY_DECODE_CAP_NAME: &str = "dotnet method body cap";
+const BODY_DECODE_UNREAD: &str = "Refusal: dotnet method body cap. Later method bodies were not decoded.";
+/// Exception clauses kept from one well-formed section. Later clauses are not read.
+const CLAUSE_CAP: usize = 16;
+const CLAUSE_CAP_NAME: &str = "dotnet exception clause cap";
+/// `switch` targets consumed. A larger declared count is not consumed, so the walk cannot drift.
+const SWITCH_TARGET_CAP: usize = 16;
+const SWITCH_TARGET_CAP_NAME: &str = "dotnet switch target cap";
+/// Declared extra-section data size, including its 4-byte header. A larger section is not mapped.
+const EH_BYTE_CAP: usize = 4096;
+/// Extra sections followed from one method's MoreSects chain.
+const EH_CHAIN_CAP: usize = 4;
+const EH_CAP_NAME: &str = "dotnet exception section cap";
+const SCOPE: &str = "Scope: CLR runtime header (data directory entry 14), metadata signature and version, named streams, non-zero table row counts, module and assembly names, the count of MethodDef rows whose RVA column is nonzero, and CIL method bodies up to the instruction, body, clause, and switch caps. A decoded instruction records the opcode, the IL offset, the length, the operand, and any branch or switch target. An exception clause records its kind and its try and handler offsets. No behaviour is claimed.";
 
 #[derive(Clone, Copy)]
 struct Heap {
@@ -60,6 +78,12 @@ struct MethodObs {
     read: u32,
     nonzero: u32,
     rvas: Vec<u32>,
+    bodies_decoded: u32,
+    instructions: u32,
+}
+
+fn method_rows(declared: u32, read: u32, nonzero: u32, rvas: Vec<u32>) -> MethodObs {
+    MethodObs { declared, read, nonzero, rvas, bodies_decoded: 0, instructions: 0 }
 }
 
 enum TextField {
@@ -810,7 +834,7 @@ fn read_index(bytes: &[u8], at: usize, width: usize) -> Option<u32> {
 
 fn method_obs(stream: &[u8], rows: &[u32; 64], valid: u64, heap: Heap, header: usize, budget: &mut Budget<'_>) -> Result<MethodObs, MethodFail> {
     if valid & (1u64 << 0x06) == 0 {
-        return Ok(MethodObs { declared: 0, read: 0, nonzero: 0, rvas: Vec::new() });
+        return Ok(method_rows(0, 0, 0, Vec::new()));
     }
     let declared = rows[0x06];
     let stride = row_size(0x06, rows, heap).ok_or(MethodFail::Message("MethodDef row width is unresolved."))?;
@@ -847,7 +871,7 @@ fn method_obs(stream: &[u8], rows: &[u32; 64], valid: u64, heap: Heap, header: u
         read += 1;
     }
     if stopped {
-        return Ok(MethodObs { declared, read, nonzero, rvas });
+        return Ok(method_rows(declared, read, nonzero, rvas));
     }
     if read < declared {
         if declared > METHOD_ROW_CAP as u32 {
@@ -855,7 +879,7 @@ fn method_obs(stream: &[u8], rows: &[u32; 64], valid: u64, heap: Heap, header: u
         }
         return Err(MethodFail::Message("unread MethodDef rows are not counted and their bodies are not claimed."));
     }
-    Ok(MethodObs { declared, read, nonzero, rvas })
+    Ok(method_rows(declared, read, nonzero, rvas))
 }
 
 fn fill_names(evidence: &mut Evidence, meta: &[u8], stream: &[u8], rows: &[u32; 64], valid: u64, heap: Heap, header: usize, budget: &mut Budget<'_>) -> Result<(), ()> {
@@ -965,7 +989,7 @@ fn read_table_stream(evidence: &mut Evidence, meta: &[u8], streams: &[StreamRow]
         evidence.tables_listed = true;
         evidence.module_name = TextField::Absent;
         evidence.assembly_name = TextField::Absent;
-        evidence.methods = Some(MethodObs { declared: 0, read: 0, nonzero: 0, rvas: Vec::new() });
+        evidence.methods = Some(method_rows(0, 0, 0, Vec::new()));
         return Ok(());
     };
     let body = match open_stream(meta, &table) {
@@ -1061,7 +1085,7 @@ fn partial_methods(stream: &[u8], rows: &[u32; 64], valid: u64, heap: Heap, head
         }
         read += 1;
     }
-    Ok(Some(MethodObs { declared, read, nonzero, rvas }))
+    Ok(Some(method_rows(declared, read, nonzero, rvas)))
 }
 
 fn note_heaps(evidence: &mut Evidence, meta: &[u8]) {
@@ -1097,24 +1121,197 @@ fn note_heaps(evidence: &mut Evidence, meta: &[u8]) {
     }
 }
 
-fn header_line(rva: u32, bytes: &[u8]) -> String {
-    let flags = u16::from_le_bytes([bytes[0], bytes[1]]);
-    let header_bytes = u32::from(flags >> 12).saturating_mul(4);
-    let max_stack = u32::from(u16::from_le_bytes([bytes[2], bytes[3]]));
-    let code_size = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-    let local_sig = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-    let mut line = format!(
-        "MethodDef RVA {rva:#x} header full, header bytes {header_bytes}, max stack {max_stack}, code size {code_size}, local var sig {local_sig:#x}"
-    );
-    if flags & 0x10 != 0 {
-        line.push_str(", init locals");
+fn method_summary(methods: &MethodObs) -> String {
+    if methods.bodies_decoded == 0 {
+        format!(
+            "MethodDef rows declared {}, rows read {}, nonzero RVA {}. Method bodies were not read. IL was not decoded. No behaviour is claimed.",
+            methods.declared, methods.read, methods.nonzero
+        )
+    } else {
+        format!(
+            "MethodDef rows declared {}, rows read {}, nonzero RVA {}. Method bodies decoded {}. IL instructions {}. No behaviour is claimed.",
+            methods.declared, methods.read, methods.nonzero, methods.bodies_decoded, methods.instructions
+        )
     }
-    line.push('.');
-    if flags & 0x08 != 0 {
-        line.push_str(" More sections were not read.");
+}
+
+fn bodies_field(methods: &MethodObs) -> String {
+    if methods.bodies_decoded == 0 {
+        "not read".to_string()
+    } else {
+        format!("decoded {} instructions {}", methods.bodies_decoded, methods.instructions)
     }
-    line.push_str(" IL was not decoded.");
-    line
+}
+
+fn remember_body(evidence: &mut Evidence, instructions: u32) {
+    if let Some(methods) = evidence.methods.as_mut() {
+        methods.bodies_decoded = methods.bodies_decoded.saturating_add(1);
+        methods.instructions = methods.instructions.saturating_add(instructions);
+    }
+}
+
+fn body_cap_reached(evidence: &mut Evidence) -> bool {
+    let opened = evidence.methods.as_ref().map(|item| item.bodies_decoded).unwrap_or(0);
+    if opened < BODY_DECODE_CAP as u32 {
+        return false;
+    }
+    if !evidence.caps.contains(&BODY_DECODE_CAP_NAME) {
+        evidence.caps.push(BODY_DECODE_CAP_NAME);
+    }
+    if !evidence.refusals.iter().any(|item| item == BODY_DECODE_UNREAD) {
+        add_refusal(evidence, BODY_DECODE_UNREAD.to_string());
+    }
+    true
+}
+
+fn push_cap(evidence: &mut Evidence, name: &'static str, detail: String) {
+    if !evidence.caps.contains(&name) {
+        evidence.caps.push(name);
+    }
+    add_refusal(evidence, detail);
+}
+
+/// ECMA-335 operand widths. An opcode absent from the tables has no known width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpKind {
+    None,
+    I8,
+    U8,
+    I32,
+    I64,
+    F32,
+    F64,
+    Br8,
+    Br32,
+    Var16,
+    Method,
+    Field,
+    Type,
+    Sig,
+    Tok,
+    String,
+    Switch,
+}
+
+fn kind_tag(tag: u8) -> OpKind {
+    match tag {
+        1 => OpKind::I8,
+        2 => OpKind::U8,
+        3 => OpKind::I32,
+        4 => OpKind::I64,
+        5 => OpKind::F32,
+        6 => OpKind::F64,
+        7 => OpKind::Br8,
+        8 => OpKind::Br32,
+        9 => OpKind::Var16,
+        10 => OpKind::Method,
+        11 => OpKind::Field,
+        12 => OpKind::Type,
+        13 => OpKind::Sig,
+        14 => OpKind::Tok,
+        15 => OpKind::String,
+        16 => OpKind::Switch,
+        _ => OpKind::None,
+    }
+}
+
+fn fixed_width(kind: OpKind) -> Option<usize> {
+    match kind {
+        OpKind::None => Some(0),
+        OpKind::I8 | OpKind::U8 | OpKind::Br8 => Some(1),
+        OpKind::Var16 => Some(2),
+        OpKind::I32 | OpKind::F32 | OpKind::Br32 | OpKind::Method | OpKind::Field | OpKind::Type | OpKind::Sig | OpKind::Tok | OpKind::String => Some(4),
+        OpKind::I64 | OpKind::F64 => Some(8),
+        OpKind::Switch => None,
+    }
+}
+
+/// Single-byte opcodes. `0xFE` is the two-byte family and is not listed. Prefixes `0xF8..=0xFD` and `0xFF` are omitted on purpose.
+fn opcode_one(op: u8) -> Option<(&'static str, OpKind)> {
+    const ROWS: &[(u8, &str, u8)] = &[
+        (0x00, "nop", 0), (0x01, "break", 0), (0x02, "ldarg.0", 0), (0x03, "ldarg.1", 0),
+        (0x04, "ldarg.2", 0), (0x05, "ldarg.3", 0), (0x06, "ldloc.0", 0), (0x07, "ldloc.1", 0),
+        (0x08, "ldloc.2", 0), (0x09, "ldloc.3", 0), (0x0A, "stloc.0", 0), (0x0B, "stloc.1", 0),
+        (0x0C, "stloc.2", 0), (0x0D, "stloc.3", 0), (0x0E, "ldarg.s", 2), (0x0F, "ldarga.s", 2),
+        (0x10, "starg.s", 2), (0x11, "ldloc.s", 2), (0x12, "ldloca.s", 2), (0x13, "stloc.s", 2),
+        (0x14, "ldnull", 0), (0x15, "ldc.i4.m1", 0), (0x16, "ldc.i4.0", 0), (0x17, "ldc.i4.1", 0),
+        (0x18, "ldc.i4.2", 0), (0x19, "ldc.i4.3", 0), (0x1A, "ldc.i4.4", 0), (0x1B, "ldc.i4.5", 0),
+        (0x1C, "ldc.i4.6", 0), (0x1D, "ldc.i4.7", 0), (0x1E, "ldc.i4.8", 0), (0x1F, "ldc.i4.s", 1),
+        (0x20, "ldc.i4", 3), (0x21, "ldc.i8", 4), (0x22, "ldc.r4", 5), (0x23, "ldc.r8", 6),
+        (0x24, "unused", 0), (0x25, "dup", 0), (0x26, "pop", 0), (0x27, "jmp", 10),
+        (0x28, "call", 10), (0x29, "calli", 13), (0x2A, "ret", 0), (0x2B, "br.s", 7),
+        (0x2C, "brfalse.s", 7), (0x2D, "brtrue.s", 7), (0x2E, "beq.s", 7), (0x2F, "bge.s", 7),
+        (0x30, "bgt.s", 7), (0x31, "ble.s", 7), (0x32, "blt.s", 7), (0x33, "bne.un.s", 7),
+        (0x34, "bge.un.s", 7), (0x35, "bgt.un.s", 7), (0x36, "ble.un.s", 7), (0x37, "blt.un.s", 7),
+        (0x38, "br", 8), (0x39, "brfalse", 8), (0x3A, "brtrue", 8), (0x3B, "beq", 8),
+        (0x3C, "bge", 8), (0x3D, "bgt", 8), (0x3E, "ble", 8), (0x3F, "blt", 8),
+        (0x40, "bne.un", 8), (0x41, "bge.un", 8), (0x42, "bgt.un", 8), (0x43, "ble.un", 8),
+        (0x44, "blt.un", 8), (0x45, "switch", 16), (0x46, "ldind.i1", 0), (0x47, "ldind.u1", 0),
+        (0x48, "ldind.i2", 0), (0x49, "ldind.u2", 0), (0x4A, "ldind.i4", 0), (0x4B, "ldind.u4", 0),
+        (0x4C, "ldind.i8", 0), (0x4D, "ldind.i", 0), (0x4E, "ldind.r4", 0), (0x4F, "ldind.r8", 0),
+        (0x50, "ldind.ref", 0), (0x51, "stind.ref", 0), (0x52, "stind.i1", 0), (0x53, "stind.i2", 0),
+        (0x54, "stind.i4", 0), (0x55, "stind.i8", 0), (0x56, "stind.r4", 0), (0x57, "stind.r8", 0),
+        (0x58, "add", 0), (0x59, "sub", 0), (0x5A, "mul", 0), (0x5B, "div", 0),
+        (0x5C, "div.un", 0), (0x5D, "rem", 0), (0x5E, "rem.un", 0), (0x5F, "and", 0),
+        (0x60, "or", 0), (0x61, "xor", 0), (0x62, "shl", 0), (0x63, "shr", 0),
+        (0x64, "shr.un", 0), (0x65, "neg", 0), (0x66, "not", 0), (0x67, "conv.i1", 0),
+        (0x68, "conv.i2", 0), (0x69, "conv.i4", 0), (0x6A, "conv.i8", 0), (0x6B, "conv.r4", 0),
+        (0x6C, "conv.r8", 0), (0x6D, "conv.u4", 0), (0x6E, "conv.u8", 0), (0x6F, "callvirt", 10),
+        (0x70, "cpobj", 12), (0x71, "ldobj", 12), (0x72, "ldstr", 15), (0x73, "newobj", 10),
+        (0x74, "castclass", 12), (0x75, "isinst", 12), (0x76, "conv.r.un", 0), (0x77, "unused", 0),
+        (0x78, "unused", 0), (0x79, "unbox", 12), (0x7A, "throw", 0), (0x7B, "ldfld", 11),
+        (0x7C, "ldflda", 11), (0x7D, "stfld", 11), (0x7E, "ldsfld", 11), (0x7F, "ldsflda", 11),
+        (0x80, "stsfld", 11), (0x81, "stobj", 12), (0x82, "conv.ovf.i1.un", 0), (0x83, "conv.ovf.i2.un", 0),
+        (0x84, "conv.ovf.i4.un", 0), (0x85, "conv.ovf.i8.un", 0), (0x86, "conv.ovf.u1.un", 0), (0x87, "conv.ovf.u2.un", 0),
+        (0x88, "conv.ovf.u4.un", 0), (0x89, "conv.ovf.u8.un", 0), (0x8A, "conv.ovf.i.un", 0), (0x8B, "conv.ovf.u.un", 0),
+        (0x8C, "box", 12), (0x8D, "newarr", 12), (0x8E, "ldlen", 0), (0x8F, "ldelema", 12),
+        (0x90, "ldelem.i1", 0), (0x91, "ldelem.u1", 0), (0x92, "ldelem.i2", 0), (0x93, "ldelem.u2", 0),
+        (0x94, "ldelem.i4", 0), (0x95, "ldelem.u4", 0), (0x96, "ldelem.i8", 0), (0x97, "ldelem.i", 0),
+        (0x98, "ldelem.r4", 0), (0x99, "ldelem.r8", 0), (0x9A, "ldelem.ref", 0), (0x9B, "stelem.i", 0),
+        (0x9C, "stelem.i1", 0), (0x9D, "stelem.i2", 0), (0x9E, "stelem.i4", 0), (0x9F, "stelem.i8", 0),
+        (0xA0, "stelem.r4", 0), (0xA1, "stelem.r8", 0), (0xA2, "stelem.ref", 0), (0xA3, "ldelem", 12),
+        (0xA4, "stelem", 12), (0xA5, "unbox.any", 12), (0xA6, "unused", 0), (0xA7, "unused", 0),
+        (0xA8, "unused", 0), (0xA9, "unused", 0), (0xAA, "unused", 0), (0xAB, "unused", 0),
+        (0xAC, "unused", 0), (0xAD, "unused", 0), (0xAE, "unused", 0), (0xAF, "unused", 0),
+        (0xB0, "unused", 0), (0xB1, "unused", 0), (0xB2, "unused", 0), (0xB3, "conv.ovf.i1", 0),
+        (0xB4, "conv.ovf.u1", 0), (0xB5, "conv.ovf.i2", 0), (0xB6, "conv.ovf.u2", 0),
+        (0xB7, "conv.ovf.i4", 0), (0xB8, "conv.ovf.u4", 0), (0xB9, "conv.ovf.i8", 0), (0xBA, "conv.ovf.u8", 0),
+        (0xBB, "unused", 0), (0xBC, "unused", 0), (0xBD, "unused", 0), (0xBE, "unused", 0),
+        (0xBF, "unused", 0), (0xC0, "unused", 0), (0xC1, "unused", 0), (0xC2, "refanyval", 12),
+        (0xC3, "ckfinite", 0), (0xC4, "unused", 0), (0xC5, "unused", 0), (0xC6, "mkrefany", 12),
+        (0xC7, "unused", 0), (0xC8, "unused", 0), (0xC9, "unused", 0), (0xCA, "unused", 0),
+        (0xCB, "unused", 0), (0xCC, "unused", 0), (0xCD, "unused", 0), (0xCE, "unused", 0),
+        (0xCF, "unused", 0), (0xD0, "ldtoken", 14), (0xD1, "conv.u2", 0), (0xD2, "conv.u1", 0),
+        (0xD3, "conv.i", 0), (0xD4, "conv.ovf.i", 0), (0xD5, "conv.ovf.u", 0), (0xD6, "add.ovf", 0),
+        (0xD7, "add.ovf.un", 0), (0xD8, "mul.ovf", 0), (0xD9, "mul.ovf.un", 0), (0xDA, "sub.ovf", 0),
+        (0xDB, "sub.ovf.un", 0), (0xDC, "endfault/endfinally", 0), (0xDD, "leave", 8), (0xDE, "leave.s", 7),
+        (0xDF, "stind.i", 0), (0xE0, "conv.u", 0), (0xE1, "unused", 0), (0xE2, "unused", 0),
+        (0xE3, "unused", 0), (0xE4, "unused", 0), (0xE5, "unused", 0), (0xE6, "unused", 0),
+        (0xE7, "unused", 0), (0xE8, "unused", 0), (0xE9, "unused", 0), (0xEA, "unused", 0),
+        (0xEB, "unused", 0), (0xEC, "unused", 0), (0xED, "unused", 0), (0xEE, "unused", 0),
+        (0xEF, "unused", 0), (0xF0, "unused", 0), (0xF1, "unused", 0), (0xF2, "unused", 0),
+        (0xF3, "unused", 0), (0xF4, "unused", 0), (0xF5, "unused", 0), (0xF6, "unused", 0),
+        (0xF7, "unused", 0),
+    ];
+    let row = ROWS.iter().find(|item| item.0 == op)?;
+    Some((row.1, kind_tag(row.2)))
+}
+
+/// `0xFE` family through opcode.def `0x22`. `volatile.` is `0x13`. `0x20` is unused.
+fn opcode_fe(op: u8) -> Option<(&'static str, OpKind)> {
+    const ROWS: &[(u8, &str, u8)] = &[
+        (0x00, "arglist", 0), (0x01, "ceq", 0), (0x02, "cgt", 0), (0x03, "cgt.un", 0),
+        (0x04, "clt", 0), (0x05, "clt.un", 0), (0x06, "ldftn", 10), (0x07, "ldvirtftn", 10),
+        (0x08, "unused", 0), (0x09, "ldarg", 9), (0x0A, "ldarga", 9), (0x0B, "starg", 9),
+        (0x0C, "ldloc", 9), (0x0D, "ldloca", 9), (0x0E, "stloc", 9), (0x0F, "localloc", 0),
+        (0x10, "unused", 0), (0x11, "endfilter", 0), (0x12, "unaligned.", 1), (0x13, "volatile.", 0),
+        (0x14, "tail.", 0), (0x15, "initobj", 12), (0x16, "constrained.", 12), (0x17, "cpblk", 0),
+        (0x18, "initblk", 0), (0x19, "no.", 2), (0x1A, "rethrow", 0), (0x1B, "unused", 0),
+        (0x1C, "sizeof", 12), (0x1D, "refanytype", 0), (0x1E, "readonly.", 0), (0x1F, "unused", 0),
+        (0x20, "unused", 0), (0x21, "unused", 0), (0x22, "unused", 0),
+    ];
+    let row = ROWS.iter().find(|item| item.0 == op)?;
+    Some((row.1, kind_tag(row.2)))
 }
 
 fn store_method_header(evidence: &mut Evidence, line: String) -> bool {
@@ -1123,6 +1320,572 @@ fn store_method_header(evidence: &mut Evidence, line: String) -> bool {
     };
     evidence.method_headers.push(line);
     true
+}
+
+fn il_line(rva: u32, at: usize, name: &str, len: usize, tail: &str) -> String {
+    if tail.is_empty() {
+        format!("IL {rva:#x} offset {at:#x} {name} length {len}.")
+    } else {
+        format!("IL {rva:#x} offset {at:#x} {name} length {len} {tail}.")
+    }
+}
+
+fn le_u16(raw: &[u8]) -> Option<u16> {
+    let bytes: [u8; 2] = raw.try_into().ok()?;
+    Some(u16::from_le_bytes(bytes))
+}
+
+fn le_u32(raw: &[u8]) -> Option<u32> {
+    let bytes: [u8; 4] = raw.try_into().ok()?;
+    Some(u32::from_le_bytes(bytes))
+}
+
+fn le_u64(raw: &[u8]) -> Option<u64> {
+    let bytes: [u8; 8] = raw.try_into().ok()?;
+    Some(u64::from_le_bytes(bytes))
+}
+
+fn operand_tail(kind: OpKind, raw: &[u8], next: usize) -> Option<String> {
+    let tail = match kind {
+        OpKind::None | OpKind::Switch => String::new(),
+        OpKind::I8 => format!("i8 {}", raw.first().copied()? as i8),
+        OpKind::U8 => format!("var {}", raw.first().copied()?),
+        OpKind::I32 => format!("i32 {}", le_u32(raw)? as i32),
+        OpKind::I64 => format!("i64 {}", le_u64(raw)? as i64),
+        OpKind::F32 => format!("r4 {:#x}", le_u32(raw)?),
+        OpKind::F64 => format!("r8 {:#x}", le_u64(raw)?),
+        OpKind::Br8 => {
+            let delta = raw.first().copied()? as i8 as i64;
+            format!("target {:#x}", (next as i64).wrapping_add(delta))
+        }
+        OpKind::Br32 => {
+            let delta = le_u32(raw)? as i32 as i64;
+            format!("target {:#x}", (next as i64).wrapping_add(delta))
+        }
+        OpKind::Var16 => format!("var {}", le_u16(raw)?),
+        OpKind::Method => format!("method {:#x}", le_u32(raw)?),
+        OpKind::Field => format!("field {:#x}", le_u32(raw)?),
+        OpKind::Type => format!("type {:#x}", le_u32(raw)?),
+        OpKind::Sig => format!("sig {:#x}", le_u32(raw)?),
+        OpKind::Tok => format!("tok {:#x}", le_u32(raw)?),
+        OpKind::String => {
+            let token = le_u32(raw)?;
+            format!("string index {} token {token:#x}", token & 0x00ff_ffff)
+        }
+    };
+    Some(tail)
+}
+
+enum WalkEnd {
+    Done,
+    Cap(&'static str, String),
+    Refuse(String),
+    Budget,
+}
+
+struct Walk {
+    lines: Vec<String>,
+    instructions: u32,
+    end: WalkEnd,
+}
+
+fn past_end(rva: u32, name: &str, at: usize, need: usize) -> WalkEnd {
+    WalkEnd::Refuse(format!(
+        "Refusal: MethodDef RVA {rva:#x} opcode {name} at IL offset {at:#x} needs {need} operand bytes past the code end. Later instructions were not decoded."
+    ))
+}
+
+fn walk_il(budget: &mut Budget<'_>, evidence: &mut Evidence, rva: u32, code: &[u8]) -> Result<Walk, ()> {
+    let mut lines = Vec::new();
+    let mut instructions = 0u32;
+    let mut at = 0usize;
+    while at < code.len() {
+        if instructions as usize >= INSTRUCTION_CAP {
+            return Ok(Walk {
+                lines,
+                instructions,
+                end: WalkEnd::Cap(
+                    INSTRUCTION_CAP_NAME,
+                    format!("Refusal: MethodDef RVA {rva:#x} reached the dotnet instruction cap at IL offset {at:#x}. Later instructions in this method were not decoded."),
+                ),
+            });
+        }
+        match budget.step(1) {
+            Ok(()) => {}
+            Err(Halt::Cancel) => return Err(()),
+            Err(Halt::Work) => {
+                note_work(evidence);
+                return Ok(Walk { lines, instructions, end: WalkEnd::Budget });
+            }
+        }
+        let op = code[at];
+        let (name, kind, opcode_len) = if op == 0xFE {
+            let Some(second) = code.get(at + 1).copied() else {
+                return Ok(Walk { lines, instructions, end: past_end(rva, "0xfe", at, 1) });
+            };
+            match opcode_fe(second) {
+                Some((name, kind)) => (name, kind, 2usize),
+                None => {
+                    return Ok(Walk {
+                        lines,
+                        instructions,
+                        end: WalkEnd::Refuse(format!(
+                            "Refusal: MethodDef RVA {rva:#x} opcode 0xfe {second:#x} at IL offset {at:#x} has no operand width. Later instructions were not decoded."
+                        )),
+                    });
+                }
+            }
+        } else {
+            match opcode_one(op) {
+                Some((name, kind)) => (name, kind, 1usize),
+                None => {
+                    return Ok(Walk {
+                        lines,
+                        instructions,
+                        end: WalkEnd::Refuse(format!(
+                            "Refusal: MethodDef RVA {rva:#x} opcode {op:#x} at IL offset {at:#x} has no operand width. Later instructions were not decoded."
+                        )),
+                    });
+                }
+            }
+        };
+        let operand_at = at + opcode_len;
+        if kind == OpKind::Switch {
+            let Some(count_raw) = code.get(operand_at..operand_at + 4) else {
+                return Ok(Walk { lines, instructions, end: past_end(rva, name, at, 4) });
+            };
+            let Some(count) = le_u32(count_raw) else {
+                return Ok(Walk { lines, instructions, end: past_end(rva, name, at, 4) });
+            };
+            if count as usize > SWITCH_TARGET_CAP {
+                return Ok(Walk {
+                    lines,
+                    instructions,
+                    end: WalkEnd::Cap(
+                        SWITCH_TARGET_CAP_NAME,
+                        format!(
+                            "Refusal: MethodDef RVA {rva:#x} switch at IL offset {at:#x} declares {count} targets, above the dotnet switch target cap. The switch operand was not consumed and later instructions in this method were not decoded."
+                        ),
+                    ),
+                });
+            }
+            let Some(tail_bytes) = (count as usize).checked_mul(4) else {
+                return Ok(Walk { lines, instructions, end: past_end(rva, name, at, 4) });
+            };
+            let Some(end) = operand_at.checked_add(4).and_then(|start| start.checked_add(tail_bytes)) else {
+                return Ok(Walk { lines, instructions, end: past_end(rva, name, at, 4) });
+            };
+            if end > code.len() {
+                return Ok(Walk { lines, instructions, end: past_end(rva, name, at, 4 + tail_bytes) });
+            }
+            let mut listed = String::new();
+            let mut cursor = operand_at + 4;
+            for index in 0..count {
+                let Some(delta) = code.get(cursor..cursor + 4).and_then(le_u32) else {
+                    return Ok(Walk { lines, instructions, end: past_end(rva, name, at, 4 + tail_bytes) });
+                };
+                if index > 0 {
+                    listed.push(' ');
+                }
+                listed.push_str(&format!("{:#x}", (end as i64).wrapping_add(delta as i32 as i64)));
+                cursor += 4;
+            }
+            let tail = if count == 0 {
+                "target count 0".to_string()
+            } else {
+                format!("target count {count} targets {listed}")
+            };
+            lines.push(il_line(rva, at, name, end - at, &tail));
+            instructions += 1;
+            at = end;
+            continue;
+        }
+        let Some(width) = fixed_width(kind) else {
+            return Ok(Walk {
+                lines,
+                instructions,
+                end: WalkEnd::Refuse(format!(
+                    "Refusal: MethodDef RVA {rva:#x} opcode {name} at IL offset {at:#x} has no operand width. Later instructions were not decoded."
+                )),
+            });
+        };
+        let Some(end) = operand_at.checked_add(width) else {
+            return Ok(Walk { lines, instructions, end: past_end(rva, name, at, width) });
+        };
+        if end > code.len() {
+            return Ok(Walk { lines, instructions, end: past_end(rva, name, at, width) });
+        }
+        let Some(tail) = operand_tail(kind, &code[operand_at..end], end) else {
+            return Ok(Walk { lines, instructions, end: past_end(rva, name, at, width) });
+        };
+        lines.push(il_line(rva, at, name, end - at, &tail));
+        instructions += 1;
+        at = end;
+    }
+    Ok(Walk { lines, instructions, end: WalkEnd::Done })
+}
+
+struct EhClause {
+    kind: &'static str,
+    try_off: u32,
+    try_len: u32,
+    try_end: u32,
+    handler_off: u32,
+    handler_len: u32,
+    handler_end: u32,
+    token: Option<u32>,
+    filter: Option<u32>,
+}
+
+fn parse_clause(raw: &[u8], fat: bool) -> Option<EhClause> {
+    let (flags, try_off, try_len, handler_off, handler_len, token) = if fat {
+        (
+            le_u32(raw.get(..4)?)?,
+            le_u32(raw.get(4..8)?)?,
+            le_u32(raw.get(8..12)?)?,
+            le_u32(raw.get(12..16)?)?,
+            le_u32(raw.get(16..20)?)?,
+            le_u32(raw.get(20..24)?)?,
+        )
+    } else {
+        (
+            u32::from(le_u16(raw.get(..2)?)?),
+            u32::from(le_u16(raw.get(2..4)?)?),
+            u32::from(*raw.get(4)?),
+            u32::from(le_u16(raw.get(5..7)?)?),
+            u32::from(*raw.get(7)?),
+            le_u32(raw.get(8..12)?)?,
+        )
+    };
+    let (kind, token, filter) = match flags & 0x7 {
+        0 => ("catch", Some(token), None),
+        1 => ("filter", None, Some(token)),
+        2 => ("finally", None, None),
+        4 => ("fault", None, None),
+        _ => return None,
+    };
+    Some(EhClause {
+        kind,
+        try_off,
+        try_len,
+        try_end: try_off.checked_add(try_len)?,
+        handler_off,
+        handler_len,
+        handler_end: handler_off.checked_add(handler_len)?,
+        token,
+        filter,
+    })
+}
+
+fn clause_line(rva: u32, clause: &EhClause) -> String {
+    let mut line = format!(
+        "EH {rva:#x} clause {} try offset {:#x} length {} end {:#x} handler offset {:#x} length {} end {:#x}",
+        clause.kind, clause.try_off, clause.try_len, clause.try_end, clause.handler_off, clause.handler_len, clause.handler_end
+    );
+    if let Some(token) = clause.token {
+        line.push_str(&format!(" token {token:#x}"));
+    }
+    if let Some(filter) = clause.filter {
+        line.push_str(&format!(" filter offset {filter:#x}"));
+    }
+    line.push('.');
+    line
+}
+
+enum SectEnd {
+    Done,
+    Cap(&'static str, String),
+    Refuse(String),
+    Budget,
+}
+
+struct SectRead {
+    lines: Vec<String>,
+    end: SectEnd,
+}
+
+enum Got<'a> {
+    Bytes(&'a [u8]),
+    Stop,
+    Absent,
+}
+
+fn map_exact<'a>(bytes: &'a [u8], sections: &[Section], headers: u32, complete: bool, rva: u32, size: u32, budget: &mut Budget<'_>, evidence: &mut Evidence) -> Result<Got<'a>, ()> {
+    match map_range(bytes, sections, headers, complete, rva, size, budget) {
+        Ok(found) => Ok(Got::Bytes(found)),
+        Err(MapFail::Cancelled) => Err(()),
+        Err(MapFail::Work) => {
+            note_work(evidence);
+            Ok(Got::Stop)
+        }
+        Err(MapFail::Declared) => {
+            note_declared(evidence);
+            Ok(Got::Stop)
+        }
+        Err(_) => Ok(Got::Absent),
+    }
+}
+
+fn read_sections(bytes: &[u8], sections: &[Section], cli: &Cli, complete: bool, evidence: &mut Evidence, budget: &mut Budget<'_>, rva: u32, header_len: u32, code_size: u32) -> Result<SectRead, ()> {
+    let mut out = SectRead { lines: Vec::new(), end: SectEnd::Done };
+    let Some(body_end) = header_len.checked_add(code_size) else {
+        out.end = SectEnd::Refuse(format!("Refusal: MethodDef RVA {rva:#x} exception section offset overflowed. Clauses were not read."));
+        return Ok(out);
+    };
+    let Some(aligned_sum) = body_end.checked_add(3) else {
+        out.end = SectEnd::Refuse(format!("Refusal: MethodDef RVA {rva:#x} exception section offset overflowed. Clauses were not read."));
+        return Ok(out);
+    };
+    let mut cursor = aligned_sum & !3;
+    let mut seen = 0usize;
+    loop {
+        if seen >= EH_CHAIN_CAP {
+            out.end = SectEnd::Cap(
+                EH_CAP_NAME,
+                format!("Refusal: MethodDef RVA {rva:#x} exception section chain exceeds the dotnet exception section cap. Later sections were not read."),
+            );
+            return Ok(out);
+        }
+        seen += 1;
+        let Some(sect_rva) = rva.checked_add(cursor) else {
+            out.end = SectEnd::Refuse(format!("Refusal: MethodDef RVA {rva:#x} exception section at offset {cursor:#x} runs past the mapped bytes. Clauses were not read."));
+            return Ok(out);
+        };
+        let header = match map_exact(bytes, sections, cli.headers, complete, sect_rva, 4, budget, evidence)? {
+            Got::Bytes(header) => header,
+            Got::Stop => {
+                out.end = SectEnd::Budget;
+                return Ok(out);
+            }
+            Got::Absent => {
+                out.end = SectEnd::Refuse(format!("Refusal: MethodDef RVA {rva:#x} exception section at offset {cursor:#x} runs past the mapped bytes. Clauses were not read."));
+                return Ok(out);
+            }
+        };
+        if header.len() < 4 {
+            out.end = SectEnd::Refuse(format!("Refusal: MethodDef RVA {rva:#x} exception section at offset {cursor:#x} is malformed. Clauses were not read."));
+            return Ok(out);
+        }
+        let kind = header[0];
+        let more = kind & 0x80 != 0;
+        if kind & !0xC1 != 0 || kind & 0x01 == 0 {
+            out.end = SectEnd::Refuse(format!(
+                "Refusal: MethodDef RVA {rva:#x} exception section at offset {cursor:#x} kind {kind:#x} is not an exception table. Clauses were not read."
+            ));
+            return Ok(out);
+        }
+        let fat = kind & 0x40 != 0;
+        let data_size = if fat {
+            u32::from(header[1]) | (u32::from(header[2]) << 8) | (u32::from(header[3]) << 16)
+        } else {
+            u32::from(header[1])
+        };
+        if data_size as usize > EH_BYTE_CAP {
+            out.end = SectEnd::Cap(
+                EH_CAP_NAME,
+                format!("Refusal: MethodDef RVA {rva:#x} exception section at offset {cursor:#x} data size {data_size} exceeds the dotnet exception section cap. Clauses were not read."),
+            );
+            return Ok(out);
+        }
+        let clause_len = if fat { 24usize } else { 12usize };
+        if data_size < 4 || ((data_size - 4) as usize) % clause_len != 0 {
+            out.end = SectEnd::Refuse(format!("Refusal: MethodDef RVA {rva:#x} exception section at offset {cursor:#x} is malformed. Clauses were not read."));
+            return Ok(out);
+        }
+        let raw = match map_exact(bytes, sections, cli.headers, complete, sect_rva, data_size, budget, evidence)? {
+            Got::Bytes(raw) => raw,
+            Got::Stop => {
+                out.end = SectEnd::Budget;
+                return Ok(out);
+            }
+            Got::Absent => {
+                out.end = SectEnd::Refuse(format!(
+                    "Refusal: MethodDef RVA {rva:#x} exception section at offset {cursor:#x} data size {data_size} runs past the mapped bytes. Clauses were not read."
+                ));
+                return Ok(out);
+            }
+        };
+        let total = ((data_size - 4) as usize) / clause_len;
+        let mut parsed = Vec::new();
+        for index in 0..total {
+            match budget.step(1) {
+                Ok(()) => {}
+                Err(Halt::Cancel) => return Err(()),
+                Err(Halt::Work) => {
+                    note_work(evidence);
+                    out.end = SectEnd::Budget;
+                    return Ok(out);
+                }
+            }
+            let at = 4 + index * clause_len;
+            let Some(clause) = raw.get(at..at + clause_len).and_then(|slice| parse_clause(slice, fat)) else {
+                out.end = SectEnd::Refuse(format!("Refusal: MethodDef RVA {rva:#x} exception section at offset {cursor:#x} is malformed. Clauses were not read."));
+                return Ok(out);
+            };
+            parsed.push(clause);
+        }
+        let shown = parsed.len().min(CLAUSE_CAP);
+        out.lines.push(format!(
+            "EH {rva:#x} section kind {kind:#x} data size {data_size} clauses {shown} declared {}.",
+            parsed.len()
+        ));
+        for clause in parsed.iter().take(shown) {
+            out.lines.push(clause_line(rva, clause));
+        }
+        if parsed.len() > CLAUSE_CAP {
+            out.end = SectEnd::Cap(
+                CLAUSE_CAP_NAME,
+                format!(
+                    "Refusal: MethodDef RVA {rva:#x} exception section declares {} clauses, above the dotnet exception clause cap. Later clauses in this method were not emitted.",
+                    parsed.len()
+                ),
+            );
+            return Ok(out);
+        }
+        if !more {
+            return Ok(out);
+        }
+        let Some(next) = cursor.checked_add(data_size) else {
+            out.end = SectEnd::Refuse(format!("Refusal: MethodDef RVA {rva:#x} exception section offset overflowed. Clauses were not read."));
+            return Ok(out);
+        };
+        cursor = next;
+    }
+}
+
+enum Head {
+    Tiny { code_size: u32 },
+    Fat { header_bytes: u32, max_stack: u32, code_size: u32, local_sig: u32, init: bool, more: bool },
+}
+
+fn head_line(rva: u32, head: &Head, instructions: Option<u32>) -> String {
+    let status = match instructions {
+        Some(count) => format!("IL instructions {count}."),
+        None => "IL was not decoded.".to_string(),
+    };
+    match head {
+        Head::Tiny { code_size } => format!("MethodDef RVA {rva:#x} header tiny, code size {code_size}. {status}"),
+        Head::Fat { header_bytes, max_stack, code_size, local_sig, init, more } => {
+            let mut line = format!(
+                "MethodDef RVA {rva:#x} header full, header bytes {header_bytes}, max stack {max_stack}, code size {code_size}, local var sig {local_sig:#x}"
+            );
+            if *init {
+                line.push_str(", init locals");
+            }
+            if *more {
+                line.push_str(", more sects");
+            }
+            line.push_str(". ");
+            line.push_str(&status);
+            line
+        }
+    }
+}
+
+fn truncated_body(rva: u32, code_size: u32, more: bool) -> String {
+    let mut text = format!("Refusal: MethodDef RVA {rva:#x} declared code size {code_size} runs past the mapped bytes. IL was not decoded.");
+    if more {
+        text.push_str(" Exception sections were not read.");
+    }
+    text
+}
+
+enum Loaded<'a> {
+    Code(&'a [u8]),
+    Stop,
+    Handled,
+}
+
+fn load_code<'a>(bytes: &'a [u8], sections: &[Section], cli: &Cli, complete: bool, evidence: &mut Evidence, budget: &mut Budget<'_>, rva: u32, head: &Head, header_len: u32, code_size: u32, more: bool) -> Result<Loaded<'a>, ()> {
+    if code_size == 0 {
+        return Ok(Loaded::Code(bytes.get(..0).unwrap_or(&[])));
+    }
+    let Some(span) = header_len.checked_add(code_size) else {
+        add_refusal(evidence, truncated_body(rva, code_size, more));
+        if !store_method_header(evidence, head_line(rva, head, None)) {
+            return Ok(Loaded::Stop);
+        }
+        return Ok(Loaded::Handled);
+    };
+    match map_exact(bytes, sections, cli.headers, complete, rva, span, budget, evidence)? {
+        Got::Stop => Ok(Loaded::Stop),
+        Got::Absent => {
+            add_refusal(evidence, truncated_body(rva, code_size, more));
+            if !store_method_header(evidence, head_line(rva, head, None)) {
+                return Ok(Loaded::Stop);
+            }
+            Ok(Loaded::Handled)
+        }
+        Got::Bytes(mapped) => {
+            let start = header_len as usize;
+            let end = span as usize;
+            if start > end || mapped.len() < end {
+                add_refusal(evidence, truncated_body(rva, code_size, more));
+                if !store_method_header(evidence, head_line(rva, head, None)) {
+                    return Ok(Loaded::Stop);
+                }
+                return Ok(Loaded::Handled);
+            }
+            Ok(Loaded::Code(&mapped[start..end]))
+        }
+    }
+}
+
+fn apply_end(evidence: &mut Evidence, end: WalkEnd) -> bool {
+    match end {
+        WalkEnd::Done => true,
+        WalkEnd::Budget => false,
+        WalkEnd::Cap(name, detail) => {
+            push_cap(evidence, name, detail);
+            !evidence.output_omitted
+        }
+        WalkEnd::Refuse(detail) => {
+            add_refusal(evidence, detail);
+            !evidence.output_omitted
+        }
+    }
+}
+
+fn apply_sect(evidence: &mut Evidence, end: SectEnd) -> bool {
+    match end {
+        SectEnd::Done => true,
+        SectEnd::Budget => false,
+        SectEnd::Cap(name, detail) => {
+            push_cap(evidence, name, detail);
+            !evidence.output_omitted
+        }
+        SectEnd::Refuse(detail) => {
+            add_refusal(evidence, detail);
+            !evidence.output_omitted
+        }
+    }
+}
+
+fn publish_body(bytes: &[u8], sections: &[Section], cli: &Cli, complete: bool, evidence: &mut Evidence, budget: &mut Budget<'_>, rva: u32, head: &Head, code: &[u8], header_len: u32, code_size: u32, more: bool) -> Result<bool, ()> {
+    let Walk { lines, instructions, end } = walk_il(budget, evidence, rva, code)?;
+    let budget_stop = matches!(end, WalkEnd::Budget);
+    remember_body(evidence, instructions);
+    if !store_method_header(evidence, head_line(rva, head, Some(instructions))) {
+        return Ok(false);
+    }
+    for line in lines {
+        if !store_method_header(evidence, line) {
+            return Ok(false);
+        }
+    }
+    if budget_stop || !apply_end(evidence, end) {
+        return Ok(false);
+    }
+    if !more {
+        return Ok(true);
+    }
+    let sect = read_sections(bytes, sections, cli, complete, evidence, budget, rva, header_len, code_size)?;
+    for line in sect.lines {
+        if !store_method_header(evidence, line) {
+            return Ok(false);
+        }
+    }
+    Ok(apply_sect(evidence, sect.end))
 }
 
 fn classify_headers(bytes: &[u8], sections: &[Section], cli: &Cli, complete: bool, evidence: &mut Evidence, budget: &mut Budget<'_>) -> Result<(), ()> {
@@ -1186,12 +1949,32 @@ fn classify_headers(bytes: &[u8], sections: &[Section], cli: &Cli, complete: boo
         let format = first[0] & 0x3;
         if format == 0x2 {
             let code_size = u32::from(first[0] >> 2);
-            if !store_method_header(evidence, format!("MethodDef RVA {rva:#x} header tiny, code size {code_size}. IL was not decoded.")) {
+            if code_size == 0 {
+                if !store_method_header(evidence, format!("MethodDef RVA {rva:#x} header tiny, code size {code_size}. IL was not decoded.")) {
+                    return Ok(());
+                }
+                continue;
+            }
+            if body_cap_reached(evidence) {
                 return Ok(());
+            }
+            let head = Head::Tiny { code_size };
+            match load_code(bytes, sections, cli, complete, evidence, budget, rva, &head, 1, code_size, false)? {
+                Loaded::Stop => return Ok(()),
+                Loaded::Handled => continue,
+                Loaded::Code(code) => {
+                    if !publish_body(bytes, sections, cli, complete, evidence, budget, rva, &head, code, 1, code_size, false)? {
+                        return Ok(());
+                    }
+                }
             }
             continue;
         }
         if format != 0x3 {
+            add_refusal(evidence, format!("Refusal: MethodDef RVA {rva:#x} header format {format} is not tiny or fat. The method body was not read."));
+            if evidence.output_omitted {
+                return Ok(());
+            }
             continue;
         }
         let prefix = match map_range(bytes, sections, cli.headers, complete, rva, 2, budget) {
@@ -1248,8 +2031,23 @@ fn classify_headers(bytes: &[u8], sections: &[Section], cli: &Cli, complete: boo
             }
             continue;
         }
-        if !store_method_header(evidence, header_line(rva, full)) {
+        let max_stack = u32::from(u16::from_le_bytes([full[2], full[3]]));
+        let code_size = u32::from_le_bytes([full[4], full[5], full[6], full[7]]);
+        let local_sig = u32::from_le_bytes([full[8], full[9], full[10], full[11]]);
+        let init = flags & 0x10 != 0;
+        let more = flags & 0x08 != 0;
+        if body_cap_reached(evidence) {
             return Ok(());
+        }
+        let head = Head::Fat { header_bytes, max_stack, code_size, local_sig, init, more };
+        match load_code(bytes, sections, cli, complete, evidence, budget, rva, &head, header_bytes, code_size, more)? {
+            Loaded::Stop => return Ok(()),
+            Loaded::Handled => continue,
+            Loaded::Code(code) => {
+                if !publish_body(bytes, sections, cli, complete, evidence, budget, rva, &head, code, header_bytes, code_size, more)? {
+                    return Ok(());
+                }
+            }
         }
     }
     Ok(())
@@ -1418,7 +2216,7 @@ fn methods_json(methods: &MethodObs) -> Json {
         ("nonzero_rva", num(methods.nonzero)),
         ("rows_read", num(methods.read)),
         ("rows_declared", num(methods.declared)),
-        ("bodies", s(BODIES)),
+        ("bodies", s(&bodies_field(methods))),
     ])
 }
 
@@ -1438,7 +2236,7 @@ fn report(evidence: &Evidence) -> (String, bool) {
         out.push('\n');
     };
     emit(".NET metadata and CIL observation");
-    emit("Scope: CLR runtime header (data directory entry 14), metadata signature and version, named streams, non-zero table row counts, module and assembly names, and the count of MethodDef rows whose RVA column is nonzero. Method bodies are not read. IL is not decoded. No behaviour is claimed.");
+    emit(SCOPE);
     emit(&format!(
         "CLR runtime header: data directory entry 14 at optional-header offset {}, RVA {:#x}, size {}.",
         evidence.directory_offset, evidence.clr_rva, evidence.clr_size
@@ -1480,12 +2278,7 @@ fn report(evidence: &Evidence) -> (String, bool) {
     emit(&format!("Module name: {}.", field_word(&evidence.module_name)));
     emit(&format!("Assembly name: {}.", field_word(&evidence.assembly_name)));
     match &evidence.methods {
-        Some(methods) => {
-            emit(&format!(
-                "MethodDef rows declared {}, rows read {}, nonzero RVA {}. Method bodies were not read. IL was not decoded. No behaviour is claimed.",
-                methods.declared, methods.read, methods.nonzero
-            ));
-        }
+        Some(methods) => emit(&method_summary(methods)),
         None => {
             emit("MethodDef RVA column was not read. Method bodies were not read. IL was not decoded. No behaviour is claimed.");
         }
@@ -1879,7 +2672,7 @@ mod checks {
     #[test]
     fn named_assembly_reports_streams_version_and_unread_bodies() {
         // Fails if the zero RVA row is counted, if a name is swapped between module and assembly,
-        // if the zero-row TypeRef table is listed, or if a method body is decoded.
+        // if the zero-row TypeRef table is listed, or if the CLR header at RVA 0x2000 is decoded as IL.
         let (heap, indexes) = strings(&["DemoModule", "DemoAssembly"]);
         let mut body = Vec::new();
         push16(&mut body, 0);
@@ -1915,7 +2708,10 @@ mod checks {
         let stream = tilde(&[(0x00, 1), (0x01, 0), (0x06, 2), (0x08, 1), (0x20, 1)], 0, &body);
         let root = metadata("v4.0.30319", &[("#~", stream.as_slice()), ("#Strings", heap.as_slice())]);
         let found = subject_view(&image_of(&root)).expect("named assembly is a CLI subject");
-        assert_eq!(found.get("refusal").unwrap(), &Null);
+        assert_eq!(
+            found.get("refusal").unwrap().text().unwrap(),
+            "Refusal: MethodDef RVA 0x2000 header format 0 is not tiny or fat. The method body was not read."
+        );
         assert!(found.get("caps").unwrap().array().unwrap().is_empty());
         assert_eq!(found.get("directory_offset").unwrap(), &Num("224".into()));
         assert_eq!(found.get("version").unwrap().text().unwrap(), "v4.0.30319");
@@ -1937,7 +2733,12 @@ mod checks {
         let report = found.get("report").unwrap().text().unwrap();
         assert!(report.contains("No behaviour is claimed."), "{report}");
         assert!(report.contains("IL was not decoded"), "{report}");
+        assert!(report.contains("Method bodies were not read."), "{report}");
+        let unread = "Refusal: MethodDef RVA 0x2000 header format 0 is not tiny or fat. The method body was not read.\n";
+        assert_eq!(report.matches(unread).count(), 1, "{report}");
+        assert_eq!(report.matches(" length ").count(), 0, "{report}");
         assert!(!report.contains("ldarg"), "{report}");
+        assert!(!report.contains("ldind"), "{report}");
     }
 
     #[test]
@@ -1979,7 +2780,7 @@ mod checks {
     }
 
     fn headed(body: &str) -> String {
-        format!(".NET metadata and CIL observation\nScope: CLR runtime header (data directory entry 14), metadata signature and version, named streams, non-zero table row counts, module and assembly names, and the count of MethodDef rows whose RVA column is nonzero. Method bodies are not read. IL is not decoded. No behaviour is claimed.\n{body}")
+        format!(".NET metadata and CIL observation\n{SCOPE}\n{body}")
     }
 
     #[test]
@@ -2161,28 +2962,45 @@ mod checks {
     }
 
     #[test]
-    fn tiny_method_header_names_code_size_without_decoding_il() {
-        // Fails if a tiny header is reported as full, if the code-size field moves, or if the following ret opcode is decoded.
-        let (bytes, rva) = image_with_methods(1, &[0x06, 0x2a]);
-        let text = evidence_of(&bytes).expect("tiny header is a CLI subject");
-        let line = format!("MethodDef RVA {rva:#x} header tiny, code size 1. IL was not decoded.\n");
-        assert_eq!(text.matches(line.as_str()).count(), 1);
-        assert_eq!(text.matches(" ret").count(), 0);
-        assert_eq!(text.matches("ldarg").count(), 0);
-        assert_eq!(text.matches("IL was not decoded").count(), 2);
+    fn tiny_method_body_decodes_offsets_operands_and_branch_target() {
+        // Fails if a tiny header is reported as full, if an operand width drifts the next offset, or if a branch target is not the next IL offset plus the signed delta.
+        // code: ldarg.0; ldc.i4.s -1; ldc.i8 1; ldstr index 1; br.s +0; ret
+        let body = [
+            0x52, 0x02, 0x1F, 0xFF, 0x21, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x72, 0x01, 0x00, 0x00, 0x70, 0x2B, 0x00, 0x2A,
+        ];
+        let (bytes, rva) = image_with_methods(1, &body);
+        let text = evidence_of(&bytes).expect("tiny body is a CLI subject");
+        let header = format!("MethodDef RVA {rva:#x} header tiny, code size 20. IL instructions 6.\n");
+        assert_eq!(text.matches(header.as_str()).count(), 1, "{text}");
+        let lines = [
+            format!("IL {rva:#x} offset 0x0 ldarg.0 length 1.\n"),
+            format!("IL {rva:#x} offset 0x1 ldc.i4.s length 2 i8 -1.\n"),
+            format!("IL {rva:#x} offset 0x3 ldc.i8 length 9 i64 1.\n"),
+            format!("IL {rva:#x} offset 0xc ldstr length 5 string index 1 token 0x70000001.\n"),
+            format!("IL {rva:#x} offset 0x11 br.s length 2 target 0x13.\n"),
+            format!("IL {rva:#x} offset 0x13 ret length 1.\n"),
+        ];
+        for line in lines {
+            assert_eq!(text.matches(line.as_str()).count(), 1, "{line} in {text}");
+        }
+        assert!(text.contains("Method bodies decoded 1. IL instructions 6."), "{text}");
+        assert!(!text.contains("Hello"), "{text}");
+        let found = subject_view(&bytes).expect("json view");
+        assert_eq!(found.get("methods").unwrap().get("bodies").unwrap().text().unwrap(), "decoded 1 instructions 6");
     }
 
     #[test]
-    fn full_method_header_names_stack_and_code_size_without_decoding_il() {
-        // Fails if the fat header's max stack or code size is taken from the wrong bytes, or if IL bytes are printed.
+    fn full_method_header_decodes_nop_and_ret() {
+        // Fails if the fat header's max stack or code size is taken from the wrong bytes, or if init locals is dropped.
         let header = [0x13, 0x30, 0x08, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2a];
         let (bytes, rva) = image_with_methods(1, &header);
         let text = evidence_of(&bytes).expect("full header is a CLI subject");
-        let line = format!("MethodDef RVA {rva:#x} header full, header bytes 12, max stack 8, code size 2, local var sig 0x0, init locals. IL was not decoded.\n");
-        assert_eq!(text.matches(line.as_str()).count(), 1);
-        assert_eq!(text.matches(" ret").count(), 0);
-        assert_eq!(text.matches("ldarg").count(), 0);
+        let line = format!("MethodDef RVA {rva:#x} header full, header bytes 12, max stack 8, code size 2, local var sig 0x0, init locals. IL instructions 2.\n");
+        assert_eq!(text.matches(line.as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x0 nop length 1.\n").as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x1 ret length 1.\n").as_str()).count(), 1, "{text}");
         assert_eq!(text.matches("More sections were not read.").count(), 0);
+        assert_eq!(text.matches("more sects").count(), 0);
     }
 
     #[test]
@@ -2313,6 +3131,279 @@ mod checks {
         assert_eq!(text.matches("table 0x00 ").count(), 0);
         assert_eq!(text.matches("Metadata version v4.0.30319.\n").count(), 0);
         assert_eq!(text.matches("Refusal: metadata directory size").count(), 0);
+    }
+
+    #[test]
+    fn opcode_table_pins_operand_widths() {
+        // Fails if a mnemonic moves to the wrong opcode or an operand kind loses its width.
+        let check = |op: u8, name: &str, kind: OpKind| {
+            let found = opcode_one(op).unwrap_or_else(|| panic!("missing {name}"));
+            assert_eq!(found.0, name);
+            assert_eq!(found.1, kind);
+        };
+        check(0x00, "nop", OpKind::None);
+        check(0x0E, "ldarg.s", OpKind::U8);
+        check(0x1F, "ldc.i4.s", OpKind::I8);
+        check(0x20, "ldc.i4", OpKind::I32);
+        check(0x21, "ldc.i8", OpKind::I64);
+        check(0x22, "ldc.r4", OpKind::F32);
+        check(0x23, "ldc.r8", OpKind::F64);
+        check(0x28, "call", OpKind::Method);
+        check(0x29, "calli", OpKind::Sig);
+        check(0x2A, "ret", OpKind::None);
+        check(0x2B, "br.s", OpKind::Br8);
+        check(0x38, "br", OpKind::Br32);
+        check(0x45, "switch", OpKind::Switch);
+        check(0x72, "ldstr", OpKind::String);
+        check(0x7B, "ldfld", OpKind::Field);
+        check(0x8C, "box", OpKind::Type);
+        check(0xD0, "ldtoken", OpKind::Tok);
+        check(0xDC, "endfault/endfinally", OpKind::None);
+        check(0xDE, "leave.s", OpKind::Br8);
+        assert!(opcode_one(0xFE).is_none());
+        assert!(opcode_one(0xFF).is_none());
+        assert_eq!(opcode_fe(0x01).unwrap().0, "ceq");
+        assert_eq!(opcode_fe(0x13).unwrap().0, "volatile.");
+        assert_eq!(opcode_fe(0x09).unwrap(), ("ldarg", OpKind::Var16));
+        assert_eq!(opcode_fe(0x19).unwrap(), ("no.", OpKind::U8));
+        assert_eq!(opcode_fe(0x20).unwrap().0, "unused");
+        assert!(opcode_fe(0x23).is_none());
+        assert_eq!(fixed_width(OpKind::I64), Some(8));
+        assert_eq!(fixed_width(OpKind::Var16), Some(2));
+        assert_eq!(fixed_width(OpKind::Switch), None);
+    }
+
+    #[test]
+    fn fat_body_decodes_init_locals_more_sects_and_clause_offsets() {
+        // Fails if MoreSects or InitLocals is dropped, if a small clause is read as fat, or if the fat clause token moves.
+        let mut body = vec![
+            0x1B, 0x30, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A, 0x00, 0x00,
+            0x81, 0x10, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0x41, 0x1C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x01,
+        ];
+        assert_eq!(body.len(), 60);
+        let (bytes, rva) = image_with_methods(1, &body);
+        let text = evidence_of(&bytes).expect("fat body with clauses is a CLI subject");
+        let header = format!("MethodDef RVA {rva:#x} header full, header bytes 12, max stack 1, code size 2, local var sig 0x0, init locals, more sects. IL instructions 2.\n");
+        assert_eq!(text.matches(header.as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x0 nop length 1.\n").as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x1 ret length 1.\n").as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(format!("EH {rva:#x} section kind 0x81 data size 16 clauses 1 declared 1.\n").as_str()).count(), 1, "{text}");
+        assert_eq!(
+            text.matches(format!("EH {rva:#x} clause finally try offset 0x0 length 1 end 0x1 handler offset 0x1 length 1 end 0x2.\n").as_str()).count(),
+            1,
+            "{text}"
+        );
+        assert_eq!(text.matches(format!("EH {rva:#x} section kind 0x41 data size 28 clauses 1 declared 1.\n").as_str()).count(), 1, "{text}");
+        assert_eq!(
+            text.matches(format!("EH {rva:#x} clause catch try offset 0x0 length 1 end 0x1 handler offset 0x1 length 1 end 0x2 token 0x100000a.\n").as_str()).count(),
+            1,
+            "{text}"
+        );
+        body[16] = 0x00;
+        let (bad, _) = image_with_methods(1, &body);
+        let refused = evidence_of(&bad).expect("kind 0 stays a CLI subject");
+        assert_eq!(refused.matches("kind 0x0 is not an exception table. Clauses were not read.\n").count(), 1, "{refused}");
+        assert_eq!(refused.matches("clause finally").count(), 0, "{refused}");
+        assert_eq!(refused.matches("clause catch").count(), 0, "{refused}");
+    }
+
+    #[test]
+    fn switch_target_cap_refuses_without_drifting_the_walk() {
+        // Fails if a declared count above the cap is consumed, or if the following ret is decoded from the count bytes.
+        let count = (SWITCH_TARGET_CAP as u32 + 1).to_le_bytes();
+        let body = [0x1E, 0x00, 0x45, count[0], count[1], count[2], count[3], 0x2A];
+        let (bytes, rva) = image_with_methods(1, &body);
+        let text = evidence_of(&bytes).expect("oversized switch is a CLI subject");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x0 nop length 1.\n").as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches("ret length").count(), 0, "{text}");
+        assert_eq!(text.matches("ldloc.s").count(), 0, "{text}");
+        assert_eq!(text.matches("switch length").count(), 0, "{text}");
+        assert_eq!(text.matches(&format!("Refusal: {SWITCH_TARGET_CAP_NAME}.\n")).count(), 1, "{text}");
+        assert!(text.contains("was not consumed and later instructions in this method were not decoded."), "{text}");
+        assert!(text.contains("Module name: Demo."), "{text}");
+    }
+
+    #[test]
+    fn truncated_code_size_refuses_instead_of_inventing_instructions() {
+        // Fails if a declared code size past the mapped section is filled in from neighbouring bytes.
+        let (bytes, rva) = image_with_methods(1, &[0x16]);
+        let text = evidence_of(&bytes).expect("truncated tiny body is a CLI subject");
+        let header = format!("MethodDef RVA {rva:#x} header tiny, code size 5. IL was not decoded.\n");
+        let refusal = format!("Refusal: MethodDef RVA {rva:#x} declared code size 5 runs past the mapped bytes. IL was not decoded.\n");
+        assert_eq!(text.matches(header.as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(refusal.as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(" length ").count(), 0, "{text}");
+        assert!(text.contains("Method bodies were not read. IL was not decoded."), "{text}");
+    }
+
+    #[test]
+    fn operand_past_the_code_end_refuses_without_drifting() {
+        // Fails if ldc.i4 is decoded from a short tail, or if the following ret byte is treated as the next opcode.
+        let (bytes, rva) = image_with_methods(1, &[0x0E, 0x20, 0x2A, 0x00]);
+        let text = evidence_of(&bytes).expect("short operand is a CLI subject");
+        assert_eq!(text.matches("ldc.i4 length").count(), 0, "{text}");
+        assert_eq!(text.matches("ret length").count(), 0, "{text}");
+        assert!(text.contains(&format!("Refusal: MethodDef RVA {rva:#x} opcode ldc.i4 at IL offset 0x0 needs 4 operand bytes past the code end.")), "{text}");
+        assert!(text.contains("Later instructions were not decoded."), "{text}");
+    }
+
+    #[test]
+    fn fe_family_decodes_volatile_and_ceq_by_name() {
+        // Fails if 0xFE is a one-byte opcode, or if ceq and volatile. lose their names.
+        let (bytes, rva) = image_with_methods(1, &[0x16, 0xFE, 0x13, 0xFE, 0x01, 0x2A]);
+        let text = evidence_of(&bytes).expect("two-byte opcodes are a CLI subject");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x0 volatile. length 2.\n").as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x2 ceq length 2.\n").as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x4 ret length 1.\n").as_str()).count(), 1, "{text}");
+    }
+
+    #[test]
+    fn no_prefix_consumes_the_check_byte_and_keeps_later_boundaries() {
+        // Fails if FE 19 is unused, if operand 0x01 is decoded as the next opcode, or if ldc.i4 and ret move.
+        // IL bytes fe 19 01 20 05 00 00 00 2a: no. 0x01; ldc.i4 5; ret.
+        let body = [0x26, 0xFE, 0x19, 0x01, 0x20, 0x05, 0x00, 0x00, 0x00, 0x2A];
+        let (bytes, rva) = image_with_methods(1, &body);
+        let text = evidence_of(&bytes).expect("no. prefix is a CLI subject");
+        let header = format!("MethodDef RVA {rva:#x} header tiny, code size 9. IL instructions 3.\n");
+        let lines = [
+            format!("IL {rva:#x} offset 0x0 no. length 3 var 1.\n"),
+            format!("IL {rva:#x} offset 0x3 ldc.i4 length 5 i32 5.\n"),
+            format!("IL {rva:#x} offset 0x8 ret length 1.\n"),
+        ];
+        assert_eq!(text.matches("unused").count(), 0, "{text}");
+        assert_eq!(text.matches(header.as_str()).count(), 1, "{text}");
+        for line in &lines {
+            assert_eq!(text.matches(line.as_str()).count(), 1, "{line} in {text}");
+        }
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x2 ").as_str()).count(), 0, "{text}");
+        assert_eq!(text.matches("Refusal:").count(), 0, "{text}");
+        assert!(text.contains("Method bodies decoded 1. IL instructions 3."), "{text}");
+        let unknown = [0x0E, 0xFE, 0x23, 0x2A];
+        let (bad, bad_rva) = image_with_methods(1, &unknown);
+        let refused = evidence_of(&bad).expect("unknown 0xfe stays a CLI subject");
+        let refusal = format!("Refusal: MethodDef RVA {bad_rva:#x} opcode 0xfe 0x23 at IL offset 0x0 has no operand width. Later instructions were not decoded.\n");
+        assert_eq!(refused.matches(refusal.as_str()).count(), 1, "{refused}");
+        assert_eq!(refused.matches("ret length").count(), 0, "{refused}");
+    }
+
+    #[test]
+    fn body_cap_keeps_metadata_and_refuses_later_bodies() {
+        // Fails if the cap drops the module name or version, or if a method past the cap still contributes an instruction.
+        let count = BODY_DECODE_CAP + 1;
+        let (bytes, base) = image_with_methods(count, &[0x06, 0x2A]);
+        let text = evidence_of(&bytes).expect("many method bodies remain a CLI subject");
+        let first = format!("IL {base:#x} offset 0x0 ret length 1.\n");
+        let last = format!("IL {:#x} offset 0x0 ret length 1.\n", base + (BODY_DECODE_CAP as u32) * 2);
+        assert_eq!(text.matches(first.as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(last.as_str()).count(), 0, "{text}");
+        assert_eq!(text.matches("ret length 1.\n").count(), BODY_DECODE_CAP, "{text}");
+        assert_eq!(text.matches(&format!("Refusal: {BODY_DECODE_CAP_NAME}.\n")).count(), 1, "{text}");
+        assert_eq!(text.matches(BODY_DECODE_UNREAD).count(), 1, "{text}");
+        assert_eq!(text.matches("Module name: Demo.\n").count(), 1, "{text}");
+        assert_eq!(text.matches("Metadata version v4.0.30319.\n").count(), 1, "{text}");
+        assert!(text.contains(&format!("MethodDef rows declared {count}, rows read {count}, nonzero RVA {count}. Method bodies decoded {BODY_DECODE_CAP}. IL instructions {BODY_DECODE_CAP}.")), "{text}");
+        let found = subject_view(&bytes).expect("json view");
+        assert_eq!(
+            found.get("methods").unwrap().get("bodies").unwrap().text().unwrap(),
+            format!("decoded {BODY_DECODE_CAP} instructions {BODY_DECODE_CAP}")
+        );
+    }
+
+    #[test]
+    fn instruction_cap_keeps_the_instructions_already_decoded() {
+        // Fails if the cap drops the earlier nops, or if the instruction past the cap is still named.
+        let mut body = vec![0x03, 0x30, 0x08, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        body.extend(std::iter::repeat(0u8).take(129));
+        let (bytes, rva) = image_with_methods(1, &body);
+        let text = evidence_of(&bytes).expect("long nop body is a CLI subject");
+        assert_eq!(text.matches(" nop length 1.\n").count(), INSTRUCTION_CAP, "{text}");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x0 nop length 1.\n").as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x7f nop length 1.\n").as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x80 nop length 1.\n").as_str()).count(), 0, "{text}");
+        assert_eq!(text.matches(&format!("Refusal: {INSTRUCTION_CAP_NAME}.\n")).count(), 1, "{text}");
+        assert!(text.contains("Module name: Demo."), "{text}");
+        assert!(text.contains(&format!("IL instructions {INSTRUCTION_CAP}.")), "{text}");
+    }
+
+    #[test]
+    fn exception_section_overrun_and_oversized_data_refuse_the_whole_section() {
+        // Fails if a short section emits a clause, or if a huge declared data size is mapped.
+        // Data size 16 is one small clause, and only the 4-byte section header is present.
+        let mut overrun = vec![0x0B, 0x30, 0x08, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A, 0x00, 0x00, 0x01, 0x10, 0x00, 0x00];
+        let (bytes, rva) = image_with_methods(1, &overrun);
+        let text = evidence_of(&bytes).expect("short exception section is a CLI subject");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x1 ret length 1.\n").as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches(&format!("EH {rva:#x} clause ")).count(), 0, "{text}");
+        assert!(text.contains("data size 16 runs past the mapped bytes. Clauses were not read."), "{text}");
+        overrun[17] = 0xFF;
+        let (odd, odd_rva) = image_with_methods(1, &overrun);
+        let odd_text = evidence_of(&odd).expect("odd section size stays a CLI subject");
+        assert!(odd_text.contains("is malformed. Clauses were not read."), "{odd_text}");
+        assert_eq!(odd_text.matches(&format!("EH {odd_rva:#x} clause ")).count(), 0, "{odd_text}");
+        overrun[16] = 0x41;
+        overrun[17] = 0x00;
+        overrun[18] = 0x00;
+        overrun[19] = 0x01;
+        let (huge, huge_rva) = image_with_methods(1, &overrun);
+        let refused = evidence_of(&huge).expect("huge section stays a CLI subject");
+        assert_eq!(refused.matches(&format!("Refusal: {EH_CAP_NAME}.\n")).count(), 1, "{refused}");
+        assert!(refused.contains("data size 65536 exceeds the dotnet exception section cap. Clauses were not read."), "{refused}");
+        assert_eq!(refused.matches(&format!("EH {huge_rva:#x} clause ")).count(), 0, "{refused}");
+        assert!(refused.contains("ret length 1."), "{refused}");
+    }
+
+    #[test]
+    fn clause_cap_keeps_earlier_clauses_and_names_the_rest() {
+        // Fails if a 17th well-formed clause is emitted, or if the first 16 are dropped with the cap.
+        let mut body = vec![
+            0x0B, 0x30, 0x08, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A, 0x00, 0x00,
+        ];
+        let clauses = CLAUSE_CAP + 1;
+        let data_size = 4 + clauses * 12;
+        body.push(0x01);
+        body.push(data_size as u8);
+        body.extend_from_slice(&[0x00, 0x00]);
+        for index in 0..clauses {
+            body.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x01]);
+            body.extend_from_slice(&(0x0100_0000u32 + index as u32).to_le_bytes());
+        }
+        let (bytes, rva) = image_with_methods(1, &body);
+        let text = evidence_of(&bytes).expect("many clauses remain a CLI subject");
+        let section = format!("EH {rva:#x} section kind 0x1 data size {data_size} clauses {CLAUSE_CAP} declared {clauses}.\n");
+        assert_eq!(text.matches(section.as_str()).count(), 1, "{text}");
+        assert_eq!(text.matches("clause catch").count(), CLAUSE_CAP, "{text}");
+        assert_eq!(text.matches("token 0x1000000.\n").count(), 1, "{text}");
+        assert_eq!(text.matches("token 0x100000f.\n").count(), 1, "{text}");
+        assert_eq!(text.matches("token 0x1000010.\n").count(), 0, "{text}");
+        assert_eq!(text.matches(&format!("Refusal: {CLAUSE_CAP_NAME}.\n")).count(), 1, "{text}");
+        assert!(text.contains("above the dotnet exception clause cap. Later clauses in this method were not emitted."), "{text}");
+        assert_eq!(text.matches(format!("IL {rva:#x} offset 0x1 ret length 1.\n").as_str()).count(), 1, "{text}");
+    }
+
+    #[test]
+    fn filter_and_fault_clauses_keep_their_offsets() {
+        // Fails if filter is reported as a type token, or if fault loses its handler end.
+        let filter = parse_clause(&[0x01, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00], false).expect("filter");
+        assert_eq!(filter.kind, "filter");
+        assert_eq!(filter.filter, Some(4));
+        assert_eq!(filter.token, None);
+        assert_eq!(filter.try_end, 1);
+        assert_eq!(filter.handler_off, 2);
+        let mut fault = [0u8; 24];
+        fault[0] = 0x04;
+        fault[4] = 0x01;
+        fault[8] = 0x02;
+        fault[12] = 0x03;
+        fault[16] = 0x04;
+        let fault = parse_clause(&fault, true).expect("fault");
+        assert_eq!(fault.kind, "fault");
+        assert_eq!(fault.try_off, 1);
+        assert_eq!(fault.try_end, 3);
+        assert_eq!(fault.handler_off, 3);
+        assert_eq!(fault.handler_end, 7);
+        assert!(parse_clause(&[0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], false).is_none());
     }
 
     #[test]
