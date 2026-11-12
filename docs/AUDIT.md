@@ -7,7 +7,7 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **729/729 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
+  report bytes): **737/737 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
   69-group record is backed by 638/638, measured at `c34b170`), measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the 638 count is the tree at `c34b170`: 597 at `600e44d`,
   +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
@@ -16,7 +16,8 @@ their original counts and wording.
   +4 in `4758d28` → 642 and +7 in `5c93aed` → 645, then 649 re-measured in a room at `e4b7452` — that +4 was not
   re-derived per commit — and +1 in `98fb0d9` → 650, +8 in `e4118b1` → 658, +9 in `e7d13ec` → 667, +5 in
   `db16ffa` → 672, +14 in `436b281` → 686, +15 in `28b29d3` → 701, +7 in `2b041bc` → 708, +10 in `06d1f6b` → 718,
-  +5 in `b6457b0` → 723, +6 in `f28e463` → 729; the sums were
+  +5 in `b6457b0` → 723, +6 in `f28e463` → 729, +6 in `0b1cf39` → 735, +2 in `f1051da` → 737 (re-measured directly on
+  `f1051da` in a room that held none of the pending lanes' work); the sums were
   re-derived by counting added `#[test]` lines per commit with `git show`, which is why `3e5eda1` (+3) and
   `112e251` (+1) are absent from the chain — those are `tools/` package-test legs, not core unit cases; every delta was
   re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
@@ -574,7 +575,8 @@ open-items list, as ledger obligations `GAP1`-`GAP5`, ranked as the report ranks
    (`tools/harness.rs:955` is a descriptive string, not a call). Done bar is a **run log**:
    edit → build → test → revision → re-exec/successor → same job continuing.
 2. **`GAP2-RRSI-LOOP`** — the refine loop rewrites agent *instructions* only
-   (`core/harness.rs:396-434`), is capped at **two** rounds (`core/improvement.rs:109-115`),
+   (`core/harness.rs:396-434`), was capped at **two** rounds (`core/improvement.rs:109-115`; raised to **three**
+   with a production `round_index` writer and a `held_out` round in `f1051da`),
    scores only user phrases / JSON fields (`:36-67`) and keeps a candidate on a raw passed-count
    gain (`:120-124`). Missing: edit budget, edit history, stall exploration, leakage critic, noise
    floor, cost-aware acceptance, pruning, held-out/OOD split, parallel candidates, worktree
@@ -1782,6 +1784,82 @@ instead of fixing it. Adjudication: the arm is dropped, `core/rrsi.rs` and the s
 and the leg must go green in the main tree without weakening provenance. `locate_worktree`'s linked-worktree gap
 stays a separate real finding: it is what stops any git-reading group from passing in a linked worktree, so the
 pending delivered sweep must run in the primary tree.
+
+## Two lanes land, the loop regression gets a 2×2 attribution, and I reverse my own adjudication from the last block — 2026-11-13T06:0Z–08:0Z
+
+**The unit line is re-pinned at 737.** A room holding only `git archive f1051da` (no lane work at all) built its units
+binary and measured **737/737 cases plus 55 isolated application cases, exit 0**, which matches the chain arithmetic
+(`729 → +6 in 0b1cf39 → 735 → +2 in f1051da → 737`).
+
+**`room7` landed as `0b1cf39`** (clean-room). The route used to verify the created file against the generated buffer
+and then report counts from an in-memory re-render; it now accumulates the read-back into a buffer, runs
+`verify_artifact` on *that* buffer, refuses if the disk observation disagrees, and builds the entire response from it,
+naming the length: `Verification matched 5, missing 0, unknown 0 on the N bytes read back from disk`. Room witness
+(`git archive 3a4550f` + the two files, md5 `0c0430b5c43385b5` / `79f67cc1eb4a82ba`): **735/735 plus 55, exit 0**.
+Mutation: reporting the in-memory counts again reddens
+`application::file_evidence::checks::clean_room_route_reports_counts_from_the_bytes_read_back`.
+The seat raised three P1s and **two of them are artifacts of my own truncated diff** — I sliced it at 17,012 bytes, so
+the seat could not see the final `format!` (which does use the disk observation) or the route-level cap test
+(`clean_room_route_refuses_an_over_cap_observation_without_writing`, which drives `reconstruction::run` and asserts no
+output file). Its third P1 — items and gaps each bounded by `SPEC_ITEM_CAP` separately, so the total admitted records
+can reach twice the cap — is real but is a bound on *parse work*, not a promised single-record count; I also measured
+that `parse_fact` yields an item only for the five fields the pre-parse check names, so the lane's field list is exact,
+not an omission.
+
+**`gap2e` landed as `f1051da`** (three refinement rounds, a `held_out` round, and the group that proves them). Room
+witness (`git archive 475e34c` + `core/harness.rs`, `core/improvement.rs`, `verification/rrsi_loop.py`):
+**731/731 plus 55, exit 0**, and the connected group **`rrsi_loop PASS (exit 0, 1s, 13 checks)`**. Mutation of the new
+production writer (removing `put(&mut run,"round_index",Num((index+1).to_string()));`) gives **730/731** with exactly
+one red: `application::harness::checks::three_refinement_rounds_record_budget_floor_leakage_prune_held_out_and_commit`.
+Before this change the ceiling was unreachable: `complete_refinement_round` compared `refinement_rounds == 2` and
+nothing ever wrote a round index.
+
+**I reverse my previous adjudication about that group.** Last block I wrote that `gap2e`'s arm "hides the regression
+instead of fixing it" and dropped it. Measuring the 2×2 says otherwise:
+
+| product | group file | `rrsi_loop` |
+|---|---|---|
+| `44b755e` (pre-guard) | committed (6 checks) | **PASS** |
+| `44b755e` (pre-guard) | lane's new file (13 checks) | FAIL — the three-round legs need `f1051da` |
+| `dbfa7db` (guarded) | committed (6 checks) | FAIL — `refine entry copies approval_root onto task_run.workspace and records source_digest`, fixture prints `source_digest=None expected=absent` |
+| `475e34c` + `gap2e` | lane's new file (13 checks) | **PASS, 13 checks** |
+
+So the red was introduced by `436b281` (the guard) *and* the new legs need the three-round product change; neither
+half is sufficient alone. The seat's Critical — "provenance recorded on a failed work-tree check, and the consumer
+skips `recorded_source`" — does **not** put the pool on an unverified tree: `evaluate_pool` calls
+`require_recorded_worktree` again at adoption time (`core/harness.rs`), so refusal of the pool is independent of the
+digest recorded at refine time. What is still not pinned is **which** guard arm fires for that fixture room: with
+`gap2e`'s arm the leg goes green, and that arm records the digest for every error *except*
+`workspace identity does not match the approved root`, so the fixture's failure is some other arm — probably
+`locate_worktree`/`finish_worktree` rejecting the hand-planted store. The refusal sentence is still swallowed in the
+shipped binary, and that remains a work item. `locate_worktree`'s linked-worktree rule (`.git` must be a real
+directory) stays a separate, real finding: any git-reading group must run in the primary tree.
+
+**Held on findings that survived my own check.**
+- `core/self_build.rs` (lane `g1s2` plus lane `xect`'s tamper tests) is green in an isolated room —
+  `git archive f1051da` + that file gives **741/741 plus 55, exit 0**, warnings unchanged at 13 — and both new
+  refusals are load-bearing: removing the vanished-companion refusal gives **740/741** red on
+  `self_build::checks::handoff_refuses_a_vanished_successor_journal_beside_a_journal_with_rows`. Two P1s keep it
+  uncommitted: the truthful `running`/`exit` view depends on `Child::try_wait` caching the status inside `Child`,
+  which is a current-implementation detail and not the documented contract; and the vanished-companion predicate is
+  exactly *journal has ≥1 row ∧ companion absent*, which cannot tell "vanished" from "this handoff never tracked a
+  successor" — a first real handoff with an ordinary non-empty journal would now refuse. That hazard is latent, not
+  shipped: `self_handoff` is dispatched only at `core/lib.rs:443` and `grep -rn self_handoff platform/ gui/
+  verification/` returns nothing, so no surface calls it yet. Lane `g1s3` owns both fixes.
+- `core/rrsi.rs` (lane `rdx`) emits `library_index` on `resume_run`'s receipt and adds a line-cap refusal, and is
+  green alone (`git archive 475e34c` + that file: **731/731 plus 55**), but `resume_run` has **no production call
+  site** — `grep -rn "resume_run(" core/` finds only unit tests, and the route rebuilds from
+  `records_of(&text(run,"edit_ledger"))` instead. A field on an unreachable receipt is not a capability, and the new
+  `load_resume_library` gives a second library loader with a different refusal set. Its cap test also cannot fail for
+  the right reason: the at-cap leg asserts `assert_ne!(error, "resume library index exceeds its line cap; ...")`,
+  which also passes when resume fails for an unrelated reason, so acceptance at exactly `LINE_CAP` is unproven.
+  Lane `rr1` owns reachability plus that boundary.
+
+**Lanes in flight at 08:0Z:** `dn7` (the three `.NET` bound/cancellation findings from `dotnet6`), `rr1`
+(`resume_run` reachability), `g1s3` (the two successor findings). Rooms: `/tmp/headw` (real worktree at `dbfa7db`),
+`/tmp/preguard` (`44b755e` archive, used for the pre-guard cells above), `/tmp/g2x` (`475e34c` + `gap2e`, mutated and
+restored), `/tmp/sb2w` (`f1051da` + `self_build`), `/tmp/rdxw`, `/tmp/room7w`, `/tmp/g2w`, `/tmp/dn6w`, `/tmp/xectw`,
+`/tmp/wtexp`. Nothing in the commit chain depends on a lane's uncommitted file.
 
 ## Historical baseline audit (original text)
 
