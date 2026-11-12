@@ -1518,16 +1518,34 @@ relocations even though that projection is production-live (`core/binary_evidenc
 `core/reconstruction.rs:12`) — so cross-reference edges reach the prose but never the typed graph.
 
 `defl5` closed GAP5's first half — the archive compressor. `deflate` (`core/compression.rs:644`, outside
-`#[cfg(test)]`) writes RFC1951 raw DEFLATE with fixed Huffman blocks and a hash-chain LZ77 match finder;
-`tools/package.rs`'s `write_zip` now calls the tool's own copy of it (the tool is a standalone binary that
-already carried its own inflater) instead of storing every member. Verified in a `git archive` room of
-`28b29d3` plus the lane's two files: **708/708 cases plus 55 isolated application cases, exit 0** — 701 + 7,
-matching the lane's own new-case count — and the package tool's suite is **29/29**, up from 20, exit 0. The
-lane's first delivery was refused for two defects found by measurement, not review: it had written the
-compressor to a new `core/deflate.rs` with **zero markers and no `mod` line** (dead code that would not even
-compile, and would have needed two interlock edits), and its archive test asserted a hand-computed header
-offset that was wrong by two bytes — `fnv(&archive[..payload - 6..])` covered the extra-field length field and
-the CRC, so the pinned digest refused it while the comment claimed the whole member prefix.
+`#[cfg(test)]`) writes RFC1951 raw DEFLATE in fixed **or dynamic** Huffman blocks — it emits a dynamic block
+only when that is smaller, which is why the corpus result sits near zlib level 6/9 — with a hash-chain LZ77
+match finder run per 64 KiB chunk, so a match never crosses a chunk boundary and the effective lookback near
+a chunk start is under the 32 KiB window; the chain walk is capped at 4096 steps (128 after a length-32 match)
+and stops at a 258-byte match, so worst-case work per chunk is bounded but superlinear (≈65,536 lookups ×
+4,096 candidates), not a linear-time guarantee. A block that would grow falls back to STORED with correct
+`LEN`/`NLEN` (`NLEN = 0xffff − LEN`) and ≤5 bytes of overhead per ≤65,535-byte chunk, and `deflate` returns
+the stored form unless the compressed form is strictly smaller. `tools/package.rs`'s `write_zip` now calls the
+tool's own copy of it (the tool is a standalone binary that already carried its own inflater) instead of
+storing every member. Verified in a `git archive` room of `28b29d3` plus the lane's two files: **708/708 cases
+plus 55 isolated application cases, exit 0** — 701 + 7, matching the lane's own new-case count — and the
+package tool's suite is **29/29**, up from 20, exit 0. The lane's first delivery was refused for two defects
+found by measurement, not review: it had written the compressor to a new `core/deflate.rs` with **zero markers
+and no `mod` line** (dead code that would not even compile, and would have needed two interlock edits), and
+its archive test asserted a hand-computed header offset that was wrong by two bytes —
+`fnv(&archive[..payload - 6..])` covered the extra-field length field and the CRC, so the pinned digest
+refused it while the comment claimed the whole member prefix.
+
+The audit seat for this commit found no Critical defect and two Important wording defects, both corrected
+above: the encoder is not fixed-block-only, and the zlib conformance evidence is a **coordinator probe**, not
+a test inside the patch — the patch's own legs round-trip through the project's inflater. The seat also
+checked which legs survive a stored-only `deflate`: `deflate_growth_uses_stored_blocks`,
+`archive_writer_stores_a_growth_member`, `zip_roundtrip_verifies_crc_and_length`, `truncated_deflate_stream_is_refused`
+and `length_limited_codes_stay_complete` do, while `deflate_empty_is_fixed_block`,
+`deflate_short_literals_match_fixed_block`, `deflate_long_run_is_dynamic_and_smaller`,
+`deflate_roundtrip_at_stored_block_boundary` and `archive_writer_shrinks_a_compressible_member` all fail, so
+the suite is not vacuous. Both archive legs assume a local header with no extra field, which the writer's own
+code satisfies.
 
 Conformance was measured without the product's own inflater, so the claim does not rest on a self-consistent
 pair: a standalone probe compiled against `core/compression.rs` deflates a 230,800-byte corpus
