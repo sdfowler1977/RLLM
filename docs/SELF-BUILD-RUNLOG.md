@@ -150,6 +150,25 @@ the pair discriminates. The journal commit itself also succeeds in that layout (
 Defect 1 is closed at the seam and witnessed at unit level (`Saved N bytes to <path>.` plus the three
 new refusal cases in the gate), but **not yet through the product's own approval path** — see below.
 
+The sanctioned plan was then re-run through the **consolidated** child runner (one `bounded_child`
+delegating to `execution::bounded_process`, the seam's private runner deleted) with the correct
+parent, in the same room whose journal and rollback live at non-skipped paths:
+
+```
+{"op":"self_journal",...,"parent":"8c61e0523228cb663dcd644c5b3ca56f88e6f60ae21b6e5fd3cb4fb70cc23607",
+ "sanctioned":true,"units":"output/units-run","review_confirmed":true}
+{"value":{"builder_exit":0,"gate":{"cases":541,"green":true,"isolated":55,"passed":541},
+ "parent":"8c61e0523228…","recorded":true,
+ "revision":"025ca432ba447be74f5237398c3cd13a86e8faf4bcf134edee22861cec6b470f",
+ "rollback":"self/rollback","rollback_digest":"69463f2ef2da…",
+ "successor":{"argv":["./output/headless/RLLM"],"binary_digest":"69463f2ef2da…","pid":1176140}}}
+```
+
+`bash headless.sh`, `bash tools/build-units.sh output/units-run` and
+`python3 tools/checks.py --all-units output/units-run` all ran as bounded children, the gate line was
+parsed off stdout (not the exit code), the rollback artifact was preserved, and the journal appended a
+**second** revision chained to the first — so the runner consolidation did not break the plan legs.
+
 The first re-run attempt produced four refusals that were **my driver's defects, not product reds**,
 recorded so the next driver does not repeat them: the journal directory `self/` did not exist
 (`No such file or directory (os error 2)`), a `gate_output` line that is not the gate's own shape is
