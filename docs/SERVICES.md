@@ -1,0 +1,189 @@
+# Optional server capabilities
+
+Use App settings → Network services → Service connections. These connections are independent of LLM connections. The app still opens and supports local work with no model; conversation inference needs one configured model. Speech, generation, document services and additional models are optional. A disabled, malformed or offline unrelated service does not block an eligible service or the primary model.
+
+Configure the HTTP interface exposed by your own server, local network, tunnel, internet service or proxy. There are no provider-specific key slots. A server can dispatch to any program behind that interface. The phone does not install or start server programs. Services using a different protocol need an HTTP adapter on the server.
+
+## Connection format
+
+Save one version-1 JSON object with `hosts`, `routes` and `defaults`. Saving never sends a request. Host URLs contain the scheme, hostname and optional port; route paths contain the API path and query. Explicit `plain:true` is required for HTTP. HTTPS retains certificate and hostname validation.
+
+```json
+{
+  "version": 1,
+  "hosts": [
+    {"id":"local","url":"http://server.local:8080","plain":true,"enabled":true},
+    {"id":"backup","url":"https://speech.example.invalid","enabled":true,
+     "auth_header":"Authorization","auth_prefix":"Bearer ","key":""}
+  ],
+  "routes": [
+    {"id":"recognize","host":"local","capability":"speech_recognition",
+     "method":"POST","path":"/recognize","enabled":true,
+     "request_format":"multipart","file_field":"audio","request":{},
+     "response":"json","response_path":"/text"},
+    {"id":"speak-local","host":"local","capability":"speech_synthesis",
+     "method":"POST","path":"/speak","enabled":true,
+     "request":{"text":{"$input":"/text"}},
+     "response":"binary","artifact_kind":"audio"},
+    {"id":"speak-backup","host":"backup","capability":"speech_synthesis",
+     "method":"POST","path":"/audio","enabled":true,
+     "request":{"input":{"$input":"/text"}},
+     "response":"base64","response_path":"/audio","artifact_kind":"audio"}
+  ],
+  "defaults": {
+    "speech_recognition":{"routes":["recognize"]},
+    "speech_synthesis":{"routes":["speak-local","speak-backup"],
+                        "fallback_codes":[503],"connect_fallback":true}
+  }
+}
+```
+
+The example URLs and paths are illustrative; replace them with your server contract. No key is needed for an unauthenticated local service. Hosts accept an optional `headers` object, any valid `auth_header` and an optional prefix. Each host's credentials stay with its own request. Duplicate headers differing only by letter case are refused. A custom multipart Content-Type must not replace the generated boundary.
+
+Saved keys and header values appear as `<unchanged>` in the editor. Keep that marker to retain a saved value, replace it to change the value, or use an empty key to remove it. Changing the host URL or authentication settings requires re-entering masked credentials. This prevents a configuration edit from silently forwarding an old key to a new host.
+
+## Requests and responses
+
+Route IDs, host IDs and capability names use letters, digits, underscores or hyphens. Capabilities can include `image_generation`, `video_generation`, `scene_generation`, `document_extraction` or other names you choose. Speech conversation uses `speech_recognition` and `speech_synthesis` defaults.
+
+| Setting | Behavior |
+| --- | --- |
+| `method` | GET, POST, PUT or DELETE |
+| `path` | Relative HTTP path; `{field}` substitutes a scalar from input with URL encoding |
+| `request` | JSON template; `{"$input":"/prompt"}` copies the actual typed input value; other values remain literals |
+| `request_format` | `json` (default), `binary` selected file, or `multipart` mapped fields plus selected file |
+| `$file` | A single-key mapping with `name`, `mime`, `base64` or `data_url`; requires explicit file upload consent |
+| `file_field` | Multipart file field name; defaults to `file` |
+| `input_schema` | Optional JSON schema object (8 KiB maximum) describing the input expected by your server |
+| `response` | `json`, UTF-8 `text`, `binary`, `base64`, or `artifact_url` |
+| `response_path` | JSON pointer selecting the result, encoded bytes or artifact URL; empty selects the whole document |
+| `artifact_kind` | `audio`, `video`, `image`, `document`, `scene` or generic `data`; container mismatch is refused |
+| `artifact_host` | Host allowed to serve a returned artifact URL; defaults to the submission host |
+| `artifact_limit_mb` | Streaming file limit, default 64 MiB, maximum 256 MiB |
+| `timeout_seconds` | Request deadline, up to 600 seconds |
+
+JSON pointer escapes follow `~0` for tilde and `~1` for slash. A whole-input mapping uses `{"$input":""}`. Path substitutions currently select top-level input fields. Response pointers are fixed pointers; use a server adapter for APIs whose response keys or protocol need additional normalization.
+
+The requesting model sees eligible route IDs, capabilities, input paths, optional input schemas and response formats. Host credentials and literal request-template values are excluded from that catalog. It can call the normal reviewed `service` operation from ordinary or delegated work. Explicit manual requests use the same engine. A capability request follows its configured ordered routes; an exact route request stays on that route. Review shows the destinations and explicit file disclosure.
+
+Only configured HTTP error statuses or a confirmed failure before send can select a fallback. A sent request with an uncertain outcome is never automatically replayed. Failed artifact downloads do not repeat generation. Returned URLs must match the configured artifact host's scheme, hostname and port; redirects and credential forwarding to another origin are refused.
+
+JSON/base64 replies are bounded to 4 MiB. Direct binary POST/PUT results, GET binary files and returned artifact URLs stream in 8 KiB chunks to owned files, using artifact_limit_mb (default64MiB, maximum256MiB within available space); large video bytes do not enter conversation JSON. Initial submissions accept complete200or201file responses. Retrieval requires200; partial206responses and redirects are not treated as complete artifacts. Other initial status bodies are bounded to64KiB and drained for complete framing before configured HTTP-error fallback can run.202without a usable artifact remains accepted_unconfirmed and never resubmits generation. Confirmed pre-send fallback releases its previous reservation first. Expired abandoned transfers release unwritten reservations at the next stream admission or expired read. Selected files import in 8 KiB chunks up to 64 MiB, within remaining storage. File bytes stay outside conversation JSON. Media imports and downloads require exact padded or unpadded Base64 chunks. A failed owned chunk cannot produce a file receipt. Reviewed uploads stream binary, multipart and configured JSON base64/data-URL mappings. Inline legacy capture remains limited to 2 MiB; ordinary model image attachments retain their separate 2 MiB limit. GET routes are lookups and cannot upload an explicitly selected file; use a POST or PUT route for uploads. Local media has a 512-file / 256 MiB total bound. Stream allocations reserve their maximum logical size before writing, so concurrent imports and downloads cannot each spend the same space. Manual recording reserves its current capture bound while the platform writes. Cancellation releases unwritten padding and retains received bytes; an abrupt process loss can retain reserved padding in an unadopted partial file. Interrupted partial files remain visible in Manage local media files, where each file can be exported or individually reviewed for permanent removal.
+
+## Generation jobs
+
+A submission route can have this optional `job` mapping. The submission must return JSON; status, result and cancellation are separate routes.
+
+```json
+{
+  "id":"/id","state":"/state","success":["done"],"failure":["failed"],
+  "accept_codes":[200,202],
+  "status_route":"status","result_route":"result","cancel_route":"cancel",
+  "result_input":{"asset":{"$input":"/output/file"}}
+}
+```
+
+Status and result routes can use `/jobs/{job}` or other configured paths. The captured server identifier becomes input `job`. Optional `status_input` and `cancel_input` templates map from the submission response. `result_input` maps from a successful status response and can supply other result path/request fields. This mapping uses the same `$input` syntax and preserves scalar types. Terminal status values may be distinct strings, numbers or booleans. Default acceptance is HTTP202; HTTP200 acceptance must be explicitly configured.
+
+Server acceptance is tracked separately from completion. A successful status becomes `ready`; the job becomes `completed` only when a validated local artifact arrives. Refresh and retrieval never repeat submission. App restart preserves job records, but does not start an unattended polling timer. Cancellation is a reviewed server request; an accepted cancellation does not prove the server stopped. Job records can be archived, restored or individually reviewed for local removal. Removing a record does not cancel a server job or delete its files.
+
+## Voice, files and documents
+
+Conversation actions → Voice and media → Start open microphone opens a review of recognition, speech and model destinations. Enable the listening checkbox and confirm to start. The app captures microphone PCM directly, detects an utterance locally, stops capture, sends the actual WAVE recording to your recognition connection, sends its transcript through the primary conversation, plays the returned speech, then starts the next listener only after playback completes. It does not depend on keyboard dictation or the standard platform speech recognizer.
+
+Both `speech_recognition` and `speech_synthesis` defaults are required for this mode, alongside one conversation model. A synthesis server/key alone provides speech output, not recognition. Configure the actual paths, request fields, response mapping, host credentials and fallback order exposed by your servers. Recognition must accept actual recording bytes through binary, multipart or a `$file` base64/data_url mapping and return text or JSON selecting text. Speech output must return audio bytes, base64 audio or an approved artifact URL. No provider-specific settings or mandatory paid key are required.
+
+The microphone pauses during recognition and model work. By default it also pauses during playback. The optional “Listen for interruption during replies” review setting permits microphone capture while the reply plays, during foreground voice or the explicitly reviewed background session, with device echo control active. Approximately240ms of sustained microphone activity stops that owned reply and promotes the same PCM capture into the next utterance, preserving its leading speech. Echo control availability and actual suppression vary by device and audio route; installed-device effectiveness remains unverified. If echo control is missing or stops, only the interruption listener is retired and the reply continues. Speak now remains available to stop the owned reply and start a new listener. Stop playback pauses even if the native player has not started yet. Late completion, focus, dismissal and interruption events cannot replace another capture, primary request or preview. A typed draft stops the interruption listener and remains available for review. The app does not take over an existing call's communication mode. Optional background voice is described below. Visible status distinguishes the starting interruption microphone from an active interruption microphone, alongside Listening, Transcribing, Preparing reply, Preparing speech, Speaking and Paused. Stop voice ends the session. With the background option off, leaving the foreground ends it. Changing conversation/workspace/routes, task or activity teardown, or process restart also ends it. Consent expires after ten minutes and does not silently renew. Microphone/playback/service failure pauses the loop without automatic replay; Resume microphone starts another attempt while consent is still valid. Text remains available.
+
+The review offers a silence interval of300–3000ms (default800), an activity threshold of100–5000 (default500; lower is more sensitive) and a5–30second utterance cap (default20). Capture uses16kHzmono16-bitPCM with a bounded pre-roll and requires approximately240ms of sustained activity. Quiet audio and short noise bursts are not uploaded. This is an adjustable energy detector, not a neural speech recognizer; room noise and microphone characteristics can require tuning. Ordinary operation reviews remain in force. A draft typed during a voice turn is preserved and a later transcript is appended for review rather than sent automatically.
+
+Manual recording, standalone transcription and Speak last reply remain available. Manual recording stops at60seconds /2MiB. Microphone access requires platform permission; a pending permission request never starts an expired voice session. Capture originals are retained in the quota-managed local media folder and can be exported or individually reviewed for removal. Separate bounded media workers handle capture and file providers. Ordinary previews stop on app pause; matching speech may continue through the explicitly reviewed background session. Loss of audio focus or conversation/workspace changes stops playback; owned callbacks reject retired or duplicate results.
+
+Returned files appear in their conversation and can be previewed or exported. Configure a phone-folder or network destination in Files and storage before exporting; generated files retain their detected extension and content type. Supported native previews include PNG/JPEG images, platform-decodable audio/video, and PDF pages. Returned GLB2scene triangle geometry can now be previewed inside the app. Drag to orbit, or use the labeled rotate, tilt, zoom and reset buttons. The Rust software viewport applies node transforms, sparse/interleaved accessors, supported unsigned indices, triangle/strip/fan topology, base/vertex colors and depth testing. The preview explicitly omits textures, animation and physical material effects; it does not fetch external resources. Skins, morph targets, transparent materials, unsupported required extensions, invalid geometry and excessive preview workloads refuse only preview; the original file remains available for export. Each viewport is bound to the returned file, workspace and conversation; source changes, context changes, close and foreground loss retire its use. Measured heap/system memory and the app resource mode admit metadata complexity before JSON node allocation, then scale geometry, accessor spans and viewport resolution within that budget. Missing measurements use a conservative usable default. Absolute ceilings of two in-flight/live viewports,100000triangles,300000accessor elements,16MiB accessor spans,4MiB scene JSON,128–768pixel frames and bounded frame work/time protect memory and UI responsiveness. Native controls use the admitted frame size. Supported larger original files retain the existing256MiB media limit. Installed-device controls, gesture/lifecycle behavior and display quality remain unverified. GPU rendering and broader scene support remain open. Container identity and disk digest checks are distinct from actual decoder acceptance. Generic MP4 audio/video is classified from track handlers, not the filename.
+
+Manual MCP results offer **Save image** for typed PNG and JPEG entries. The selected file is saved locally in the active workspace and added to the conversation for preview or export. **View raw result** keeps the original result available. Tool errors, unsupported media types and resource links do not produce image files.
+
+For a model-directed MCP call, the continuation receives text, structured content and descriptors for typed images. In the originating workspace and conversation, open **Conversation actions → Review MCP images** for the latest retained raw result. Supported images use the same explicit save and preview controls. If the conversation lacks space for the raw result, its text continuation still runs and the app reports that the image could not be retained. An already received image can still be reviewed locally if the model follow-up cannot start.
+
+Selected or returned PNG/JPEG images up to 2 MiB can be attached to a reviewed draft for any of the four model API formats; the chosen model must support image input. PDF OCR, document extraction and generation use whatever optional server routes you configure. PDF preview is available locally; built-in OCR, medical interpretation and a separate medical application are not part of this upgrade.
+
+## Validation scope
+
+`verification/services.py`, `media.py`, `jobs.py`, `voice.py`, `voice_interruption.py` and `media_stream.py` exercise the public shared core with actual local HTTP peers, real file bytes, large-file streaming, review/cancellation/ownership, scoped fallbacks and all four primary/child model formats. Model responses and microphone callbacks in these checks are controlled fixtures. They do not certify an installed microphone, speaker, decoder or a particular remote server. Those require current-device and endpoint acceptance.
+
+File transfers use single-use input results and expiring request ownership. A changed file, stale callback, cancellation or overflow cannot adopt a prefix as a complete input. Upload interruption after possible send never automatically replays the request. Missing optional servers do not block ordinary text or local work.
+
+Android capture uses the microphone session’s platform echo-cancel effect; availability, enabled state and communication mode are checked before advertising an interruption microphone. Interface reference: https://developer.android.com/reference/android/media/audiofx/AcousticEchoCanceler . A positive platform state does not certify physical echo removal.
+
+The static scene reader follows the GLB2container and accessor/node conventions in https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html . This is a geometry preview subset, not a claim of full rendering conformance. `verification/scene.py` executes actual returned files, transforms, sparse/interleaved data, depth-tested pixels, camera changes, source mutations and scoped refusals.
+
+The static scene viewport now divides rasterization into disjoint row bands with a shared bounded host CPU allowance. It preserves triangle draw order and exact pixels, accounts for worker stack memory, and uses one worker when current memory or measured CPU limits require it. Closing a queued or active frame releases admission before returning; no partial frame is reported as successful.
+
+Headphone/Bluetooth output disconnection and speech audio-focus loss stop current foreground audio. Speech also pauses when another app asks it to duck. The owned voice session is retired, so neither a delayed recognition/synthesis result nor focus recovery automatically opens the microphone. An already-running primary model answer can still finish into the conversation. Start voice again through its review when the audio route is ready. Route monitoring is scoped to active audio/voice and the foreground lifecycle; unsupported route/focus access fails only the optional audio operation. Physical phone, headset, Bluetooth, call and lifecycle behavior still needs device acceptance.
+
+Voice request review now has an explicit waiting state. Dismissing or going back from review keeps the unsent proposal available. Rejection pauses voice and releases its capture owner; Resume microphone starts a fresh listener. Approving a request changes the status only after the service operation is admitted. An explicitly requested transcription returns to the composer for review and never sends itself to the model.
+
+Resume microphone is enabled only when the same Rust checks used to start capture allow it: the reviewed session is live, no operation or proposal is pending, and the composer is empty. A retained transcript can be edited or sent without opening the microphone; clearing it enables explicit resume.
+
+If current memory admission refuses a recognition or speech request, its owned transfer is retired and the voice loop shows Paused. The abandoned voice phase is cleared, the primary text answer remains available, and nothing is submitted or automatically replayed. Explicit resume opens a fresh microphone while the reviewed session remains valid. Service cleanup changes only its matching voice phase.
+
+Starting a separate request review, operation or task pauses the current microphone. A completed utterance arriving afterward cannot replace that proposal or running request, submit recognition or change the conversation. The separate request can still be approved and completed normally. Resume microphone stays unavailable while work is pending and starts a fresh capture only when explicitly chosen afterward.
+
+If an otherwise completed answer cannot enter speech preparation, including the speech-text size bound or full local media storage, the loop also shows Paused with its specific explanation. The complete primary text remains in the conversation. It is not truncated for speech or automatically sent again.
+
+## Document provider inputs
+
+Document and media inputs can come from installed document providers through the generic Android picker. Storage → Document providers opens selected-file controls; Setup → Document provider access configures its source policy and optional account setup. Provider accounts are managed by their own app or Android settings. No specific provider is required. Read grants are owned and can be removed without revoking unrelated phone-folder or writable grants; unsuccessful removals remain available for retry. Temporary grants require reselection when Android expires them. The app can separately authorize its configured WebDAV connection as described below; provider-native cloud file APIs and SMB remain separate open work.
+
+## Voice and microphone settings
+
+Open App settings → Voice and microphone. The same settings are linked from Conversation actions, Voice and media and Network services. The page shows the latest observed Android microphone permission, the capture controls and conversation connection readiness. Saving preferences works without any model, speech service or key, and starts neither microphone capture nor a network request. App microphone permissions opens this application's Android permission settings; the displayed observation refreshes when you return. Starting capture requests microphone access if needed.
+
+Microphone capture, PCM framing and silence detection are part of the app. No speech-to-text model is bundled. Configure your chosen local, network or internet recognition and speech-output hosts through Configure speech connections. Automatic spoken conversation needs the speech_recognition and speech_synthesis default routes and a conversation model. Recognition must send the actual recording and return text; speech output must return audio. A synthesis key alone does not provide recognition. Manual Speak last reply can use speech output independently.
+
+Save the silence interval, activity threshold, maximum utterance length and optional preferences. Settings validate whole-number ranges: 300–3000 milliseconds, activity threshold 100–5000, and maximum utterance length 5–30 seconds. A lower threshold is more sensitive; it does not control hardware microphone gain. Typed integer inputs and the visible number fields use the same capture validation. Invalid values preserve the previously saved settings.
+
+To switch to open microphone, select Review open microphone conversation. Keep listening between replies is selected in that explicit review; check the model and service destinations, then choose Enable voice conversation. The optional background checkbox applies to the reviewed ten-minute session and still requires microphone/notification permission. Review manual voice conversation keeps automatic/background capture off by default. Cancelling its review leaves saved preferences intact. Saving or opening settings never grants a new listening session. Opening settings during voice ends that voice owner while preserving an already-running primary text answer and a separate manual-speech proposal. Start a fresh reviewed session afterward.
+
+The established capture → recognition → primary conversation → speech output → completed playback → next microphone sequence remains unchanged. Current settings checks exercise it with real PCM/files and local speech HTTP peers across all four model formats. These checks do not certify physical Android microphone quality, permission views, layout, speaker routes or a user's server configuration.
+
+## Network storage credentials
+
+The network-drive connection supports optional username/password credentials, an access key/token, or no credentials. A nonempty key uses its configured header instead of the retained username/password credentials. Header name defaults to Authorization and the prefix defaults to Bearer; set another header or prefix to match your server, and clear the prefix to send the raw key. Clearing the key explicitly restores the retained username/password mode. No particular provider or mandatory key is implied.
+
+Header syntax, reserved framing headers, control characters, field types and the 8192-byte storage key bound are checked before saving an active key configuration or sending a request. Invalid settings preserve the prior connection. A 401/403 response does not replay with another credential. Ordinary text and other sources remain available. Manual WebDAV, legacy pending payloads and current streamed payloads use the same credential selection. Saved pending transfers retain their original complete connection for writes/probes/readback; credentials are not borrowed from a newly selected destination. Configuration export omits both the key and retained username/password values. Protected saved app state remains the credential storage boundary.
+
+Manual credential presentation is separate from the optional sign-in flow below. Existing trusted-LAN HTTP opt-in and certificate identity checks remain in force.
+
+## Network storage sign-in
+
+Save the network-drive URL first, then choose Connection authorization in that connection's settings. Configure the authorization server's browser and/or device endpoint, token endpoint, registered public client identifier, scopes and optional expected issuer. Register the displayed app redirect URI with that server for browser sign-in. Hosts, account types and keys remain configurable; no particular provider or paid key is required. A public-client sign-in can only work with an authorization server that supports the selected flow and your registration.
+
+Sign in with browser uses the external browser, a fresh S256 challenge and an expiring matching return. Sign in with device code shows the actual server address and code; Check authorization performs one explicit, rate-limited status request. Opening authorization ends an active microphone session. Its review identifies whether credentials belong to storage or a model and shows the authorized destination. An unfinished optional sign-in does not prevent a new primary text request; its old return cannot then adopt credentials.
+
+Successful storage grants are saved separately from model grants and manually configured storage credentials. Only that network-drive connection uses the returned Bearer token. Refresh authorization explicitly renews it using the configured token endpoint; tokens are not refreshed by replaying failed file requests. A definitely unsent refresh can be retried explicitly. An uncertain sent refresh requires a fresh sign-in, preserving the existing rotating-token boundary. Expired tokens, changed destinations or trust/authorization settings refuse only the affected storage operation and never silently select a saved key or password. Use saved key or username/password explicitly restores manual mode without deleting the grant.
+
+Manual WebDAV requests and both pending-transfer formats share the same destination-bound token checks. Pending writes, probes and readback keep their original complete connection; refreshing or editing a connection does not retarget an outstanding transfer. Configuration export omits access tokens, refresh tokens and manual secrets. Existing encrypted app state remains the credential storage boundary. Browser returns can recover their matching pending owner after resume; process loss never replays device polling or an uncertain token exchange.
+
+This provides authorization for the configured WebDAV interface. It does not implement arbitrary provider-native cloud file APIs, SMB, confidential-client secrets, sender-constrained tokens or every authorization grant. It extends the existing native-app public-client design described by [RFC 8252](https://www.rfc-editor.org/info/rfc8252/) and [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html). Physical browser/deep-link/Keystore behavior and actual user server registration remain separate acceptance work.
+
+## Background voice
+
+Start open microphone now offers a separate, default-off Continue voice outside the app checkbox. It applies only to the current reviewed ten-minute microphone session. Recognition, synthesis, fallback order and the conversation model still use the same optional configured server connections. Manual speech does not silently enable background capture.
+
+The app requests the current microphone and notification permissions before starting a private microphone/playback foreground service. Its ongoing Voice conversation notification displays actual voice status, opens the app and offers Stop voice. Background capture requires both app notifications and its voice channel to remain visible. Denial or an unavailable service pauses only voice; re-review with the background option off to use foreground voice. Startup must occur while the app is visible. A pending permission or service handshake cannot advertise an active microphone.
+
+Once admitted, the same owned microphone, speech HTTP requests and returned audio can continue when the activity is paused or the screen is off. A bounded wake lease keeps that user-started session running; it may consume battery. Permission-review delays are deducted from the original remaining consent. Neither a later utterance nor activity return extends that lease. The service checks its current notification, permission, owner and expiry; losing them stops it. It never starts at boot, restores a microphone after process loss, or restarts itself.
+
+Stop voice, notification Stop, route/focus interruption, conversation/workspace/configuration changes, expiry and task/activity teardown retire the current session. An old notification cannot stop its replacement. An already-running primary text answer can still complete after voice stops. Unreviewed operation proposals wait for the existing approval in the app; background voice grants no extra tool authority. File/image/video/document previews remain in the visible app, while only the matching synthesized audio plays through the background session.
+
+The platform service weakly references its existing activity/controller owner; activity destruction ends the service rather than retaining or silently reconstructing that owner. Returning to the still-live activity refreshes its current state. Controlled adapter checks execute actual service lifecycle code, wake leases, notification ownership and native capture start/stop interleaving; full SDK compilation is separate. Real phone screen-off capture/playback, battery use, permissions, interruptions and lifecycle acceptance remain unverified.
+
+Platform references: https://developer.android.com/develop/background-work/services/fgs/service-types and https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start .
+
+
+## Scene base-color textures and cutouts
+
+The native scene viewport renders embedded PNG base-color textures from GLB buffer views. It combines the selected TEXCOORD set with float or normalized unsigned coordinates, the material factor and vertex colors. Repeat, mirrored repeat and edge clamping work independently per axis. Nearest and linear filters sample in linear RGB; alpha remains a separate coverage value. Mipmapped minification uses the glTF base-level nearest/linear fallback. MASK materials apply their configured cutoff (default 0.5) before writing depth. OPAQUE materials retain their previous pixels and ignore alpha.
+
+Image loading stays inside the admitted scene memory and decode-work budget, uses the owned Rust PNG decoder and performs no external image request. The original scene file remains available for export. See the [glTF texture and material specification](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#_texture_data) for the underlying format.

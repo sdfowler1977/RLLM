@@ -1,0 +1,4 @@
+min_width_dp,max_width_dp,layout,pane_count,rtl_mirror,text_expand,hc,rm
+0,599,single,1,0,0,1,1
+600,839,list-detail,2,0,0,1,1
+840,0,multi-pane,3,0,0,1,1

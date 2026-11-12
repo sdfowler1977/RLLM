@@ -1,0 +1,10 @@
+target=linux
+application_id=app.panel
+cpu_workers=8
+cpu_admitted=1
+gpu_executed=0
+npu_executed=0
+toolchain_invoked=0
+host_limit_bytes=0
+project_ready=1
+text_scale=100

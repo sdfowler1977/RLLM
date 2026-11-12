@@ -1,0 +1,66 @@
+/* application desktop projection */
+/* document_id=000000000000000100000000b3e4907f generation=45 */
+struct StableId { unsigned long long high; unsigned long long low; };
+static const StableId kDocumentId = {1ull, 3018100863ull};
+static const unsigned kRtl = 0u;
+static const unsigned kTextScale = 100u;
+static const unsigned kPaneCount = 3u;
+static const unsigned kMinTargetDip = 24u;
+/* widget 00000000000000020000000000000002 type=page name=Chat */
+/* widget 00000000000000020000000000000003 type=page name=History */
+/* widget 00000000000000020000000000000004 type=widget name=Rail Navigation */
+/* widget 00000000000000020000000000000005 type=widget name=Status Indicator */
+/* widget 00000000000000020000000000000006 type=widget name=Chat Panel */
+/* widget 00000000000000020000000000000007 type=widget name=Message Composer */
+/* widget 00000000000000020000000000000008 type=widget name=Metric Strip */
+/* widget 00000000000000020000000000000009 type=page name=Workspace */
+/* widget 0000000000000002000000000000000a type=page name=App settings */
+/* widget 0000000000000002000000000000000b type=page name=Agent settings */
+/* widget 0000000000000002000000000000000c type=page name=Diagnostics */
+/* widget 0000000000000002000000000000000d type=widget name=Rail Navigation */
+/* widget 0000000000000002000000000000000e type=widget name=Status Indicator */
+/* widget 0000000000000002000000000000000f type=widget name=Virtual List */
+/* widget 00000000000000020000000000000010 type=widget name=Rail Navigation */
+/* widget 00000000000000020000000000000011 type=widget name=Status Indicator */
+/* widget 00000000000000020000000000000012 type=widget name=Virtual List */
+/* widget 00000000000000020000000000000013 type=widget name=Rail Navigation */
+/* widget 00000000000000020000000000000014 type=widget name=Status Indicator */
+/* widget 00000000000000020000000000000015 type=widget name=Description List */
+/* widget 00000000000000020000000000000016 type=widget name=Rail Navigation */
+/* widget 00000000000000020000000000000017 type=widget name=Status Indicator */
+/* widget 00000000000000020000000000000018 type=widget name=Agent Roster */
+/* widget 00000000000000020000000000000019 type=widget name=Rail Navigation */
+/* widget 0000000000000002000000000000001a type=widget name=Status Indicator */
+/* widget 0000000000000002000000000000001b type=widget name=Metric Strip */
+/* widget 0000000000000002000000000000001c type=widget name=Job Monitor */
+/* AT-SPI accessible nodes: object id, AT-SPI role, role name, accessible name */
+static const struct { const char *id; unsigned role; const char *role_name; const char *name; } kAccessible[] = {
+    {"000000000000000100000000b3e4907f", 110u, "landmark", "RLLM"},
+    {"00000000000000020000000000000002", 110u, "landmark", "Chat"},
+    {"00000000000000020000000000000003", 110u, "landmark", "History"},
+    {"00000000000000020000000000000004", 39u, "panel", "Rail Navigation"},
+    {"00000000000000020000000000000005", 39u, "panel", "Status Indicator"},
+    {"00000000000000020000000000000006", 39u, "panel", "Chat Panel"},
+    {"00000000000000020000000000000007", 39u, "panel", "Message Composer"},
+    {"00000000000000020000000000000008", 39u, "panel", "Metric Strip"},
+    {"00000000000000020000000000000009", 110u, "landmark", "Workspace"},
+    {"0000000000000002000000000000000a", 110u, "landmark", "App settings"},
+    {"0000000000000002000000000000000b", 110u, "landmark", "Agent settings"},
+    {"0000000000000002000000000000000c", 110u, "landmark", "Diagnostics"},
+    {"0000000000000002000000000000000d", 39u, "panel", "Rail Navigation"},
+    {"0000000000000002000000000000000e", 39u, "panel", "Status Indicator"},
+    {"0000000000000002000000000000000f", 39u, "panel", "Virtual List"},
+    {"00000000000000020000000000000010", 39u, "panel", "Rail Navigation"},
+    {"00000000000000020000000000000011", 39u, "panel", "Status Indicator"},
+    {"00000000000000020000000000000012", 39u, "panel", "Virtual List"},
+    {"00000000000000020000000000000013", 39u, "panel", "Rail Navigation"},
+    {"00000000000000020000000000000014", 39u, "panel", "Status Indicator"},
+    {"00000000000000020000000000000015", 39u, "panel", "Description List"},
+    {"00000000000000020000000000000016", 39u, "panel", "Rail Navigation"},
+    {"00000000000000020000000000000017", 39u, "panel", "Status Indicator"},
+    {"00000000000000020000000000000018", 39u, "panel", "Agent Roster"},
+    {"00000000000000020000000000000019", 39u, "panel", "Rail Navigation"},
+    {"0000000000000002000000000000001a", 39u, "panel", "Status Indicator"},
+    {"0000000000000002000000000000001b", 39u, "panel", "Metric Strip"},
+    {"0000000000000002000000000000001c", 39u, "panel", "Job Monitor"},
+};

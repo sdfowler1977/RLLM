@@ -1,0 +1,21 @@
+# RLLM
+
+Current signed candidate 1794270237 includes the MCP connections, conversation menu, web search, transport and authorization changes described in the release notes. Owner validation, unavailable historical comparisons and pending device/independent acceptance are recorded separately.
+
+RLLM connects your Android device to configured language models and integrates investigation into ordinary command following.
+
+Configured models and callable-agent routes appear in the request catalog. Reviewed delegation returns the actual child response or error to the captured parent. Question/design records connect plans, source observations, interpretations, finite checks and implementation decisions.
+
+Start an investigation by telling the assistant what to examine; the editable plan and hypothesis forms are optional. Permitted model operations can record findings and implementation-language constraints in the same journal. A design brief can be read by the model or exported as Markdown without raw returned source/output bodies, alongside the existing complete journal JSON. Authored text may still quote sources; a brief does not establish separate analysis and implementation contexts. See [Question and design process](docs/QUESTION-PROCESS.md).
+
+The app includes four provider formats, incremental replies, user agent/skill settings, file inspection/comparison, typed binary evidence, web search/page capture, reviewed reconstruction/experiments, WebDAV storage, encrypted history and local MCP/A2A access.
+
+Use **Config → Network services → MCP connections** to save and switch servers. Discovery, calls and streams use the active connection. Use **Web access → Always allow built-in web search** to allow built-in searches without per-query prompts. Tap a compact web result or tool request in conversation to see its details. The plus menu opens with **New conversation**.
+
+The separately supplied signed APK matches this source; its SHA-256 is recorded in PUBLICATION-MANIFEST.json. Build instructions are in [docs/BUILD.md](docs/BUILD.md), command behavior in [docs/COMMANDS.md](docs/COMMANDS.md), and recorded validation in [verification/RESULTS.json](verification/RESULTS.json).
+
+Voice controls are in **App settings → Voice and microphone**, and are also reachable from Conversation actions and Voice and media. Save microphone preferences without configuring a model or speech server. Configure optional recognition and speech-output connections, choose **Review open microphone conversation**, review the destinations and listening options, then enable the session. A speech-output key alone does not provide recognition. Microphone capture and silence detection run in the app; speech-to-text uses your chosen server and no recognition model is bundled. Background listening remains a separate reviewed option. See [voice setup](docs/SERVICES.md#voice-and-microphone-settings).
+
+Optional provider-neutral server capabilities now support foreground open-microphone conversation, explicit Speak now interruption, optional foreground spoken interruption with device echo control, and manual voice turns, file uploads, an interactive static GLB viewport with embedded PNG textures and alpha cutouts, image/video/scene/document routes, ordered fallbacks and tracked generation jobs. Setup and limits are in [docs/SERVICES.md](docs/SERVICES.md). Optional S256 browser authorization supports owned automatic credential refresh and pending-browser recovery while retaining API-key mode. Standalone read-only ACP v1 sessions use the shared workspace engine. Headless tasks discover bounded usable CPU concurrency when device metadata is absent. All extra services remain optional. Current candidate validation and any unavailable checks are recorded separately from the preserved baseline.
+
+Pending authorization replies belong to the saved credential generation that initiated them. Replacing tokens at the same destination retires older replies while retaining explicit manual credentials and current sign-in/refresh recovery.

@@ -1,0 +1,17 @@
+id,name,surface_state,error_associated,persisted,projected
+derived-loading,derived_loading,loading,0,0,1
+derived-empty,derived_empty,empty,0,0,1
+derived-ready,derived_ready,ready,0,0,1
+derived-changed,derived_changed,changed,0,0,1
+derived-running,derived_running,running,0,0,1
+derived-paused,derived_paused,paused,0,0,1
+derived-success,derived_success,success,0,0,1
+derived-warning,derived_warning,warning,0,0,1
+derived-stale,derived_stale,stale,0,0,1
+derived-error,derived_error,error,1,0,1
+derived-offline,derived_offline,offline,0,0,1
+derived-denied,derived_denied,denied,0,0,1
+derived-unsupported,derived_unsupported,unsupported,0,0,1
+derived-cancelled,derived_cancelled,cancelled,0,0,1
+derived-uncertain,derived_uncertain,uncertain,0,0,1
+derived-disabled,derived_disabled,disabled,0,0,1

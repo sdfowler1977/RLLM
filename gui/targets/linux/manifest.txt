@@ -1,0 +1,17 @@
+kind=linux
+export_version=1
+document_id=000000000000000100000000b3e4907f
+generation=45
+application_id=app.panel
+display_name=RLLM
+identity_preserved=1
+mapped=0/28
+content_preserved=28/28
+semantic_fork=0
+migration_from=1
+migration_to=1
+dropped_count=0
+admitted_caps=0
+toolchain_invoked=0
+unsafe_web_execution=0
+cpu_path=1

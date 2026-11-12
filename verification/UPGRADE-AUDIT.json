@@ -1,0 +1,579 @@
+{
+  "proposal_recovery": {
+    "version": 1793985689,
+    "reported_behavior": "Installed screenshots showed useful commentary plus one web_search JSON request replaced by a generic warning. Raw text was exposed only through Branch conversation. Actual search records were irrelevant to current weather.",
+    "baseline_reproduction": {
+      "version": 1793982425,
+      "source_sha256": "6bc9f7d834a6d77ad8c52fae511a7145bd47e7f9e1b76fdfc6a63e85cbcc3d21",
+      "method": "Exact saved core compiled before edits; public model completion with commentary plus one bare JSON object reproduced hidden commentary, no proposal and no operation."
+    },
+    "implementation": "Useful commentary retained in chat; Response details and explicit single-request review; current originating profile/agent/task/permission checks; separate one-time approval that cannot use matching saved rules; examples, ambiguity and hidden reasoning excluded; explicit built-in alternative-source-only search with exact query and custom-credential isolation.",
+    "validation": {
+      "recovery_cases": 128,
+      "selected_rust_cases": 212,
+      "connected_groups_passed": 42,
+      "connected_groups": 43,
+      "scope": "Four model formats through actual shared public events; actual matching session grants, real local HTTP and controlled model continuation. Installed Android screenshots diagnose the old failure; they do not certify the repaired APK."
+    },
+    "source_checkpoint": "Drive1qGkg82ZyexX7iIPH0m1qaR_gTMPZbSN-;258source-only files,all member hashes and ZIP CRC verified on actual download;SHA256b01d183e49e0da1c6f56cc222671475679100ad1e855160adb3c3d5ddee17a49",
+    "limits": [
+      "Actual user's private model server, current weather, physical repaired-device UI and independent acceptance remain unverified.",
+      "Three genuine historical comparisons remain unavailable; reader fingerprints and protected archive/compression/fixture scopes preserved.",
+      "Original baseline,optional voice/media/local services and full cumulative roadmap retained."
+    ]
+  },
+  "foreground_voice": {
+    "passed": 147,
+    "scope": "Actual local HTTP/WAVE with controlled PCM, model and playback callbacks across all four primary formats; device and user endpoint acceptance pending.",
+    "implemented": [
+      "foreground half-duplex automatic turns",
+      "Rust bounded activity segmentation",
+      "expiring consent and capture/playback ownership",
+      "lifecycle and changed settings retirement",
+      "failure pause and explicit resume",
+      "separate generic recognition and synthesis defaults",
+      "explicit owned Speak now interruption",
+      "pending playback stop and stale callback isolation"
+    ],
+    "not_implemented": [
+      "background listening",
+      "simultaneous interruption during speech",
+      "bundled neural recognition",
+      "medical branch"
+    ]
+  },
+  "full_rust_suite": {
+    "current": {
+      "source": "current",
+      "code": 101,
+      "summary": "test result: FAILED. 457 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.13s",
+      "failures": [
+        "application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity",
+        "application::checks::conversation_webdav_save_is_pending_until_exact_readback",
+        "application::checks::disconnected_provider_preserves_tools",
+        "application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+        "application::checks::interrupted_phone_creation_warns_without_replay",
+        "application::checks::network_conversation_requires_review",
+        "application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path",
+        "application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files",
+        "application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+        "application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped",
+        "application::checks::retry_verifies_first_and_creates_only_after_framed_not_found",
+        "application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+        "application::checks::reviewed_network_update_preserves_revision_before_conditional_write",
+        "application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name"
+      ]
+    },
+    "baseline": {
+      "source": "baseline",
+      "code": 101,
+      "summary": "test result: FAILED. 454 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.81s",
+      "failures": [
+        "application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity",
+        "application::checks::conversation_webdav_save_is_pending_until_exact_readback",
+        "application::checks::disconnected_provider_preserves_tools",
+        "application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+        "application::checks::interrupted_phone_creation_warns_without_replay",
+        "application::checks::network_conversation_requires_review",
+        "application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path",
+        "application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files",
+        "application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+        "application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped",
+        "application::checks::retry_verifies_first_and_creates_only_after_framed_not_found",
+        "application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+        "application::checks::reviewed_network_update_preserves_revision_before_conditional_write",
+        "application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name"
+      ]
+    },
+    "new_failures": [],
+    "scope": "Fresh serial complete Rust sweeps in distinct clean working/temp directories with explicit font. Baseline is exact immediate published f78088a3 candidate core; historical fixtures are retained, not relabeled as passes."
+  },
+  "previous_candidate_audit": {
+    "full_rust_suite": {
+      "current": {
+        "source": "current",
+        "code": 101,
+        "summary": "test result: FAILED. 454 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.97s",
+        "failures": [
+          "application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity",
+          "application::checks::conversation_webdav_save_is_pending_until_exact_readback",
+          "application::checks::disconnected_provider_preserves_tools",
+          "application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+          "application::checks::interrupted_phone_creation_warns_without_replay",
+          "application::checks::network_conversation_requires_review",
+          "application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path",
+          "application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files",
+          "application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+          "application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped",
+          "application::checks::retry_verifies_first_and_creates_only_after_framed_not_found",
+          "application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+          "application::checks::reviewed_network_update_preserves_revision_before_conditional_write",
+          "application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name"
+        ]
+      },
+      "baseline": {
+        "source": "baseline",
+        "code": 101,
+        "summary": "test result: FAILED. 454 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.42s",
+        "failures": [
+          "application::checks::conversation_import_and_branch_respect_encrypted_vault_capacity",
+          "application::checks::conversation_webdav_save_is_pending_until_exact_readback",
+          "application::checks::disconnected_provider_preserves_tools",
+          "application::checks::failed_webdav_readback_stays_pending_and_phone_default_is_explicit",
+          "application::checks::interrupted_phone_creation_warns_without_replay",
+          "application::checks::network_conversation_requires_review",
+          "application::checks::network_drive_accepts_bare_lan_address_and_preserves_share_path",
+          "application::checks::network_text_to_project_requires_local_review_and_preserves_existing_files",
+          "application::checks::pending_remote_save_keeps_original_credentials_and_verifies_after_cancel",
+          "application::checks::phone_update_editor_binds_original_and_late_failure_is_scoped",
+          "application::checks::retry_verifies_first_and_creates_only_after_framed_not_found",
+          "application::checks::reviewed_network_folder_creation_is_scoped_and_requires_created_status",
+          "application::checks::reviewed_network_update_preserves_revision_before_conditional_write",
+          "application::checks::reviewed_phone_file_creation_needs_a_grant_and_valid_name"
+        ]
+      },
+      "new_failures": [],
+      "scope": "Fresh serial full 468-case Rust sweeps; exact published baseline2676d547 source; distinct clean working/temporary directories and explicit test font. Historical fixtures are preserved, not relabeled as passes."
+    },
+    "job_retrieval_repeats": [
+      {
+        "run": 0,
+        "code": 0
+      },
+      {
+        "run": 1,
+        "code": 0
+      },
+      {
+        "run": 2,
+        "code": 0
+      },
+      {
+        "run": 3,
+        "code": 0
+      },
+      {
+        "run": 4,
+        "code": 0
+      },
+      {
+        "run": 5,
+        "code": 0
+      },
+      {
+        "run": 6,
+        "code": 0
+      },
+      {
+        "run": 7,
+        "code": 0
+      }
+    ],
+    "job_retrieval_concurrent_repeats": [
+      {
+        "run": 0,
+        "code": 0
+      },
+      {
+        "run": 1,
+        "code": 0
+      },
+      {
+        "run": 2,
+        "code": 0
+      },
+      {
+        "run": 3,
+        "code": 0
+      },
+      {
+        "run": 4,
+        "code": 0
+      },
+      {
+        "run": 5,
+        "code": 0
+      },
+      {
+        "run": 6,
+        "code": 0
+      },
+      {
+        "run": 7,
+        "code": 0
+      }
+    ],
+    "earlier_refusal": "One earlier parallel validation received an integrity refusal in large-file retrieval. One retry,8 repetitions and8 repetitions concurrent with building passed. No invalid bytes were adopted; strict integrity checks remain in place. Cause was not established.",
+    "owner_only": true,
+    "device_acceptance": false
+  },
+  "owner_only": true,
+  "device_acceptance": false,
+  "authorization": {
+    "passed": 121,
+    "checks": [
+      "chat uses random S256 transaction proof",
+      "chat sign-in preserves existing key and text availability",
+      "chat wrong return is exact state no-op",
+      "chat duplicate return parameters are refused before exchange",
+      "chat code is exchanged at configured endpoint only",
+      "chat code return cannot exchange twice",
+      "chat actual server credential is adopted without replacing API key",
+      "chat credentials stay out of authorization UI",
+      "chat token callback is single-use",
+      "chat normal conversation uses bearer auth for its own format",
+      "chat actual HTTP model response completes",
+      "chat refresh uses actual configured refresh credential",
+      "chat refreshed credentials rotate together",
+      "chat configuration export omits all authentication credentials",
+      "chat choosing API-key mode restores the existing credential",
+      "local uses random S256 transaction proof",
+      "local sign-in preserves existing key and text availability",
+      "local wrong return is exact state no-op",
+      "local duplicate return parameters are refused before exchange",
+      "local code is exchanged at configured endpoint only",
+      "local code return cannot exchange twice",
+      "local actual server credential is adopted without replacing API key",
+      "local credentials stay out of authorization UI",
+      "local token callback is single-use",
+      "local normal conversation uses bearer auth for its own format",
+      "local actual HTTP model response completes",
+      "local refresh uses actual configured refresh credential",
+      "local refreshed credentials rotate together",
+      "local configuration export omits all authentication credentials",
+      "local choosing API-key mode restores the existing credential",
+      "messages uses random S256 transaction proof",
+      "messages sign-in preserves existing key and text availability",
+      "messages wrong return is exact state no-op",
+      "messages duplicate return parameters are refused before exchange",
+      "messages code is exchanged at configured endpoint only",
+      "messages code return cannot exchange twice",
+      "messages actual server credential is adopted without replacing API key",
+      "messages credentials stay out of authorization UI",
+      "messages token callback is single-use",
+      "messages normal conversation uses bearer auth for its own format",
+      "messages actual HTTP model response completes",
+      "messages refresh uses actual configured refresh credential",
+      "messages refreshed credentials rotate together",
+      "messages configuration export omits all authentication credentials",
+      "messages choosing API-key mode restores the existing credential",
+      "content uses random S256 transaction proof",
+      "content sign-in preserves existing key and text availability",
+      "content wrong return is exact state no-op",
+      "content duplicate return parameters are refused before exchange",
+      "content code is exchanged at configured endpoint only",
+      "content code return cannot exchange twice",
+      "content actual server credential is adopted without replacing API key",
+      "content credentials stay out of authorization UI",
+      "content token callback is single-use",
+      "content normal conversation uses bearer auth for its own format",
+      "content actual HTTP model response completes",
+      "content refresh uses actual configured refresh credential",
+      "content refreshed credentials rotate together",
+      "content configuration export omits all authentication credentials",
+      "content choosing API-key mode restores the existing credential",
+      "chat expiry schedules one refresh before any model POST",
+      "chat owned refresh resumes exact original model question once",
+      "chat duplicate automatic refresh cannot submit a second model turn",
+      "chat automatic refresh completes real model response",
+      "local expiry schedules one refresh before any model POST",
+      "local owned refresh resumes exact original model question once",
+      "local duplicate automatic refresh cannot submit a second model turn",
+      "local automatic refresh completes real model response",
+      "messages expiry schedules one refresh before any model POST",
+      "messages owned refresh resumes exact original model question once",
+      "messages duplicate automatic refresh cannot submit a second model turn",
+      "messages automatic refresh completes real model response",
+      "content expiry schedules one refresh before any model POST",
+      "content owned refresh resumes exact original model question once",
+      "content duplicate automatic refresh cannot submit a second model turn",
+      "content automatic refresh completes real model response",
+      "cancelled automatic refresh cannot adopt tokens or resume the model",
+      "confirmed pre-send refresh failure retains retryable credential",
+      "new explicit turn can refresh after confirmed pre-send failure",
+      "uncertain rotating refresh credential is never replayed",
+      "changed conversation context cannot resume an automatic model request",
+      "child authorization refresh does not bypass operation review",
+      "approved child refresh carries captured delegation ownership",
+      "child refresh resumes the exact reviewed model",
+      "refreshed child returns its real result to captured parent once",
+      "parent after refreshed child settles normally",
+      "child refresh failure returns scoped failure to its captured parent",
+      "paused hosted continuation refreshes before continuation POST",
+      "refreshed hosted continuation retains exact captured server context",
+      "refreshed hosted continuation settles without replay",
+      "actual voice recognition waits for authorization refresh before model request",
+      "owned token rotation preserves the existing voice consent",
+      "refreshed voice answer automatically reaches configured synthesis",
+      "actual synthesized audio remains available after model token refresh",
+      "same identity with an unowned token change revokes voice consent",
+      "refresh preserves owned hosted context for the same authorization identity",
+      "fresh sign-in cannot replay previous account private hosted context",
+      "unsaved authorization destination cannot receive a sign-in request",
+      "cancelled browser return cannot revive authorization",
+      "cancelled network result cannot adopt credentials",
+      "browser proof remains out of UI and authorization URL",
+      "recovery restores only the pending browser flow without network replay",
+      "matching return after activity recovery completes actual code exchange",
+      "new process recovers encrypted-state browser ownership without reopening browser",
+      "recovered flow still refuses wrong state exactly",
+      "proof is retired from saved state before code submission",
+      "new process exchanges original server code with the original S256 verifier",
+      "recovered browser return is still single use",
+      "expired browser recovery refuses stale ownership without submitting a code",
+      "future browser recovery refuses stale ownership without submitting a code",
+      "destination browser recovery refuses stale ownership without submitting a code",
+      "workspace browser recovery refuses stale ownership without submitting a code",
+      "proof browser recovery refuses stale ownership without submitting a code",
+      "process loss during rotating refresh never replays the saved credential",
+      "process recovery rejects a lost refresh callback exactly",
+      "uncertain token submission never replays",
+      "token refusal preserves working API key and excludes server error body",
+      "fresh sign-in never inherits a previous account refresh credential",
+      "changed model destination cannot receive an old bearer credential",
+      "known token expiry is scoped before model submission",
+      "expired optional authorization does not destroy API-key capability"
+    ],
+    "scope": "Owner checks through actual local HTTP authorization, S256 code verification, token refresh/rotation and model peers across all four formats. Browser-return delivery is controlled; installed Android browser/deep-link/Keystore and live authorization-server acceptance remain unverified."
+  },
+  "workspace_agent_sessions": {
+    "passed": 41,
+    "checks": [
+      "session creation requires initialization",
+      "unknown requested version negotiates supported stable version",
+      "unsupported media and peer launch capabilities are not advertised",
+      "implemented session extensions are advertised",
+      "duplicate initialization cannot replace connection state",
+      "client cannot widen startup workspace",
+      "unadvertised external server launch is refused",
+      "additional roots cannot be silently accepted",
+      "real engine output reaches ACP agent messages",
+      "returned output digest describes actual returned bytes",
+      "tool start and completion precede prompt completion",
+      "session list returns owned selected-root session",
+      "existing in-process session resumes without fabricated history",
+      "local resource links execute actual comparison",
+      "JSON command uses actual whole-file digest",
+      "scoped read refusal /inspect ../outside/private.txt",
+      "refusal exposes no outside content /inspect ../outside/private.txt",
+      "scoped read refusal /inspect escape",
+      "refusal exposes no outside content /inspect escape",
+      "scoped read refusal /inspect missing.txt",
+      "refusal exposes no outside content /inspect missing.txt",
+      "unsupported authority or malformed command refused 30",
+      "unsupported authority or malformed command refused 31",
+      "unsupported authority or malformed command refused 32",
+      "refused write did not create a file",
+      "outside resource links are refused",
+      "unadvertised audio is not interpreted as text",
+      "unrelated valid operation still works after scoped failures",
+      "malformed JSON receives a parse error",
+      "oversized frame is drained within declared bound",
+      "valid request after oversized frame remains usable",
+      "actual in-flight work cancels with stable prompt stop reason",
+      "cancelled work publishes no agent result",
+      "one session cancellation leaves another session usable",
+      "request cancellation retains original request identity",
+      "session close waits for owned turn cancellation",
+      "closed session cannot revive",
+      "idle close releases session capacity",
+      "bounded session admission reports actual capacity",
+      "replaced startup root cannot feed stale session",
+      "replacement root contents are not adopted"
+    ],
+    "scope": "Owner checks through actual ACP standard streams and shared production workspace engine; no model, external server, developer report or journal in the selected workspace. Read-only ACP v1 capability scope, not full coding-agent or Android ACP client acceptance."
+  },
+  "current_selected_rust_cases": 212,
+  "current_connected_groups": {
+    "passed": 42,
+    "total": 43,
+    "executed_checks": 2308,
+    "unavailable_historical_checks": 3
+  },
+  "resource_concurrency": {
+    "observed_usable_cpus": 9,
+    "observed_host_workers": 4,
+    "checks": 72,
+    "scope": "Actual independent128MiB complete-file scans, excess-task refusal, scoped cancellation and exact source/output digests; CPU fallback with missing platform metadata."
+  },
+  "spoken_interruption_toolchain_repair": {
+    "scope": "Current owner execution; initial LLVM-dependent checks failed before repaired NDK extraction, then reran. Product runtime does not read this report.",
+    "official_ndk_sha256": "dfb20d396df28ca02a8c708314b814a4d961dc9074f9a161932746f815aa552f",
+    "regular_files_checked": 8414,
+    "bytes_crc_sizes_modes": "passed",
+    "repaired_large_members": 4
+  },
+  "scene_preview": {
+    "owner_scene_checks": 60,
+    "delivery_connected_groups": 40,
+    "delivery_groups_passed": 39,
+    "binary_actual_checks": 94,
+    "binary_unavailable": 3,
+    "selected_rust_cases": 199,
+    "live_public_checks": 9,
+    "physical_device": false,
+    "live_user_services": false,
+    "independent_review": false,
+    "software_visual_reference": {
+      "scope": "Actual Rust software renderer on controlled cube geometry through owned file capture; not Android UI acceptance",
+      "source_sha256": "b6b9af52c32b68f5147a85722ea93b8cadb9c10b756d8319d6b9f1a3d718294b",
+      "rgba_sha256": "46a4b16504182a1056ff3674f946976d6085b024560dca0905e84333aad7306c",
+      "triangles": 12,
+      "width": 384,
+      "height": 384
+    },
+    "resource_repair": "Preallocation estimate for GLB JSON outside strings; measured/default geometry, span and frame admission. Core checks include exact refusal, usable small-memory frames and punctuation inside strings.",
+    "build_repair": "Initial optimized build refused changed inputs before signing. Clean151-input dual-ABI compilation completed; its first aligned output was truncated to2048000bytes and apksigner rejected it. One fresh zipalign output has6525642bytes, all25payloads identical to complete input, CRC/alignment passed and151frozen inputs remain exact. Signing resumed from those same frozen outputs; actual APK1793904514has6535186bytes,SHA2563d9def995670eb2db7cf52990260fdb746f9310cb3af41c4d81f67daf56104d0, pinned v2/v3 signature, both ABIs, compiled scene/voice bindings and16KiB alignment verified. No truncated APK was delivered.",
+    "scope": "Static triangle geometry with base/vertex colors; textures, animation and physical material effects explicitly omitted; unsupported features preserve export. Prior preliminary runs are not substituted for final-source execution."
+  },
+  "multicore_scene_continuation": {
+    "date": "2026-11-05",
+    "version": 1793921544,
+    "implementation": "Shared bounded host CPU row-band rasterization; exact draw order, measured CPU and worker-stack fallback, joined cancellation, scoped time/workload refusal. Full aligned ZIP payload hashes/lengths/CRC and official alignment verified before signing, retained rejected output and at most one retry.",
+    "validation": {
+      "scene_cases": 66,
+      "new_rust_worker_cases": 5,
+      "selected_rust_cases": 204,
+      "alignment_cases": 8,
+      "connected_groups_passed": 40,
+      "connected_groups": 41,
+      "live_public_web_cases": 9,
+      "compiled_input_files": 152,
+      "actual_alignment_attempts": 1
+    },
+    "saved_source_checkpoint": "Drive1k4G_lU_lTLGalRf4CtAdQSUDlH_ehhDJ; downloaded255file hashes and CRC verified",
+    "original_comparator": "Actual saved1793904514 controller; four real before/after scene pixel comparisons",
+    "limits": [
+      "Transient OS thread-start and alignment-retry failures were not forced.",
+      "Installed Android/UI/gesture/audio/echo/lifecycle and actual user service endpoints remain unverified.",
+      "Independent acceptance and three genuine historical revision-two comparisons remain open.",
+      "Textures/animation/GPU/wider scene formats and full cumulative roadmap remain open."
+    ],
+    "prior_publication": "All256original1793904514source files match mainb5f29ae551a44786a9b3c34dcee4edbe92f99c7a. Its release draft435871828 retains all3assets; two Publish attempts returned GitHub500. No public release claimed for that draft."
+  },
+  "audio_route_continuation": {
+    "version": 1793922659,
+    "implementation": "Scoped protected-system audio route receiver and per-registration identity; pause-on-duck speech focus with main-thread and preview ownership; current-session Rust voice_route_lost cleanup; no automatic microphone restart or request replay; in-flight primary answers preserved.",
+    "validation": {
+      "connected_groups_passed": 41,
+      "connected_groups": 42,
+      "voice_pcm_http_cases": 104,
+      "platform_callback_cases": 23,
+      "selected_rust_cases": 204,
+      "scene_cases": 66,
+      "alignment_cases": 8,
+      "live_public_web_cases": 9,
+      "compiled_inputs": 153
+    },
+    "saved_source": "Drive1Vcl0KAH2Asb9LVn7j0IDY3ClJqCdo6Fu;257file hashes and ZIP CRC read back",
+    "repairs_during_validation": [
+      "Initial SDK invocation lacked the genuine generated R.java; reused the unchanged actual generated resource binding.",
+      "Corrected a newly introduced local-variable name collision before final SDK compilation.",
+      "Canceled-upload ownership correctly refused a late send; the race check now delays only an actual already-received HTTP callback."
+    ],
+    "limits": [
+      "Current owner host/SDK execution is not physical Android wired/Bluetooth/call/audio-focus or lifecycle acceptance.",
+      "Actual user-configured services and independent acceptance remain unverified.",
+      "Three genuine historical revision-two comparisons remain unavailable.",
+      "Protected scopes, original baseline, optional behavior and full broader roadmap preserved."
+    ]
+  },
+  "voice_ownership_continuation": {
+    "version": 1793982425,
+    "implementation": "Other proposals, operations and tasks pause capture; callback-time admission prevents a held utterance from replacing separate work. Resume shares the active-task condition. Speech preparation failures pause with complete primary text and their specific explanation.",
+    "baseline_reproduction": {
+      "version": 1793981376,
+      "source_sha256": "bc19fca1eba3ccc922aa97574c66f54ed4e0cbdf7d3d92f169d54e5f5eaf86c2",
+      "method": "Actual public PCM/service-review/admission events on the unchanged saved controller before this repair.",
+      "observations": [
+        "Microphone completion replaced a separate pending service proposal with recognition.",
+        "Microphone completion replaced a separately admitted service owner with recognition.",
+        "An answer beyond the speech bound left thinking without request/effect/busy.",
+        "The actual 512-file media quota left synthesizing without request/effect/busy."
+      ]
+    },
+    "validation": {
+      "voice_cases": 375,
+      "new_ownership_cases": 64,
+      "new_speech_preparation_cases": 32,
+      "selected_rust_cases": 204,
+      "connected_groups_passed": 41,
+      "connected_groups": 42,
+      "scope": "Real PCM completion receipts held across separate review and dispatch in all four model formats; exact proposal/running-owner preservation, no replay, actual separate HTTP completion, explicit fresh resume, full speech text and actual storage-quota refusal."
+    },
+    "source_checkpoint": "Drive1IyjMWkJmeNY_3yaNx_qbFIqBnShHCLi2;257source-only member hashes and ZIP CRC verified after actual download;SHA256a50d939bc6b73cf858869f02a122a32d6d1ca321eccda212f593710c3d25d17a",
+    "limits": [
+      "Owner execution is not installed Android, actual configured user-service or independent acceptance.",
+      "Three genuine historical comparisons remain unavailable; reader fingerprints and protected scopes preserved.",
+      "Original baseline,optional services and full cumulative roadmap preserved."
+    ]
+  },
+  "voice_admission_continuation": {
+    "version": 1793981376,
+    "implementation": "Service interruption clears only its matching voice phase and pauses that loop without automatic replay or microphone restart. Consent, primary text answers and unrelated capture owners are retained.",
+    "baseline_reproduction": {
+      "version": 1793979944,
+      "source_sha256": "3df328b1b328f7d02fdfb9eefb59fab198169db1262065cc4efcabdd7c0507c4",
+      "method": "Public PCM/HTTP/controlled primary response through the unchanged saved current controller before production edits.",
+      "heap_mib": [16, 24],
+      "voice_status": "synthesizing",
+      "voice_phase": "synthesis",
+      "service_expected": null,
+      "effect": null,
+      "notice": "Current memory cannot admit this transfer; existing files and text remain available"
+    },
+    "validation": {
+      "voice_cases": 279,
+      "new_admission_cases": 80,
+      "selected_rust_cases": 204,
+      "connected_groups_passed": 41,
+      "connected_groups": 42,
+      "scope": "Real PCM and local HTTP through four model formats; measured-memory recognition/synthesis refusal, scoped explanation, retained text, explicit fresh resume, admitted synthesis playback and unrelated-service capture preservation."
+    },
+    "source_checkpoint": "Drive17igD8i0cC0HG7rvxvhtp5yGa5QbB9pc1;257source-only files,all hashes and ZIP CRC verified on actual download;SHA256fae40fa0ef26ced433ce9629b394fe237091ebc19b5de5b748eab64d2fa5f52f",
+    "limits": [
+      "Owner fixture execution does not establish installed Android, actual user-service or independent acceptance.",
+      "Three genuine historical comparisons remain unavailable; protected scopes and fingerprints are preserved.",
+      "Original baseline and cumulative wider roadmap remain open and unchanged."
+    ]
+  },
+  "voice_review_continuation": {
+    "version": 1793979944,
+    "implementation": "Distinct review waiting status; real service dispatch starts recognition/synthesis status; rejection or removal of the owned review pauses capture; explicit resume gets a new owner; shared Rust start conditions drive native Resume enabled state. Manual transcript remains in the composer.",
+    "baseline_reproduction": {
+      "version": 1793922659,
+      "source_sha256": "c506100631f916806f5b007808311abe1dd95ff93c5b512fc0c42a48c43acd82",
+      "observation": {
+        "before_phase": "synthesizing",
+        "after_reject_phase": "synthesizing",
+        "voice_phase": "synthesis",
+        "pending": null,
+        "effect": null
+      },
+      "method": "Actual saved core compiled opaquely; real PCM/HTTP/controlled model/review operation before repair."
+    },
+    "validation": {
+      "selected_rust_cases": 204,
+      "voice_cases": 199,
+      "interruption_cases": 104,
+      "scene_cases": 66,
+      "platform_route_cases": 23,
+      "connected_groups_passed": 41,
+      "connected_groups": 42,
+      "live_public_web_cases": 9,
+      "compiled_inputs": 153
+    },
+    "toolchain_recovery": {
+      "observed": "Two official Rust target archive files persisted truncated at20172800and26451968bytes after an earlier verification message.",
+      "repair": "Parent-owned bounded sequential writes with file/directory fsync,post-close/post-rename size/hash verification,pre-extraction verification and at most one retry; rejected bytes preserved.",
+      "verified_archives": 8,
+      "verified_large_extracted_or_installed_payloads": 287
+    },
+    "limits": [
+      "Owner execution is not independent acceptance.",
+      "No physical Android UI/IME/audio/headset/Bluetooth/call/lifecycle acceptance or actual configured user-service execution.",
+      "Three genuine historical revision-two comparisons remain unavailable; fingerprints and protected historical scopes preserved.",
+      "Original baseline,optional services and full cumulative roadmap preserved."
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+[package]
+name = "application"
+version = "0.1.0"
+edition = "2021"
+[workspace]
+[profile.dev]
+debug = false
+strip = "debuginfo"
+[profile.release]
+debug = false
+strip = "debuginfo"
