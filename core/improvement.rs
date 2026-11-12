@@ -140,8 +140,8 @@ pub(super) struct CandidateShape<'a> {
     pub diff_digest: &'a str,
 }
 
-fn cost_limit(gain: i64) -> i64 {
-    COST_BETA0.saturating_add(COST_BETA1.saturating_mul(gain))
+fn cost_limit(gain: i64, beta0: i64, beta1: i64) -> i64 {
+    beta0.saturating_add(beta1.saturating_mul(gain))
 }
 
 fn signed_cost_delta(before: u64, after: u64) -> Option<i64> {
@@ -170,6 +170,8 @@ fn shape_recorded(records: &[Json], shape: &CandidateShape) -> bool {
 /// A positive gain whose cost increase exceeds that bound is refused as "cost bound".
 /// Missing cost leaves the legacy bit. Inside a measured band (floor > 0) a flat score
 /// that is not a cost saving is admitted only when its shape is absent from `seen`.
+/// `beta0` and `beta1` are the cost bound for this judgement. The live refine path
+/// passes `COST_BETA0` and `COST_BETA1`. Rejudge passes the pair stored on the row.
 pub(super) fn acceptance(
     baseline: &Json,
     candidate: &Json,
@@ -178,6 +180,8 @@ pub(super) fn acceptance(
     cost_after: Option<u64>,
     shape: Option<CandidateShape>,
     seen: &[Json],
+    beta0: i64,
+    beta1: i64,
 ) -> Json {
     let legacy = check_gain(baseline, candidate);
     let before = number(baseline, "passed") as i64;
@@ -193,7 +197,7 @@ pub(super) fn acceptance(
     if let (Some(cost_before), Some(cost_after)) = (cost_before, cost_after) {
         cost_known = true;
         let over = match signed_cost_delta(cost_before, cost_after) {
-            Some(delta) => delta > cost_limit(gain),
+            Some(delta) => delta > cost_limit(gain, beta0, beta1),
             None => true,
         };
         if after == before && cost_after < cost_before && preserves_checks(baseline, candidate) {
@@ -231,8 +235,8 @@ pub(super) fn acceptance(
         ("gain", s(&gain.to_string())),
         ("noise_floor", Num(floor.to_string())),
         ("cost_known", Bool(cost_known)),
-        ("beta0", Num(COST_BETA0.to_string())),
-        ("beta1", Num(COST_BETA1.to_string())),
+        ("beta0", Num(beta0.to_string())),
+        ("beta1", Num(beta1.to_string())),
     ])
 }
 
@@ -817,7 +821,7 @@ mod checks {
         };
         let before = score("1");
         let after = score("2");
-        let decision = acceptance(&before, &after, 0, None, None, None, &[]);
+        let decision = acceptance(&before, &after, 0, None, None, None, &[], COST_BETA0, COST_BETA1);
         assert_eq!(boolean(&decision, "admit"), check_gain(&before, &after));
         assert_eq!(boolean(&decision, "admit"), true);
         assert_eq!(boolean(&decision, "legacy"), true);
@@ -825,7 +829,7 @@ mod checks {
         assert_eq!(text(&decision, "gain"), "1");
         assert_eq!(get(&decision, "noise_floor"), &Num("0".into()));
         assert_eq!(boolean(&decision, "cost_known"), false);
-        let equal = acceptance(&before, &before, 0, None, None, None, &[]);
+        let equal = acceptance(&before, &before, 0, None, None, None, &[], COST_BETA0, COST_BETA1);
         assert_eq!(boolean(&equal, "admit"), false);
         assert_eq!(boolean(&equal, "admit"), check_gain(&before, &before));
         assert_eq!(boolean(&equal, "legacy"), boolean(&equal, "admit"));
@@ -924,23 +928,23 @@ mod checks {
         let gain = 1i64;
         let limit = COST_BETA0 + COST_BETA1 * gain;
         assert_eq!(limit, 64);
-        let over = acceptance(&before, &after, 0, Some(1000), Some(1000 + limit as u64 + 1), None, &[]);
+        let over = acceptance(&before, &after, 0, Some(1000), Some(1000 + limit as u64 + 1), None, &[], COST_BETA0, COST_BETA1);
         assert!(!boolean(&over, "admit"));
         assert_eq!(text(&over, "reason"), "cost bound");
         assert_eq!(get(&over, "beta0"), &Num("0".into()));
         assert_eq!(get(&over, "beta1"), &Num("64".into()));
         assert_eq!(text(&over, "gain"), "1");
-        let inside = acceptance(&before, &after, 0, Some(1000), Some(1000 + limit as u64), None, &[]);
+        let inside = acceptance(&before, &after, 0, Some(1000), Some(1000 + limit as u64), None, &[], COST_BETA0, COST_BETA1);
         assert!(boolean(&inside, "admit"));
         assert_eq!(text(&inside, "reason"), "score");
         assert_eq!(get(&inside, "beta0"), &Num("0".into()));
         assert_eq!(get(&inside, "beta1"), &Num("64".into()));
         let tied = paired("2");
-        let saved = acceptance(&tied, &tied, 0, Some(50), Some(40), None, &[]);
+        let saved = acceptance(&tied, &tied, 0, Some(50), Some(40), None, &[], COST_BETA0, COST_BETA1);
         assert_eq!(text(&saved, "reason"), "lower cost");
         assert!(boolean(&saved, "admit"));
         assert!(40 - 50 <= COST_BETA0 + COST_BETA1 * 0);
-        let costly = acceptance(&tied, &tied, 0, Some(40), Some(50), None, &[]);
+        let costly = acceptance(&tied, &tied, 0, Some(40), Some(50), None, &[], COST_BETA0, COST_BETA1);
         assert_eq!(text(&costly, "reason"), "cost rose");
         assert!(!boolean(&costly, "admit"));
         assert!(50 - 40 > COST_BETA0 + COST_BETA1 * 0);
@@ -956,7 +960,7 @@ mod checks {
             hypothesis: "try a cache",
             diff_digest: digest,
         };
-        let first = acceptance(&score, &score, 3, None, None, Some(shape), &[]);
+        let first = acceptance(&score, &score, 3, None, None, Some(shape), &[], COST_BETA0, COST_BETA1);
         assert!(boolean(&first, "admit"));
         assert_eq!(text(&first, "reason"), "structural novelty");
         assert_eq!(text(&first, "gain"), "0");
@@ -965,7 +969,7 @@ mod checks {
             ("hypothesis", s("try a cache")),
             ("diff_digest", s(digest)),
         ]);
-        let second = acceptance(&score, &score, 3, None, None, Some(shape), &[seen]);
+        let second = acceptance(&score, &score, 3, None, None, Some(shape), &[seen], COST_BETA0, COST_BETA1);
         assert!(!boolean(&second, "admit"));
         assert_eq!(text(&second, "reason"), "duplicate shape");
         let novel = CandidateShape {
@@ -977,13 +981,13 @@ mod checks {
             ("component", s("skills")),
             ("hypothesis", s("try a cache")),
             ("diff_digest", s(digest)),
-        ])]);
+        ])], COST_BETA0, COST_BETA1);
         assert!(boolean(&third, "admit"));
         assert_eq!(text(&third, "reason"), "structural novelty");
-        let unmeasured = acceptance(&score, &score, 0, None, None, Some(novel), &[]);
+        let unmeasured = acceptance(&score, &score, 0, None, None, Some(novel), &[], COST_BETA0, COST_BETA1);
         assert!(!boolean(&unmeasured, "admit"));
         assert_eq!(text(&unmeasured, "reason"), "score");
-        let noisy = acceptance(&paired("1"), &paired("2"), 3, None, None, Some(novel), &[]);
+        let noisy = acceptance(&paired("1"), &paired("2"), 3, None, None, Some(novel), &[], COST_BETA0, COST_BETA1);
         assert!(!boolean(&noisy, "admit"));
         assert_eq!(text(&noisy, "reason"), "floor");
     }

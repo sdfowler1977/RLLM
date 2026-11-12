@@ -92,6 +92,9 @@ const SPLIT_KEYS: &[&str] = &[
     "beta1",
     "accept_reason",
 ];
+/// A control row is sealed with the ledger line and is not a trial.
+/// `stop` is the only marker. The record schema allows it on every row and requires nothing when it is absent.
+const CONTROL_KEYS: &[&str] = &["control"];
 // Three candidates are a pool, and three refusals still leave one edit of the
 // annealed cap of four. The slots are judged in order. There is no thread schedule
 // in the ledger. One worktree per slot: a fourth live worktree is refused.
@@ -99,6 +102,13 @@ pub(crate) const CANDIDATE_MAX: usize = 3;
 pub(crate) const WORKTREE_MAX: usize = 3;
 pub(crate) const EVOLVE_BRANCH: &str = "rllm-evolve";
 const HARNESS_FILE: &str = "rllm-harness.txt";
+/// One file in the run store. The refine loop reads it and never deletes it.
+pub(crate) const STOP_FILE: &str = "STOP";
+/// Notice text and the durable row when a regular STOP file is present.
+pub(crate) const STOP_SENTENCE: &str =
+    "refused because the STOP file is present; the incumbent was kept";
+/// A symlink named STOP is refused with this sentence and left in place.
+pub(crate) const STOP_SYMLINK: &str = "STOP file must be a regular non-symlink file";
 const SOURCE_ABSENT: &str = "absent";
 const GIT_WALL_SECS: u64 = 15;
 const GIT_OUTPUT_MAX: usize = 64 * 1024;
@@ -177,7 +187,21 @@ fn validate_fields(value: &Json, expected_run: &str) -> Result<()> {
         return Err("verdict must be accepted or rejected".into());
     }
     let round = number_field(value, "round")?;
-    if !(1..=1024).contains(&round) {
+    // A STOP control row may record round 0. That means the caller closed no
+    // round. Writing 1 there would name a round that was never opened.
+    // A trial row stays in 1..=1024.
+    let control_stop = if get(value, "control") == &Null {
+        false
+    } else if text(value, "control") == "stop" {
+        true
+    } else {
+        return Err("control must be stop".into());
+    };
+    if control_stop {
+        if round > 1024 {
+            return Err("round is outside 0..=1024".into());
+        }
+    } else if !(1..=1024).contains(&round) {
         return Err("round is outside 1..=1024".into());
     }
     for key in ["cost_before", "cost_after"] {
@@ -189,12 +213,23 @@ fn validate_fields(value: &Json, expected_run: &str) -> Result<()> {
     }
     let refused = matches!(leakage.as_str(), "task_text" | "answer_text" | "inert");
     let decision_text = text(value, "decision");
+    // The STOP sentence is accepted only on the control row that names hypothesis STOP.
+    // Any other row that copies the sentence is an ordinary record and must carry scores.
+    // `control_stop` was parsed with the round check above.
+    if control_stop && !score_missing(value) {
+        return Err("a control row must not record a score".into());
+    }
+    let stop_row = control_stop && hypothesis == "STOP" && decision_text == STOP_SENTENCE;
+    if control_stop && !stop_row {
+        return Err("a control row must pair the STOP hypothesis with the STOP decision".into());
+    }
     let unscored = refused
         || (score_missing(value)
             && (decision_text.starts_with("refused because component ")
                 || decision_text.starts_with("workspace is not")
                 // Distinct from the work-tree sentence, and still written before any score exists.
-                || decision_text == "workspace identity does not match the approved root"));
+                || decision_text == "workspace identity does not match the approved root"
+                || stop_row));
     if refused && !score_missing(value) {
         return Err("a leakage refusal must not record a score".into());
     }
@@ -310,6 +345,7 @@ fn edit_keys(sealed: bool) -> Vec<&'static str> {
     keys.extend_from_slice(POLICY_KEYS);
     keys.extend_from_slice(ROW_EXTRA);
     keys.extend_from_slice(SPLIT_KEYS);
+    keys.extend_from_slice(CONTROL_KEYS);
     if sealed {
         keys.extend_from_slice(&["schema", "previous", "revision"]);
     }
@@ -605,8 +641,7 @@ pub(crate) fn annotate(mut edit: Json, leakage: &str) -> Result<Json> {
     validate_edit(&edit, &text(&edit, "run_digest"))?;
     Ok(edit)
 }
-/// A refusal written before scoring. The row keeps costs and the verdict, and omits both scores.
-pub(crate) fn unscored(
+fn refusal_row(
     component: &str,
     hypothesis: &str,
     diff_digest: &str,
@@ -616,7 +651,7 @@ pub(crate) fn unscored(
     run_digest: &str,
     leakage: &str,
     decision: &str,
-) -> Result<Json> {
+) -> Json {
     let mut fields = vec![
         ("component", s(component)),
         ("hypothesis", s(hypothesis)),
@@ -633,7 +668,31 @@ pub(crate) fn unscored(
     if !leakage.is_empty() {
         fields.push(("leakage", s(leakage)));
     }
-    let value = obj(fields);
+    obj(fields)
+}
+/// A refusal written before scoring. The row keeps costs and the verdict, and omits both scores.
+pub(crate) fn unscored(
+    component: &str,
+    hypothesis: &str,
+    diff_digest: &str,
+    cost_before: u64,
+    cost_after: u64,
+    round: u64,
+    run_digest: &str,
+    leakage: &str,
+    decision: &str,
+) -> Result<Json> {
+    let value = refusal_row(
+        component,
+        hypothesis,
+        diff_digest,
+        cost_before,
+        cost_after,
+        round,
+        run_digest,
+        leakage,
+        decision,
+    );
     validate_edit(&value, run_digest)?;
     Ok(value)
 }
@@ -679,7 +738,12 @@ pub(crate) fn records_of(document: &str) -> Result<Vec<Json>> {
 pub(crate) fn falsified(records: &[Json], run_digest: &str) -> Vec<Json> {
     records
         .iter()
-        .filter(|record| text(record, "run_digest") == run_digest && text(record, "verdict") == "rejected")
+        .filter(|record| {
+            text(record, "run_digest") == run_digest
+                && text(record, "verdict") == "rejected"
+                // A STOP control row is rejected, and it was never a trial.
+                && text(record, "control") != "stop"
+        })
         .cloned()
         .collect()
 }
@@ -687,6 +751,10 @@ pub(crate) fn component_counts(records: &[Json], run_digest: &str) -> Vec<(Strin
     let mut counts = [0usize; COMPONENTS.len()];
     for record in records {
         if text(record, "run_digest") != run_digest {
+            continue;
+        }
+        // A STOP control row names a component but it was never a trial.
+        if text(record, "control") == "stop" {
             continue;
         }
         if let Some(index) = component_index(&text(record, "component")) {
@@ -708,6 +776,10 @@ pub(crate) fn budget_for(records: &[Json], run_digest: &str, round: u64) -> (u64
     let mut spent = 0u64;
     for record in records {
         if text(record, "run_digest") != run_digest {
+            continue;
+        }
+        // A STOP control row names a round but it was never a trial.
+        if text(record, "control") == "stop" {
             continue;
         }
         let Ok(id) = number_field(record, "round") else { continue };
@@ -750,6 +822,10 @@ pub(crate) fn prior_rejection(records: &[Json], run_digest: &str, component: &st
             || text(record, "verdict") != "rejected"
             || text(record, "hypothesis") != hypothesis
         {
+            continue;
+        }
+        // A STOP control row reuses a component and hypothesis, and it was never a trial.
+        if text(record, "control") == "stop" {
             continue;
         }
         if let Ok(round) = number_field(record, "round") {
@@ -828,21 +904,22 @@ pub(crate) fn live_components(records: &[Json], run_digest: &str) -> Vec<&'stati
         .filter(|name| pruned.iter().all(|pruned_name| pruned_name != name))
         .collect()
 }
-// Every row stores measured lengths. cost_known is false when a row had no pair
-// of costs to compare, and those lengths are not a later comparison.
+// Incumbent cost is the run-global incumbent length: `cost_after` on the latest
+// accepted row for this run, whichever component that row names. `incumbent_text`
+// is one body for the run (`first_refinement.instructions`, else the active
+// agent's `instructions`). The component label is not the text being replaced,
+// so a plugins accept is the length a later prompt or skills candidate is scored
+// against. That length is stored even when the accepted row had no earlier pair
+// (`cost_known` false). A missing `cost_after` is unknown and is not borrowed
+// from an older accepted row.
 pub(crate) fn incumbent_cost(records: &[Json], run_digest: &str) -> Option<u64> {
-    records.iter().rev().find_map(|record| {
-        if text(record, "run_digest") != run_digest || text(record, "verdict") != "accepted" {
-            return None;
-        }
-        if get(record, "cost_known") != &Bool(true) {
-            return None;
-        }
-        match get(record, "cost_after") {
-            Num(value) => value.parse().ok(),
-            _ => None,
-        }
-    })
+    let record = records.iter().rev().find(|record| {
+        text(record, "run_digest") == run_digest && text(record, "verdict") == "accepted"
+    })?;
+    match get(record, "cost_after") {
+        Num(value) => value.parse().ok(),
+        _ => None,
+    }
 }
 pub(crate) fn untried_components(records: &[Json], run_digest: &str) -> Vec<&'static str> {
     let tried = component_counts(records, run_digest);
@@ -1516,6 +1593,68 @@ fn library_error(error: String) -> String {
     } else {
         format!("{error}; existing history was left unchanged")
     }
+}
+
+/// `true` when the run store holds a regular `STOP` file. Missing is `false`.
+/// A symlink or other non-file is `STOP_SYMLINK` and is not removed. An absent
+/// store is not created. The file is opened with `O_NOFOLLOW` and not read as a ledger.
+pub(crate) fn stop_requested(root: &str) -> Result<bool> {
+    if root.is_empty() {
+        return Ok(false);
+    }
+    if root.len() > PATH_MAX || root.contains('\0') {
+        return Err("ledger root is empty or over the path cap".into());
+    }
+    let root_path = Path::new(root);
+    match fs::symlink_metadata(root_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+            return Err("ledger root must be a real directory".into());
+        }
+        Ok(_) => {}
+    }
+    let name = file_name(STOP_FILE)?;
+    let path = root_path.join(&name);
+    if path.parent() != Some(root_path) {
+        return Err("ledger path must stay inside its root".into());
+    }
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => return Err(STOP_SYMLINK.into()),
+        Ok(meta) if meta.len() > FILE_MAX => return Err("STOP file exceeds its size cap".into()),
+        Ok(_) => {}
+    }
+    match OpenOptions::new().read(true).custom_flags(NOFOLLOW | CLOEXEC).open(&path) {
+        Ok(file) => {
+            drop(file);
+            Ok(true)
+        }
+        Err(error) if error.raw_os_error() == Some(40) => Err(STOP_SYMLINK.into()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Unscored control row that names `STOP_SENTENCE`. The closed round keeps its own row.
+/// `round` is that closed round. `0` means the caller closed nothing; the row keeps 0
+/// so it does not claim round 1. A trial row cannot use 0.
+/// `control` is `stop`, so the component census does not treat this row as a trial.
+pub(crate) fn stop_edit(run_digest: &str, round: u64, incumbent: &str) -> Result<Json> {
+    let mut value = refusal_row(
+        "prompt",
+        "STOP",
+        &diff_digest(incumbent, STOP_FILE),
+        incumbent.len() as u64,
+        incumbent.len() as u64,
+        round,
+        run_digest,
+        "",
+        STOP_SENTENCE,
+    );
+    put(&mut value, "control", s("stop"));
+    validate_edit(&value, run_digest)?;
+    Ok(value)
 }
 
 /// Load the sealed ledger file and the experience library into a new process.
@@ -2518,10 +2657,12 @@ mod checks {
         assert_eq!(get(&records[1], "cost_known"), &Bool(false));
         assert_eq!(text(&records[1], "decision"), "cost not recorded");
         assert_eq!(text(&records[1], "verdict"), "rejected");
-        assert!(incumbent_cost(&records, RUN).is_none());
+        // The rejected row is not the incumbent. The accepted legacy row's measured
+        // cost_after is, even though that row never set cost_known.
+        assert_eq!(incumbent_cost(&records, RUN), Some("legacy row".len() as u64));
         let measured = edit("prompt", "lengths only", &diff_digest("a", "b"), 1, 2, 4, 11, "accepted", 3, RUN).unwrap();
         document = text(&append_document(&document, &measured, RUN).unwrap(), "document");
-        assert!(incumbent_cost(&records_of(&document).unwrap(), RUN).is_none());
+        assert_eq!(incumbent_cost(&records_of(&document).unwrap(), RUN), Some(11));
         let mut known = edit("prompt", "kept", &diff_digest("a", "b"), 1, 2, 4, 11, "accepted", 4, RUN).unwrap();
         put(&mut known, "cost_known", Bool(true));
         document = text(&append_document(&document, &known, RUN).unwrap(), "document");
@@ -2709,6 +2850,277 @@ mod checks {
         assert!(untried_components(&records, RUN).is_empty());
         assert_eq!(reserved_slot_refusal(&records, RUN, "prompt", delta), None);
         assert_eq!(reserved_slot_refusal(&records, RUN, "subagents", delta), None);
+    }
+
+    fn budget_if_control_rows_count(records: &[Json], run_digest: &str, round: u64) -> (u64, u64) {
+        let mut prior = Vec::new();
+        let mut spent = 0u64;
+        for record in records {
+            if text(record, "run_digest") != run_digest {
+                continue;
+            }
+            let Ok(id) = number_field(record, "round") else { continue };
+            if id == round {
+                spent += 1;
+            } else if !prior.contains(&id) {
+                prior.push(id);
+            }
+        }
+        let budget = annealed_budget(prior.len() as u64);
+        (budget, budget.saturating_sub(spent))
+    }
+
+    fn falsified_if_control_rows_count(records: &[Json], run_digest: &str) -> Vec<Json> {
+        records
+            .iter()
+            .filter(|record| text(record, "run_digest") == run_digest && text(record, "verdict") == "rejected")
+            .cloned()
+            .collect()
+    }
+
+    fn prior_rejection_if_control_rows_count(
+        records: &[Json],
+        run_digest: &str,
+        component: &str,
+        hypothesis: &str,
+    ) -> Option<u64> {
+        let mut found = None;
+        for record in records {
+            if text(record, "run_digest") != run_digest
+                || text(record, "component") != component
+                || text(record, "verdict") != "rejected"
+                || text(record, "hypothesis") != hypothesis
+            {
+                continue;
+            }
+            if let Ok(round) = number_field(record, "round") {
+                if found.is_none() {
+                    found = Some(round);
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn stop_control_row_is_not_a_trial_for_budget_falsified_or_prior_rejection() {
+        let round = 2u64;
+        let trial = edit("skills", "real attempt", &diff_digest("a", "real attempt"), 1, 1, 4, 4, "rejected", round, RUN).unwrap();
+        let stop = stop_edit(RUN, round, "incumbent").unwrap();
+        let genuine_stop = edit("prompt", "STOP", &diff_digest("a", "STOP"), 1, 1, 4, 4, "rejected", round, RUN).unwrap();
+        let genuine_other = edit(
+            "prompt",
+            "already tried",
+            &diff_digest("a", "already tried"),
+            1,
+            1,
+            4,
+            4,
+            "rejected",
+            3,
+            RUN,
+        )
+        .unwrap();
+        let without = vec![trial.clone()];
+        let mut with_stop = without.clone();
+        with_stop.push(stop.clone());
+        let counted_without = budget_if_control_rows_count(&without, RUN, round);
+        let counted_with = budget_if_control_rows_count(&with_stop, RUN, round);
+        assert_ne!(
+            counted_without, counted_with,
+            "counting the STOP row changes the budget tuple"
+        );
+        assert_eq!(budget_for(&without, RUN, round), counted_without);
+        assert_eq!(
+            budget_for(&with_stop, RUN, round),
+            budget_for(&without, RUN, round),
+            "excluding the STOP row leaves the budget tuple unchanged"
+        );
+        assert_eq!(budget_for(&with_stop, RUN, round).1, counted_without.1);
+        let mut with_genuine = without.clone();
+        with_genuine.push(genuine_other.clone());
+        assert_ne!(
+            budget_for(&with_genuine, RUN, 3),
+            budget_for(&without, RUN, 3),
+            "a real rejected trial still spends a slot"
+        );
+        let stop_only = vec![stop_edit(RUN, round, "incumbent").unwrap()];
+        let empty: Vec<Json> = Vec::new();
+        assert_ne!(
+            budget_if_control_rows_count(&stop_only, RUN, 5),
+            budget_if_control_rows_count(&empty, RUN, 5),
+            "a STOP row in another round anneals the budget while it is counted"
+        );
+        assert_eq!(budget_for(&stop_only, RUN, 5), budget_for(&empty, RUN, 5));
+        let listed = vec![genuine_stop.clone(), stop.clone(), genuine_other.clone()];
+        let before = falsified_if_control_rows_count(&listed, RUN);
+        assert!(before.iter().any(|record| text(record, "control") == "stop"));
+        assert!(before.iter().any(|record| text(record, "hypothesis") == "already tried"));
+        assert!(before.iter().any(|record| text(record, "hypothesis") == "STOP" && text(record, "control") != "stop"));
+        let after = falsified(&listed, RUN);
+        assert!(after.iter().all(|record| text(record, "control") != "stop"));
+        assert!(after.iter().any(|record| text(record, "hypothesis") == "already tried"));
+        assert!(after.iter().any(|record| text(record, "hypothesis") == "STOP"));
+        assert_eq!(after.len(), 2);
+        let stop_ledger = vec![stop.clone()];
+        assert_eq!(
+            prior_rejection_if_control_rows_count(&stop_ledger, RUN, "prompt", "STOP"),
+            Some(round),
+            "the control row refuses hypothesis STOP while it is counted"
+        );
+        assert_eq!(prior_rejection(&stop_ledger, RUN, "prompt", "STOP"), None);
+        let between = vec![trial.clone(), stop.clone()];
+        assert_eq!(prior_rejection(&between, RUN, "prompt", "STOP"), None);
+        assert_eq!(
+            prior_rejection_if_control_rows_count(&between, RUN, "prompt", "STOP"),
+            Some(round)
+        );
+        let real = vec![genuine_stop.clone()];
+        assert_eq!(prior_rejection(&real, RUN, "prompt", "STOP"), Some(round));
+        assert_eq!(prior_rejection_if_control_rows_count(&real, RUN, "prompt", "STOP"), Some(round));
+        assert_eq!(
+            rejection_refusal("prompt", round),
+            "refused because component prompt with that hypothesis was already rejected in round 2"
+        );
+    }
+
+    #[test]
+    fn stop_control_round_zero_means_nothing_was_closed() {
+        let row = stop_edit(RUN, 0, "kept").unwrap();
+        assert_eq!(number_field(&row, "round").unwrap(), 0);
+        assert_eq!(text(&row, "control"), "stop");
+        let saved = append_document("", &row, RUN).unwrap();
+        let records = records_of(&text(&saved, "document")).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(number_field(&records[0], "round").unwrap(), 0);
+        let trial = edit("prompt", "a real round", &diff_digest("a", "b"), 0, 1, 1, 1, "accepted", 0, RUN);
+        let error = trial.unwrap_err();
+        assert!(error.contains("outside 1..=1024"), "{error}");
+        let closed = stop_edit(RUN, 4, "kept").unwrap();
+        assert_eq!(number_field(&closed, "round").unwrap(), 4);
+    }
+
+    #[test]
+    fn stop_control_row_stays_in_the_library_index_and_historical_render() {
+        // Round 0 is legal on a control row and refused on a trial (`validate_fields`).
+        // `index_of` copies key, revision, and run_digest and does not read `control`,
+        // and `library_index` maps every record through that function. Dropping the
+        // control row from a stored index then disagrees with the map.
+        let stop = stop_edit(RUN, 0, "kept").unwrap();
+        let mut document = text(&append_document("", &stop, RUN).unwrap(), "document");
+        let trial = edit(
+            "skills",
+            "real attempt",
+            &diff_digest("a", "real attempt"),
+            1,
+            1,
+            4,
+            4,
+            "rejected",
+            1,
+            RUN,
+        )
+        .unwrap();
+        document = text(&append_document(&document, &trial, RUN).unwrap(), "document");
+        let records = records_of(&document).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(number_field(&records[0], "round").unwrap(), 0);
+        assert_eq!(text(&records[0], "control"), "stop");
+        assert_eq!(text(&records[0], "hypothesis"), "STOP");
+        let mapped: Vec<Json> = records
+            .iter()
+            .map(|record| {
+                obj(vec![
+                    ("key", s(&text(record, "key"))),
+                    ("revision", s(&text(record, "revision"))),
+                    ("run_digest", s(&text(record, "run_digest"))),
+                ])
+            })
+            .collect();
+        assert_eq!(library_index(&records), mapped);
+        assert_eq!(mapped.len(), records.len());
+        assert_eq!(text(&mapped[0], "run_digest"), RUN);
+        assert_eq!(text(&mapped[0], "revision"), text(&records[0], "revision"));
+        assert_eq!(text(&mapped[0], "key"), "");
+        assert!(!index_disagrees(&Arr(mapped.clone()), &records));
+        assert!(index_disagrees(&Arr(mapped[1..].to_vec()), &records));
+        let section = render_historical(&records, "task t");
+        assert!(section.contains("HISTORICAL EXPERIENCE"), "{section}");
+        assert!(section.contains(&text(&records[0], "revision")), "{section}");
+        assert!(section.contains(&text(&records[1], "revision")), "{section}");
+        let rejected = falsified(&records, RUN);
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(text(&rejected[0], "hypothesis"), "real attempt");
+        assert!(rejected.iter().all(|row| text(row, "control") != "stop"));
+        assert_eq!(component_counts(&records, RUN), vec![("skills".to_string(), 1)]);
+        assert_eq!(budget_for(&records, RUN, 2), (3, 3));
+        assert_eq!(prior_rejection(&records, RUN, "prompt", "STOP"), None);
+        assert_eq!(prior_rejection(&records, RUN, "skills", "real attempt"), Some(1));
+    }
+
+    #[test]
+    fn stop_row_does_not_count_as_a_tried_component() {
+        let stalled: Vec<Json> = (1..=STALL_WINDOW as u64)
+            .map(|round| flat("tools", &format!("tools {round}"), round, 4, 5))
+            .collect();
+        let delta = 1u64;
+        assert!(progress_stalled(&stalled, RUN, delta));
+        let before_counts = component_counts(&stalled, RUN);
+        let before_untried = untried_components(&stalled, RUN);
+        assert!(before_untried.contains(&"prompt"));
+        assert_eq!(reserved_slot_refusal(&stalled, RUN, "prompt", delta), None);
+        let stop = stop_edit(RUN, STALL_WINDOW as u64, "incumbent").unwrap();
+        let mut with_stop = stalled.clone();
+        with_stop.push(stop);
+        assert_eq!(component_counts(&with_stop, RUN), before_counts);
+        assert_eq!(untried_components(&with_stop, RUN), before_untried);
+        assert_eq!(
+            reserved_slot_refusal(&with_stop, RUN, "prompt", delta),
+            None,
+            "a STOP row must not refuse a prompt candidate that was never tried"
+        );
+    }
+
+    #[test]
+    fn stop_control_row_seals_and_a_scored_control_row_is_refused() {
+        let row = stop_edit(RUN, 1, "kept").unwrap();
+        assert_eq!(text(&row, "control"), "stop");
+        assert_eq!(text(&row, "hypothesis"), "STOP");
+        let saved = append_document("", &row, RUN).unwrap();
+        let records = records_of(&text(&saved, "document")).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(text(&records[0], "control"), "stop");
+        assert_eq!(text(&records[0], "decision"), STOP_SENTENCE);
+        assert_eq!(get(&records[0], "score_before"), &Null);
+        assert_eq!(get(&records[0], "score_after"), &Null);
+        assert_eq!(text(&records[0], "verdict"), "rejected");
+        let mut scored = edit("prompt", "STOP", &diff_digest("a", "b"), 0, 1, 1, 1, "rejected", 1, RUN).unwrap();
+        put(&mut scored, "control", s("stop"));
+        put(&mut scored, "decision", s(STOP_SENTENCE));
+        let error = append_document("", &scored, RUN).unwrap_err();
+        assert!(error.contains("must not record a score"), "{error}");
+    }
+
+    #[test]
+    fn stop_sentence_on_an_unrelated_row_fails_validation() {
+        let row = obj(vec![
+            ("component", s("skills")),
+            ("hypothesis", s("unrelated hypothesis")),
+            ("diff_digest", s(&diff_digest("a", "b"))),
+            ("cost_before", n(1)),
+            ("cost_after", n(1)),
+            ("cost_change", Num("0".into())),
+            ("verdict", s("rejected")),
+            ("accepted", Bool(false)),
+            ("round", n(1)),
+            ("run_digest", s(RUN)),
+            ("decision", s(STOP_SENTENCE)),
+        ]);
+        let error = append_document("", &row, RUN).unwrap_err();
+        assert!(
+            error.contains("score_before"),
+            "an unrelated row carrying the STOP sentence must fail validation, got {error}"
+        );
     }
 
     #[test]

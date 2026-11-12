@@ -182,6 +182,24 @@ fn gate_candidate(run:&mut Json,reply:&str)->Result<bool>{
  record_unscored(run,&critic.component,&critic.claim,reply,&critic.diff,&critic.leakage,&critic.decision)?;
  Ok(true)
 }
+fn refuse_for_stop(st:&mut Json,mut run:Json,index:u64)->Result<Option<Json>>{
+ // The caller already sealed this round. Leave that row alone. Keep the composition
+ // the round selected, and do not open a round that would replace it.
+ // `index` is that closed round. 0 means nothing was closed, and the control row
+ // stores 0. Promoting 0 to 1 would name a round that was never opened.
+ // A trial row still has to be in 1..=1024.
+ let incumbent=incumbent_text(&run);
+ if text(&run,"composition").is_empty(){put(&mut run,"composition",s(&incumbent));}
+ put(&mut run,"incumbent_kept",Bool(true));
+ put(&mut run,"round_note",s(crate::rrsi::STOP_SENTENCE));
+ let digest=text(&run,"run_digest");
+ if digest.len()==64{
+  if let Ok(edit)=crate::rrsi::stop_edit(&digest,index,&incumbent){
+   commit_edit(&mut run,&edit);
+  }
+ }
+ stop_refused(st,run)
+}
 fn stop_refused(st:&mut Json,run:Json)->Result<Option<Json>>{
  let note=text(&run,"round_note");
  put(st,"task_run",run);
@@ -270,6 +288,12 @@ fn resume_durable_ledger(run:&mut Json)->Result<()>{
  put(run,"edit_ledger_root",s(&root));
  put(run,"edit_ledger_path",s(&name));
  put(run,"library_index",get(&resumed,"library_index").clone());
+ // Same refine entry the Android client already calls. The report is read from
+ // the sealed rows and is not written back to the ledger.
+ let digest=text(&resumed,"run_digest");
+ let document=text(&resumed,"edit_ledger");
+ let records=crate::rrsi::records_of(&document).unwrap_or_default();
+ put(run,"rejudge",rejudge(&records,&digest));
  Ok(())
 }
 fn record_settled_library(run:&mut Json){
@@ -453,7 +477,7 @@ pub(super) fn event_for(st:&mut Json,a:&str,inputs:&Json)->Result<Json>{
  "capture_file"=>{let mut args=get(st,"edit").clone();if boolean(&args,"capture_scripts"){put(&mut args,"scripts",s("inline"));}let pending=obj(vec![("tool",s("capture")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "compare_files"=>{if text(st,"dialog")!="investigation"{return Err("Open File investigation before comparing paths".into());}if interaction::locked(st){return Err("Finish or cancel the current operation before comparing paths".into());}let e=get(st,"edit");let mut args=obj(vec![("path",s(&text(e,"path"))),("other",s(&text(e,"other")))]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("compare")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "inspect_file"=>{let e=get(st,"edit");let mut args=obj(vec![("path",get(e,"path").clone())]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("inspect")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
- "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));let mut task_run=obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]);if a=="refine"{let workspace=text(st,"approval_root");if !workspace.is_empty(){match crate::rrsi::require_recorded_worktree(std::path::Path::new(&workspace),&text(st,"approval_root_identity")){Ok(root)=>{let bound=crate::rrsi::workspace_text(&root)?;put(&mut task_run,"workspace",s(&bound));if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&bound)){put(&mut task_run,"source_digest",s(&digest));}}Err(error)=>{put(&mut task_run,"workspace",s(&workspace));if error!="workspace identity does not match the approved root"{if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&workspace)){put(&mut task_run,"source_digest",s(&digest));}}}}}resume_durable_ledger(&mut task_run)?;}put(&mut next,"task_run",task_run);if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
+ "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));let mut task_run=obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]);if a=="refine"{let workspace=text(st,"approval_root");if !workspace.is_empty(){match crate::rrsi::require_recorded_worktree(std::path::Path::new(&workspace),&text(st,"approval_root_identity")){Ok(root)=>{let bound=crate::rrsi::workspace_text(&root)?;put(&mut task_run,"workspace",s(&bound));if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&bound)){put(&mut task_run,"source_digest",s(&digest));}}Err(error)=>{put(&mut task_run,"workspace",s(&workspace));if error!="workspace identity does not match the approved root"{if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&workspace)){put(&mut task_run,"source_digest",s(&digest));}}}}}resume_durable_ledger(&mut task_run)?;if let Some(effect)=resume_stop(st,&task_run)?{return Ok(effect);}}put(&mut next,"task_run",task_run);if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
  "refinement_review"|"refinement_discard_review"=>{
   completed_refinement(st)?;
   put(st,"dialog",s(a));
@@ -690,7 +714,7 @@ pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
    let cap=number(&run,"refinement_rounds");
    let index=round_index_of(&run);
    if cap>=3 && index<cap as u64{return open_next_round(st,run,index);}
-   return queue_evaluation(st,run,"evaluation_base");
+   return handoff_or_stop(st,run,index);
   }
  }
  match phase.as_str(){
@@ -736,7 +760,7 @@ pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
   "compose"=>{
    if gate_candidate(&mut run,reply)?{return stop_refused(st,run);}
    put(&mut run,"composition",s(reply));
-   if get(&run,"baseline_score")==&Null{return queue_evaluation(st,run,"evaluation_base");}
+   if get(&run,"baseline_score")==&Null{let index=round_index_of(&run);return handoff_or_stop(st,run,index);}
    put(&mut run,"phase",s("verify"));
   },
   _=>return Err("Unknown refinement phase".into())
@@ -940,7 +964,9 @@ fn judged_acceptance(run:&Json,reference:&Json,selected:&Json,reply:&str,prior:&
  let (component,claim,body)=declared_edit(reply);
  let hypothesis=improvement::stored_hypothesis(&claim,run);
  let diff=crate::rrsi::diff_digest(prior,edit_body(reply,&claim,&body));
- improvement::acceptance(reference,selected,floor,cost_before,cost_after,Some(improvement::CandidateShape{component:&component,hypothesis:&hypothesis,diff_digest:&diff}),records)
+ // `records` is the ledger as of this candidate: `edit_ledger` is read before the row is appended.
+ // rejudge passes that same prefix, `records[0..i]`, when it judges row i.
+ improvement::acceptance(reference,selected,floor,cost_before,cost_after,Some(improvement::CandidateShape{component:&component,hypothesis:&hypothesis,diff_digest:&diff}),records,improvement::COST_BETA0,improvement::COST_BETA1)
 }
 fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:&str,round:u64)->Json{
  let digest=refinement_digest(run);
@@ -948,6 +974,9 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
  let (budget,remaining)=crate::rrsi::budget_for(&records,&digest,round);
  let floor=improvement::noise_floor(run,&improvement::task_key(&text(run,"task")),&improvement::verifier_key(get(run,"response_checks")));
  let new_len=selected_text.len() as u64;
+ // The incumbent length is the latest accepted row's measured cost_after, including
+ // a row that itself had no earlier pair. new_len is this candidate's measured length.
+ // Both sides present is a known pair, and acceptance sets cost_known.
  let costs=crate::rrsi::incumbent_cost(&records,&digest).map(|before|(before,new_len));
  let prior=incumbent_text(run);
  let decision=judged_acceptance(run,reference,selected,selected_text,&prior,floor,costs.map(|pair|pair.0),costs.map(|pair|pair.1),&records);
@@ -1037,6 +1066,94 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
  if let Some(verdict)=verdict_override{put(&mut policy,"verdict",s(verdict));}
  policy
 }
+fn score_pair(before:u64,after:u64)->(Json,Json){
+ let arm=|passed:u64| obj(vec![("passed",Num(passed.to_string())),("total",Num("1".into())),("route",s("rejudge")),("context",s("rejudge"))]);
+ (arm(before),arm(after))
+}
+fn row_u64(row:&Json,key:&str)->Option<u64>{
+ match get(row,key){Num(text)=>text.parse().ok(),_=>None}
+}
+fn beta_i64(row:&Json,key:&str)->Option<i64>{
+ row_u64(row,key).and_then(|value| i64::try_from(value).ok())
+}
+/// Re-derive each stored decision for `run_digest`. Reads `score_before`,
+/// `score_after`, `cost_before`, `cost_after`, `noise_floor`, and `pool_status`
+/// from the rows. Calls `improvement::acceptance` and does not write history.
+/// A legacy row leaves `beta0`, `beta1`, and `accept_reason` null and uses the
+/// current constants. A row that carries one of those three keys without the
+/// others is reported and not filled in. A complete triple is judged with the
+/// row's own betas, passed through `improvement::acceptance`.
+fn rejudge(records:&[Json],run_digest:&str)->Json{
+ let mut differences=Vec::new();
+ let mut prior=Vec::new();
+ for (index,row) in records.iter().enumerate(){
+  if text(row,"run_digest")!=run_digest{continue;}
+  let beta0_present=get(row,"beta0")!=&Null;
+  let beta1_present=get(row,"beta1")!=&Null;
+  let reason_present=get(row,"accept_reason")!=&Null;
+  let present=[beta0_present,beta1_present,reason_present].iter().filter(|bit|**bit).count();
+  let incomplete=present!=0&&present!=3;
+  let sealed=if present==3{
+   match (beta_i64(row,"beta0"),beta_i64(row,"beta1")){
+    (Some(beta0),Some(beta1)) if !text(row,"accept_reason").is_empty()=>Some((beta0,beta1)),
+    _=>None,
+   }
+  }else{None};
+  let incomplete=incomplete||(present==3&&sealed.is_none());
+  let (beta0,beta1)=sealed.unwrap_or((improvement::COST_BETA0,improvement::COST_BETA1));
+  let mut verdict_differs=false;
+  let mut reason_differs=false;
+  let mut derived_verdict=String::new();
+  let mut derived_reason=String::new();
+  let recorded_verdict=text(row,"verdict");
+  let recorded_reason=if reason_present&&!incomplete{text(row,"accept_reason")}else{String::new()};
+  if let (Some(before),Some(after))=(row_u64(row,"score_before"),row_u64(row,"score_after")){
+   if !incomplete{
+    let (baseline,candidate)=score_pair(before,after);
+    let floor=row_u64(row,"noise_floor").unwrap_or(0);
+    let (cost_before,cost_after)=if get(row,"cost_known")==&Bool(true){
+     match (row_u64(row,"cost_before"),row_u64(row,"cost_after")){(Some(cost_before),Some(cost_after))=>(Some(cost_before),Some(cost_after)),_=>(None,None)}
+    }else{(None,None)};
+    let component=text(row,"component");
+    let hypothesis=text(row,"hypothesis");
+    let diff=text(row,"diff_digest");
+    let shape=improvement::CandidateShape{component:&component,hypothesis:&hypothesis,diff_digest:&diff};
+    // Row i is judged against `prior`, which is `records[0..i]`: the ledger as of that row.
+    // judged_acceptance reads `edit_ledger` before the candidate row is appended, the same prefix.
+    // Do not widen this to later rows or narrow it by dropping a predecessor.
+    let decision=improvement::acceptance(&baseline,&candidate,floor,cost_before,cost_after,Some(shape),&prior,beta0,beta1);
+    let admit=boolean(&decision,"admit");
+    derived_verdict=if admit{"accepted".into()}else{"rejected".into()};
+    derived_reason=text(&decision,"reason");
+    verdict_differs=derived_verdict!=recorded_verdict;
+    if sealed.is_some(){reason_differs=derived_reason!=text(row,"accept_reason");}
+   }
+  }
+  if incomplete||verdict_differs||reason_differs{
+   let mut entry=obj(vec![
+    ("index",Num(index.to_string())),
+    ("revision",s(&text(row,"revision"))),
+    ("round",get(row,"round").clone()),
+    ("recorded_verdict",s(&recorded_verdict)),
+    ("derived_verdict",s(&derived_verdict)),
+    ("verdict_differs",Bool(verdict_differs)),
+    ("recorded_reason",if recorded_reason.is_empty(){Null}else{s(&recorded_reason)}),
+    ("derived_reason",if derived_reason.is_empty(){Null}else{s(&derived_reason)}),
+    ("reason_differs",Bool(reason_differs)),
+    ("incomplete",Bool(incomplete)),
+    ("beta0_present",Bool(beta0_present)),
+    ("beta1_present",Bool(beta1_present)),
+    ("accept_reason_present",Bool(reason_present)),
+    ("beta1_used",if incomplete{Null}else{Num(beta1.to_string())}),
+   ]);
+   if get(row,"pool_status")!=&Null{put(&mut entry,"pool_status",get(row,"pool_status").clone());}
+   if get(row,"noise_floor")!=&Null{put(&mut entry,"noise_floor",get(row,"noise_floor").clone());}
+   differences.push(entry);
+  }
+  prior.push(row.clone());
+ }
+ obj(vec![("run_digest",s(run_digest)),("differences",Arr(differences))])
+}
 fn install_split(run:&mut Json,scored:&Json){
  for key in ["harness_digest","evolve_task_key","evolve_verifier","evolve_shape","held_out_task_key","held_out_verifier","ood_task_key","ood_verifier","ood_shape"]{
   if get(scored,key)!=&Null{put(run,key,get(scored,key).clone());}
@@ -1048,9 +1165,46 @@ fn install_split(run:&mut Json,scored:&Json){
 }
 // `index` is the round that just closed. first_refinement may be set here, so the
 // next id is index+1 and is not inferred after that write.
+// STOP is read here, after the caller has sealed that round and before this
+// function clears the round fields. A file that shows up during propose, probe,
+// compose, verify, or baseline waits until the row is durable. Nothing here
+// deletes the file.
+/// `Some` means STOP already settled the run. The caller returns that effect
+/// and does not open another refinement round or hand off to evaluation.
+fn stop_effect(st:&mut Json,run:Json,index:u64)->Result<Option<Option<Json>>>{
+ match crate::rrsi::stop_requested(&text(&run,"edit_ledger_root")){
+  Ok(false)=>Ok(None),
+  Ok(true)=>Ok(Some(refuse_for_stop(st,run,index)?)),
+  Err(error)=>Err(error),
+ }
+}
+fn handoff_or_stop(st:&mut Json,run:Json,index:u64)->Result<Option<Json>>{
+ if let Some(effect)=stop_effect(st,run.clone(),index)?{return Ok(effect);}
+ queue_evaluation(st,run,"evaluation_base")
+}
+fn ledger_round(run:&Json)->u64{
+ let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
+ let recorded=records.iter().map(|row| number(row,"round") as u64).max().unwrap_or(0);
+ recorded.max(round_index_of(run))
+}
+/// A resumed ledger whose STOP file is present records the control row and
+/// does not start the model. A run with no sealed ledger is not a resume.
+fn resume_stop(st:&mut Json,run:&Json)->Result<Option<Json>>{
+ if text(run,"run_digest").len()!=64 || text(run,"edit_ledger").is_empty(){return Ok(None);}
+ let Some(effect)=stop_effect(st,run.clone(),ledger_round(run))? else {return Ok(None);};
+ let mut stopped=get(st,"task_run").clone();
+ // Refine entry stamps phase baseline before any round exists. A stopped resume
+ // must not sit in that opening phase.
+ if text(&stopped,"phase")=="baseline" && get(&stopped,"baseline_score")==&Null{
+  put(&mut stopped,"phase",s("review"));
+  put(st,"task_run",stopped);
+ }
+ Ok(Some(effect.unwrap_or(Null)))
+}
 fn open_next_round(st:&mut Json,mut run:Json,index:u64)->Result<Option<Json>>{
+ if let Some(effect)=stop_effect(st,run.clone(),index)?{return Ok(effect);}
  let cap=number(&run,"refinement_rounds") as u64;
- if cap<3 || index>=cap{return queue_evaluation(st,run,"evaluation_base");}
+ if cap<3 || index>=cap{return handoff_or_stop(st,run,index);}
  if get(&run,"first_refinement")==&Null && get(&run,"selected_score")!=&Null && !text(&run,"composition").is_empty() && !boolean(&run,"incumbent_kept"){
   let kept=obj(vec![("instructions",get(&run,"composition").clone()),("reply",get(&run,"composition").clone()),("score",get(&run,"selected_score").clone())]);
   put(&mut run,"first_refinement",kept);
@@ -1116,7 +1270,7 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
   let verdict=if forced=="rejected"{"rejected"}else{"accepted"};
   if forced=="rejected"{put(&mut run,"round_note",s(&text(&policy,"decision")));}
   record(&mut run,verdict,&policy);
-  return queue_evaluation(st,run,"evaluation_base");
+  return handoff_or_stop(st,run,round_index as u64);
  }
  let first=get(&run,"first_refinement");
  if first!=&Null{
@@ -1144,7 +1298,7 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
    }
    return open_next_round(st,run,round_index as u64);
   }
-  return queue_evaluation(st,run,"evaluation_base");
+  return handoff_or_stop(st,run,round_index as u64);
  }
  let strict=boolean(&selected,"strict");
  let gained=improvement::check_gain(get(&run,"baseline_score"),&selected);
@@ -1156,12 +1310,13 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
   put(&mut run,"round_note",s(&note));
   record(&mut run,&verdict,&policy);
   if cap>=3 && round_index<cap{return open_next_round(st,run,round_index as u64);}
-  return queue_evaluation(st,run,"evaluation_base");
+  return handoff_or_stop(st,run,round_index as u64);
  }
  record(&mut run,"accepted",&policy);
  let first=obj(vec![("instructions",get(&run,"composition").clone()),("reply",get(&run,if retain_probe{"probe"}else{"replay"}).clone()),("score",selected)]);
  put(&mut run,"first_refinement",first);
  if cap>=3{return open_next_round(st,run,round_index as u64);}
+ if let Some(effect)=stop_effect(st,run.clone(),round_index as u64)?{return Ok(effect);}
  put(&mut run,"phase",s("propose"));
  for key in ["candidate","probe","probe_score","replay","replay_score","composition","rejected_revision","retained_probe","tool_trail"]{put(&mut run,key,Null);}
  match route(st,"subagent").and_then(|index|continue_refinement(st,run.clone(),index)){
@@ -1895,7 +2050,7 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   let dropped=marked(2,0b110,"same-route");
   let other=marked(2,0b11,"other-route");
   for (before,after) in [(&equal,&equal),(&equal,&up),(&up,&dropped),(&equal,&other),(&Null,&up)]{
-   let decision=improvement::acceptance(before,after,0,None,None,None,&[]);
+   let decision=improvement::acceptance(before,after,0,None,None,None,&[],improvement::COST_BETA0,improvement::COST_BETA1);
    assert_eq!(boolean(&decision,"admit"),improvement::check_gain(before,after));
    assert_eq!(boolean(&decision,"legacy"),boolean(&decision,"admit"));
    assert_eq!(boolean(&decision,"cost_known"),false);
@@ -1908,6 +2063,9 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   let refused=settled_run(&mut high_state,high_run);let row=last_edit(&refused);
   assert_eq!(text(&row,"verdict"),"rejected");
   assert_eq!(text(&row,"decision"),"refused because the cost rose while the score did not");
+  assert_eq!(text(&row,"accept_reason"),"cost rose");
+  assert_eq!(get(&row,"beta0"),&Num(improvement::COST_BETA0.to_string()));
+  assert_eq!(get(&row,"beta1"),&Num(improvement::COST_BETA1.to_string()));
   assert_eq!(text(&refused,"round_note"),"refused because the cost rose while the score did not");
   assert_eq!(get(&row,"cost_known"),&Bool(true));
   assert_eq!(number(&row,"cost_before"),10);
@@ -1923,22 +2081,148 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert_eq!(get(&row,"cost_known"),&Bool(true));
   assert_eq!(number(&row,"cost_before"),40);
   assert_eq!(number(&row,"cost_after"),10);
+  // The seeded accept stored cost_after 10 and left cost_known unset. That length is the incumbent.
   let absent=seed_edit("",9,"accepted",10,&kept,false);
   let (mut old_state,old_run)=policy_run(1,low_bits(1),low_bits(1),low_bits(1),&expensive,&expensive,&kept,&absent,&[],Null);
-  let unchanged=settled_run(&mut old_state,old_run);let row=last_edit(&unchanged);
-  assert_eq!(text(&row,"verdict"),"accepted");
-  assert_eq!(text(&row,"decision"),"cost not recorded");
-  assert_eq!(get(&row,"cost_known"),&Bool(false));
-  assert_eq!(get(&unchanged,"round_note"),&Null);
-  assert_eq!(number(&row,"cost_before"),kept.len());
+  let refused_growth=settled_run(&mut old_state,old_run);let row=last_edit(&refused_growth);
+  assert_eq!(text(&row,"verdict"),"rejected");
+  assert_eq!(text(&row,"decision"),"refused because the cost rose while the score did not");
+  assert_eq!(text(&row,"accept_reason"),"cost rose");
+  assert_eq!(get(&row,"cost_known"),&Bool(true));
+  assert_eq!(text(&refused_growth,"round_note"),"refused because the cost rose while the score did not");
+  assert_eq!(number(&row,"cost_before"),10);
   assert_eq!(number(&row,"cost_after"),expensive.len());
   let (mut kept_state,kept_run)=policy_run(2,low_bits(1),low_bits(1),low_bits(1),&cheap,&cheap,&kept,&absent,&[],first);
   let retained=settled_run(&mut kept_state,kept_run);
   assert_eq!(text(&retained,"composition"),kept);
   assert_eq!(text(&retained,"round_note"),"The first round was retained because the second did not add passing checks while preserving earlier passes under comparable conditions.");
   assert_eq!(text(&last_edit(&retained),"verdict"),"rejected");
-  assert_eq!(text(&last_edit(&retained),"decision"),"cost not recorded");
-  assert_eq!(get(&last_edit(&retained),"cost_known"),&Bool(false));
+  assert_eq!(text(&last_edit(&retained),"decision"),"score");
+  assert_eq!(get(&last_edit(&retained),"cost_known"),&Bool(true));
+  assert_eq!(number(&last_edit(&retained),"cost_before"),10);
+  assert_eq!(number(&last_edit(&retained),"cost_after"),cheap.len());
+ }
+ fn opened_measured_ledger()->(String,String){
+  let short="s".repeat(40);
+  let (mut first_state,first_run)=policy_run(1,low_bits(0),low_bits(1),low_bits(1),&short,&short,"old","",&[],Null);
+  let opened=settled_run(&mut first_state,first_run);
+  let opened_row=last_edit(&opened);
+  assert_eq!(text(&opened_row,"verdict"),"accepted");
+  assert_eq!(text(&opened_row,"decision"),"cost not recorded");
+  assert_eq!(get(&opened_row,"cost_known"),&Bool(false));
+  assert_eq!(number(&opened_row,"cost_after"),short.len());
+  (text(&opened,"edit_ledger"),short)
+ }
+ #[test] fn first_measured_round_has_no_incumbent_cost(){
+  let (ledger,short)=opened_measured_ledger();
+  assert!(!ledger.is_empty());
+  assert_eq!(short.len(),40);
+ }
+ #[test] fn measured_incumbent_cost_refuses_a_flat_score_that_grew(){
+  let (ledger,short)=opened_measured_ledger();
+  let limit=(improvement::COST_BETA0+improvement::COST_BETA1*0) as usize;
+  let flat_grown="g".repeat(short.len()+limit+49);
+  let (mut flat_state,flat_run)=policy_run(1,low_bits(1),low_bits(1),low_bits(1),&flat_grown,&flat_grown,&short,&ledger,&[],Null);
+  let flat=settled_run(&mut flat_state,flat_run);let row=last_edit(&flat);
+  assert_eq!(text(&row,"accept_reason"),"cost rose");
+  assert_eq!(text(&row,"verdict"),"rejected");
+  assert_eq!(text(&row,"decision"),"refused because the cost rose while the score did not");
+  assert_eq!(get(&row,"cost_known"),&Bool(true));
+  assert_eq!(number(&row,"cost_before"),short.len());
+  assert_eq!(number(&row,"cost_after"),flat_grown.len());
+  assert!(number(&row,"cost_after")-number(&row,"cost_before")>(improvement::COST_BETA0+improvement::COST_BETA1*0) as usize);
+ }
+ #[test] fn measured_incumbent_cost_refuses_a_gain_past_the_bound(){
+  let (ledger,short)=opened_measured_ledger();
+  let bound_gain="b".repeat(short.len()+improvement::COST_BETA1 as usize+1);
+  let (mut bound_state,bound_run)=policy_run(1,low_bits(0),low_bits(1),low_bits(1),&bound_gain,&bound_gain,&short,&ledger,&[],Null);
+  let bound=settled_run(&mut bound_state,bound_run);let row=last_edit(&bound);
+  assert_eq!(text(&row,"accept_reason"),"cost bound");
+  assert_eq!(text(&row,"verdict"),"rejected");
+  assert_eq!(text(&row,"decision"),"refused because the cost bound was exceeded for the gain 1");
+  assert_eq!(get(&row,"cost_known"),&Bool(true));
+ }
+ #[test] fn measured_incumbent_cost_admits_a_lower_cost(){
+  let (ledger,short)=opened_measured_ledger();
+  let saved="c".repeat(10);
+  let (mut low_state,low_run)=policy_run(1,low_bits(1),low_bits(1),low_bits(1),&saved,&saved,&short,&ledger,&[],Null);
+  let lower=settled_run(&mut low_state,low_run);let row=last_edit(&lower);
+  assert_eq!(text(&row,"verdict"),"accepted");
+  assert_eq!(text(&row,"accept_reason"),"lower cost");
+  assert_eq!(text(&row,"decision"),"accepted because the equal score costs less");
+  assert_eq!(get(&row,"cost_known"),&Bool(true));
+  assert_eq!(number(&row,"cost_before"),short.len());
+  assert_eq!(number(&row,"cost_after"),saved.len());
+ }
+ #[test] fn incumbent_cost_uses_the_latest_accepted_row_of_another_component(){
+  // The latest accepted row is plugins. A later skills rejection is not the incumbent.
+  // The candidate is prompt, which has no accepted row. The run-global length still
+  // refuses the longer equal score. A component-scoped read would leave the cost unknown.
+  let plugins_cost=11usize;
+  let accepted=crate::rrsi::edit("plugins","short plug",&crate::rrsi::diff_digest("a","short plug"),0,1,4,plugins_cost as u64,"accepted",1,POLICY_RUN).unwrap();
+  let mut ledger=text(&crate::rrsi::append_document("",&accepted,POLICY_RUN).unwrap(),"document");
+  let rejected=crate::rrsi::edit("skills","later skills",&crate::rrsi::diff_digest("a","later skills"),1,1,4,99,"rejected",2,POLICY_RUN).unwrap();
+  ledger=text(&crate::rrsi::append_document(&ledger,&rejected,POLICY_RUN).unwrap(),"document");
+  let records=crate::rrsi::records_of(&ledger).unwrap();
+  assert!(records.iter().all(|row| !(text(row,"component")=="prompt" && text(row,"verdict")=="accepted")));
+  assert_eq!(text(&records[0],"component"),"plugins");
+  assert_eq!(text(&records[1],"component"),"skills");
+  let grown="S".repeat(40);
+  let prior="OLD-INCUMBENT-BODY";
+  assert_ne!(prior.len(),plugins_cost);
+  assert!(grown.len()>plugins_cost && grown.len()<99);
+  let (mut st,run)=policy_run(1,low_bits(1),low_bits(1),low_bits(1),&grown,&grown,prior,&ledger,&[],Null);
+  let settled=settled_run(&mut st,run);
+  let row=last_edit(&settled);
+  assert_eq!(text(&row,"component"),"prompt");
+  assert_ne!(text(&row,"component"),"plugins");
+  assert_eq!(text(&row,"decision"),"refused because the cost rose while the score did not");
+  assert_eq!(text(&row,"accept_reason"),"cost rose");
+  assert_eq!(text(&row,"verdict"),"rejected");
+  assert_eq!(get(&row,"cost_known"),&Bool(true));
+  assert_eq!(number(&row,"cost_before"),plugins_cost);
+  assert_eq!(number(&row,"cost_after"),grown.len());
+  assert_eq!(number(&row,"score_before"),1);
+  assert_eq!(number(&row,"score_after"),1);
+  assert_eq!(crate::rrsi::incumbent_cost(&records,POLICY_RUN),Some(plugins_cost as u64));
+ }
+ #[test] fn stop_control_row_does_not_refuse_prompt_stop_and_records_the_closed_round(){
+  let reply="component: prompt\nhypothesis: STOP\nbody after the control row";
+  let stop=crate::rrsi::stop_edit(POLICY_RUN,1,"kept").unwrap();
+  let control_ledger=text(&crate::rrsi::append_document("",&stop,POLICY_RUN).unwrap(),"document");
+  let open=propose_run("later",&control_ledger,"kept",Arr(vec![]));
+  let mut run=get(&open,"task_run").clone();
+  assert!(!gate_candidate(&mut run,reply).unwrap());
+  assert_eq!(get(&run,"round_note"),&Null);
+  let genuine=crate::rrsi::edit("prompt","STOP",&crate::rrsi::diff_digest("a","STOP"),1,1,4,4,"rejected",2,POLICY_RUN).unwrap();
+  let rejected=text(&crate::rrsi::append_document("",&genuine,POLICY_RUN).unwrap(),"document");
+  let closed=propose_run("later",&rejected,"kept",Arr(vec![]));
+  let mut run=get(&closed,"task_run").clone();
+  assert!(gate_candidate(&mut run,reply).unwrap());
+  assert_eq!(text(&run,"round_note"),"refused because component prompt with that hypothesis was already rejected in round 2");
+  let trial=crate::rrsi::edit("skills","real attempt",&crate::rrsi::diff_digest("a","real attempt"),1,1,4,4,"rejected",2,POLICY_RUN).unwrap();
+  let before=text(&crate::rrsi::append_document("",&trial,POLICY_RUN).unwrap(),"document");
+  let before_records=crate::rrsi::records_of(&before).unwrap();
+  let before_budget=crate::rrsi::budget_for(&before_records,POLICY_RUN,2);
+  let mut after_doc=before.clone();
+  let stop_row=crate::rrsi::stop_edit(POLICY_RUN,2,"kept").unwrap();
+  after_doc=text(&crate::rrsi::append_document(&after_doc,&stop_row,POLICY_RUN).unwrap(),"document");
+  let after_records=crate::rrsi::records_of(&after_doc).unwrap();
+  assert_eq!(crate::rrsi::budget_for(&after_records,POLICY_RUN,2),before_budget);
+  assert!(crate::rrsi::falsified(&after_records,POLICY_RUN).iter().all(|row| text(row,"control")!="stop"));
+  assert!(crate::rrsi::falsified(&after_records,POLICY_RUN).iter().any(|row| text(row,"hypothesis")=="real attempt"));
+  let bare=obj(vec![("run_digest",s(POLICY_RUN)),("agent",obj(vec![("instructions",s("kept"))])),("edit_ledger",s(""))]);
+  let mut st=obj(vec![]);
+  refuse_for_stop(&mut st,bare.clone(),0).unwrap();
+  let stopped=get(&st,"task_run");
+  let rows=crate::rrsi::records_of(&text(stopped,"edit_ledger")).unwrap();
+  assert_eq!(rows.len(),1,"{}",text(stopped,"edit_ledger_error"));
+  assert_eq!(text(&rows[0],"control"),"stop");
+  assert_eq!(number(&rows[0],"round"),0);
+  refuse_for_stop(&mut st,bare,4).unwrap();
+  let later=get(&st,"task_run");
+  let rows=crate::rrsi::records_of(&text(later,"edit_ledger")).unwrap();
+  assert_eq!(number(&rows[0],"round"),4);
  }
  #[test] fn proposal_prompt_and_ledger_row_publish_the_round_budget(){
   let mut st=configured();
@@ -3265,6 +3549,283 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert_eq!(std::fs::read_to_string(scratch.repo.join("rllm-harness.txt")).unwrap(),"{\"a\":\"\"}");
   assert_eq!(git_text(&scratch.repo,&["rev-parse","HEAD"]),seed);
   assert_eq!(git_text(&scratch.repo,&["rev-parse",&format!("refs/heads/{}^",crate::rrsi::EVOLVE_BRANCH)]),seed);
+ }
+ fn gain_round()->(Json,Json,String){
+  let (st,run)=policy_run(3,low_bits(0),low_bits(1),low_bits(1),"accepted text","accepted text","old","",&[],Null);
+  let root=text(&run,"edit_ledger_root");
+  (st,run,root)
+ }
+ #[test]
+ fn stop_file_refuses_the_next_round_and_the_same_run_advances_without_it(){
+  let (mut stopped_state,stopped_run,root)=gain_round();
+  let stop_path=std::path::Path::new(&root).join(crate::rrsi::STOP_FILE);
+  std::fs::write(&stop_path,b"stop\n").unwrap();
+  let stop_bytes=std::fs::read(&stop_path).unwrap();
+  let settled=settled_run(&mut stopped_state,stopped_run);
+  assert_eq!(text(&stopped_state,"notice"),crate::rrsi::STOP_SENTENCE);
+  assert_eq!(text(&settled,"round_note"),crate::rrsi::STOP_SENTENCE);
+  assert_eq!(get(&settled,"incumbent_kept"),&Bool(true));
+  assert_eq!(get(&settled,"round_index"),&Null);
+  assert_eq!(text(&settled,"phase"),"verify");
+  assert_eq!(text(get(&settled,"agent"),"instructions"),"old");
+  assert_eq!(text(&settled,"composition"),"accepted text");
+  assert_eq!(std::fs::read(&stop_path).unwrap(),stop_bytes);
+  let rows=crate::rrsi::records_of(&text(&settled,"edit_ledger")).unwrap();
+  assert_eq!(rows.len(),2,"{}",text(&settled,"edit_ledger_error"));
+  assert_eq!(text(&rows[0],"verdict"),"accepted");
+  assert_ne!(text(&rows[0],"decision"),crate::rrsi::STOP_SENTENCE);
+  assert_eq!(text(&rows[1],"decision"),crate::rrsi::STOP_SENTENCE);
+  assert_eq!(text(&rows[1],"verdict"),"rejected");
+  assert_eq!(get(&rows[1],"score_before"),&Null);
+  let (mut open_state,open_run,_root)=gain_round();
+  complete_refinement_round(&mut open_state,open_run).unwrap();
+  let advanced=get(&open_state,"task_run");
+  assert_eq!(number(advanced,"round_index"),2);
+  assert_eq!(text(advanced,"phase"),"baseline");
+  assert!(!text(&open_state,"notice").contains("STOP file"));
+  let advanced_rows=crate::rrsi::records_of(&text(advanced,"edit_ledger")).unwrap();
+  assert_eq!(advanced_rows.len(),1);
+  assert_eq!(text(&advanced_rows[0],"verdict"),"accepted");
+  assert!(advanced_rows.iter().all(|row| text(row,"decision")!=crate::rrsi::STOP_SENTENCE));
+ }
+ #[test]
+ fn propose_handoff_stop_names_the_closed_round_not_the_next(){
+  let (mut st,mut run,root)=gain_round();
+  // Cap 2 seals this round and stays on it. The stored index is 2 so that once
+  // first_refinement is set, round_index_of still names the sealed round.
+  put(&mut run,"refinement_rounds",Num("2".into()));
+  put(&mut run,"round_index",Num("2".into()));
+  complete_refinement_round(&mut st,run).unwrap();
+  let advanced=get(&st,"task_run").clone();
+  let sealed=crate::rrsi::records_of(&text(&advanced,"edit_ledger")).unwrap();
+  // The accepted row is the round complete_refinement_round sealed. The control row must name it.
+  let closed=number(&sealed[0],"round");
+  let following=closed+1;
+  assert_eq!(text(&advanced,"phase"),"propose");
+  assert_eq!(number(&advanced,"round_index"),closed);
+  let mut handoff=advanced;
+  // Compose with no baseline is the propose-path handoff. It passes the current round index.
+  put(&mut handoff,"baseline_score",Null);
+  put(&mut handoff,"phase",s("compose"));
+  put(&mut st,"task_run",handoff);
+  put(&mut st,"busy",Bool(false));
+  let stop_path=std::path::Path::new(&root).join(crate::rrsi::STOP_FILE);
+  std::fs::write(&stop_path,b"stop\n").unwrap();
+  model_reply(&mut st,"fresh instructions after the closed round").unwrap();
+  let run=get(&st,"task_run");
+  let rows=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap();
+  let control=rows.iter().rev().find(|row| text(row,"control")=="stop").expect("control row");
+  assert_eq!(number(control,"round"),closed,"{}",text(run,"edit_ledger"));
+  assert_ne!(number(control,"round"),following);
+  assert!(rows.iter().all(|row| number(row,"round")!=following));
+  assert_eq!(text(control,"decision"),crate::rrsi::STOP_SENTENCE);
+ }
+ #[test]
+ fn symlink_stop_file_is_refused_by_name(){
+  let (mut st,run,_root)=gain_round();
+  let root=text(&run,"edit_ledger_root");
+  let dir=std::path::Path::new(&root);
+  let target=dir.join("real-stop");
+  std::fs::write(&target,b"do-not-follow").unwrap();
+  let link=dir.join(crate::rrsi::STOP_FILE);
+  std::os::unix::fs::symlink(&target,&link).unwrap();
+  assert_eq!(crate::rrsi::stop_requested(&root).unwrap_err(),crate::rrsi::STOP_SYMLINK);
+  let error=complete_refinement_round(&mut st,run).unwrap_err();
+  assert_eq!(error,crate::rrsi::STOP_SYMLINK);
+  assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+  assert_eq!(std::fs::read(&target).unwrap(),b"do-not-follow");
+  let ledger=std::fs::read_to_string(dir.join("edits.jsonl")).unwrap();
+  assert!(ledger.contains("\"verdict\":\"accepted\""),"{ledger}");
+  assert!(!ledger.contains(crate::rrsi::STOP_SENTENCE),"{ledger}");
+  assert_eq!(crate::rrsi::stop_requested(&root).unwrap_err(),crate::rrsi::STOP_SYMLINK);
+ }
+ #[test]
+ fn stop_at_the_evaluation_handoff_records_the_row_and_skips_evaluation(){
+  let (mut st,mut run)=policy_run(1,low_bits(0),low_bits(1),low_bits(1),"accepted text","accepted text","old","",&[],Null);
+  put(&mut run,"evaluation_requested",Bool(true));
+  put(&mut run,"evaluation",obj(vec![("task",s("separate evaluation")),("checks",s("TOKEN"))]));
+  let root=text(&run,"edit_ledger_root");
+  let stop_path=std::path::Path::new(&root).join(crate::rrsi::STOP_FILE);
+  std::fs::write(&stop_path,b"stop\n").unwrap();
+  let effect=complete_refinement_round(&mut st,run).unwrap();
+  assert_eq!(effect,Some(Null));
+  assert_eq!(get(&st,"refinement_pending"),&Null);
+  let settled=get(&st,"task_run");
+  assert_eq!(get(settled,"incumbent_kept"),&Bool(true));
+  assert_eq!(text(settled,"round_note"),crate::rrsi::STOP_SENTENCE);
+  assert_ne!(text(settled,"phase"),"evaluation_base");
+  assert_ne!(text(settled,"phase"),"evaluation_candidate");
+  let rows=crate::rrsi::records_of(&text(settled,"edit_ledger")).unwrap();
+  assert_eq!(rows.len(),2,"{}",text(settled,"edit_ledger_error"));
+  assert_ne!(text(&rows[0],"decision"),crate::rrsi::STOP_SENTENCE);
+  assert_eq!(text(&rows[1],"decision"),crate::rrsi::STOP_SENTENCE);
+  assert_eq!(text(&rows[1],"control"),"stop");
+  assert_eq!(text(&rows[1],"hypothesis"),"STOP");
+  assert_eq!(text(&rows[1],"verdict"),"rejected");
+  assert_eq!(get(&rows[1],"score_before"),&Null);
+  assert_eq!(std::fs::read(&stop_path).unwrap(),b"stop\n");
+ }
+ fn seal_judged(document:&str,hypothesis:&str,verdict:&str,before:u64,after:u64,cost_before:u64,cost_after:u64,known:bool,floor:u64,reason:&str,beta0:Option<i64>,beta1:Option<i64>,pool:&str)->String{
+  let mut row=crate::rrsi::edit("prompt",hypothesis,&crate::rrsi::diff_digest("prior",hypothesis),before,after,cost_before,cost_after,verdict,1,POLICY_RUN).unwrap();
+  put(&mut row,"cost_known",Bool(known));
+  put(&mut row,"noise_floor",Num(floor.to_string()));
+  put(&mut row,"decision",s("recorded for rejudge"));
+  put(&mut row,"edit_budget",Num("4".into()));
+  row=crate::rrsi::annotate(row,"clean").unwrap();
+  let mut extra=obj(vec![]);
+  if !reason.is_empty(){put(&mut extra,"accept_reason",s(reason));}
+  if let Some(value)=beta0{put(&mut extra,"beta0",Num(value.to_string()));}
+  if let Some(value)=beta1{put(&mut extra,"beta1",Num(value.to_string()));}
+  if !pool.is_empty(){put(&mut extra,"pool_status",s(pool));}
+  row=crate::rrsi::attach(row,&extra).unwrap();
+  text(&crate::rrsi::append_document(document,&row,POLICY_RUN).unwrap(),"document")
+ }
+ #[test]
+ fn rejudge_names_an_accepted_row_the_current_rules_refuse_and_spares_a_consistent_run(){
+  let floor=seal_judged("","floor case","accepted",0,1,4,4,false,5,"",None,None,"admissible");
+  let floor_bytes=floor.as_bytes().to_vec();
+  let floor_path=std::path::Path::new(&ledger_root()).join("floor.jsonl");
+  std::fs::write(&floor_path,&floor_bytes).unwrap();
+  let report=rejudge(&crate::rrsi::records_of(&floor).unwrap(),POLICY_RUN);
+  assert_eq!(std::fs::read(&floor_path).unwrap(),floor_bytes);
+  let diffs=array(&report,"differences");
+  assert_eq!(diffs.len(),1,"{}",report.string());
+  assert_eq!(text(&diffs[0],"recorded_verdict"),"accepted");
+  assert_eq!(text(&diffs[0],"derived_verdict"),"rejected");
+  assert_eq!(text(&diffs[0],"derived_reason"),"floor");
+  assert_eq!(text(&diffs[0],"pool_status"),"admissible");
+  assert!(boolean(&diffs[0],"verdict_differs"));
+  assert!(!boolean(&diffs[0],"incomplete"));
+  let costly=seal_judged("","cost case","accepted",1,1,10,50,true,0,"score",Some(0),Some(improvement::COST_BETA1),"");
+  let costly_bytes=costly.clone();
+  let costly_report=rejudge(&crate::rrsi::records_of(&costly).unwrap(),POLICY_RUN);
+  assert_eq!(costly,costly_bytes);
+  let cost_diffs=array(&costly_report,"differences");
+  assert_eq!(cost_diffs.len(),1,"{}",costly_report.string());
+  assert_eq!(text(&cost_diffs[0],"recorded_verdict"),"accepted");
+  assert_eq!(text(&cost_diffs[0],"derived_verdict"),"rejected");
+  assert_eq!(text(&cost_diffs[0],"derived_reason"),"cost rose");
+  let consistent=seal_judged("","consistent gain","accepted",0,1,4,4,false,0,"",None,None,"");
+  let consistent_bytes=consistent.as_bytes().to_vec();
+  let consistent_path=std::path::Path::new(&ledger_root()).join("consistent.jsonl");
+  std::fs::write(&consistent_path,&consistent_bytes).unwrap();
+  let consistent_report=rejudge(&crate::rrsi::records_of(&consistent).unwrap(),POLICY_RUN);
+  assert_eq!(std::fs::read(&consistent_path).unwrap(),consistent_bytes);
+  assert!(array(&consistent_report,"differences").is_empty(),"{}",consistent_report.string());
+  let flat=seal_judged("","consistent flat","rejected",1,1,4,4,false,0,"",None,None,"");
+  assert!(array(&rejudge(&crate::rrsi::records_of(&flat).unwrap(),POLICY_RUN),"differences").is_empty());
+ }
+ #[test]
+ fn rejudge_uses_the_sealed_beta1_and_reports_a_partial_triple(){
+  assert_eq!(improvement::COST_BETA1,64);
+  let mut document=seal_judged("","tight bound","accepted",0,1,0,40,true,0,"score",Some(0),Some(10),"");
+  document=seal_judged(&document,"wide bound","accepted",0,1,0,100,true,0,"score",Some(0),Some(200),"");
+  let bytes=document.as_bytes().to_vec();
+  let path=std::path::Path::new(&ledger_root()).join("betas.jsonl");
+  std::fs::write(&path,&bytes).unwrap();
+  let records=crate::rrsi::records_of(&document).unwrap();
+  let report=rejudge(&records,POLICY_RUN);
+  assert_eq!(std::fs::read(&path).unwrap(),bytes);
+  let diffs=array(&report,"differences");
+  assert_eq!(diffs.len(),1,"{}",report.string());
+  assert_eq!(number(&diffs[0],"index"),0);
+  assert_eq!(text(&diffs[0],"recorded_verdict"),"accepted");
+  assert_eq!(text(&diffs[0],"derived_verdict"),"rejected");
+  assert_eq!(text(&diffs[0],"recorded_reason"),"score");
+  assert_eq!(text(&diffs[0],"derived_reason"),"cost bound");
+  assert!(boolean(&diffs[0],"reason_differs"));
+  assert_eq!(number(&diffs[0],"beta1_used"),10);
+  assert_ne!(number(&diffs[0],"beta1_used"),improvement::COST_BETA1 as usize);
+  let partial=seal_judged("","partial beta","accepted",0,1,0,40,true,0,"",None,Some(10),"");
+  let partial_bytes=partial.as_bytes().to_vec();
+  let partial_path=std::path::Path::new(&ledger_root()).join("partial.jsonl");
+  std::fs::write(&partial_path,&partial_bytes).unwrap();
+  let partial_records=crate::rrsi::records_of(&partial).unwrap();
+  assert_eq!(get(&partial_records[0],"beta0"),&Null);
+  assert_eq!(get(&partial_records[0],"accept_reason"),&Null);
+  assert_eq!(get(&partial_records[0],"beta1"),&Num("10".into()));
+  let partial_report=rejudge(&partial_records,POLICY_RUN);
+  assert_eq!(std::fs::read(&partial_path).unwrap(),partial_bytes);
+  let partial_diffs=array(&partial_report,"differences");
+  assert_eq!(partial_diffs.len(),1,"{}",partial_report.string());
+  assert!(boolean(&partial_diffs[0],"incomplete"));
+  assert!(boolean(&partial_diffs[0],"beta1_present"));
+  assert!(!boolean(&partial_diffs[0],"beta0_present"));
+  assert!(!boolean(&partial_diffs[0],"accept_reason_present"));
+  assert!(!boolean(&partial_diffs[0],"reason_differs"));
+  assert_eq!(get(&partial_diffs[0],"beta1_used"),&Null);
+  assert_eq!(get(&partial_records[0],"beta0"),&Null);
+ }
+ #[test]
+ fn rejudge_seen_set_for_row_i_is_the_ledger_prefix(){
+  let mut document=seal_judged("","same shape","accepted",1,1,4,4,false,3,"score",Some(0),Some(improvement::COST_BETA1),"");
+  document=seal_judged(&document,"same shape","accepted",1,1,4,4,false,3,"score",Some(0),Some(improvement::COST_BETA1),"");
+  let records=crate::rrsi::records_of(&document).unwrap();
+  assert_eq!(records.len(),2);
+  assert_eq!(text(&records[0],"component"),text(&records[1],"component"));
+  assert_eq!(text(&records[0],"hypothesis"),text(&records[1],"hypothesis"));
+  assert_eq!(text(&records[0],"diff_digest"),text(&records[1],"diff_digest"));
+  let report=rejudge(&records,POLICY_RUN);
+  let diffs=array(&report,"differences");
+  assert_eq!(diffs.len(),2,"{}",report.string());
+  assert_eq!(number(&diffs[0],"index"),0);
+  assert_eq!(text(&diffs[0],"derived_verdict"),"accepted");
+  assert_eq!(text(&diffs[0],"derived_reason"),"structural novelty");
+  assert_eq!(number(&diffs[1],"index"),1);
+  assert_eq!(text(&diffs[1],"derived_verdict"),"rejected");
+  assert_eq!(text(&diffs[1],"derived_reason"),"duplicate shape");
+ }
+ #[test]
+ fn refine_resume_attaches_rejudge_and_leaves_history_bytes(){
+  let home=DataHome::set("rejudge-resume");
+  let root=home.root();
+  let task="Write the bounded note.";
+  let document=seal_rejected(&root,task,"do-not-repeat","ADOPTED-HARNESS-MARKER",true);
+  let ledger_path=std::path::Path::new(&root).join(format!("{POLICY_RUN}.jsonl"));
+  let before=std::fs::read(&ledger_path).unwrap();
+  let st=refine_state(task);
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),before);
+  let run=get(&st,"task_run");
+  let report=get(run,"rejudge");
+  assert_eq!(text(report,"run_digest"),POLICY_RUN);
+  assert!(array(report,"differences").is_empty(),"{}",report.string());
+  assert_eq!(text(run,"edit_ledger"),document);
+ }
+ #[test]
+ fn refine_resume_with_stop_records_the_row_and_does_not_open_a_round(){
+  let home=DataHome::set("stop-resume");
+  let root=home.root();
+  let task="Write the bounded note.";
+  let sealed=seal_rejected(&root,task,"do-not-repeat","ADOPTED-HARNESS-MARKER",true);
+  let planted=crate::rrsi::records_of(&sealed).unwrap();
+  // The rejected row is the only round this ledger closed. Resume records the control row on that round.
+  let closed=number(&planted[0],"round");
+  let ledger_path=std::path::Path::new(&root).join(format!("{POLICY_RUN}.jsonl"));
+  let before=std::fs::read(&ledger_path).unwrap();
+  std::fs::write(std::path::Path::new(&root).join(crate::rrsi::STOP_FILE),b"stop\n").unwrap();
+  let mut st=prepared();
+  let effect=event_for(&mut st,"refine",&obj(vec![("task",s(task))])).unwrap();
+  assert_eq!(effect,Null);
+  assert!(!boolean(&st,"busy"));
+  assert_eq!(get(&st,"refinement_pending"),&Null);
+  let run=get(&st,"task_run");
+  assert_eq!(get(run,"incumbent_kept"),&Bool(true));
+  assert_eq!(text(run,"round_note"),crate::rrsi::STOP_SENTENCE);
+  assert_ne!(text(run,"phase"),"baseline");
+  assert_ne!(text(run,"phase"),"propose");
+  assert_eq!(get(run,"round_index"),&Null);
+  let rows=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap();
+  assert_eq!(rows.len(),2,"{}",text(run,"edit_ledger_error"));
+  assert_eq!(text(&rows[0],"hypothesis"),"do-not-repeat");
+  assert_eq!(text(&rows[1],"control"),"stop");
+  assert_eq!(text(&rows[1],"hypothesis"),"STOP");
+  assert_eq!(text(&rows[1],"decision"),crate::rrsi::STOP_SENTENCE);
+  assert_eq!(text(&rows[1],"verdict"),"rejected");
+  assert_eq!(number(&rows[1],"round"),closed);
+  let disk=std::fs::read(&ledger_path).unwrap();
+  assert!(disk.starts_with(&before));
+  assert!(disk.len()>before.len());
+  assert_eq!(text(run,"edit_ledger").as_bytes(),disk.as_slice());
  }
 }
 
