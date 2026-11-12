@@ -17,36 +17,36 @@ use std::process::Command;
 struct PyErr {
     class: &'static str,
     message: String,
-    caught: bool,
 }
 
 impl PyErr {
     fn value(message: &str) -> Self {
-        Self { class: "ValueError", message: message.to_string(), caught: true }
+        Self { class: "ValueError", message: message.to_string() }
     }
     fn bad(message: &str) -> Self {
-        Self { class: "BadZipFile", message: message.to_string(), caught: true }
+        Self { class: "BadZipFile", message: message.to_string() }
     }
     fn zlib(message: String) -> Self {
-        Self { class: "zlib.error", message, caught: true }
+        Self { class: "zlib.error", message }
     }
     fn runtime(message: &str) -> Self {
-        Self { class: "RuntimeError", message: message.to_string(), caught: true }
+        Self { class: "RuntimeError", message: message.to_string() }
     }
     fn eof() -> Self {
-        Self { class: "EOFError", message: String::new(), caught: true }
+        Self { class: "EOFError", message: String::new() }
     }
     fn uncaught(class: &'static str, message: String) -> Self {
-        Self { class, message, caught: false }
+        Self { class, message }
     }
     fn text(&self) -> String {
         self.message.clone()
     }
     fn traceback_line(&self) -> String {
-        if self.message.is_empty() {
+        let message = self.text();
+        if message.is_empty() {
             self.class.to_string()
         } else {
-            format!("{}: {}", self.class, self.message)
+            format!("{}: {}", self.class, message)
         }
     }
 }
@@ -88,10 +88,7 @@ fn io_err(err: &std::io::Error, path: &str) -> PyErr {
     } else {
         format!("[Errno {code}] {text}: {}", py_repr(path))
     };
-    // FileNotFoundError and PermissionError are OSError subclasses, which
-    // alignment.py catches inside the retry. NotFound during the initial
-    // inventory is printed by the caller as an uncaught traceback.
-    PyErr { class, message, caught: true }
+    PyErr { class, message }
 }
 
 fn sha256(data: &[u8]) -> [u8; 32] {
@@ -696,7 +693,7 @@ impl Archive {
     fn read_name(&self, name: &str) -> Result<Vec<u8>, PyErr> {
         let index = self.members.iter().rposition(|member| member.name == name).ok_or_else(|| {
             let sentence = format!("There is no item named {} in the archive", py_repr(name));
-            PyErr { class: "KeyError", message: format!("\"{sentence}\""), caught: false }
+            PyErr { class: "KeyError", message: format!("\"{sentence}\"") }
         })?;
         let member = self.copy_member(index);
         self.read_member(&member)
@@ -704,15 +701,15 @@ impl Archive {
 }
 
 fn bare() -> PyErr {
-    PyErr { class: "AssertionError", message: String::new(), caught: false }
+    PyErr { class: "AssertionError", message: String::new() }
 }
 
 fn assertion(message: &str) -> PyErr {
-    PyErr { class: "AssertionError", message: message.to_string(), caught: false }
+    PyErr { class: "AssertionError", message: message.to_string() }
 }
 
 fn env_key(name: &str) -> Result<String, PyErr> {
-    env::var(name).map_err(|_| PyErr { class: "KeyError", message: py_repr(name), caught: false })
+    env::var(name).map_err(|_| PyErr { class: "KeyError", message: py_repr(name) })
 }
 
 fn py_bytes(data: &[u8]) -> String {
@@ -1205,7 +1202,6 @@ fn command_error(argv: &[String], code: i32) -> PyErr {
     PyErr {
         class: "subprocess.CalledProcessError",
         message: format!("Command '{list}' returned non-zero exit status {code}."),
-        caught: false,
     }
 }
 
@@ -1342,7 +1338,7 @@ fn split_before<'a>(text: &'a str, needle: &str) -> Vec<&'a str> {
 fn voice_block(manifest: &str) -> Result<String, PyErr> {
     let blocks = split_before(manifest, "      E: service ");
     let Some(block) = blocks.into_iter().find(|block| block.contains("com.local.client.VoiceSession")) else {
-        return Err(PyErr { class: "StopIteration", message: String::new(), caught: false });
+        return Err(PyErr { class: "StopIteration", message: String::new() });
     };
     let after = block.split("      E: service ").nth(1).unwrap_or(block);
     Ok(after.split("      E: activity ").next().unwrap_or(after).to_string())
@@ -1715,6 +1711,7 @@ fn main() {
     std::process::exit(code);
 }
 
+#[cfg(test)]
 fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
     let mut local = Vec::new();
     let mut central = Vec::new();
@@ -1770,6 +1767,7 @@ fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
+#[cfg(test)]
 fn elf_image(machine: u16, align: u64) -> Vec<u8> {
     let mut raw = vec![0u8; 120];
     raw[0..6].copy_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1]);
