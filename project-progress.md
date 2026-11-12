@@ -40,3 +40,32 @@ without stating why.
 
 Not claimed: device acceptance, the signed APK bytes, PUBLICATION-MANIFEST republish (sources moved
 past it), and any Gap 2/3/4 capability.
+
+# RLLM working checkpoint — 2026-11-12T03:05Z
+
+`GAP1` step 1 is in the tree (`2f44536`) and its loop has been **run for real**:
+`docs/SELF-BUILD-RUNLOG.md` shows the product fingerprint a committed tree, run the
+sanctioned plan (`headless.sh` + `build-units.sh` + `checks.py`) as bounded children, append a
+content-addressed journal revision with the pre-edit binary as the rollback digest, detect a stale
+claimed digest, refuse a reload without review, then `exec` into the rebuilt image — whose
+successor answered a verb that exists only in the rebuilt source and appended the next journal
+revision on the same pipe. Two defects came out of that log and are open: the tool never applies
+its own edit, and `handoff` ignores the journal/rollback skip paths so its own rollback binary
+trips the walker's 4 MiB cap. `self_build` is offered to new agent profiles (28/28 tools, measured
+on the built product) but is absent from `REFINEMENT_TOOLS` and no connected group exercises it.
+
+`GAP5` step 1 landed: `tools/alignment.py`, `readback.py`, `checkpoint.py` replaced by Rust plus
+`tools/build-tools.sh`, with `package.sh` and `verification/apk_alignment.py` rewired. Four defects
+were measured and dispatched (stale `tools/alignment.py` literals in `tools/apk.py:10` and
+`tools/package.py:105`; no build step behind `package.sh:101`; 8 unit tests no instrument ran;
+`checkpoint.rs` has no consumer at all). Tracked Python is now **76 files / 7,932 lines** from
+**79 / 8,004** — and `GAP1` added a **new** Python dependency inside the product
+(`core/self_build.rs:435,556,983` name the Python gate), which is stated rather than absorbed.
+
+Also re-measured: `PUBLICATION-MANIFEST.json` pins 162 build inputs — 131 match, 30 drifted, and
+**1 names a file that no longer exists** (`tools/alignment.py`); 6 build-input-scoped files are not
+in the manifest. `docs/BUILD.md` and `docs/AUDIT.md` no longer describe deleted Python tools.
+
+Not claimed: any `GAP2`/`GAP3`/`GAP4` capability, device acceptance, the signed APK bytes, or a
+record republish (no connected sweep has been run since these edits; the record still reads
+69 groups / 4,185 checks / sha256 `7250328b5385`).
