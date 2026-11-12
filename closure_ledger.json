@@ -744,5 +744,49 @@
     "defl5 (core/compression.rs, tools/package.rs - native DEFLATE replacing stored blocks)",
     "loop7 (verification/rrsi_loop.py - GAP2 >=3-round proof bar)",
     "dotnet5 (core/dotnet_evidence.rs, core/investigation.rs - .NET consumer onto the inspect route)"
-  ]
+  ],
+  "gap3_headline_bar_already_witnessed": {
+    "at": "2026-11-12T20:10Z",
+    "finding": "Gap 3 stated bar (task t+1 visibly reading the library entry written by task t) is already closed by a connected group and must not be listed as open",
+    "witness": "verification/hosted_phases.py:47 - check('a later refinement reuses the adopted measured lesson as historical data', again['state']['task_run']['lesson_context']['items'][0]['provenance'].startswith('user-adopted profile; retained instructions met'))",
+    "negative_controls": [
+      "an explicitly saved partial candidate does not enter the next learning context",
+      "ineligible evaluation does not enter later learning prompts"
+    ],
+    "group_size": "106 check( call sites in hosted_phases.py; part of the 71-group census, executed count comes from a real run",
+    "gap3_open_items_revised": [
+      "probe-scored candidates in the live round",
+      "chained sequential selection for k>1",
+      "agentic selector",
+      "approval_root provenance variants (lane root3 in flight)",
+      "apply_accepted digest-compare/write non-atomicity (recorded limitation)"
+    ]
+  },
+  "gap5_retirement_ordering_constraint": {
+    "at": "2026-11-12T20:12Z",
+    "constraint": "tools/package.rs parses tools/checks.py names list as its census interlock (12 references; refuses 'tools/checks.py has no names list'), with the interlock test runner_names_match_packaging_pairs at tools/package.rs:2391 - deleting checks.py without repointing that parser at the native runner GROUPS census breaks the packaging interlock",
+    "measured_redundancy": "at HEAD b9a2c5b, /tmp/htools/tb/gate <units> and python3 tools/checks.py --all-units <same units binary> produced byte-identical stdout (diff empty), both exit 0, on 'Rust cases passed: 672/672; isolated application cases: 55'",
+    "ordering": [
+      "1) repoint the package.rs parser at tools/harness.rs GROUPS",
+      "2) drop checks.py units-replay role",
+      "3) keep checks.py only as the group driver until the Rust runner covers every group",
+      "note: defl5 owns tools/package.rs while it runs, so step 1 waits for that lane"
+    ]
+  },
+  "tools_suite_at_head_b9a2c5b": {
+    "at": "2026-11-12T20:05Z",
+    "instrument": "git archive HEAD room /tmp/htools; bash tools/build-tools.sh /tmp/htools/tb",
+    "counts": {
+      "alignment": 2,
+      "readback": 24,
+      "checkpoint": 5,
+      "signature": 5,
+      "apk": 6,
+      "toolchain": 7,
+      "gate": 8,
+      "package": 20
+    },
+    "total_cases": 77,
+    "exit": 0
+  }
 }
