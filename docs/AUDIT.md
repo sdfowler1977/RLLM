@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T18:0Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T20:0Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -7,14 +7,15 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **650/650 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
+  report bytes): **672/672 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
   69-group record is backed by 638/638, measured at `c34b170`), measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the 638 count is the tree at `c34b170`: 597 at `600e44d`,
   +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
   cases in `a9c62c5`, +4 refine-workspace cases in `5b898cd`, +9 call-edge/cross-reference cases in `a2a976e`,
   +4 durable-successor cases in `12cdc6b`, +5 cross-reference cap-disclosure cases in `c34b170`; continued by
   +4 in `4758d28` → 642 and +7 in `5c93aed` → 645, then 649 re-measured in a room at `e4b7452` — that +4 was not
-  re-derived per commit — and +1 in `98fb0d9` → 650; the sums were
+  re-derived per commit — and +1 in `98fb0d9` → 650, +8 in `e4118b1` → 658, +9 in `e7d13ec` → 667, +5 in
+  `db16ffa` → 672; the sums were
   re-derived by counting added `#[test]` lines per commit with `git show`, which is why `3e5eda1` (+3) and
   `112e251` (+1) are absent from the chain — those are `tools/` package-test legs, not core unit cases; every delta was
   re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
@@ -1382,6 +1383,60 @@ census), and `js3` (GAP4 stage 3, JS/Electron observation — measured absent be
 "electron|asar|source map|sourcemap" core/` returns nothing, and the only `javascript` hits in `core/` are web
 MIME handling). GAP4 stages 1 and 2 and the `pe_declarations` connected witness are already landed, so stage 3
 is the next real slice, dispatched with a consumer wired in the same change.
+
+## The JavaScript lane lands, a .NET consumer is rejected as dead wiring, and the record still has mixed provenance — 2026-11-12T18:3Z–20:0Z
+
+`rb5` landed as `478e9f5`: `tools/readback.rs` went from 1 to 24 `#[test]` markers (inflate over
+stored/fixed-Huffman/dynamic-Huffman streams, truncation and over-size refusals, real-ZIP fixtures, a
+corrupt-byte witness that names the reserved block type, little-endian field readers, `py_repr` and
+`PyErr` parity). The claim "no runtime change" is confirmed by hunk arithmetic: the only hunk is
+`@@ -1401,0 +1402,359 @@` inside `#[cfg(test)] mod checks`, which starts at :1389.
+
+`js3` landed as `db16ffa` (`core/js_evidence.rs` 52,344 B with 5 markers, the `core/lib.rs` mod line, and
+`core/investigation.rs`). Verified in a `git archive` room of the commit itself: `Rust cases passed:
+672/672; isolated application cases: 55`, exit 0, which is HEAD's 667 + 5, equal to the new file's marker
+count. Its audit seat answered questions A–D and then hit its token ceiling, so legs E and F were measured
+here instead of accepted: `core/investigation.rs` is exactly 2 hunks (the shared `NATIVE_CAPABILITIES`
+advertisement and the 4-line JS branch whose `cancelled()` guard precedes the work), and `js_evidence.rs`
+contains no `Command::new`, `std::process`, `std::env`, `std::net`, filesystem access, `unsafe` or `extern`
+block — its only import is `super::{parse, Json, Json::*}`. Two limitations are recorded rather than
+hidden: package-field and IPC happy paths ride the inspect route with no unit of their own beyond the
+inert capability census case, and the shared capability string did change, so no whole-tool golden byte
+diff was taken. `core/lib.rs` was staged with only the `js_evidence` mod line because a sibling lane's
+uncommitted `mod dotnet_evidence;` shares that file; committing it whole would have referenced an
+untracked source file and made the committed tree non-compiling.
+
+`dotnet4` (GAP4 stage 4, .NET metadata) is **not committed**: its module is real but its consumer is dead
+wiring. `core/observation_records.rs:116` feeds `text(r,"report").as_bytes()` into a PE locator, yet
+`report` is written at `core/observation_records.rs:56` as `s(report)` — the observation tool's prose text,
+bounded by `MAX_REPORT` — so it never carries raw PE bytes and `retained_image` returns None on every
+product record. The product's real PE path is the `data.starts_with(b"MZ")` branch at
+`core/investigation.rs:101-103`, which is where lane `dotnet5` is moving the consumer. The coverage itself
+is new and was confirmed as such: the CLI header (data-directory index 14) and CLR metadata are read
+nowhere else in `core/` — `pe_observation.rs` covers imports (dir 1), certificate (dir 4) and base
+relocations (dir 5) only. Reuse finding, recorded not fixed: `dotnet_evidence` re-implements MZ and
+optional-header parsing privately because `pe_observation::Image` (:24) and its reader are not exposed
+(only `analyze`/`observe_with_cancel` are `pub(super)`).
+
+Two more GAP items were dispatched after measurement rather than guesswork. `defl5` targets the native
+archive writer's real defect: `tools/package.rs:123 deflate_store` emits stored DEFLATE blocks while
+`tools/package.py:109` writes real DEFLATE at `compresslevel=9`, so the natively built archive is not a
+compressed archive; `core/compression.rs` has `inflate` only, and no code path in `core/` reads data
+directory index 14 or emits a deflate stream. `loop7` targets GAP2's remaining proof bar: every field it
+needs already exists in the product — `budget_for` (`core/rrsi.rs:685`), `budget_line` (:702, embedding
+`pruned_components` :788), `prune_refusal` (:716), `incumbent_cost` (:812), `incumbent_base` (:1622), the
+`noise_floor` policy key (:63) and numeric guard (:313), and the held-out leg keys (:70-79 with
+`known_leg` :280) — so GAP2 is now an instrument extension of `verification/rrsi_loop.py` over at least
+three rounds, not a product gap.
+
+Instrument lesson: `tools/build-units.sh <out>` emits ONE executable FILE at `<out>`; the sanctioned
+measurement is `python3 tools/checks.py --all-units <that file>`. A first attempt in this window invoked
+`./bin/product-unit-targets` and `./tools/build-units-targets`, which produced exits 126 and 127 and no
+measurement at all — a compile-only `BUILD_EXIT:0` is not a case count.
+
+The delivered record (71 groups, 4,215 checks, 67 pass, 0 fail, 4 unavailable) is still backed by a
+product binary of mixed provenance (built at 09:23:49 from `e7d13ec` plus `js3`'s then-uncommitted files).
+A second full sweep on a settled tree must supersede it before that record is cited as current.
 
 ## Historical baseline audit (original text)
 
