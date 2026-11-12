@@ -989,9 +989,10 @@ fn run_log(pid: u64, argv: &[String], binary_digest: &str, source_digest: &str) 
 /// witness. A missing companion is refused when that journal has a row and
 /// this process has a tracked entry whose witness path is the companion.
 /// A missing, shorter, replaced, or forked companion is refused when the
-/// mark file beside the journal records a chain. The mark is append-only
-/// and survives exec and restart. This read does not create the companion
-/// and does not append a row.
+/// mark file beside the journal records a chain. Each append replaces that
+/// file with one sealed row for the current chain. The mark survives exec
+/// and restart. This read does not create the companion and does not append
+/// a row.
 fn successor_witness(root: &Path, value: &Json) -> Result<(u64, String)> {
     let journal_rel = text(value, "journal");
     if journal_rel.is_empty() {
@@ -1452,20 +1453,77 @@ fn seal_with_parent(path: &Path, mut body: Json, parent: &str) -> Result<String>
 }
 /// The latest mark is the successor chain this process has already appended.
 /// A later read refuses a companion that is missing, shorter, or not that chain.
-/// The mark file uses the same append, digest, and `journal_lines` bounds as the
-/// companion. It is not the companion, so truncating or deleting the companion
-/// leaves the mark in place.
+/// The mark is an anchor, not a history. Each append seals a new row whose
+/// `revisions` are the whole companion, then replaces the file with that row.
+/// The row's parent is empty because it is the only link in the mark chain.
+/// One row stays under the companion's digest and `journal_lines` bounds
+/// (the companion itself stops at 256 revisions). The mark is not the companion,
+/// so truncating or deleting the companion leaves the mark in place.
 fn append_mark(path: &Path, revisions: &[String]) -> Result<()> {
-    let parent = tail_revision(&journal_lines(path)?)?.unwrap_or_default();
-    seal_with_parent(
-        path,
-        obj(vec![
-            ("schema", s("1")),
-            ("event", s("mark")),
-            ("revisions", Arr(revisions.iter().map(|revision| s(revision)).collect())),
-        ]),
-        &parent,
-    )?;
+    let mut body = obj(vec![
+        ("schema", s("1")),
+        ("event", s("mark")),
+        ("revisions", Arr(revisions.iter().map(|revision| s(revision)).collect())),
+    ]);
+    put(&mut body, "parent", s(""));
+    let revision = sha256(body.string().as_bytes());
+    put(&mut body, "revision", s(&revision));
+    let line = body.string();
+    if line.len() as u64 + 1 > JOURNAL_MAX {
+        return Err("journal exceeds 1 MiB".into());
+    }
+    rewrite_mark(path, &line)
+}
+/// Publish one mark line by renaming a synced temporary file over `path`.
+/// The temporary file is opened with `O_NOFOLLOW` so a symlink is not followed.
+/// An existing symlink mark is refused. The byte bound matches `journal_lines`.
+fn rewrite_mark(path: &Path, line: &str) -> Result<()> {
+    let mut payload = Vec::with_capacity(line.len() + 1);
+    payload.extend_from_slice(line.as_bytes());
+    payload.push(b'\n');
+    if payload.len() as u64 > JOURNAL_MAX {
+        return Err("journal exceeds 1 MiB".into());
+    }
+    let parent = match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    };
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let parent_meta = fs::symlink_metadata(parent).map_err(|error| error.to_string())?;
+    if parent_meta.file_type().is_symlink() || !parent_meta.is_dir() {
+        return Err("journal must be a regular non-symlink file".into());
+    }
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+            return Err("journal must be a regular non-symlink file".into());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    let file_name = path.file_name().and_then(|name| name.to_str()).ok_or("invalid mark name")?;
+    let temp_name = format!(".{file_name}.{}.{}.tmp", std::process::id(), pending_stamp());
+    if temp_name.len() > 255 || temp_name.contains(['/', '\\', '\0']) {
+        return Err("invalid mark name".into());
+    }
+    let temp = parent.join(&temp_name);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(NOFOLLOW | CLOEXEC)
+        .open(&temp)
+        .map_err(|error| error.to_string())?;
+    let applied = file.write_all(&payload).and_then(|_| file.sync_all());
+    drop(file);
+    if let Err(error) = applied {
+        let _ = fs::remove_file(&temp);
+        return Err(error.to_string());
+    }
+    if let Err(error) = fs::rename(&temp, path) {
+        let _ = fs::remove_file(&temp);
+        return Err(error.to_string());
+    }
     Ok(())
 }
 fn mark_revisions(value: &Json) -> Result<Vec<String>> {
@@ -4413,7 +4471,8 @@ mv "$tmp" "$1.done"
         let lines = successor_lines(journal);
         assert!(lines.len() >= 3, "a rollback fork needs a recorded tail to abandon");
         let saved = mark_lines(journal);
-        assert_eq!(saved.len(), lines.len());
+        let recorded = recorded_successor_revisions(journal).unwrap();
+        assert_eq!(recorded.len(), lines.len(), "the mark does not record the whole companion");
         let scratch = Scratch::new("fork-side");
         let side_journal = scratch.path().join("side.jsonl");
         let side_witness = successor_journal_path(&side_journal);
@@ -4421,9 +4480,9 @@ mv "$tmp" "$1.done"
         prefix.push('\n');
         fs::create_dir_all(side_witness.parent().unwrap()).unwrap();
         fs::write(&side_witness, prefix).unwrap();
-        let mut mark_prefix = saved[..2].join("\n");
-        mark_prefix.push('\n');
-        fs::write(successor_mark_path(&side_journal), mark_prefix).unwrap();
+        // The anchor is one row, so the side chain gets a sealed prefix mark
+        // instead of a copied history of earlier anchors.
+        append_mark(&successor_mark_path(&side_journal), &recorded[..2]).unwrap();
         append_spawn_row(&side_witness, 99, "rolled", &sha256(b"rolled-source"), "spawn").unwrap();
         let rolled = successor_lines(&side_journal);
         assert_eq!(rolled.len(), 3);
@@ -4671,20 +4730,25 @@ mv "$tmp" "$1.done"
         );
     }
 
+    fn newest_mark(lines: &[String]) -> usize {
+        assert!(!lines.is_empty(), "tamper target has no mark row");
+        lines.len() - 1
+    }
     #[test]
     fn handoff_refuses_a_tampered_successor_mark() {
         let _isolate = isolate();
         {
             let (scratch, journal) = three_linked_successor_rows("mark-digest");
             let mut lines = mark_lines(&journal);
+            let newest = newest_mark(&lines);
             let marker = "\"event\":\"mark\"";
-            let at = lines[2].find(marker).expect("mark event");
-            let mut bytes = lines[2].clone().into_bytes();
+            let at = lines[newest].find(marker).expect("mark event");
+            let mut bytes = lines[newest].clone().into_bytes();
             let index = at + marker.len() - 2;
             assert_eq!(bytes[index], b'k');
             bytes[index] = b'q';
-            lines[2] = String::from_utf8(bytes).unwrap();
-            let flipped = parse(&lines[2]).unwrap();
+            lines[newest] = String::from_utf8(bytes).unwrap();
+            let flipped = parse(&lines[newest]).unwrap();
             assert_ne!(
                 text(&flipped, "revision"),
                 sha256(without_revision(&flipped).unwrap().string().as_bytes())
@@ -4695,29 +4759,92 @@ mv "$tmp" "$1.done"
         {
             let (scratch, journal) = three_linked_successor_rows("mark-parent");
             let mut lines = mark_lines(&journal);
-            let previous = text(&parse(&lines[1]).unwrap(), "revision");
-            let mut row = parse(&lines[2]).unwrap();
+            let newest = newest_mark(&lines);
+            let previous = if newest == 0 {
+                String::new()
+            } else {
+                text(&parse(&lines[newest - 1]).unwrap(), "revision")
+            };
+            let mut row = parse(&lines[newest]).unwrap();
             assert_eq!(text(&row, "parent"), previous);
             let wrong = sha256(b"wrong-mark-parent");
             assert_ne!(wrong, previous);
             put(&mut row, "parent", s(&wrong));
             let revision = sha256(without_revision(&row).unwrap().string().as_bytes());
             put(&mut row, "revision", s(&revision));
-            lines[2] = row.string();
+            lines[newest] = row.string();
             store_mark_lines(&journal, &lines);
             assert_handoff_refuses(scratch.path(), "successor mark parent does not match the previous row");
         }
         {
             let (scratch, journal) = three_linked_successor_rows("mark-shape");
             let mut lines = mark_lines(&journal);
-            let mut row = parse(&lines[2]).unwrap();
+            let newest = newest_mark(&lines);
+            let mut row = parse(&lines[newest]).unwrap();
             put(&mut row, "revisions", s("not-a-list"));
             let revision = sha256(without_revision(&row).unwrap().string().as_bytes());
             put(&mut row, "revision", s(&revision));
             assert_eq!(text(&row, "revision"), sha256(without_revision(&row).unwrap().string().as_bytes()));
-            lines[2] = row.string();
+            lines[newest] = row.string();
             store_mark_lines(&journal, &lines);
             assert_handoff_refuses(scratch.path(), "successor mark row is not a recorded chain");
         }
+    }
+
+    #[test]
+    fn successor_mark_stays_bounded_past_append_174() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("mark-soak");
+        let journal = scratch.path().join("self/journal.jsonl");
+        let witness = successor_journal_path(&journal);
+        let mark = successor_mark_path(&journal);
+        const APPENDED: u64 = 200;
+        for index in 0..APPENDED {
+            append_spawn_row(
+                &witness,
+                index,
+                &format!("soak-{index}"),
+                &sha256(format!("soak-source-{index}").as_bytes()),
+                "spawn",
+            )
+            .unwrap();
+            let size = fs::symlink_metadata(&mark).unwrap().len();
+            assert!(
+                size <= JOURNAL_MAX,
+                "successor mark exceeded its bound at append {} ({size} bytes)",
+                index + 1
+            );
+        }
+        let lines = mark_lines(&journal);
+        assert_eq!(lines.len(), 1, "pruned successor mark is one content-addressed row");
+        let row = parse(&lines[0]).unwrap();
+        addressed(&row);
+        assert_eq!(text(&row, "parent"), "", "pruned successor mark is not chained");
+        assert_eq!(text(&row, "event"), "mark");
+        let marked = mark_revisions(&row).unwrap();
+        let companion = successor_lines(&journal);
+        let current: Vec<String> = companion
+            .iter()
+            .map(|line| text(&parse(line).unwrap(), "revision"))
+            .collect();
+        assert_eq!(marked, current, "pruned successor mark does not record the companion");
+        assert_eq!(current.len(), APPENDED as usize);
+        let seen = handoff_at(scratch.path(), false).unwrap();
+        assert_eq!(get(&seen, "successor_rows"), &n(APPENDED));
+        assert_eq!(text(&seen, "successor_tip"), current.last().cloned().unwrap());
+        let saved_mark = fs::read(&mark).unwrap();
+        store_successor_lines(&journal, &companion[..companion.len() / 2]);
+        assert_handoff_refuses(scratch.path(), "successor journal was truncated below the recorded chain");
+        assert_eq!(fs::read(&mark).unwrap(), saved_mark, "truncation refusal rewrote the pruned mark");
+        store_successor_lines(&journal, &companion);
+        let replacement = side_chain("soak-replace", 2);
+        assert_ne!(replacement, companion);
+        store_successor_lines(&journal, &replacement);
+        assert_handoff_refuses(scratch.path(), "successor journal was replaced with a different chain");
+        assert_eq!(fs::read(&mark).unwrap(), saved_mark, "replacement refusal rewrote the pruned mark");
+        store_successor_lines(&journal, &companion);
+        fork_companion(&journal);
+        assert_handoff_refuses(scratch.path(), "successor journal rolled back onto a revision already observed");
+        assert_eq!(fs::read(&mark).unwrap(), saved_mark, "fork refusal rewrote the pruned mark");
     }
 }
