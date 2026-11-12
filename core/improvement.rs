@@ -125,6 +125,68 @@ pub(super) fn check_gain(baseline: &Json, candidate: &Json) -> bool {
         && number(candidate,"passed")>number(baseline,"passed")
 }
 
+/// `floor` is the largest base-to-base spread already recorded for this task and verifier.
+/// A floor of 0 is one observation: the legacy comparison is unchanged.
+/// Equal scores are not a gain. A lower recorded cost can still admit them, and a higher
+/// recorded cost refuses a score that did not rise. Missing cost leaves the legacy bit.
+pub(super) fn acceptance(baseline: &Json, candidate: &Json, floor: u64, cost_before: Option<u64>, cost_after: Option<u64>) -> Json {
+    let legacy = check_gain(baseline, candidate);
+    let before = number(baseline, "passed") as i64;
+    let after = number(candidate, "passed") as i64;
+    let gain = after - before;
+    let mut admit = legacy;
+    let mut reason = "score";
+    if floor > 0 && legacy && gain <= floor as i64 {
+        admit = false;
+        reason = "floor";
+    }
+    let mut cost_known = false;
+    if let (Some(cost_before), Some(cost_after)) = (cost_before, cost_after) {
+        cost_known = true;
+        if after == before && cost_after < cost_before && preserves_checks(baseline, candidate) {
+            admit = true;
+            reason = "lower cost";
+        } else if cost_after > cost_before && after <= before {
+            admit = false;
+            reason = "cost rose";
+        }
+    }
+    obj(vec![
+        ("admit", Bool(admit)),
+        ("legacy", Bool(legacy)),
+        ("reason", s(reason)),
+        ("gain", s(&gain.to_string())),
+        ("noise_floor", Num(floor.to_string())),
+        ("cost_known", Bool(cost_known)),
+    ])
+}
+
+pub(super) fn verifier_key(checks: &Json) -> String {
+    if checks == &Null { return String::new(); }
+    harness_rules::digest(checks)
+}
+
+pub(super) fn record_base(run: &mut Json, task: &str, verifier: &str, passed: usize) {
+    if task.is_empty() || verifier.is_empty() { return; }
+    let mut rows = array(run, "base_evaluations");
+    rows.push(obj(vec![("task", s(task)), ("verifier", s(verifier)), ("passed", Num(passed.to_string()))]));
+    put(run, "base_evaluations", Arr(rows));
+}
+
+pub(super) fn noise_floor(run: &Json, task: &str, verifier: &str) -> u64 {
+    let scores: Vec<u64> = array(run, "base_evaluations").into_iter().filter(|row| {
+        text(row, "task") == task && text(row, "verifier") == verifier
+    }).map(|row| number(&row, "passed") as u64).collect();
+    if scores.len() < 2 { return 0; }
+    let mut spread = 0u64;
+    for left in 0..scores.len() {
+        for right in (left + 1)..scores.len() {
+            spread = spread.max(scores[left].abs_diff(scores[right]));
+        }
+    }
+    spread
+}
+
 pub(super) fn preserves_checks(baseline: &Json, candidate: &Json) -> bool {
     if !comparable(baseline, candidate) || number(candidate, "total") != number(baseline, "total") {
         return false;

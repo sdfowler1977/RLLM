@@ -44,13 +44,23 @@ fn refinement_digest(run:&mut Json)->String{
  let digest=crate::rrsi::digest(format!("{}\n{}\n{}",text(run,"task"),text(run,"chat"),now()).as_bytes());
  put(run,"run_digest",s(&digest));digest
 }
-fn note_refinement_edit(run:&mut Json,hypothesis:&str,verdict:&str,before:usize,after:usize,prior:&str,round:usize){
+fn note_refinement_edit(run:&mut Json,hypothesis:&str,verdict:&str,before:usize,after:usize,prior:&str,round:usize,policy:&Json){
  if hypothesis.is_empty(){return;}
  let run_digest=refinement_digest(run);
- let edit=match crate::rrsi::edit("prompt",hypothesis,&crate::rrsi::diff_digest(prior,hypothesis),before as u64,after as u64,prior.len() as u64,hypothesis.len() as u64,verdict,round as u64,&run_digest){
+ let cost_before=if get(policy,"cost_before")==&Null{prior.len() as u64}else{number(policy,"cost_before") as u64};
+ let cost_after=if get(policy,"cost_after")==&Null{hypothesis.len() as u64}else{number(policy,"cost_after") as u64};
+ let mut edit=match crate::rrsi::edit("prompt",hypothesis,&crate::rrsi::diff_digest(prior,hypothesis),before as u64,after as u64,cost_before,cost_after,verdict,round as u64,&run_digest){
   Ok(edit)=>edit,
   Err(error)=>{put(run,"edit_ledger_error",s(&error));return;}
  };
+ let decision=text(policy,"decision");
+ if decision.is_empty()||get(policy,"edit_budget")==&Null||get(policy,"noise_floor")==&Null||!matches!(get(policy,"cost_known"),Bool(_)){
+  put(run,"edit_ledger_error",s("acceptance policy did not record its budget, floor and cost"));return;
+ }
+ put(&mut edit,"edit_budget",get(policy,"edit_budget").clone());
+ put(&mut edit,"noise_floor",get(policy,"noise_floor").clone());
+ put(&mut edit,"cost_known",get(policy,"cost_known").clone());
+ put(&mut edit,"decision",s(&decision));
  let saved=match crate::rrsi::append_document(&text(run,"edit_ledger"),&edit,&run_digest){
   Ok(saved)=>saved,
   Err(error)=>{put(run,"edit_ledger_error",s(&error));return;}
@@ -64,23 +74,33 @@ fn note_refinement_edit(run:&mut Json,hypothesis:&str,verdict:&str,before:usize,
   put(run,"edit_ledger_file_error",s(&error));
  }
 }
-fn record_round_edit(run:&mut Json,retain_probe:bool,composed:&str,candidate:&str,verdict:&str,before:usize,replay_passed:usize,selected_passed:usize,prior:&str,round:usize){
+fn record_round_edit(run:&mut Json,retain_probe:bool,composed:&str,candidate:&str,verdict:&str,before:usize,replay_passed:usize,selected_passed:usize,prior:&str,round:usize,policy:&Json){
  if retain_probe{
-  note_refinement_edit(run,composed,"rejected",before,replay_passed,prior,round);
-  if candidate!=composed{note_refinement_edit(run,candidate,verdict,before,selected_passed,prior,round);}
+  let mut discarded=policy.clone();
+  put(&mut discarded,"decision",s("rejected revision"));
+  put(&mut discarded,"cost_known",Bool(false));
+  put(&mut discarded,"cost_before",Null);
+  put(&mut discarded,"cost_after",Null);
+  note_refinement_edit(run,composed,"rejected",before,replay_passed,prior,round,&discarded);
+  if candidate!=composed{note_refinement_edit(run,candidate,verdict,before,selected_passed,prior,round,policy);}
  }else{
-  note_refinement_edit(run,composed,verdict,before,replay_passed,prior,round);
+  note_refinement_edit(run,composed,verdict,before,replay_passed,prior,round,policy);
  }
 }
 fn refinement_ledger_section(run:&Json)->String{
- let digest=text(run,"run_digest");if digest.is_empty(){return String::new();}
+ let digest=text(run,"run_digest");
  let document=text(run,"edit_ledger");
  let file=crate::rrsi::load_file(&text(run,"edit_ledger_root"),&text(run,"edit_ledger_path")).unwrap_or_default();
  let source=if !file.is_empty()&&file==document{file}else{document};
- match crate::rrsi::prompt_document(&source,&digest){
-  Ok(section)=>section,
-  Err(_)=>"\nEDIT HISTORY\nThe edit ledger could not be read. Existing history was left unchanged.".into(),
- }
+ let history=if digest.is_empty(){String::new()}else{
+  match crate::rrsi::prompt_document(&source,&digest){
+   Ok(section)=>section,
+   Err(_)=>"\nEDIT HISTORY\nThe edit ledger could not be read. Existing history was left unchanged.".into(),
+  }
+ };
+ let round=if get(run,"first_refinement")!=&Null{2}else{1};
+ let records=crate::rrsi::records_of(&source).unwrap_or_default();
+ format!("{history}{}",crate::rrsi::budget_line(&records,&digest,round))
 }
 fn historical_experience(run:&Json)->String{
  let root=if text(run,"edit_ledger_root").is_empty(){crate::rrsi::default_root()}else{text(run,"edit_ledger_root")};
@@ -494,6 +514,10 @@ pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
    let (result,score,next)=match phase.as_str(){"baseline"=>("baseline","baseline_score","propose"),"probe"=>("probe","probe_score","compose"),_=>("replay","replay_score","review")};
    let mut value=improvement::evaluate(st,get(&run,"response_checks"),reply);
    if value!=Null{put(&mut value,"context",get(&run,"response_context").clone());}
+   if phase=="baseline"&&value!=Null{
+    let task=text(&run,"task");let verifier=improvement::verifier_key(get(&run,"response_checks"));
+    improvement::record_base(&mut run,&task,&verifier,number(&value,"passed"));
+   }
    put(&mut run,result,s(reply));put(&mut run,score,value);put(&mut run,"phase",s(next));
    if next=="review"{return complete_refinement_round(st,run);}
   },
@@ -522,17 +546,55 @@ fn keep_first_refinement(run:&mut Json,note:&str){
  put(run,"composition",instructions);put(run,"selected_score",score);
  put(run,"retained_probe",Bool(false));put(run,"round_note",s(note));
 }
+fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:&str,round:u64)->Json{
+ let digest=refinement_digest(run);
+ let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
+ let (budget,remaining)=crate::rrsi::budget_for(&records,&digest,round);
+ let floor=improvement::noise_floor(run,&text(run,"task"),&improvement::verifier_key(get(run,"response_checks")));
+ let new_len=selected_text.len() as u64;
+ let costs=crate::rrsi::incumbent_cost(&records,&digest).map(|before|(before,new_len));
+ let decision=improvement::acceptance(reference,selected,floor,costs.map(|pair|pair.0),costs.map(|pair|pair.1));
+ let reason=text(&decision,"reason");
+ let gain=text(&decision,"gain");
+ let cost_known=boolean(&decision,"cost_known");
+ let budget_block=remaining==0;
+ let (verdict_override,decision_text)=if budget_block{
+  (Some("rejected"),format!("refused because the annealed edit budget {budget} is already spent"))
+ }else if reason=="floor"{
+  (Some("rejected"),format!("refused because the gain {gain} does not exceed the noise floor {floor}"))
+ }else if reason=="cost rose"{
+  (Some("rejected"),"refused because the cost rose while the score did not".into())
+ }else if reason=="lower cost"{
+  (Some("accepted"),"accepted because the equal score costs less".into())
+ }else if !cost_known{
+  (None,"cost not recorded".into())
+ }else{
+  (None,"score".into())
+ };
+ let mut policy=obj(vec![
+  ("edit_budget",Num(budget.to_string())),
+  ("noise_floor",Num(floor.to_string())),
+  ("cost_known",Bool(cost_known)),
+  ("decision",s(&decision_text)),
+ ]);
+ if let Some((before,after))=costs{
+  put(&mut policy,"cost_before",Num(before.to_string()));
+  put(&mut policy,"cost_after",Num(after.to_string()));
+ }
+ if let Some(verdict)=verdict_override{put(&mut policy,"verdict",s(verdict));}
+ policy
+}
 fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
  let iterative=number(&run,"refinement_rounds")==2;
  let baseline=get(&run,"baseline_score");let probe=get(&run,"probe_score");let replay=get(&run,"replay_score");
  let first=get(&run,"first_refinement");
- let reference=if first==&Null{baseline}else{get(first,"score")};
+ let reference=if first==&Null{baseline.clone()}else{get(first,"score").clone()};
  let fallback=!boolean(replay,"strict")&&boolean(probe,"strict");
  let retain_probe=if iterative{
   match (improvement::comparable(baseline,probe),improvement::comparable(baseline,replay)){
    (true,true)=>{
-    let probe_preserves=improvement::preserves_checks(reference,probe);
-    let replay_preserves=improvement::preserves_checks(reference,replay);
+    let probe_preserves=improvement::preserves_checks(&reference,probe);
+    let replay_preserves=improvement::preserves_checks(&reference,replay);
     (probe_preserves&&!replay_preserves)
      || (probe_preserves==replay_preserves&&improvement::check_gain(replay,probe))
    },
@@ -542,41 +604,61 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
   }
  }else{fallback};
  let selected=if retain_probe{probe.clone()}else{replay.clone()};
- let score_before=number(reference,"passed");
+ let score_before=number(&reference,"passed");
  let replay_passed=number(replay,"passed");
  let selected_passed=number(&selected,"passed");
  let composed=text(&run,"composition");
  let candidate=text(&run,"candidate");
  let prior=if first==&Null{text(get(&run,"agent"),"instructions")}else{text(first,"instructions")};
  let round_index=if first==&Null{1}else{2};
+ let selected_text=if retain_probe{candidate.clone()}else{composed.clone()};
+ let policy=acceptance_policy(&mut run,&reference,&selected,&selected_text,round_index as u64);
+ let forced=text(&policy,"verdict");
  if retain_probe{
   let verified=get(&run,"candidate").clone();let revision=get(&run,"composition").clone();
   put(&mut run,"rejected_revision",revision);put(&mut run,"composition",verified);put(&mut run,"retained_probe",Bool(true));
  }
+ let record=|run:&mut Json,verdict:&str,policy:&Json|{
+  record_round_edit(run,retain_probe,&composed,&candidate,verdict,score_before,replay_passed,selected_passed,&prior,round_index,policy);
+ };
+ // A gate moves the note only when the accept bit moves. The ledger still names the gate.
  if !iterative{
-  record_round_edit(&mut run,retain_probe,&composed,&candidate,"accepted",score_before,replay_passed,selected_passed,&prior,round_index);
+  let verdict=if forced=="rejected"{"rejected"}else{"accepted"};
+  if forced=="rejected"{put(&mut run,"round_note",s(&text(&policy,"decision")));}
+  record(&mut run,verdict,&policy);
   return queue_evaluation(st,run,"evaluation_base");
  }
  let first=get(&run,"first_refinement");
  if first!=&Null{
-  let verdict=if !improvement::check_gain(get(first,"score"),&selected){
-   keep_first_refinement(&mut run,"The first round was retained because the second did not add passing checks while preserving earlier passes under comparable conditions.");
+  let old_reject=!improvement::check_gain(get(first,"score"),&selected);
+  let old_verdict=if old_reject{"rejected"}else{"accepted"};
+  let changed=!forced.is_empty()&&forced!=old_verdict;
+  let reject=if changed{forced=="rejected"}else{old_reject};
+  let verdict=if reject{
+   let note=if changed{text(&policy,"decision")}else{"The first round was retained because the second did not add passing checks while preserving earlier passes under comparable conditions.".into()};
+   keep_first_refinement(&mut run,&note);
    "rejected"
   }else{
    put(&mut run,"selected_score",selected);
-   put(&mut run,"round_note",s("The second round added passing checks and preserved earlier passes under comparable conditions."));
+   let note=if changed{text(&policy,"decision")}else{"The second round added passing checks and preserved earlier passes under comparable conditions.".into()};
+   put(&mut run,"round_note",s(&note));
    "accepted"
   };
-  record_round_edit(&mut run,retain_probe,&composed,&candidate,verdict,score_before,replay_passed,selected_passed,&prior,round_index);
+  record(&mut run,verdict,&policy);
   return queue_evaluation(st,run,"evaluation_base");
  }
- if boolean(&selected,"strict")||!improvement::check_gain(get(&run,"baseline_score"),&selected){
-  let verdict=if boolean(&selected,"strict"){"accepted"}else{"rejected"};
-  put(&mut run,"round_note",s("The first round ended the refinement. A second round requires a comparable partial gain."));
-  record_round_edit(&mut run,retain_probe,&composed,&candidate,verdict,score_before,replay_passed,selected_passed,&prior,round_index);
+ let strict=boolean(&selected,"strict");
+ let gained=improvement::check_gain(get(&run,"baseline_score"),&selected);
+ let old_verdict=if strict||gained{"accepted"}else{"rejected"};
+ let changed=!forced.is_empty()&&forced!=old_verdict;
+ if changed || strict || !gained{
+  let verdict=if changed{forced}else if strict{"accepted".into()}else{"rejected".into()};
+  let note=if changed{text(&policy,"decision")}else{"The first round ended the refinement. A second round requires a comparable partial gain.".into()};
+  put(&mut run,"round_note",s(&note));
+  record(&mut run,&verdict,&policy);
   return queue_evaluation(st,run,"evaluation_base");
  }
- record_round_edit(&mut run,retain_probe,&composed,&candidate,"accepted",score_before,replay_passed,selected_passed,&prior,round_index);
+ record(&mut run,"accepted",&policy);
  let first=obj(vec![("instructions",get(&run,"composition").clone()),("reply",get(&run,if retain_probe{"probe"}else{"replay"}).clone()),("score",selected)]);
  put(&mut run,"first_refinement",first);put(&mut run,"phase",s("propose"));
  for key in ["candidate","probe","probe_score","replay","replay_score","composition","rejected_revision","retained_probe","tool_trail"]{put(&mut run,key,Null);}
@@ -628,6 +710,8 @@ pub(super) fn evaluation_reply(st:&mut Json,reply:Option<&str>)->Result<Json>{
  if score==Null{return Err("The captured evaluation checks are unavailable".into());}
  put(&mut score,"context",get(&run,"evaluation_context").clone());
  if phase=="evaluation_base"{
+  let task=text(get(&run,"evaluation"),"task");let verifier=improvement::verifier_key(checks);
+  improvement::record_base(&mut run,&task,&verifier,number(&score,"passed"));
   put(&mut run,"evaluation_base_score",score);
   Ok(queue_evaluation(st,run,"evaluation_candidate")?.unwrap_or(Null))
  }else{
@@ -1195,6 +1279,159 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
  }
  #[test] fn empty_instruction_response_does_not_make_unusable_saved_candidate(){
   let mut st=configured();event_for(&mut st,"refine",&obj(vec![("task",s("Inspect"))])).unwrap();model_reply(&mut st,"baseline").unwrap();assert!(model_reply(&mut st,"  ").is_err());assert_eq!(get(&st,"refinement_pending"),&Null);
+ }
+ const POLICY_RUN:&str="abababababababababababababababababababababababababababababababab";
+ fn ledger_root()->String{
+  static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
+  let path=std::env::temp_dir().join(format!("rllm-gap2-{}-{}",std::process::id(),NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed)));
+  std::fs::create_dir_all(&path).unwrap();path.to_str().unwrap().to_string()
+ }
+ fn marked(passed:usize,mask:u8,route:&str)->Json{obj(vec![("passed",Num(passed.to_string())),("total",Num("8".into())),("strict",Bool(false)),("route",s(route)),("kind",s("required phrases")),("passed_checks",Num(mask.to_string())),("context",s("same-context"))])}
+ fn low_bits(passed:usize)->Json{marked(passed,((1u16<<passed) as u8)-1,"same-route")}
+ fn seed_edit(document:&str,round:u64,verdict:&str,cost_after:u64,hypothesis:&str,known:bool)->String{
+  let mut row=crate::rrsi::edit("prompt",hypothesis,&crate::rrsi::diff_digest("a",hypothesis),0,1,cost_after,cost_after,verdict,round,POLICY_RUN).unwrap();
+  if known{put(&mut row,"cost_known",Bool(true));}
+  text(&crate::rrsi::append_document(document,&row,POLICY_RUN).unwrap(),"document")
+ }
+ fn policy_run(rounds:usize,baseline:Json,probe:Json,replay:Json,composition:&str,candidate:&str,prior:&str,ledger:&str,bases:&[usize],first:Json)->(Json,Json){
+  let st=configured();let checks=Arr((0..8).map(|i|s(&format!("c{i}"))).collect());
+  let mut run=obj(vec![("mode",s("refine")),("phase",s("verify")),("task",s("acceptance task")),("chat",get(&st,"active").clone()),("agent",obj(vec![("name",s("General")),("instructions",s(prior)),("tools",s("read"))])),("baseline",s("baseline reply")),("probe",s("probe reply")),("replay",s("replay reply")),("baseline_score",baseline),("probe_score",probe),("replay_score",replay),("composition",s(composition)),("candidate",s(candidate)),("response_checks",checks.clone()),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(false)),("run_digest",s(POLICY_RUN)),("edit_ledger",s(ledger)),("edit_ledger_root",s(&ledger_root())),("edit_ledger_path",s("edits.jsonl")),("observations",Arr(vec![])),("tool_evidence",Arr(vec![])),("first_refinement",first)]);
+  let verifier=improvement::verifier_key(&checks);
+  for passed in bases{improvement::record_base(&mut run,"acceptance task",&verifier,*passed);}
+  (st,run)
+ }
+ fn settled_run(st:&mut Json,run:Json)->Json{
+  complete_refinement_round(st,run).unwrap();
+  let pending=get(st,"refinement_pending");if pending!=&Null{pending.clone()}else{get(st,"task_run").clone()}
+ }
+ fn last_edit(run:&Json)->Json{crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap().last().cloned().unwrap()}
+ fn decision_of(run:&Json)->(String,String,String,bool){
+  let row=last_edit(run);
+  (text(&row,"verdict"),text(run,"round_note"),text(&row,"decision"),get(run,"first_refinement")!=&Null)
+ }
+ #[test] fn annealed_budget_refuses_the_next_edit_through_the_round(){
+  let mut seen=Vec::new();
+  for priors in 0..5{
+   let mut ledger=String::new();
+   for index in 0..priors{ledger=seed_edit(&ledger,10+index as u64,"rejected",4,&format!("prior-{priors}-{index}"),false);}
+   let (mut st,run)=policy_run(1,low_bits(0),low_bits(1),low_bits(1),"accepted text","accepted text","old",&ledger,&[],Null);
+   let settled=settled_run(&mut st,run);let row=last_edit(&settled);
+   assert_eq!(text(&row,"verdict"),"accepted","{priors}");
+   assert_eq!(text(&row,"decision"),"cost not recorded");
+   seen.push(number(&row,"edit_budget"));
+  }
+  assert!(seen.windows(2).all(|pair|pair[0]>=pair[1]),"{seen:?}");
+  assert!(seen[0]>seen[3],"{seen:?}");
+  assert_eq!(seen,vec![4,3,2,1,1]);
+  let mut ledger=String::new();
+  for index in 0..4{ledger=seed_edit(&ledger,1,"accepted",4,&format!("spent-{index}"),false);}
+  let (mut st,run)=policy_run(1,low_bits(0),low_bits(1),low_bits(1),"beyond the budget","beyond the budget","old",&ledger,&[],Null);
+  let settled=settled_run(&mut st,run);let row=last_edit(&settled);
+  assert_eq!(text(&row,"verdict"),"rejected");
+  assert_eq!(text(&row,"decision"),"refused because the annealed edit budget 4 is already spent");
+  assert_eq!(text(&settled,"round_note"),"refused because the annealed edit budget 4 is already spent");
+  assert_eq!(number(&row,"edit_budget"),4);
+  assert!(get(&row,"noise_floor")!=&Null);
+  assert!(!text(&row,"decision").contains("noise floor")&&!text(&row,"decision").contains("cost rose"));
+ }
+ #[test] fn noise_floor_admits_only_a_gain_above_the_recorded_spread(){
+  let k=2usize;
+  let (mut floor_state,floor_run)=policy_run(2,low_bits(0),low_bits(k),low_bits(k),"gain of k","gain of k","old","",&[0,k],Null);
+  let refused=settled_run(&mut floor_state,floor_run);let row=last_edit(&refused);
+  assert_eq!(text(&row,"verdict"),"rejected");
+  assert_eq!(text(&row,"decision"),format!("refused because the gain {k} does not exceed the noise floor {k}"));
+  assert_eq!(text(&refused,"round_note"),text(&row,"decision"));
+  assert_eq!(number(&row,"noise_floor"),k);
+  assert_eq!(get(&refused,"first_refinement"),&Null);
+  let (mut above_state,above_run)=policy_run(2,low_bits(0),low_bits(k+1),low_bits(k+1),"gain of k plus one","gain of k plus one","old","",&[0,k],Null);
+  let admitted=settled_run(&mut above_state,above_run);let row=last_edit(&admitted);
+  assert_eq!(text(&row,"verdict"),"accepted");
+  assert!(!text(&row,"decision").contains("noise floor"),"{}",text(&row,"decision"));
+  assert!(!text(&admitted,"round_note").contains("noise floor"));
+  assert!(get(&admitted,"first_refinement")!=&Null);
+  assert_eq!(number(&row,"noise_floor"),k);
+  let (mut one_state,one_run)=policy_run(2,low_bits(1),low_bits(1),low_bits(1),"no gain","no gain","old","",&[0],Null);
+  let (mut zero_state,zero_run)=policy_run(2,low_bits(1),low_bits(1),low_bits(1),"no gain","no gain","old","",&[],Null);
+  let one=settled_run(&mut one_state,one_run);let zero=settled_run(&mut zero_state,zero_run);
+  assert_eq!(decision_of(&one),decision_of(&zero));
+  assert_eq!(text(&one,"round_note"),"The first round ended the refinement. A second round requires a comparable partial gain.");
+  assert_eq!(number(&last_edit(&one),"noise_floor"),0);
+  assert_eq!(text(&last_edit(&one),"decision"),"cost not recorded");
+  let (mut gained_one_state,gained_one_run)=policy_run(2,low_bits(0),low_bits(1),low_bits(1),"one base gain","one base gain","old","",&[4],Null);
+  let (mut gained_zero_state,gained_zero_run)=policy_run(2,low_bits(0),low_bits(1),low_bits(1),"one base gain","one base gain","old","",&[],Null);
+  assert_eq!(decision_of(&settled_run(&mut gained_one_state,gained_one_run)),decision_of(&settled_run(&mut gained_zero_state,gained_zero_run)));
+  let equal=low_bits(1);let up=low_bits(2);
+  let dropped=marked(2,0b110,"same-route");
+  let other=marked(2,0b11,"other-route");
+  for (before,after) in [(&equal,&equal),(&equal,&up),(&up,&dropped),(&equal,&other),(&Null,&up)]{
+   let decision=improvement::acceptance(before,after,0,None,None);
+   assert_eq!(boolean(&decision,"admit"),improvement::check_gain(before,after));
+   assert_eq!(boolean(&decision,"legacy"),boolean(&decision,"admit"));
+   assert_eq!(boolean(&decision,"cost_known"),false);
+  }
+ }
+ #[test] fn cost_changes_an_equal_score_only_when_both_legs_were_recorded(){
+  let expensive="x".repeat(50);let cheap="z".repeat(10);let kept="y".repeat(40);
+  let higher=seed_edit("",9,"accepted",10,&kept,true);
+  let (mut high_state,high_run)=policy_run(1,low_bits(1),low_bits(1),low_bits(1),&expensive,&expensive,&kept,&higher,&[],Null);
+  let refused=settled_run(&mut high_state,high_run);let row=last_edit(&refused);
+  assert_eq!(text(&row,"verdict"),"rejected");
+  assert_eq!(text(&row,"decision"),"refused because the cost rose while the score did not");
+  assert_eq!(text(&refused,"round_note"),"refused because the cost rose while the score did not");
+  assert_eq!(get(&row,"cost_known"),&Bool(true));
+  assert_eq!(number(&row,"cost_before"),10);
+  assert_eq!(number(&row,"cost_after"),50);
+  let first=obj(vec![("instructions",s(&kept)),("reply",s("first reply")),("score",low_bits(1))]);
+  let lower=seed_edit("",1,"accepted",40,&kept,true);
+  let (mut low_state,low_run)=policy_run(2,low_bits(1),low_bits(1),low_bits(1),&cheap,&cheap,&kept,&lower,&[],first.clone());
+  let accepted=settled_run(&mut low_state,low_run);let row=last_edit(&accepted);
+  assert_eq!(text(&row,"verdict"),"accepted");
+  assert_eq!(text(&row,"decision"),"accepted because the equal score costs less");
+  assert_eq!(text(&accepted,"round_note"),"accepted because the equal score costs less");
+  assert_eq!(text(&accepted,"composition"),cheap);
+  assert_eq!(get(&row,"cost_known"),&Bool(true));
+  assert_eq!(number(&row,"cost_before"),40);
+  assert_eq!(number(&row,"cost_after"),10);
+  let absent=seed_edit("",9,"accepted",10,&kept,false);
+  let (mut old_state,old_run)=policy_run(1,low_bits(1),low_bits(1),low_bits(1),&expensive,&expensive,&kept,&absent,&[],Null);
+  let unchanged=settled_run(&mut old_state,old_run);let row=last_edit(&unchanged);
+  assert_eq!(text(&row,"verdict"),"accepted");
+  assert_eq!(text(&row,"decision"),"cost not recorded");
+  assert_eq!(get(&row,"cost_known"),&Bool(false));
+  assert_eq!(get(&unchanged,"round_note"),&Null);
+  assert_eq!(number(&row,"cost_before"),kept.len());
+  assert_eq!(number(&row,"cost_after"),expensive.len());
+  let (mut kept_state,kept_run)=policy_run(2,low_bits(1),low_bits(1),low_bits(1),&cheap,&cheap,&kept,&absent,&[],first);
+  let retained=settled_run(&mut kept_state,kept_run);
+  assert_eq!(text(&retained,"composition"),kept);
+  assert_eq!(text(&retained,"round_note"),"The first round was retained because the second did not add passing checks while preserving earlier passes under comparable conditions.");
+  assert_eq!(text(&last_edit(&retained),"verdict"),"rejected");
+  assert_eq!(text(&last_edit(&retained),"decision"),"cost not recorded");
+  assert_eq!(get(&last_edit(&retained),"cost_known"),&Bool(false));
+ }
+ #[test] fn proposal_prompt_and_ledger_row_publish_the_round_budget(){
+  let mut st=configured();
+  let mut run=obj(vec![("mode",s("refine")),("phase",s("propose")),("task",s("Show the edit budget")),("agent",active_agent(&st)),("chat",get(&st,"active").clone()),("run_digest",s(POLICY_RUN)),("edit_ledger",s("")),("edit_ledger_root",s(&ledger_root())),("edit_ledger_path",s("edits.jsonl"))]);
+  put(&mut st,"task_run",run.clone());
+  let open=text(&request_messages(&st,vec![]).unwrap()[1],"content");
+  assert!(open.contains("Edits remaining this round: 4"),"{open}");
+  assert!(open.contains("The annealed budget is 4"),"{open}");
+  let mut ledger=String::new();
+  ledger=seed_edit(&ledger,3,"rejected",2,"older-a",false);
+  ledger=seed_edit(&ledger,4,"rejected",2,"older-b",false);
+  ledger=seed_edit(&ledger,2,"rejected",2,"spent-this-round",false);
+  put(&mut run,"edit_ledger",s(&ledger));
+  put(&mut run,"first_refinement",obj(vec![("instructions",s("kept")),("reply",s("first reply")),("score",low_bits(1))]));
+  put(&mut st,"task_run",run);
+  let later=text(&request_messages(&st,vec![]).unwrap()[1],"content");
+  assert!(later.contains("Edits remaining this round: 1"),"{later}");
+  assert!(later.contains("The annealed budget is 2"),"{later}");
+  let (mut st,run)=policy_run(1,low_bits(0),low_bits(1),low_bits(1),"recorded fields","recorded fields","old","",&[1],Null);
+  let settled=settled_run(&mut st,run);let row=last_edit(&settled);
+  assert_eq!(number(&row,"edit_budget"),4);
+  assert_eq!(number(&row,"noise_floor"),0);
+  assert_eq!(get(&row,"cost_known"),&Bool(false));
+  assert_eq!(text(&row,"decision"),"cost not recorded");
  }
 
 }

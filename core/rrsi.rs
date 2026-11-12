@@ -44,6 +44,11 @@ const EDIT_KEYS: &[&str] = &[
     "round",
     "run_digest",
 ];
+const POLICY_KEYS: &[&str] = &["edit_budget", "noise_floor", "cost_known", "decision"];
+// The product has no fixed round horizon, so each round already in the ledger
+// spends one step of the cap. Early rounds may attempt more edits than later ones.
+const BUDGET_MAX: u64 = 4;
+const BUDGET_MIN: u64 = 1;
 
 pub(crate) fn digest(bytes: &[u8]) -> String {
     super::application::workspace_digest(bytes)
@@ -113,10 +118,42 @@ fn validate_fields(value: &Json, expected_run: &str) -> Result<()> {
     if !hex_digest(&run_digest) || run_digest != expected_run {
         return Err("run_digest does not match the run being recorded".into());
     }
+    validate_policy(value)
+}
+fn edit_keys(sealed: bool) -> Vec<&'static str> {
+    let mut keys = EDIT_KEYS.to_vec();
+    keys.extend_from_slice(POLICY_KEYS);
+    if sealed {
+        keys.extend_from_slice(&["schema", "previous", "revision"]);
+    }
+    keys
+}
+fn validate_policy(value: &Json) -> Result<()> {
+    if get(value, "edit_budget") != &Null {
+        let budget = number_field(value, "edit_budget")?;
+        if budget > 1024 {
+            return Err("edit budget is outside the record cap".into());
+        }
+    }
+    if get(value, "noise_floor") != &Null {
+        let floor = number_field(value, "noise_floor")?;
+        if floor > 1024 {
+            return Err("noise floor is outside the record cap".into());
+        }
+    }
+    if get(value, "cost_known") != &Null && !matches!(get(value, "cost_known"), Bool(_)) {
+        return Err("cost_known must be a boolean".into());
+    }
+    if get(value, "decision") != &Null {
+        let decision = text(value, "decision");
+        if decision.is_empty() || decision.len() > 240 || decision.contains('\0') {
+            return Err("decision must be bounded text".into());
+        }
+    }
     Ok(())
 }
 fn validate_edit(value: &Json, expected_run: &str) -> Result<()> {
-    only_keys(value, EDIT_KEYS)?;
+    only_keys(value, &edit_keys(false))?;
     validate_fields(value, expected_run)
 }
 fn body_without_revision(value: &Json) -> Result<Json> {
@@ -128,8 +165,7 @@ fn body_without_revision(value: &Json) -> Result<Json> {
     Ok(Obj(body))
 }
 fn linked_previous(value: &Json, expected: &str) -> Result<String> {
-    let stored = EDIT_KEYS.iter().copied().chain(["schema", "previous", "revision"]);
-    only_keys(value, &stored.collect::<Vec<_>>())?;
+    only_keys(value, &edit_keys(true))?;
     if text(value, "schema") != "1" {
         return Err("edit ledger record schema is not 1".into());
     }
@@ -422,6 +458,46 @@ pub(crate) fn component_counts(records: &[Json], run_digest: &str) -> Vec<(Strin
         .filter(|(index, _)| counts[*index] > 0)
         .map(|(index, name)| ((*name).to_string(), counts[index]))
         .collect()
+}
+pub(crate) fn annealed_budget(rounds_recorded: u64) -> u64 {
+    BUDGET_MIN.max(BUDGET_MAX.saturating_sub(rounds_recorded))
+}
+pub(crate) fn budget_for(records: &[Json], run_digest: &str, round: u64) -> (u64, u64) {
+    let mut prior = Vec::new();
+    let mut spent = 0u64;
+    for record in records {
+        if text(record, "run_digest") != run_digest {
+            continue;
+        }
+        let Ok(id) = number_field(record, "round") else { continue };
+        if id == round {
+            spent += 1;
+        } else if !prior.contains(&id) {
+            prior.push(id);
+        }
+    }
+    let budget = annealed_budget(prior.len() as u64);
+    (budget, budget.saturating_sub(spent))
+}
+pub(crate) fn budget_line(records: &[Json], run_digest: &str, round: u64) -> String {
+    let (budget, remaining) = budget_for(records, run_digest, round);
+    format!("\nEDIT BUDGET\nEdits remaining this round: {remaining}. The annealed budget is {budget}.")
+}
+// Every row stores measured lengths. cost_known is false when a row had no pair
+// of costs to compare, and those lengths are not a later comparison.
+pub(crate) fn incumbent_cost(records: &[Json], run_digest: &str) -> Option<u64> {
+    records.iter().rev().find_map(|record| {
+        if text(record, "run_digest") != run_digest || text(record, "verdict") != "accepted" {
+            return None;
+        }
+        if get(record, "cost_known") != &Bool(true) {
+            return None;
+        }
+        match get(record, "cost_after") {
+            Num(value) => value.parse().ok(),
+            _ => None,
+        }
+    })
 }
 pub(crate) fn untried_components(records: &[Json], run_digest: &str) -> Vec<&'static str> {
     let tried = component_counts(records, run_digest);
@@ -1240,5 +1316,61 @@ mod checks {
         assert!(later.contains("indexed key is from another task"), "{later}");
         assert!(later.len() <= LIBRARY_PROMPT_MAX);
         assert!(!later.contains("ENDHARNESS"), "{later}");
+    }
+
+    #[test]
+    fn annealed_budget_shrinks_as_recorded_rounds_grow() {
+        let mut seen = Vec::new();
+        for rounds in 0..6 {
+            let mut records = Vec::new();
+            for round in 1..=rounds {
+                let row = edit("prompt", &format!("round {round}"), &diff_digest("a", "b"), 0, 1, 1, 2, "accepted", round, RUN).unwrap();
+                records.push(row);
+            }
+            let (budget, remaining) = budget_for(&records, RUN, rounds + 1);
+            assert_eq!(remaining, budget, "{rounds}");
+            seen.push(budget);
+        }
+        assert!(seen.windows(2).all(|pair| pair[0] >= pair[1]), "{seen:?}");
+        assert!(seen[0] > seen[3], "{seen:?}");
+        assert_eq!(seen[0], BUDGET_MAX);
+        assert_eq!(*seen.last().unwrap(), BUDGET_MIN);
+        let spent: Vec<Json> = (0..BUDGET_MAX).map(|index| {
+            edit("prompt", &format!("spent {index}"), &diff_digest("a", "b"), 0, 1, 1, 2, "accepted", 1, RUN).unwrap()
+        }).collect();
+        let (budget, remaining) = budget_for(&spent, RUN, 1);
+        assert_eq!(budget, BUDGET_MAX);
+        assert_eq!(remaining, 0);
+        let line = budget_line(&spent, RUN, 1);
+        assert!(line.contains("Edits remaining this round: 0"), "{line}");
+        assert!(line.contains(&format!("The annealed budget is {budget}")), "{line}");
+    }
+
+    #[test]
+    fn policy_fields_round_trip_and_legacy_rows_still_seal() {
+        let legacy = sample("legacy row", "accepted", RUN);
+        let mut document = text(&append_document("", &legacy, RUN).unwrap(), "document");
+        let mut annotated = edit("tools", "budget refusal", &diff_digest("a", "b"), 1, 1, 8, 9, "rejected", 2, RUN).unwrap();
+        put(&mut annotated, "edit_budget", n(2));
+        put(&mut annotated, "noise_floor", n(1));
+        put(&mut annotated, "cost_known", Bool(false));
+        put(&mut annotated, "decision", s("cost not recorded"));
+        document = text(&append_document(&document, &annotated, RUN).unwrap(), "document");
+        let records = records_of(&document).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(get(&records[0], "edit_budget"), &Null);
+        assert_eq!(get(&records[1], "edit_budget"), &Num("2".into()));
+        assert_eq!(get(&records[1], "noise_floor"), &Num("1".into()));
+        assert_eq!(get(&records[1], "cost_known"), &Bool(false));
+        assert_eq!(text(&records[1], "decision"), "cost not recorded");
+        assert_eq!(text(&records[1], "verdict"), "rejected");
+        assert!(incumbent_cost(&records, RUN).is_none());
+        let measured = edit("prompt", "lengths only", &diff_digest("a", "b"), 1, 2, 4, 11, "accepted", 3, RUN).unwrap();
+        document = text(&append_document(&document, &measured, RUN).unwrap(), "document");
+        assert!(incumbent_cost(&records_of(&document).unwrap(), RUN).is_none());
+        let mut known = edit("prompt", "kept", &diff_digest("a", "b"), 1, 2, 4, 11, "accepted", 4, RUN).unwrap();
+        put(&mut known, "cost_known", Bool(true));
+        document = text(&append_document(&document, &known, RUN).unwrap(), "document");
+        assert_eq!(incumbent_cost(&records_of(&document).unwrap(), RUN), Some(11));
     }
 }
