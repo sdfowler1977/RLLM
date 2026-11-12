@@ -175,6 +175,20 @@ fn parse_fact(line: &str) -> Result<Option<Item>, String> {
     Err(bad_line("package fact", line))
 }
 
+fn room_for(len: usize) -> Result<(), String> {
+    if len >= SPEC_ITEM_CAP {
+        Err(refusal(ITEM_CAP_NAME, &format!("{} exceeds {SPEC_ITEM_CAP}", len + 1)))
+    } else {
+        Ok(())
+    }
+}
+
+fn append_report(spec_len: usize, lines: &mut String, line: &str) -> Result<(), String> {
+    admit(spec_len.saturating_add(lines.len()).saturating_add(line.len()), SPEC_BYTE_CAP, SPEC_BYTE_NAME)?;
+    lines.push_str(line);
+    Ok(())
+}
+
 fn observe_items(bytes: &[u8], subject: Subject) -> Result<(Vec<Item>, Vec<Gap>), String> {
     match subject {
         Subject::Rust => parse_rust(&rust_source_observation::analyze(bytes, true)),
@@ -197,18 +211,31 @@ fn parse_script(text: &str) -> Result<(Vec<Item>, Vec<Gap>), String> {
         if let Some(count) = announced(line, "String census: ", " sites.") { section = "census"; sites = Some(count); continue; }
         if line.starts_with("Source maps:") { section = "maps"; continue; }
         if let Some(reason) = line.strip_prefix("Refusal: ") {
+            room_for(gaps.len())?;
             gaps.push(Gap { id: format!("refusal {}", gaps.len()), location: "observer refusal".into(), reason: reason.trim_end_matches('.').into() });
             continue;
         }
         if line.starts_with("Retained bytes are not UTF-8") {
+            room_for(gaps.len())?;
             gaps.push(Gap { id: "script-utf8".into(), location: "retained bytes".into(), reason: line.into() });
             continue;
         }
         match section {
-            "graph" => items.push(parse_edge(line)?),
-            "unknowns" => { gaps.push(parse_unknown(line)?); parsed_unknowns += 1; }
-            "census" => items.push(parse_site(line)?),
+            "graph" => {
+                room_for(items.len())?;
+                items.push(parse_edge(line)?);
+            }
+            "unknowns" => {
+                room_for(gaps.len())?;
+                gaps.push(parse_unknown(line)?);
+                parsed_unknowns += 1;
+            }
+            "census" => {
+                room_for(items.len())?;
+                items.push(parse_site(line)?);
+            }
             "maps" if line.starts_with("Reference at byte ") || line.starts_with("Unknown at byte ") => {
+                room_for(gaps.len())?;
                 gaps.push(Gap { id: format!("source-map {}", gaps.len()), location: "source map".into(), reason: line.into() });
             }
             _ => {}
@@ -231,14 +258,23 @@ fn parse_package(text: &str) -> Result<(Vec<Item>, Vec<Gap>), String> {
     }
     for line in text.lines() {
         if let Some(reason) = line.strip_prefix("Refusal: ") {
+            room_for(gaps.len())?;
             gaps.push(Gap { id: format!("refusal {}", gaps.len()), location: "observer refusal".into(), reason: reason.trim_end_matches('.').into() });
             continue;
         }
         if line.contains("facts withheld") {
+            room_for(gaps.len())?;
             gaps.push(Gap { id: "package-withheld".into(), location: "package.json".into(), reason: line.into() });
             continue;
         }
-        if let Some(item) = parse_fact(line)? { items.push(item); }
+        if let Some((field, _)) = line.split_once(": ") {
+            if matches!(field, "name" | "version" | "main" | "module" | "electron") {
+                room_for(items.len())?;
+            }
+        }
+        if let Some(item) = parse_fact(line)? {
+            items.push(item);
+        }
     }
     Ok((items, gaps))
 }
@@ -258,10 +294,12 @@ fn parse_rust(text: &str) -> Result<(Vec<Item>, Vec<Gap>), String> {
     let mut saw_count = false;
     for line in text.lines() {
         if let Some(reason) = line.strip_prefix("Lexical limitation: ") {
+            room_for(gaps.len())?;
             gaps.push(Gap { id: format!("lexical {}", gaps.len()), location: "lexical limitation".into(), reason: reason.into() });
             continue;
         }
         if line.contains("Report abbreviated") {
+            room_for(gaps.len())?;
             gaps.push(Gap { id: "rust-report-abbreviated".into(), location: "lexical report".into(), reason: line.into() });
             continue;
         }
@@ -270,25 +308,30 @@ fn parse_rust(text: &str) -> Result<(Vec<Item>, Vec<Gap>), String> {
             if let Some((total, after)) = rest.split_once(' ') {
                 if let Some(shown) = after.split("displayed ").nth(1).and_then(|value| value.split([' ', '(']).next()) {
                     if total != shown {
+                        room_for(gaps.len())?;
                         gaps.push(Gap { id: "rust-record-cap".into(), location: "lexical record cap".into(), reason: line.into() });
                     }
                 }
             }
             continue;
         }
-        if let Some(rest) = line.strip_prefix("Line ") { items.push(parse_rust_line(rest)?); }
+        if let Some(rest) = line.strip_prefix("Line ") {
+            room_for(items.len())?;
+            items.push(parse_rust_line(rest)?);
+        }
     }
     if !saw_count { return Err(refusal("clean-room rust observation", "The Rust observer did not report a declaration count.")); }
     Ok((items, gaps))
 }
 
-fn spec_lines(items: &[Item], citation: &Citation) -> String {
+fn spec_lines(items: &[Item], citation: &Citation) -> Result<String, String> {
     let mut out = String::new();
     for item in items {
         let known = format!("{} {}", cite_place(citation), item.detail());
-        out.push_str(&claim("spec", &item.id(), &known, item.spec_unknown()));
+        let line = claim("spec", &item.id(), &known, item.spec_unknown());
+        append_report(0, &mut out, &line)?;
     }
-    out
+    Ok(out)
 }
 
 fn js_escape(value: &str) -> String {
@@ -398,7 +441,7 @@ fn generate(subject: Subject, items: &[Item], citation: &Citation) -> Result<Str
     }
 }
 
-fn verify_parsed(subject: Subject, items: &[Item], gaps: &[Gap], generated: &[u8], citation: &Citation) -> Result<Outcome, String> {
+fn verify_parsed(subject: Subject, items: &[Item], gaps: &[Gap], generated: &[u8], citation: &Citation, spec_len: usize) -> Result<Outcome, String> {
     let (found, found_gaps) = observe_items(generated, subject)?;
     if !found_gaps.is_empty() && found_gaps.iter().any(|gap| gap.id.starts_with("refusal") || gap.id == "rust-record-cap" || gap.id == "rust-report-abbreviated") {
         return Err(refusal("clean-room generated observation", "The observer refused or abbreviated the generated artifact."));
@@ -416,23 +459,23 @@ fn verify_parsed(subject: Subject, items: &[Item], gaps: &[Gap], generated: &[u8
             *left -= 1;
             if *left == 0 { have.remove(&id); }
             matched += 1;
-            lines.push_str(&claim("matched", &id, &known, "the generated skeleton shows this observer item and is not the reference body"));
+            append_report(spec_len, &mut lines, &claim("matched", &id, &known, "the generated skeleton shows this observer item and is not the reference body"))?;
         } else {
             missing += 1;
-            lines.push_str(&claim("missing", &id, &known, "the generated file's observer does not show this item"));
+            append_report(spec_len, &mut lines, &claim("missing", &id, &known, "the generated file's observer does not show this item"))?;
         }
     }
     let mut unknown = 0usize;
     for gap in gaps {
         unknown += 1;
         let known = format!("{} {}", cite_place(citation), gap.location);
-        lines.push_str(&claim("unknown", &gap.id, &known, &gap.reason));
+        append_report(spec_len, &mut lines, &claim("unknown", &gap.id, &known, &gap.reason))?;
     }
     for (id, count) in have {
         for _ in 0..count {
             unknown += 1;
             let known = format!("the generated file's observer recorded this item; reference sha256 {}", citation.sha256);
-            lines.push_str(&claim("unknown", &id, &known, "it was not in the reference specification"));
+            append_report(spec_len, &mut lines, &claim("unknown", &id, &known, "it was not in the reference specification"))?;
         }
     }
     Ok(Outcome { generated: String::from_utf8(generated.to_vec()).map_err(|_| refusal("clean-room generated text", "The generated artifact is not UTF-8."))?, lines, items: items.len(), matched, missing, unknown })
@@ -453,12 +496,12 @@ fn guarded(bytes: &[u8], path: &str) -> Result<(Subject, Vec<Item>, Vec<Gap>), S
 
 pub(super) fn rebuild(bytes: &[u8], path: &str, citation: &Citation) -> Result<Outcome, String> {
     let (subject, items, gaps) = guarded(bytes, path)?;
-    let spec = spec_lines(&items, citation);
+    let spec = spec_lines(&items, citation)?;
     admit(spec.len(), SPEC_BYTE_CAP, SPEC_BYTE_NAME)?;
     let generated = generate(subject, &items, citation)?;
     admit(generated.len(), GENERATED_BYTE_CAP, GENERATED_BYTE_NAME)?;
     reject_identical(generated.as_bytes(), bytes)?;
-    let mut outcome = verify_parsed(subject, &items, &gaps, generated.as_bytes(), citation)?;
+    let mut outcome = verify_parsed(subject, &items, &gaps, generated.as_bytes(), citation, spec.len())?;
     outcome.lines.insert_str(0, &spec);
     admit(outcome.lines.len(), SPEC_BYTE_CAP, SPEC_BYTE_NAME)?;
     outcome.generated = generated;
@@ -467,9 +510,11 @@ pub(super) fn rebuild(bytes: &[u8], path: &str, citation: &Citation) -> Result<O
 
 pub(super) fn verify_artifact(reference: &[u8], path: &str, generated: &[u8], citation: &Citation) -> Result<Outcome, String> {
     let (subject, items, gaps) = guarded(reference, path)?;
-    let spec = spec_lines(&items, citation);
-    let mut outcome = verify_parsed(subject, &items, &gaps, generated, citation)?;
+    let spec = spec_lines(&items, citation)?;
+    admit(spec.len(), SPEC_BYTE_CAP, SPEC_BYTE_NAME)?;
+    let mut outcome = verify_parsed(subject, &items, &gaps, generated, citation, spec.len())?;
     outcome.lines.insert_str(0, &spec);
+    admit(outcome.lines.len(), SPEC_BYTE_CAP, SPEC_BYTE_NAME)?;
     Ok(outcome)
 }
 
@@ -542,6 +587,19 @@ mod checks {
     }
 
     #[test]
+    fn rebuild_refuses_its_own_skeleton_as_a_copy() {
+        let citation = cite("package.json");
+        let source = "{\"name\":\"desk\",\"version\":\"1.0.0\",\"main\":\"main.js\"}\n";
+        let outcome = rebuild(source.as_bytes(), "package.json", &citation).unwrap();
+        assert_ne!(outcome.generated.as_bytes(), source.as_bytes());
+        let error = rebuild(outcome.generated.as_bytes(), "package.json", &citation).unwrap_err();
+        assert!(error.contains(COPY_NAME), "{error}");
+        assert!(error.contains("Generated bytes are identical to the reference."), "{error}");
+        assert!(error.contains("No output was written."), "{error}");
+        assert!(!error.contains("Verification matched"), "{error}");
+    }
+
+    #[test]
     fn missing_spec_item_is_reported_with_its_identity() {
         let outcome = rebuild(JS.as_bytes(), "feature.js", &cite("feature.js")).unwrap();
         let needle = "router.get(\"/status\", function () {});\n";
@@ -567,6 +625,28 @@ mod checks {
         let big = vec![b'x'; SUBJECT_BYTE_CAP + 1];
         let error = rebuild(&big, "feature.js", &cite("feature.js")).unwrap_err();
         assert!(error.contains("clean-room subject-byte cap"), "{error}");
+    }
+
+    #[test]
+    fn item_cap_allows_exactly_its_bound() {
+        let mut source = String::new();
+        for index in 0..SPEC_ITEM_CAP { source.push_str(&format!("require(\"m{index}\");\n")); }
+        let outcome = rebuild(source.as_bytes(), "feature.js", &cite("feature.js")).unwrap();
+        assert_eq!(outcome.items, SPEC_ITEM_CAP, "{}", outcome.lines);
+        assert_eq!(outcome.matched, SPEC_ITEM_CAP, "{}", outcome.lines);
+        assert_eq!(outcome.missing, 0, "{}", outcome.lines);
+    }
+
+    #[test]
+    fn item_cap_stops_before_the_overflowing_row_is_parsed() {
+        let mut source = String::new();
+        for index in 0..SPEC_ITEM_CAP { source.push_str(&format!("require(\"m{index}\");\n")); }
+        source.push_str("require(\"a\\\"b\");\n");
+        let error = rebuild(source.as_bytes(), "feature.js", &cite("feature.js")).unwrap_err();
+        assert!(error.contains(ITEM_CAP_NAME), "{error}");
+        assert!(error.contains("No output was written."), "{error}");
+        assert!(!error.contains("clean-room specifier"), "{error}");
+        assert!(!error.contains("Verification matched"), "{error}");
     }
 
     #[test]
