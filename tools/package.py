@@ -1,7 +1,7 @@
 """Package exact signed inputs; incomplete compatibility remains explicit in candidates."""
 from pathlib import Path
 import argparse,datetime,hashlib,json,re,zipfile
-from signature import verify
+import subprocess
 root=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser();p.add_argument('--destination',type=Path,required=True);p.add_argument('--candidate',action='store_true',help='Retain the explicitly unavailable historical comparator in a signed candidate; never accepts a product check failure.');args=p.parse_args()
 out=args.destination.resolve();out.mkdir(parents=True,exist_ok=True)
@@ -111,7 +111,7 @@ with zipfile.ZipFile(source,'w',zipfile.ZIP_DEFLATED,compresslevel=9)as z:
 with zipfile.ZipFile(source)as z:
  assert z.testzip()is None and len(z.namelist())==len(manifest['files'])+1
  for name,record in manifest['files'].items():data=z.read('RLLM/'+name);assert len(data)==record['bytes']and hashlib.sha256(data).hexdigest()==record['sha256']
-published.write_bytes(apk_bytes);verify(published)
+published.write_bytes(apk_bytes);subprocess.run([root/'output/tools/signature', published], check=True)
 sums=out/f'RLLM__Candidate-Checksums__{stamp}.txt';sums.write_text(''.join(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.name+'\n'for f in [published,source]))
 record=dict(status='signed candidate; acceptance incomplete',version=version,members=len(files),build_inputs=len(manifest['build_inputs']),paths={k:str(f)for k,f in [('apk',published),('source',source),('checksums',sums)]},files={f.name:dict(bytes=f.stat().st_size,sha256=hashlib.sha256(f.read_bytes()).hexdigest())for f in [published,source,sums]})
 (root/'output/checks/packaged.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record,indent=2))
