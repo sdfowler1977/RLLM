@@ -141,6 +141,7 @@ fn required_inputs(root: &Path, source: &str) -> Vec<Input> {
         "signature",
         "apk",
         "toolchain",
+        "gate",
     ] {
         let reference = format!("output/tools/{tool}");
         if source.contains(&reference) {

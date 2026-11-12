@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds the native packaging tools that replace tools/alignment.py,
-# tools/readback.py and tools/checkpoint.py. No Cargo and no Python.
+# tools/readback.py, tools/checkpoint.py, tools/signature.py, tools/apk.py
+# and tools/toolchain.py. No Cargo and no Python.
 # Each tool is built twice: the application binary, then a --test build of the
 # same source that is executed here so the unit cases the source carries are
 # actually run by a sanctioned instrument. The executed case count is printed
@@ -12,7 +13,7 @@ project_dir=$(cd "$(dirname "$0")/.." && pwd)
 output=${1:-"$project_dir/output/tools"}
 mkdir -p "$output"
 printf 'tools compiler: %s\n' "$("$CLIENT_RUST/bin/rustc" --version)"
-for tool in alignment readback checkpoint; do
+for tool in alignment readback checkpoint signature apk toolchain gate; do
   LD_LIBRARY_PATH="$CLIENT_RUST/lib:${LD_LIBRARY_PATH:-}" \
     "$CLIENT_RUST/bin/rustc" --edition=2021 --crate-name "$tool" \
     --remap-path-prefix "$project_dir=RLLM" -C opt-level=2 -C codegen-units=1 \

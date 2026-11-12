@@ -29,6 +29,7 @@ const JOURNAL_LINES: usize = 256;
 const BUILDER_WALL: u64 = 900;
 const GATE_WALL: u64 = 300;
 const PROBE_WALL: u64 = 5;
+const GATE_REL: &str = "output/tools/gate";
 const SKIP_DIRS: &[&str] = &[".git", "output", "target", "tooling", ".qwen"];
 
 fn sha256(bytes: &[u8]) -> String {
@@ -430,8 +431,8 @@ pub(crate) fn plan(value: &Json) -> Result<Json> {
                 command_step(
                     "unit_gate",
                     "gate",
-                    "python3",
-                    &["tools/checks.py", "--all-units", &units],
+                    GATE_REL,
+                    &[&units],
                     GATE_WALL,
                 ),
             ]),
@@ -494,14 +495,20 @@ fn run_sanctioned(root: &Path, units: &str) -> Result<super::execution::BoundedO
         (
             "unit_gate",
             "gate",
-            "python3",
-            vec!["tools/checks.py".to_string(), "--all-units".to_string(), units.to_string()],
+            GATE_REL,
+            vec![units.to_string()],
             GATE_WALL,
         ),
     ];
     let mut last = None;
     for (name, role, program, args, wall) in steps {
-        let captured = bounded_child(root, program, &args, Duration::from_secs(wall), &uncancelled)?;
+        let captured = if role == "gate" {
+            let path = gate_tool_path(root)?;
+            let path = path.to_string_lossy().into_owned();
+            bounded_child(root, &path, &args, Duration::from_secs(wall), &uncancelled)?
+        } else {
+            bounded_child(root, program, &args, Duration::from_secs(wall), &uncancelled)?
+        };
         if role == "builder" && captured.code != Some(0) {
             return Err(format!("builder failed: {name} exited {:?}", captured.code));
         }
@@ -980,6 +987,79 @@ fn reviewed_timeout(args: &Json) -> Result<Duration> {
         _ => Err("timeout_seconds must be a number".into()),
     }
 }
+fn gate_tool_path(root: &Path) -> Result<PathBuf> {
+    let path = root.join(GATE_REL);
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => Ok(path),
+        _ => Err("unit gate tool is absent; build it with bash tools/build-tools.sh".into()),
+    }
+}
+/// The parent is settled before the reviewed edit and before any builder. A
+/// broken chain then leaves the review stamp valid and does not spend a rebuild.
+fn require_journal_parent(root: &Path, args: &Json) -> Result<()> {
+    let journal_rel = text(args, "journal");
+    let rollback_rel = text(args, "rollback");
+    relative(&journal_rel)?;
+    relative(&rollback_rel)?;
+    if journal_rel == rollback_rel {
+        return Err("journal and rollback must be different paths".into());
+    }
+    let parent = text(args, "parent");
+    digest_text(&parent)?;
+    let lines = journal_lines(&locate(root, &journal_rel, false)?)?;
+    match tail_revision(&lines)? {
+        Some(tail) if parent != tail => Err("parent revision does not match the journal tail".into()),
+        None if parent.is_empty() && !lines.is_empty() => Err("parent revision does not match the journal tail".into()),
+        _ => Ok(()),
+    }
+}
+fn append_journal_revision(
+    root: &Path,
+    args: &Json,
+    source_digest: &str,
+    rollback_digest: &str,
+    gate_output: &str,
+) -> Result<String> {
+    let gate = parse_gate(gate_output)?;
+    if !gate.green {
+        return Err(format!("reload refused: unit gate is not green ({}/{})", gate.passed, gate.cases));
+    }
+    let binary = resolve_file(root, &text(args, "binary"))?;
+    let build_digest = sha256(&read_regular(&binary, BINARY_MAX)?);
+    let mut argv = vec![s(&binary.to_string_lossy())];
+    for arg in strings(args, "successor_args")? {
+        argv.push(s(&arg));
+    }
+    let successor = obj(vec![
+        ("pid", n(u64::from(std::process::id()))),
+        ("argv", Arr(argv)),
+        ("binary_digest", s(&build_digest)),
+    ]);
+    let body = obj(vec![
+        ("schema", s("1")),
+        ("source_digest", s(source_digest)),
+        ("build_digest", s(&build_digest)),
+        ("parent", s(&text(args, "parent"))),
+        (
+            "gate",
+            obj(vec![
+                ("passed", n(gate.passed)),
+                ("cases", n(gate.cases)),
+                ("isolated", n(gate.isolated)),
+                ("green", Bool(true)),
+            ]),
+        ),
+        ("verdicts", Arr(vec![s("gate-green")])),
+        ("successor", successor),
+        ("rollback", s(&text(args, "rollback"))),
+        ("rollback_digest", s(rollback_digest)),
+    ]);
+    let revision = sha256(body.string().as_bytes());
+    let mut record = body;
+    put(&mut record, "revision", s(&revision));
+    append_record(&locate(root, &text(args, "journal"), true)?, &record.string())?;
+    Ok(revision)
+}
 fn sanctioned_child(
     root: &Path,
     program: &str,
@@ -987,20 +1067,18 @@ fn sanctioned_child(
     timeout: Duration,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<super::execution::BoundedOutput> {
-    let allowed = match (program, args) {
-        ("bash", [only]) if only == "headless.sh" => true,
-        ("bash", [script, units]) if script == "tools/build-units.sh" && relative(units).is_ok() => true,
-        ("python3", [script, flag, units])
-            if script == "tools/checks.py" && flag == "--all-units" && relative(units).is_ok() =>
-        {
-            true
+    match (program, args) {
+        ("bash", [only]) if only == "headless.sh" => bounded_child(root, program, args, timeout, cancelled),
+        ("bash", [script, units]) if script == "tools/build-units.sh" && relative(units).is_ok() => {
+            bounded_child(root, program, args, timeout, cancelled)
         }
-        _ => false,
-    };
-    if !allowed {
-        return Err("builder is not one of the sanctioned commands".into());
+        (GATE_REL, [units]) if relative(units).is_ok() => {
+            let path = gate_tool_path(root)?;
+            let path = path.to_string_lossy().into_owned();
+            bounded_child(root, &path, args, timeout, cancelled)
+        }
+        _ => Err("builder is not one of the sanctioned commands".into()),
     }
-    bounded_child(root, program, args, timeout, cancelled)
 }
 pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Result<String> {
     if cancelled() {
@@ -1013,8 +1091,20 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
         return Err("reload must be exec, spawn, or empty".into());
     }
     let timeout = reviewed_timeout(args)?;
+    let journal_rel = text(args, "journal");
+    if !journal_rel.is_empty() {
+        require_journal_parent(root, args)?;
+    }
     let (edited, written) = apply_reviewed_edit(root, args)?;
     let saved = format!("Saved {written} bytes to {edited}.");
+    let mut source_digest = String::new();
+    let mut rollback_digest = String::new();
+    if !journal_rel.is_empty() {
+        let (digest, _, _) = tree(root, &skip_paths(args)?)?;
+        source_digest = digest;
+        let binary = resolve_file(root, &text(args, "binary"))?;
+        rollback_digest = preserve_rollback(&locate(root, &text(args, "rollback"), true)?, &binary)?;
+    }
     let mut gate_text = String::new();
     if !text(args, "builder").is_empty() {
         let built = sanctioned_child(root, &text(args, "builder"), &strings(args, "builder_args")?, timeout, cancelled)?;
@@ -1035,6 +1125,11 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
         }
         gate_text = gate.stdout;
     }
+    let revision = if journal_rel.is_empty() {
+        String::new()
+    } else {
+        append_journal_revision(root, args, &source_digest, &rollback_digest, &gate_text)?
+    };
     if reload == "exec" || reload == "spawn" {
         if parse_gate(&gate_text).map(|gate| gate.green).unwrap_or(false) == false {
             return Err("reload refused unless the unit gate is green".into());
@@ -1046,9 +1141,23 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
         let mut child = Command::new(&binary);
         child.current_dir(root).stdin(Stdio::null());
         let child = child.spawn().map_err(|error| format!("successor spawn failed: {error}"))?;
-        return Ok(format!("{saved} successor pid {}", child.id()));
+        if revision.is_empty() {
+            return Ok(format!("{saved} successor pid {}", child.id()));
+        }
+        return Ok(format!(
+            "{saved} recorded revision {revision} in {journal_rel} successor pid {}",
+            child.id()
+        ));
     }
-    if gate_text.is_empty() {
+    if !revision.is_empty() {
+        let mut receipt = format!("{saved} recorded revision {revision} in {journal_rel}");
+        let gate = gate_text.trim_end_matches(['\r', '\n']);
+        if !gate.is_empty() {
+            receipt.push(' ');
+            receipt.push_str(gate);
+        }
+        Ok(receipt)
+    } else if gate_text.is_empty() {
         Ok(format!("{saved} self-build reviewed; no builder was requested"))
     } else {
         Ok(format!("{saved} {gate_text}"))
@@ -1473,5 +1582,139 @@ mod checks {
         assert_eq!(text(&logged, "source_digest"), text(&seen, "source_digest"));
         assert_eq!(text(&logged, "binary_digest"), sha256(b"successor-image"));
         assert!(text(&logged, "log").contains("continue"));
+    }
+
+    fn marker_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("rllm-self-build-{name}-{}", std::process::id()))
+    }
+    fn journal_request<'a>(
+        content: &'a str,
+        parent: &'a str,
+        extra: Vec<(&'a str, Json)>,
+    ) -> Json {
+        let mut fields = vec![
+            ("path", s("src/lib.rs")),
+            ("content", s(content)),
+            ("previous_exists", Bool(true)),
+            ("approved_previous", s("fn a() {}\n")),
+            ("builder", s("bash")),
+            ("builder_args", Arr(vec![s("headless.sh")])),
+            ("binary", s("bin")),
+            ("journal", s("self/journal.jsonl")),
+            ("rollback", s("self/rollback")),
+            ("parent", s(parent)),
+        ];
+        fields.extend(extra);
+        obj(vec![("args", obj(fields))])
+    }
+
+    #[test]
+    fn wrong_parent_refuses_before_the_builder_runs() {
+        let scratch = Scratch::new("wrong-parent");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        write(&root.join("bin"), b"binary-v1");
+        let marker = marker_path("wrong-parent");
+        let _ = fs::remove_file(&marker);
+        write(
+            &root.join("headless.sh"),
+            format!(
+                "#!/bin/sh\ntouch {}\nprintf '%s\\n' 'Rust cases passed: 2/2; isolated application cases: 1'\n",
+                marker.display()
+            )
+            .as_bytes(),
+        );
+        let body = obj(vec![("schema", s("1")), ("parent", s(""))]);
+        let revision = sha256(body.string().as_bytes());
+        let mut record = body;
+        put(&mut record, "revision", s(&revision));
+        write(&root.join("self/journal.jsonl"), format!("{}\n", record.string()).as_bytes());
+        let content = "fn a() { let _ = 1; }\n";
+        let live = || false;
+        let error = run(root, &journal_request(content, "", Vec::new()), &live).unwrap_err();
+        assert_eq!(error, "parent revision does not match the journal tail");
+        assert!(!marker.exists(), "builder ran for an empty parent");
+        assert_eq!(fs::read(root.join("src/lib.rs")).unwrap(), b"fn a() {}\n");
+        let error = run(root, &journal_request(content, &sha256(b"wrong-parent"), Vec::new()), &live).unwrap_err();
+        assert_eq!(error, "parent revision does not match the journal tail");
+        assert!(!marker.exists(), "builder ran for a wrong parent");
+        assert_eq!(fs::read(root.join("src/lib.rs")).unwrap(), b"fn a() {}\n");
+        assert_eq!(rows(&root.join("self/journal.jsonl")).len(), 1);
+        let _ = fs::remove_file(&marker);
+    }
+
+    #[test]
+    fn journal_commit_skips_over_cap_rollback_and_names_the_revision() {
+        let scratch = Scratch::new("journal-commit");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        write(&root.join("bin"), b"binary-v1");
+        let mut rollback = vec![7u8; 4 * 1024 * 1024 + 4096];
+        for (index, byte) in rollback.iter_mut().enumerate() {
+            *byte = (index % 251) as u8;
+        }
+        write(&root.join("self/rollback"), &rollback);
+        let blocked = tree(root, &Vec::<String>::new()).unwrap_err();
+        assert!(blocked.contains("exceeds"), "{blocked}");
+        let marker = marker_path("journal-commit");
+        let _ = fs::remove_file(&marker);
+        write(
+            &root.join("headless.sh"),
+            format!(
+                "#!/bin/sh\ntouch {}\nprintf '%s\\n' 'Rust cases passed: 2/2; isolated application cases: 1'\n",
+                marker.display()
+            )
+            .as_bytes(),
+        );
+        let before = tree(root, &["self/journal.jsonl".into(), "self/rollback".into()]).unwrap().0;
+        let content = "fn a() { let _ = 1; }\n";
+        let live = || false;
+        let receipt = run(root, &journal_request(content, "", Vec::new()), &live).unwrap();
+        assert!(marker.exists(), "builder did not run");
+        let _ = fs::remove_file(&marker);
+        assert_eq!(fs::read_to_string(root.join("src/lib.rs")).unwrap(), content);
+        let stored = rows(&root.join("self/journal.jsonl"));
+        assert_eq!(stored.len(), 1);
+        addressed(&stored[0]);
+        let revision = text(&stored[0], "revision");
+        assert!(
+            receipt.contains(&format!("Saved {} bytes to src/lib.rs.", content.len())),
+            "{receipt}"
+        );
+        assert!(
+            receipt.contains(&format!("recorded revision {revision} in self/journal.jsonl")),
+            "{receipt}"
+        );
+        let after = tree(root, &["self/journal.jsonl".into(), "self/rollback".into()]).unwrap().0;
+        assert_ne!(before, after);
+        assert_eq!(text(&stored[0], "source_digest"), after);
+        assert_eq!(text(&stored[0], "build_digest"), sha256(b"binary-v1"));
+        assert_eq!(text(&stored[0], "parent"), "");
+        assert_eq!(text(&stored[0], "rollback_digest"), sha256(&rollback));
+        assert_eq!(get(get(&stored[0], "gate"), "passed"), &Num("2".into()));
+        assert_eq!(get(get(&stored[0], "gate"), "cases"), &Num("2".into()));
+        assert_eq!(get(get(&stored[0], "gate"), "isolated"), &Num("1".into()));
+        assert_eq!(get(get(&stored[0], "gate"), "green"), &Bool(true));
+        assert_eq!(get(&stored[0], "verdicts").array().unwrap()[0], s("gate-green"));
+        assert_eq!(fs::read(root.join("self/rollback")).unwrap(), rollback);
+    }
+
+    #[test]
+    fn missing_gate_tool_names_the_build_script() {
+        let scratch = Scratch::new("missing-gate");
+        let root = scratch.path();
+        let error = match sanctioned_child(
+            root,
+            "output/tools/gate",
+            &["output/units".to_string()],
+            Duration::from_secs(5),
+            &|| false,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("absent gate tool was started"),
+        };
+        assert!(error.contains("bash tools/build-tools.sh"), "{error}");
+        assert!(!error.contains("No such file"), "{error}");
+        assert!(!error.contains("Cannot start"), "{error}");
     }
 }
