@@ -342,6 +342,19 @@ fn read_regular(path: &Path, max: u64) -> Result<Vec<u8>> {
         .map_err(|error| error.to_string())?;
     read_fd(file, max)
 }
+/// Successor rows sit beside the revision journal. They use the same line
+/// digest and parent link, and they are not source: a witness must not move
+/// the source digest or the revision tail the next build parent has to match.
+fn successor_journal_rel(journal_rel: &str) -> String {
+    match journal_rel.rsplit_once('.') {
+        Some((stem, ext)) => format!("{stem}.successors.{ext}"),
+        None => format!("{journal_rel}.successors"),
+    }
+}
+fn successor_journal_path(journal: &Path) -> PathBuf {
+    let name = journal.file_name().and_then(|name| name.to_str()).unwrap_or("journal");
+    journal.with_file_name(successor_journal_rel(name))
+}
 fn skip_paths(value: &Json) -> Result<Vec<String>> {
     let mut skip = Vec::new();
     for key in ["journal", "rollback"] {
@@ -350,7 +363,12 @@ fn skip_paths(value: &Json) -> Result<Vec<String>> {
             continue;
         }
         relative(&path)?;
-        skip.push(path);
+        skip.push(path.clone());
+        if key == "journal" {
+            let witness = successor_journal_rel(&path);
+            relative(&witness)?;
+            skip.push(witness);
+        }
     }
     Ok(skip)
 }
@@ -1302,6 +1320,7 @@ struct Tracked {
     job_source: String,
     mode: String,
     exit: Option<i32>,
+    journal: Option<PathBuf>,
 }
 static SUCCESSORS: OnceLock<Mutex<BTreeMap<u64, Tracked>>> = OnceLock::new();
 fn successors() -> std::sync::MutexGuard<'static, BTreeMap<u64, Tracked>> {
@@ -1311,6 +1330,15 @@ fn successors() -> std::sync::MutexGuard<'static, BTreeMap<u64, Tracked>> {
         .unwrap_or_else(|error| error.into_inner())
 }
 fn track(child: std::process::Child, job: &str, job_source: &str, mode: &str) -> u64 {
+    track_with(child, job, job_source, mode, None)
+}
+fn track_with(
+    child: std::process::Child,
+    job: &str,
+    job_source: &str,
+    mode: &str,
+    journal: Option<PathBuf>,
+) -> u64 {
     let pid = u64::from(child.id());
     successors().insert(
         pid,
@@ -1320,15 +1348,85 @@ fn track(child: std::process::Child, job: &str, job_source: &str, mode: &str) ->
             job_source: job_source.to_string(),
             mode: mode.to_string(),
             exit: None,
+            journal,
         },
     );
     pid
 }
-// The exit status is not recorded on disk.
-fn reap() -> usize {
+fn unix_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+fn witnessed_code(value: Option<i32>) -> Json {
+    match value {
+        Some(code) if code >= 0 => Num(code.to_string()),
+        _ => Null,
+    }
+}
+fn append_linked(path: &Path, mut body: Json) -> Result<()> {
+    let parent = tail_revision(&journal_lines(path)?)?.unwrap_or_default();
+    put(&mut body, "parent", s(&parent));
+    let revision = sha256(body.string().as_bytes());
+    put(&mut body, "revision", s(&revision));
+    append_record(path, &body.string())?;
+    Ok(())
+}
+fn append_spawn_row(path: &Path, pid: u64, job: &str, source_digest: &str, mode: &str) -> Result<()> {
+    append_linked(
+        path,
+        obj(vec![
+            ("schema", s("1")),
+            ("event", s("spawn")),
+            ("pid", n(pid)),
+            ("job", s(job)),
+            ("source_digest", s(source_digest)),
+            ("mode", s(mode)),
+            ("timestamp", n(unix_secs())),
+        ]),
+    )
+}
+fn append_reap_row(path: &Path, pid: u64, job: &str, exit: Option<i32>, signal: Option<i32>) -> Result<()> {
+    append_linked(
+        path,
+        obj(vec![
+            ("schema", s("1")),
+            ("event", s("reap")),
+            ("pid", n(pid)),
+            ("job", s(job)),
+            ("exit", witnessed_code(exit)),
+            ("signal", witnessed_code(signal)),
+        ]),
+    )
+}
+/// Rows in the successor journal next to `journal`. Missing file is an empty
+/// witness. The in-process table is not consulted.
+pub(crate) fn durable_successor_rows(journal: &Path) -> Result<Vec<Json>> {
+    let lines = journal_lines(&successor_journal_path(journal))?;
+    let mut rows = Vec::new();
+    let mut previous = String::new();
+    for line in &lines {
+        let value = parse(line)?;
+        let revision = text(&value, "revision");
+        digest_text(&revision)?;
+        let body = without_revision(&value)?;
+        if revision.is_empty() || revision != sha256(body.string().as_bytes()) {
+            return Err("successor journal row is not content-addressed".into());
+        }
+        let parent = text(&value, "parent");
+        digest_text(&parent)?;
+        if parent != previous {
+            return Err("successor journal parent does not match the previous row".into());
+        }
+        previous = revision;
+        rows.push(value);
+    }
+    Ok(rows)
+}
+// A spawn that carried a journal path appends its exit beside that journal.
+// A spawn with no journal stays in memory, and a refused command writes nothing.
+fn reap() -> Result<usize> {
     let mut table = successors();
-    let mut exited = 0usize;
-    for tracked in table.values_mut() {
+    let mut ready = Vec::new();
+    for (pid, tracked) in table.iter_mut() {
         if tracked.mode != "spawn" || tracked.child.is_none() {
             continue;
         }
@@ -1340,11 +1438,26 @@ fn reap() -> usize {
             }
         };
         let Some(status) = status else { continue };
-        tracked.exit = status.code();
-        tracked.child = None;
-        exited += 1;
+        ready.push((
+            *pid,
+            tracked.job.clone(),
+            tracked.journal.clone(),
+            status.code(),
+            std::os::unix::process::ExitStatusExt::signal(&status),
+        ));
     }
-    exited
+    let mut exited = 0usize;
+    for (pid, job, journal, code, signal) in ready {
+        if let Some(path) = journal {
+            append_reap_row(&path, pid, &job, code, signal)?;
+        }
+        if let Some(tracked) = table.get_mut(&pid) {
+            tracked.exit = code;
+            tracked.child = None;
+            exited += 1;
+        }
+    }
+    Ok(exited)
 }
 pub(crate) fn successor_states() -> Vec<Json> {
     successors()
@@ -1390,7 +1503,7 @@ fn run_with(
     carried_job: &str,
     carried_instruction: &str,
 ) -> Result<String> {
-    let reaped = reap();
+    let reaped = reap()?;
     if cancelled() {
         return Err("self-build cancelled".into());
     }
@@ -1489,8 +1602,17 @@ fn run_with(
             child.env("RLLM_SELF_INSTRUCTION", &instruction);
             handed.push("RLLM_SELF_INSTRUCTION".to_string());
         }
+        let witnessed = if journal_rel.is_empty() {
+            None
+        } else {
+            Some(successor_journal_path(&locate(root, &journal_rel, true)?))
+        };
         let child = child.spawn().map_err(|error| format!("successor spawn failed: {error}"))?;
-        let pid = track(child, &job, job_source, "spawn");
+        let pid = track_with(child, &job, job_source, "spawn", witnessed.clone());
+        // Spawn succeeded, so the pid is real. The row lands before the revision handoff.
+        if let Some(path) = &witnessed {
+            append_spawn_row(path, pid, &job, &source_digest, &reload)?;
+        }
         let revision = if journal_rel.is_empty() {
             String::new()
         } else {
@@ -2639,8 +2761,8 @@ mv "$tmp" "$1.done"
         assert_eq!(get(&tracked_state(hold_pid), "exit"), &Null);
         assert_eq!(text(&tracked_state(hold_pid), "job"), "held-job");
         assert_eq!(text(&tracked_state(hold_pid), "job_source"), "caller");
-        assert_eq!(reap(), 1);
-        assert_eq!(reap(), 0);
+        assert_eq!(reap().unwrap(), 1);
+        assert_eq!(reap().unwrap(), 0);
         assert_eq!(get(&tracked_state(quick_pid), "running"), &Bool(false));
         assert_eq!(get(&tracked_state(quick_pid), "exit"), &Num("5".into()));
         assert_eq!(text(&tracked_state(quick_pid), "job"), "done-job");
@@ -2649,8 +2771,8 @@ mv "$tmp" "$1.done"
         assert_eq!(get(&tracked_state(hold_pid), "exit"), &Null);
         write(&hold_path, b"go");
         wait_dead(hold_pid);
-        assert_eq!(reap(), 1);
-        assert_eq!(reap(), 0);
+        assert_eq!(reap().unwrap(), 1);
+        assert_eq!(reap().unwrap(), 0);
         assert_eq!(get(&tracked_state(hold_pid), "running"), &Bool(false));
         assert_eq!(get(&tracked_state(hold_pid), "exit"), &Num("4".into()));
     }
@@ -3200,5 +3322,176 @@ mv "$tmp" "$1.done"
         assert_eq!(gate_classifier, "gate is not one of the sanctioned commands");
         assert_eq!(gate_spawn, gate_classifier);
         assert_eq!(gate_preflight, gate_classifier);
+    }
+
+    fn unix_now() -> u64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+    }
+
+    #[test]
+    fn spawn_handoff_appends_one_durable_successor_row() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("durable-spawn");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        executable(&root.join("bin"), SUCCESSOR_SCRIPT.as_bytes());
+        green_builder(root);
+        let proof = root.join("proof-durable");
+        let before = unix_now();
+        let content = "fn a() { let _ = 1; }\n";
+        let job = "durable-job";
+        let receipt = run(
+            root,
+            &spawn_fields(
+                content,
+                "fn a() {}\n",
+                "",
+                vec![
+                    ("job", s(job)),
+                    ("successor_args", Arr(vec![s(proof.to_str().unwrap()), s("continue")])),
+                ],
+            ),
+            &|| false,
+        )
+        .unwrap();
+        let journal = root.join("self/journal.jsonl");
+        let stored = rows(&journal);
+        assert_eq!(stored.len(), 1, "the revision journal stays one build row");
+        let witness = successor_journal_path(&journal);
+        assert_eq!(witness, root.join("self/journal.successors.jsonl"));
+        let lines = rows(&witness);
+        assert_eq!(lines.len(), 1);
+        let row = &lines[0];
+        addressed(row);
+        assert_eq!(text(row, "event"), "spawn");
+        assert_eq!(text(row, "job"), job);
+        assert_eq!(text(row, "mode"), "spawn");
+        assert_eq!(text(row, "source_digest"), text(&stored[0], "source_digest"));
+        assert_eq!(text(row, "parent"), "");
+        assert_eq!(get(row, "exit"), &Null);
+        assert_eq!(get(row, "pid"), get(get(&stored[0], "successor"), "pid"));
+        let Num(stamp) = get(row, "timestamp") else { panic!("timestamp is not a number") };
+        let stamp = stamp.parse::<u64>().unwrap();
+        assert!(stamp >= before && stamp <= unix_now() + 1, "{stamp} outside {before}..");
+        let read = durable_successor_rows(&journal).unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(text(&read[0], "job"), job);
+        assert_eq!(text(&read[0], "mode"), "spawn");
+        assert_eq!(text(&read[0], "source_digest"), text(&stored[0], "source_digest"));
+        assert!(receipt.contains("successor pid "), "{receipt}");
+        wait_bytes(&PathBuf::from(format!("{}.done", proof.display())));
+        let Num(pid) = get(row, "pid") else { panic!("successor pid is not a number") };
+        wait_dead(pid.parse::<u64>().unwrap());
+        assert_eq!(reap().unwrap(), 1);
+    }
+
+    #[test]
+    fn reap_appends_the_child_exit_code_durably() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("durable-reap");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        green_builder(root);
+        // /bin/sh is a symlink. The seam only reads a regular file, so use the
+        // program that symlink names. The child is still `sh -c exit 9`.
+        let shell = fs::canonicalize("/bin/sh").unwrap();
+        let content = "fn a() { let _ = 1; }\n";
+        let job = "reap-job";
+        let receipt = run(
+            root,
+            &spawn_fields(
+                content,
+                "fn a() {}\n",
+                "",
+                vec![
+                    ("binary", s(shell.to_str().unwrap())),
+                    ("job", s(job)),
+                    ("successor_args", Arr(vec![s("-c"), s("exit 9")])),
+                ],
+            ),
+            &|| false,
+        )
+        .unwrap();
+        assert!(receipt.contains("successor pid "), "{receipt}");
+        let journal = root.join("self/journal.jsonl");
+        let spawned = durable_successor_rows(&journal).unwrap();
+        assert_eq!(spawned.len(), 1);
+        assert_eq!(text(&spawned[0], "event"), "spawn");
+        let Num(pid_text) = get(&spawned[0], "pid") else { panic!("successor pid is not a number") };
+        let pid = pid_text.parse::<u64>().unwrap();
+        wait_dead(pid);
+        assert_eq!(reap().unwrap(), 1);
+        assert_eq!(reap().unwrap(), 0);
+        let rows = durable_successor_rows(&journal).unwrap();
+        assert_eq!(rows.len(), 2);
+        addressed(&rows[0]);
+        addressed(&rows[1]);
+        assert_eq!(text(&rows[1], "event"), "reap");
+        assert_eq!(text(&rows[1], "job"), job);
+        assert_eq!(get(&rows[1], "pid"), &Num(pid.to_string()));
+        assert_eq!(get(&rows[1], "exit"), &Num("9".into()));
+        assert_eq!(get(&rows[1], "signal"), &Null);
+        assert_eq!(text(&rows[1], "parent"), text(&rows[0], "revision"));
+        let state = tracked_state(pid);
+        assert_eq!(get(&state, "running"), &Bool(false));
+        assert_eq!(get(&state, "exit"), &Num("9".into()));
+        assert_eq!(text(&state, "job"), job);
+    }
+
+    #[test]
+    fn durable_successor_rows_read_from_the_file_without_the_process_table() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("durable-fresh");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        executable(&root.join("bin"), b"#!/bin/sh\nexit 3\n");
+        green_builder(root);
+        let content = "fn a() { let _ = 1; }\n";
+        run(
+            root,
+            &spawn_fields(content, "fn a() {}\n", "", vec![("job", s("fresh-job"))]),
+            &|| false,
+        )
+        .unwrap();
+        let journal = root.join("self/journal.jsonl");
+        let spawned = durable_successor_rows(&journal).unwrap();
+        assert_eq!(spawned.len(), 1);
+        let Num(pid_text) = get(&spawned[0], "pid") else { panic!("successor pid is not a number") };
+        wait_dead(pid_text.parse::<u64>().unwrap());
+        assert_eq!(reap().unwrap(), 1);
+        let expected = durable_successor_rows(&journal).unwrap();
+        assert_eq!(expected.len(), 2);
+        assert_eq!(text(&expected[0], "event"), "spawn");
+        assert_eq!(text(&expected[0], "job"), "fresh-job");
+        assert_eq!(text(&expected[1], "event"), "reap");
+        assert_eq!(get(&expected[1], "exit"), &Num("3".into()));
+        successors().clear();
+        assert!(successor_states().is_empty(), "clearing the table left an in-process successor");
+        assert_eq!(durable_successor_rows(&journal).unwrap(), expected);
+    }
+
+    #[test]
+    fn refused_self_build_writes_no_durable_successor_file() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("durable-refuse");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        write(&root.join("bin"), b"binary-v1");
+        let journal = root.join("self/journal.jsonl");
+        let companion = successor_journal_path(&journal);
+        assert!(!companion.exists());
+        assert_refused_before_write(
+            root,
+            &refused_shape(vec![
+                ("builder", s("bash")),
+                ("builder_args", Arr(vec![s("echo"), s("unsanctioned")])),
+            ]),
+            "builder is not one of the sanctioned commands",
+        );
+        assert!(!journal.exists(), "a refused command appended a journal revision");
+        assert!(!companion.exists(), "a refused command created the successor journal");
+        assert!(durable_successor_rows(&journal).unwrap().is_empty());
+        assert!(!companion.exists(), "reading successors created a file");
+        assert!(successor_states().is_empty(), "a refused command tracked a successor");
     }
 }
