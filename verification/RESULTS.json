@@ -11,7 +11,7 @@
       "oauth": 121,
       "device_authorization": 92,
       "binary_flow": 0,
-      "pe_declarations": 18,
+      "pe_declarations": 34,
       "commands": 79,
       "history_migration": 0,
       "hosted_phases": 118,
@@ -69,11 +69,13 @@
       "state_sealing": 16,
       "desktop_runtime": 24,
       "turn_background": 0,
-      "permission_modes": 27
+      "permission_modes": 27,
+      "self_rebuild": 8,
+      "rrsi_loop": 6
     },
-    "total_executed": 4185,
-    "groups_passed": 65,
-    "groups": 69,
+    "total_executed": 4215,
+    "groups_passed": 67,
+    "groups": 71,
     "unavailable": [
       {
         "name": "binary_flow",
