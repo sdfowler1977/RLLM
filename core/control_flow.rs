@@ -3,7 +3,7 @@ use std::{collections::{BTreeMap,BTreeSet},fmt::Write as _};
 const WORDS:usize=512;
 const ROWS:usize=64;
 const OUTPUT:usize=8191;
-#[derive(Default)]pub(super) struct Observation{pub text:String,pub statements:Vec<super::instruction::Statement>,pub coordinate:String,pub regions:Vec<Region>,pub mappings_complete:bool,pub classifications:Vec<Classification>,pub classifications_complete:Option<bool>,pub relocations:Vec<Relocation>,pub pe_relocations:Vec<PeRelocation>,pub relocations_complete:Option<bool>,pub xrefs:CrossReferences}
+#[derive(Default)]pub(super) struct Observation{pub text:String,pub statements:Vec<super::instruction::Statement>,pub coordinate:String,pub regions:Vec<Region>,pub mappings_complete:bool,pub classifications:Vec<Classification>,pub classifications_complete:Option<bool>,pub relocations:Vec<Relocation>,pub pe_relocations:Vec<PeRelocation>,pub relocations_complete:Option<bool>,pub xrefs:CrossReferences,pub xrefs_complete:Option<bool>}
 #[derive(Clone,Copy)]pub(super) struct Region{pub offset:u64,pub address:u64,pub file_size:u64,pub memory_size:u64,pub executable:bool}
 #[derive(Clone,Copy)]pub(super) enum Branch{Direct{link:bool,offset:i64},Conditional{condition:u8,offset:i64,consistent:bool},Compare{nonzero:bool,wide:bool,register:u8,offset:i64},Test{nonzero:bool,bit:u8,register:u8,offset:i64},Register{kind:u8,register:u8},Authenticated{kind:u8,register:u8,modifier:Option<u8>,key_b:bool}}
 #[derive(Clone)]pub(super) struct Classification{pub section:u64,pub start:u64,pub end:u64,pub code:bool,pub mapping_agrees:bool,pub contradicted:bool,pub excludes_whole_data_words:bool}
@@ -265,7 +265,7 @@ pub(super) fn analyze(data:&[u8],regions:&[Region],inventory_complete:bool,label
 pub(super) fn analyze_with_data(data:&[u8],regions:&[Region],inventory_complete:bool,label:&str,cancelled:&dyn Fn()->bool,data_ranges:&[(u64,u64)])->Result<Observation,String>{
  if cancelled(){return Err("Inspection cancelled during control-flow observations".into());}
  let mut out=String::from("AArch64 control-flow encoding observations\nScope: aligned encoding candidates in declared executable file-backed mappings. Coordinates identify declared ELF virtual addresses or relative PE RVAs. Instruction words use little-endian encoding. Bounds: 512 examined words, 64 reported candidates, 8191 report bytes.\n");
- if !inventory_complete{out.push_str("Mapping inventory incomplete or invalid; branch candidates withheld because unseen mappings may conflict.\nCross-references withheld with the branch candidates.\n");return Ok(Observation{text:out,coordinate:label.into(),regions:regions.to_vec(),mappings_complete:inventory_complete,..Default::default()});}
+ if !inventory_complete{out.push_str("Mapping inventory incomplete or invalid; branch candidates withheld because unseen mappings may conflict.\nCross-references withheld with the branch candidates.\n");return Ok(Observation{text:out,coordinate:label.into(),regions:regions.to_vec(),mappings_complete:inventory_complete,xrefs_complete:Some(false),..Default::default()});}
  let mut ordered=regions.to_vec();ordered.sort_by_key(|r|(r.address,r.offset));let mut words=Vec::new();let mut seen=BTreeSet::new();let mut bounded=false;let mut invalid=0;let mut unavailable=0;let mut examined=0;let mut declared_data=0;
  'regions:for r in &ordered{
   if cancelled(){return Err("Inspection cancelled during control-flow observations".into());}if !r.executable||r.file_size==0{continue;}
@@ -292,9 +292,10 @@ pub(super) fn analyze_with_data(data:&[u8],regions:&[Region],inventory_complete:
  let sites:Vec<(u64,Branch)>=decoded.iter().filter_map(|row|row.3.map(|branch|(row.1,branch))).collect();
  let declared=elf_function_symbols(data);
  let xrefs=cross_references(&sites,&ordered,&declared.symbols);
+ let xrefs_complete=Some(!matches!(xrefs.refusal,Some(XREF_EDGE_CAP)|Some(XREF_UNKNOWN_CAP)));
  out.push('\n');out.push_str(&xref_text(&xrefs));
  if let Some(reason)=declared.refusal{if !out.contains(reason){out.push_str(&format!("Refusal: {reason}.\n"));}}
- Ok(Observation{text:out,statements:ir.statements,coordinate:label.into(),regions:regions.to_vec(),mappings_complete:inventory_complete,xrefs,..Default::default()})
+ Ok(Observation{text:out,statements:ir.statements,coordinate:label.into(),regions:regions.to_vec(),mappings_complete:inventory_complete,xrefs,xrefs_complete,..Default::default()})
 }
 /// Observe the declared executable mappings and return the complete observation.
 /// The observation is the mapping analysis itself; this named entry keeps the
