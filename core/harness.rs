@@ -68,7 +68,11 @@ fn incumbent_text(run:&Json)->String{
  if first!=&Null{return text(first,"instructions");}
  text(get(run,"agent"),"instructions")
 }
-fn round_index_of(run:&Json)->u64{if get(run,"first_refinement")!=&Null{2}else{1}}
+fn round_index_of(run:&Json)->u64{
+ let stored=match get(run,"round_index"){Num(value)=>value.parse::<u64>().unwrap_or(0),_=>0};
+ let inferred=if get(run,"first_refinement")!=&Null{2}else{1};
+ stored.max(inferred)
+}
 fn hypothesis_rejected(records:&[Json],digest:&str,component:&str,hypothesis:&str)->Option<u64>{
  if let Some(round)=crate::rrsi::prior_rejection(records,digest,component,hypothesis){return Some(round);}
  crate::rrsi::prior_rejection(records,digest,component,&harness_rules::digest(&s(hypothesis)))
@@ -205,7 +209,7 @@ fn refinement_ledger_section(run:&Json)->String{
    Err(_)=>"\nEDIT HISTORY\nThe edit ledger could not be read. Existing history was left unchanged.".into(),
   }
  };
- let round=if get(run,"first_refinement")!=&Null{2}else{1};
+ let round=round_index_of(run);
  let records=crate::rrsi::records_of(&source).unwrap_or_default();
  format!("{history}{}",crate::rrsi::budget_line(&records,&digest,round))
 }
@@ -347,7 +351,7 @@ pub(super) fn modal_for(st:&Json)->Json{
  "mcp_client_review"=>{let pending=get(st,"mcp_client_pending");modal("Approve MCP call?",vec![field_ui("request","Tool and arguments",&obj(vec![("name",get(pending,"name").clone()),("arguments",get(pending,"arguments").clone())]).string(),"readonly"),field_ui("destination","Destination",&endpoint_summary(&text(get(st,"mcp"),"endpoint")),"readonly")],vec![button("Run this call","mcp_client_approve")])},
  "task"=>modal("Agent task",vec![field_ui("delegation","Task and child execution",&delegation::status(st),"readonly"),field_ui("context_reminder","Context reminder",&text(st,"context_reminder"),"readonly"),field_ui("task","Task (uses current draft if supplied)",&text(st,"draft"),"multiline"),field_ui("agent","Selected agent",&text(&active_agent(st),"name"),"readonly"),interaction::choice("response_check_method","Refinement check method","phrases",&[
    ("Required phrases","phrases"),("JSON fields","json_fields")]),
-  field_ui("response_checks","Refinement checks (phrases or JSON Pointer values)","","multiline"),interaction::choice("refinement_rounds","Refinement rounds","1",&[("One round","1"),("Up to two rounds (requires response checks)","2")]),field_ui("evaluation_task","Separate evaluation task (optional, reply only)","","multiline"),interaction::choice("evaluation_method","Evaluation check method","phrases",&[("Required phrases","phrases"),("Exact text","equals"),("JSON value","json"),("JSON fields","json_fields"),("SHA-256 digest","sha256")]),field_ui("evaluation_checks","Expected evaluation output (kept on this device)","","multiline"),
+  field_ui("response_checks","Refinement checks (phrases or JSON Pointer values)","","multiline"),interaction::choice("refinement_rounds","Refinement rounds","1",&[("One round","1"),("Up to two rounds (requires response checks)","2"),("Up to three rounds (requires response checks)","3")]),field_ui("evaluation_task","Separate evaluation task (optional, reply only)","","multiline"),interaction::choice("evaluation_method","Evaluation check method","phrases",&[("Required phrases","phrases"),("Exact text","equals"),("JSON value","json"),("JSON fields","json_fields"),("SHA-256 digest","sha256")]),field_ui("evaluation_checks","Expected evaluation output (kept on this device)","","multiline"),
   field_ui("evaluation_task_2","Second evaluation task (optional, reply only)","","multiline"),
   interaction::choice("evaluation_method_2","Second evaluation check method","phrases",&[
    ("Required phrases","phrases"),("Exact text","equals"),("JSON value","json"),("JSON fields","json_fields"),("SHA-256 digest","sha256")]),
@@ -434,7 +438,7 @@ pub(super) fn event_for(st:&mut Json,a:&str,inputs:&Json)->Result<Json>{
  "capture_file"=>{let mut args=get(st,"edit").clone();if boolean(&args,"capture_scripts"){put(&mut args,"scripts",s("inline"));}let pending=obj(vec![("tool",s("capture")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "compare_files"=>{if text(st,"dialog")!="investigation"{return Err("Open File investigation before comparing paths".into());}if interaction::locked(st){return Err("Finish or cancel the current operation before comparing paths".into());}let e=get(st,"edit");let mut args=obj(vec![("path",s(&text(e,"path"))),("other",s(&text(e,"other")))]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("compare")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "inspect_file"=>{let e=get(st,"edit");let mut args=obj(vec![("path",get(e,"path").clone())]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("inspect")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
- "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));let mut task_run=obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]);if a=="refine"{let workspace=text(st,"approval_root");if !workspace.is_empty(){match crate::rrsi::require_recorded_worktree(std::path::Path::new(&workspace),&text(st,"approval_root_identity")){Ok(root)=>{let bound=crate::rrsi::workspace_text(&root)?;put(&mut task_run,"workspace",s(&bound));if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&bound)){put(&mut task_run,"source_digest",s(&digest));}}Err(_)=>{put(&mut task_run,"workspace",s(&workspace));}}}resume_durable_ledger(&mut task_run)?;}put(&mut next,"task_run",task_run);if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
+ "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));let mut task_run=obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]);if a=="refine"{let workspace=text(st,"approval_root");if !workspace.is_empty(){match crate::rrsi::require_recorded_worktree(std::path::Path::new(&workspace),&text(st,"approval_root_identity")){Ok(root)=>{let bound=crate::rrsi::workspace_text(&root)?;put(&mut task_run,"workspace",s(&bound));if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&bound)){put(&mut task_run,"source_digest",s(&digest));}}Err(error)=>{put(&mut task_run,"workspace",s(&workspace));if error!="workspace identity does not match the approved root"{if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&workspace)){put(&mut task_run,"source_digest",s(&digest));}}}}}resume_durable_ledger(&mut task_run)?;}put(&mut next,"task_run",task_run);if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
  "refinement_review"|"refinement_discard_review"=>{
   completed_refinement(st)?;
   put(st,"dialog",s(a));
@@ -617,6 +621,15 @@ pub(super) fn request_messages(st:&Json,mut messages:Vec<Json>)->Result<Vec<Json
   let system=format!("Answer the supplied task directly using the configured instructions. This evaluation accepts only a final text reply. No tool, report, memory change, or external action is available.\nUser-wide instructions:\n{}\nAgent instructions:\n{instructions}",text(st,"instructions"));
   return Ok(vec![obj(vec![("role",s("system")),("content",s(&system))]),obj(vec![("role",s("user")),("content",s(task))])]);
  }
+ if text(run,"phase")=="held_out"{
+  let evaluation=get(run,"evaluation");let task=field(evaluation,"task")?;
+  let mut instructions=text(&agent,"instructions");
+  for skill in array(&agent,"skills").iter().filter_map(|v|if let Num(n)=v{n.parse::<usize>().ok()}else{None}){
+   if let Some(profile)=array(st,"skills").get(skill){instructions.push_str(&format!("\nSkill {}:\n{}",text(profile,"name"),text(profile,"instructions")));}
+  }
+  let system=format!("Answer the supplied task directly using the configured instructions. This evaluation accepts only a final text reply. No tool, report, memory change, or external action is available.\nUser-wide instructions:\n{}\nAgent instructions:\n{instructions}",text(st,"instructions"));
+  return Ok(vec![obj(vec![("role",s("system")),("content",s(&system))]),obj(vec![("role",s("user")),("content",s(task))])]);
+ }
  let first=get(run,"first_refinement");let mut starting_agent=agent.clone();
  if first!=&Null{put(&mut starting_agent,"instructions",get(first,"instructions").clone());}
  let instructions=agent_prompt(st,&starting_agent);
@@ -659,6 +672,9 @@ pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
    evaluate_pool(st,&mut run,&pool,&[])?;
    if boolean(&run,"incumbent_kept"){return stop_refused(st,run);}
    if phase=="propose"{let candidate=get(&run,"composition").clone();put(&mut run,"candidate",candidate);}
+   let cap=number(&run,"refinement_rounds");
+   let index=round_index_of(&run);
+   if cap>=3 && index<cap as u64{return open_next_round(st,run,index);}
    return queue_evaluation(st,run,"evaluation_base");
   }
  }
@@ -667,12 +683,36 @@ pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
    let (result,score,next)=match phase.as_str(){"baseline"=>("baseline","baseline_score","propose"),"probe"=>("probe","probe_score","compose"),_=>("replay","replay_score","review")};
    let mut value=improvement::evaluate(st,get(&run,"response_checks"),reply);
    if value!=Null{put(&mut value,"context",get(&run,"response_context").clone());}
-   if phase=="baseline"&&value!=Null{
-    let task_key=improvement::task_key(&text(&run,"task"));let verifier=improvement::verifier_key(get(&run,"response_checks"));
-    improvement::record_base(&mut run,&task_key,&verifier,number(&value,"passed"));
+   if phase=="baseline" && get(&run,"baseline_score")!=&Null{
+    if value!=Null{
+     let task_key=improvement::task_key(&text(&run,"task"));let verifier=improvement::verifier_key(get(&run,"response_checks"));
+     improvement::record_base(&mut run,&task_key,&verifier,number(&value,"passed"));
+    }
+    put(&mut run,"phase",s("propose"));
+   }else{
+    if phase=="baseline"&&value!=Null{
+     let task_key=improvement::task_key(&text(&run,"task"));let verifier=improvement::verifier_key(get(&run,"response_checks"));
+     improvement::record_base(&mut run,&task_key,&verifier,number(&value,"passed"));
+    }
+    put(&mut run,result,s(reply));put(&mut run,score,value);
+    let next=if phase=="baseline" && number(&run,"refinement_rounds")>=3 && boolean(&run,"evaluation_requested") && get(&run,"held_out_known")==&Null{"held_out"}else{next};
+    put(&mut run,"phase",s(next));
+    if next=="review"{return complete_refinement_round(st,run);}
    }
-   put(&mut run,result,s(reply));put(&mut run,score,value);put(&mut run,"phase",s(next));
-   if next=="review"{return complete_refinement_round(st,run);}
+  },
+  "held_out"=>{
+   let harness_text=text(get(&run,"agent"),"instructions");
+   let evolve=vec![improvement::SplitCase{task:text(&run,"task"),checks:get(&run,"response_checks").clone(),reply:text(&run,"baseline")}];
+   let evaluation=get(&run,"evaluation");
+   let held=vec![improvement::SplitCase{task:text(evaluation,"task"),checks:get(evaluation,"checks").clone(),reply:reply.to_string()}];
+   match improvement::score_split(st,&harness_text,&evolve,Some(&held),None){
+    Ok(scored)=>{
+     install_split(&mut run,&scored);
+     if boolean(&run,"held_out_known"){let passed=get(&run,"held_out_passed").clone();put(&mut run,"held_out_before",passed);}
+    }
+    Err(error)=>put(&mut run,"held_out_error",s(&error)),
+   }
+   put(&mut run,"phase",s("propose"));
   },
   "propose"=>{
    if gate_candidate(&mut run,reply)?{return stop_refused(st,run);}
@@ -727,7 +767,7 @@ fn parse_pool(reply:&str)->Result<Option<Vec<String>>>{
 #[derive(Clone)]
 struct PoolJudgement{
  reply:String,early:bool,component:String,claim:String,diff:String,leakage:String,decision:String,
- policy:Json,admissible:bool,before:usize,after:usize,commit:String,branch:String,
+ policy:Json,admissible:bool,before:usize,after:usize,commit:String,branch:String,score:Json,
 }
 fn pool_refusal(role:&str,error:&str)->String{
  let mut text=format!("{role}: {error}").replace(['\n','\r']," ");
@@ -788,7 +828,7 @@ fn evaluate_pool(st:&Json,run:&mut Json,candidates:&[String],probes:&[String])->
    for reply in candidates{
     let critic=critic_against(run,&records,&incumbent,reply)?;
     let decision=error.clone();
-    push_pool_row(run,&PoolJudgement{reply:reply.clone(),early:true,component:critic.component,claim:critic.claim,diff:critic.diff,leakage:String::new(),decision,policy:Null,admissible:false,before:0,after:0,commit:String::new(),branch:String::new()},&incumbent,round);
+    push_pool_row(run,&PoolJudgement{reply:reply.clone(),early:true,component:critic.component,claim:critic.claim,diff:critic.diff,leakage:String::new(),decision,policy:Null,admissible:false,before:0,after:0,commit:String::new(),branch:String::new(),score:Null},&incumbent,round);
    }
    put(run,"composition",s(&incumbent));
    put(run,"incumbent_kept",Bool(true));
@@ -804,7 +844,7 @@ fn evaluate_pool(st:&Json,run:&mut Json,candidates:&[String],probes:&[String])->
  for (index,reply) in candidates.iter().enumerate(){
   let critic=critic_against(run,&records,&incumbent,reply)?;
   if critic.refused{
-   judged.push(PoolJudgement{reply:reply.clone(),early:true,component:critic.component,claim:critic.claim,diff:critic.diff,leakage:critic.leakage,decision:critic.decision,policy:Null,admissible:false,before:number(&reference,"passed"),after:0,commit:String::new(),branch:String::new()});
+   judged.push(PoolJudgement{reply:reply.clone(),early:true,component:critic.component,claim:critic.claim,diff:critic.diff,leakage:critic.leakage,decision:critic.decision,policy:Null,admissible:false,before:number(&reference,"passed"),after:0,commit:String::new(),branch:String::new(),score:Null});
    continue;
   }
   let probe=if probes.is_empty()||probes[index].is_empty(){reply.clone()}else{probes[index].clone()};
@@ -823,7 +863,7 @@ fn evaluate_pool(st:&Json,run:&mut Json,candidates:&[String],probes:&[String])->
   }else{
    text(&policy,"decision")
   };
-  judged.push(PoolJudgement{reply:reply.clone(),early:false,component:critic.component,claim:critic.claim,diff:critic.diff,leakage:"clean".into(),decision,policy,admissible,before:number(&reference,"passed"),after:number(&score,"passed"),commit:String::new(),branch:String::new()});
+  judged.push(PoolJudgement{reply:reply.clone(),early:false,component:critic.component,claim:critic.claim,diff:critic.diff,leakage:"clean".into(),decision,policy,admissible,before:number(&reference,"passed"),after:number(&score,"passed"),commit:String::new(),branch:String::new(),score:score.clone()});
  }
  let winner=judged.iter().position(|item|item.admissible);
  let root_ref=git.as_ref();
@@ -873,6 +913,7 @@ fn evaluate_pool(st:&Json,run:&mut Json,candidates:&[String],probes:&[String])->
   push_pool_row(run,&row,&incumbent,round as usize);
  }
  let adopted=winner.filter(|&index| judged[index].admissible&&judged[index].branch==crate::rrsi::EVOLVE_BRANCH);
+ if let Some(index)=adopted{put(run,"selected_score",judged[index].score.clone());}
  let kept=if let Some(index)=adopted{judged[index].reply.clone()}else{incumbent.clone()};
  put(run,"composition",s(&kept));
  put(run,"incumbent_kept",Bool(adopted.is_none()));
@@ -963,8 +1004,45 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
  if let Some(verdict)=verdict_override{put(&mut policy,"verdict",s(verdict));}
  policy
 }
+fn install_split(run:&mut Json,scored:&Json){
+ for key in ["harness_digest","evolve_task_key","evolve_verifier","evolve_shape","held_out_task_key","held_out_verifier","ood_task_key","ood_verifier","ood_shape"]{
+  if get(scored,key)!=&Null{put(run,key,get(scored,key).clone());}
+ }
+ put(run,"held_out_known",get(scored,"held_out_known").clone());
+ put(run,"ood_known",get(scored,"ood_known").clone());
+ if boolean(scored,"held_out_known"){put(run,"held_out_passed",get(scored,"held_out_passed").clone());}
+ if boolean(scored,"ood_known"){put(run,"ood_passed",get(scored,"ood_passed").clone());}
+}
+// `index` is the round that just closed. first_refinement may be set here, so the
+// next id is index+1 and is not inferred after that write.
+fn open_next_round(st:&mut Json,mut run:Json,index:u64)->Result<Option<Json>>{
+ let cap=number(&run,"refinement_rounds") as u64;
+ if cap<3 || index>=cap{return queue_evaluation(st,run,"evaluation_base");}
+ if get(&run,"first_refinement")==&Null && get(&run,"selected_score")!=&Null && !text(&run,"composition").is_empty() && !boolean(&run,"incumbent_kept"){
+  let kept=obj(vec![("instructions",get(&run,"composition").clone()),("reply",get(&run,"composition").clone()),("score",get(&run,"selected_score").clone())]);
+  put(&mut run,"first_refinement",kept);
+ }
+ put(&mut run,"round_index",Num((index+1).to_string()));
+ for key in ["candidate","probe","probe_score","replay","replay_score","composition","rejected_revision","retained_probe","tool_trail","incumbent_kept","selected_score","round_note"]{
+  put(&mut run,key,Null);
+ }
+ let task_key=improvement::task_key(&text(&run,"task"));
+ let verifier=improvement::verifier_key(get(&run,"response_checks"));
+ let observed=array(&run,"base_evaluations").into_iter().filter(|row| text(row,"task_key")==task_key && text(row,"verifier")==verifier).count();
+ put(&mut run,"phase",s(if observed<2{"baseline"}else{"propose"}));
+ match route(st,"subagent").and_then(|index|continue_refinement(st,run.clone(),index)){
+  Ok(effect)=>Ok(Some(effect)),
+  Err(_)=>{
+   if get(&run,"first_refinement")!=&Null{
+    keep_first_refinement(&mut run,"The second round could not start. The first tested candidate was retained.");
+   }
+   finish_refinement(st,run)
+  }
+ }
+}
 fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
- let iterative=number(&run,"refinement_rounds")==2;
+ let cap=number(&run,"refinement_rounds");
+ let iterative=cap>=2;
  let baseline=get(&run,"baseline_score");let probe=get(&run,"probe_score");let replay=get(&run,"replay_score");
  let first=get(&run,"first_refinement");
  let reference=if first==&Null{baseline.clone()}else{get(first,"score").clone()};
@@ -989,7 +1067,7 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
  let composed=text(&run,"composition");
  let candidate=text(&run,"candidate");
  let prior=if first==&Null{text(get(&run,"agent"),"instructions")}else{text(first,"instructions")};
- let round_index=if first==&Null{1}else{2};
+ let round_index=round_index_of(&run) as usize;
  let selected_text=if retain_probe{candidate.clone()}else{composed.clone()};
  let policy=acceptance_policy(&mut run,&reference,&selected,&selected_text,round_index as u64);
  let forced=text(&policy,"verdict");
@@ -1018,12 +1096,21 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
    keep_first_refinement(&mut run,&note);
    "rejected"
   }else{
-   put(&mut run,"selected_score",selected);
+   put(&mut run,"selected_score",selected.clone());
    let note=if changed{text(&policy,"decision")}else{"The second round added passing checks and preserved earlier passes under comparable conditions.".into()};
    put(&mut run,"round_note",s(&note));
    "accepted"
   };
   record(&mut run,verdict,&policy);
+  if cap>=3 && round_index<cap{
+   if !reject{
+    let reply=get(&run,if retain_probe{"probe"}else{"replay"}).clone();
+    let kept=obj(vec![("instructions",get(&run,"composition").clone()),("reply",reply),("score",selected.clone())]);
+    put(&mut run,"first_refinement",kept);
+    put(&mut run,"selected_score",selected.clone());
+   }
+   return open_next_round(st,run,round_index as u64);
+  }
   return queue_evaluation(st,run,"evaluation_base");
  }
  let strict=boolean(&selected,"strict");
@@ -1035,11 +1122,14 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
   let note=if changed{text(&policy,"decision")}else{"The first round ended the refinement. A second round requires a comparable partial gain.".into()};
   put(&mut run,"round_note",s(&note));
   record(&mut run,&verdict,&policy);
+  if cap>=3 && round_index<cap{return open_next_round(st,run,round_index as u64);}
   return queue_evaluation(st,run,"evaluation_base");
  }
  record(&mut run,"accepted",&policy);
  let first=obj(vec![("instructions",get(&run,"composition").clone()),("reply",get(&run,if retain_probe{"probe"}else{"replay"}).clone()),("score",selected)]);
- put(&mut run,"first_refinement",first);put(&mut run,"phase",s("propose"));
+ put(&mut run,"first_refinement",first);
+ if cap>=3{return open_next_round(st,run,round_index as u64);}
+ put(&mut run,"phase",s("propose"));
  for key in ["candidate","probe","probe_score","replay","replay_score","composition","rejected_revision","retained_probe","tool_trail"]{put(&mut run,key,Null);}
  match route(st,"subagent").and_then(|index|continue_refinement(st,run.clone(),index)){
   Ok(effect)=>Ok(Some(effect)),
@@ -1050,8 +1140,8 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
  }
 }
 pub(super) fn repeating_refinement(st:&Json)->bool{
- let run=get(st,"task_run");number(run,"refinement_rounds")==2&&get(run,"first_refinement")!=&Null
-  &&matches!(text(run,"phase").as_str(),"propose"|"probe"|"compose"|"verify")
+ let run=get(st,"task_run");number(run,"refinement_rounds")>=2&&get(run,"first_refinement")!=&Null
+  &&matches!(text(run,"phase").as_str(),"propose"|"probe"|"compose"|"verify"|"baseline"|"held_out")
 }
 pub(super) fn interrupted_refinement(st:&mut Json)->Result<Json>{
  if improvement::evaluating(st){return evaluation_reply(st,None);}
@@ -1116,6 +1206,12 @@ fn finish_refinement(st:&mut Json,mut run:Json)->Result<Option<Json>>{
   evidence.push_str(&format!("\nFirst round tested reply{}\n{first}",if clipped{" (excerpt)"}else{""}));
  }
  if boolean(&run,"evaluation_requested"){evidence.push_str("\nSeparate evaluation outcomes\n");evidence.push_str(&improvement::evaluation_summary(&run));}
+ let digest=text(&run,"run_digest");
+ if !digest.is_empty(){
+  let records=crate::rrsi::records_of(&text(&run,"edit_ledger")).unwrap_or_default();
+  let line=crate::rrsi::budget_line(&records,&digest,round_index_of(&run).saturating_add(1));
+  if line.contains("Pruned:"){evidence.push_str(&line);}
+ }
  put(&mut run,"evidence",s(&evidence));record_settled_library(&mut run);put(&mut run,"phase",s("review"));put(&mut run,"evaluation",Null);put(&mut run,"evaluation_next",Null);put(&mut run,"evaluation_context",Null);put(&mut run,"response_checks",Null);
  let mut next=st.clone();put(&mut next,"refinement_pending",run);reset_task(&mut next);
  put(&mut next,"dialog",s("refinement_review"));put(&mut next,"notice",s("Refinement ready for review; existing agent unchanged"));
@@ -2302,6 +2398,7 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   put(&mut st,"approval_root",s(&path));
   event_for(&mut st,"refine",&obj(vec![("task",s("pool workspace task")),("response_check_method",s("json_fields")),("response_checks",s("{\"/answer\":\"\"}"))])).unwrap();
   assert_eq!(text(get(&st,"task_run"),"workspace"),path);
+  assert_eq!(text(get(&st,"task_run"),"source_digest"),"absent");
   park_ledger(&mut st,&scratch.root);
   put(&mut st,"busy",Bool(false));
   model_reply(&mut st,"baseline answer").unwrap();
@@ -2863,6 +2960,111 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert!(!prompt.contains("Adopted harness"),"{prompt}");
   assert!(!prompt.contains("EDIT HISTORY"),"{prompt}");
   assert_eq!(std::fs::read(&path).unwrap(),tampered);
+ }
+ #[test]
+ fn three_refinement_rounds_record_budget_floor_leakage_prune_held_out_and_commit(){
+  let _home=DataHome::set("three-rounds");
+  let scratch=GitScratch::new();
+  let canonical=canonical_text(&scratch.repo);
+  let identity=crate::rrsi::workspace_identity(std::path::Path::new(&canonical)).unwrap();
+  let seed=git_text(&scratch.repo,&["rev-parse","HEAD"]);
+  let mut st=prepared();
+  bind_approval(&mut st,&canonical,&identity);
+  let inputs=|rounds:&str| obj(vec![
+   ("task",s("Drive three rounds.")),
+   ("response_check_method",s("json_fields")),
+   ("response_checks",s("{\"/a\":\"\",\"/b\":\"\"}")),
+   ("refinement_rounds",s(rounds)),
+   ("evaluation_task",s("Held out drive task.")),
+   ("evaluation_method",s("phrases")),
+   ("evaluation_checks",s("HELD-TOKEN")),
+  ]);
+  assert_eq!(event_for(&mut st,"refine",&inputs("4")).unwrap_err(),"Select one, two, or three refinement rounds");
+  assert_eq!(get(&st,"task_run"),&Null);
+  event_for(&mut st,"refine",&inputs("3")).unwrap();
+  assert_eq!(text(get(&st,"task_run"),"phase"),"baseline");
+  let drive=|st:&mut Json,reply:&str|{
+   put(st,"busy",Bool(false));
+   model_reply(st,reply).unwrap();
+   text(get(st,"task_run"),"phase")
+  };
+  let prompt=|st:&Json| text(&request_messages(st,vec![]).unwrap()[1],"content");
+  assert_eq!(drive(&mut st,"baseline says nothing"),"held_out");
+  assert_eq!(number(get(get(&st,"task_run"),"baseline_score"),"passed"),0);
+  let held=request_messages(&st,vec![]).unwrap();
+  assert_eq!(text(&held[1],"content"),"Held out drive task.");
+  assert!(text(&held[0],"content").contains("INCUMBENT RULES"),"{}",text(&held[0],"content"));
+  assert_eq!(drive(&mut st,"HELD-TOKEN is the separate answer"),"propose");
+  assert_eq!(get(get(&st,"task_run"),"held_out_known"),&Bool(true));
+  assert_eq!(number(get(&st,"task_run"),"held_out_passed"),1);
+  assert_eq!(number(get(&st,"task_run"),"held_out_before"),1);
+  let first_prompt=prompt(&st);
+  assert!(first_prompt.contains("Edits remaining this round: 4. The annealed budget is 4."),"{first_prompt}");
+  assert!(!first_prompt.contains("Pruned:"),"{first_prompt}");
+  let pool="candidates: 3\n{\"a\":\"\"}\n---\nCopy the task Drive three rounds. into the harness\n---\ncomponent: skills\nhypothesis: flat one\nflat body one";
+  assert_eq!(drive(&mut st,pool),"baseline");
+  assert_eq!(number(get(&st,"task_run"),"round_index"),2);
+  assert_eq!(number(get(get(&st,"task_run"),"baseline_score"),"passed"),0);
+  assert!(get(get(&st,"task_run"),"first_refinement")!=&Null);
+  assert_eq!(drive(&mut st,"{\"a\":\"\",\"b\":\"\"}"),"propose");
+  assert_eq!(number(get(get(&st,"task_run"),"baseline_score"),"passed"),0);
+  let second_prompt=prompt(&st);
+  assert!(second_prompt.contains("Edits remaining this round: 3. The annealed budget is 3."),"{second_prompt}");
+  assert!(!second_prompt.contains("Pruned:"),"{second_prompt}");
+  assert_eq!(drive(&mut st,"component: plugins\nhypothesis: raise the flag\nplugin body stays local"),"probe");
+  assert_eq!(drive(&mut st,"{\"a\":\"\",\"b\":\"\"}"),"compose");
+  assert_eq!(drive(&mut st,"component: skills\nhypothesis: flat two\nflat body two"),"verify");
+  assert_eq!(drive(&mut st,"replay says nothing"),"propose");
+  assert_eq!(number(get(&st,"task_run"),"round_index"),3);
+  let third_prompt=prompt(&st);
+  assert!(third_prompt.contains("Edits remaining this round: 2. The annealed budget is 2."),"{third_prompt}");
+  assert!(!third_prompt.contains("Pruned:"),"{third_prompt}");
+  assert_eq!(drive(&mut st,"component: skills\nhypothesis: flat three\nround three body"),"probe");
+  assert_eq!(drive(&mut st,"still nothing"),"compose");
+  assert_eq!(drive(&mut st,"component: skills\nhypothesis: flat four\nround three composed"),"verify");
+  assert_eq!(drive(&mut st,"still nothing"),"evaluation_base");
+  put(&mut st,"busy",Bool(false));
+  evaluation_reply(&mut st,Some("HELD-TOKEN is here")).unwrap();
+  assert_eq!(text(get(&st,"task_run"),"phase"),"evaluation_candidate");
+  put(&mut st,"busy",Bool(false));
+  evaluation_reply(&mut st,Some("no token")).unwrap();
+  let settled=get(&st,"refinement_pending").clone();
+  assert_eq!(text(&settled,"phase"),"review");
+  let evidence=text(&settled,"evidence");
+  assert!(evidence.contains("Pruned: skills."),"{evidence}");
+  assert!(evidence.contains("The annealed budget is 1."),"{evidence}");
+  assert!(array(&settled,"pruned_components").iter().any(|item| item==&s("skills")));
+  let rows=crate::rrsi::records_of(&text(&settled,"edit_ledger")).unwrap();
+  let leak=rows.iter().find(|row| text(row,"leakage")=="task_text").expect("leakage row");
+  assert_eq!(get(leak,"score_before"),&Null);
+  assert_eq!(get(leak,"score_after"),&Null);
+  assert_eq!(text(leak,"decision"),"refused because the candidate contains a recorded task");
+  assert_eq!(number(leak,"round"),1);
+  let floor=rows.iter().find(|row| text(row,"component")=="plugins").expect("plugins row");
+  assert_eq!(text(floor,"decision"),"refused because the gain 1 does not exceed the noise floor 2");
+  assert_eq!(number(floor,"noise_floor"),2);
+  assert_eq!(number(floor,"round"),2);
+  assert_eq!(number(floor,"score_before"),1);
+  assert_eq!(number(floor,"score_after"),2);
+  assert_eq!(get(floor,"held_out_known"),&Bool(true));
+  assert_eq!(number(floor,"held_out_passed"),1);
+  assert_eq!(text(floor,"held_out_task_key"),improvement::task_key("Held out drive task."));
+  assert_eq!(text(floor,"held_out_verifier"),improvement::verifier_key(&Arr(vec![s("HELD-TOKEN")])));
+  let budgets:Vec<_>=rows.iter().filter(|row| get(row,"edit_budget")!=&Null).map(|row| (number(row,"round"),number(row,"edit_budget"))).collect();
+  assert!(budgets.iter().filter(|pair| pair.0==1).all(|pair| pair.1==4) && budgets.iter().any(|pair| pair.0==1),"{budgets:?}");
+  assert!(budgets.iter().filter(|pair| pair.0==2).all(|pair| pair.1==3) && budgets.iter().any(|pair| pair.0==2),"{budgets:?}");
+  assert!(budgets.iter().filter(|pair| pair.0==3).all(|pair| pair.1==2) && budgets.iter().any(|pair| pair.0==3),"{budgets:?}");
+  let skills:Vec<_>=rows.iter().filter(|row| text(row,"component")=="skills").map(|row| number(row,"round")).collect();
+  assert_eq!(skills,vec![1,2,3],"{:?}",rows.iter().map(|row| (text(row,"component"),text(row,"hypothesis"),number(row,"round"),number(row,"score_before"),number(row,"score_after"))).collect::<Vec<_>>());
+  let winner=rows.iter().find(|row| text(row,"branch")==crate::rrsi::EVOLVE_BRANCH).expect("evolve row");
+  let commit=text(winner,"commit");
+  assert_eq!(commit.len(),40);
+  assert_eq!(git_text(&scratch.repo,&["rev-parse",&format!("refs/heads/{}",crate::rrsi::EVOLVE_BRANCH)]),commit);
+  assert_eq!(std::fs::read_to_string(scratch.repo.join(".git").join("worktrees").join("c0").join("HEAD")).unwrap().trim(),commit);
+  assert_eq!(std::fs::read_to_string(scratch.repo.join(".rllm-worktrees").join("c0").join("rllm-harness.txt")).unwrap(),"{\"a\":\"\"}");
+  assert_eq!(std::fs::read_to_string(scratch.repo.join("rllm-harness.txt")).unwrap(),"{\"a\":\"\"}");
+  assert_eq!(git_text(&scratch.repo,&["rev-parse","HEAD"]),seed);
+  assert_eq!(git_text(&scratch.repo,&["rev-parse",&format!("refs/heads/{}^",crate::rrsi::EVOLVE_BRANCH)]),seed);
  }
 }
 

@@ -115,8 +115,9 @@ pub(super) fn refinement_rounds(input: &Json, checks: &Json) -> Result<usize> {
         Null => Ok(1),
         Str(value) if value == "1" => Ok(1),
         Str(value) if value == "2" && checks != &Null => Ok(2),
-        Str(value) if value == "2" => Err("Add response checks before selecting a second refinement round".into()),
-        _ => Err("Select one or up to two refinement rounds".into()),
+        Str(value) if value == "3" && checks != &Null => Ok(3),
+        Str(value) if value == "2" || value == "3" => Err("Add response checks before selecting a second refinement round".into()),
+        _ => Err("Select one, two, or three refinement rounds".into()),
     }
 }
 
@@ -808,5 +809,26 @@ mod checks {
         assert!(text(&opposite, "note").contains("held-out score moved from 5 to 1"), "{}", text(&opposite, "note"));
         assert!(text(&opposite, "note").contains("evolve score moved from 0 to 2"), "{}", text(&opposite, "note"));
         assert!(text(&opposite, "note").contains("ood score moved from 4 to 0"), "{}", text(&opposite, "note"));
+    }
+
+    #[test]
+    fn three_refinement_rounds_are_accepted_and_four_are_refused() {
+        let checks = Arr(vec![s("phrase")]);
+        assert_eq!(refinement_rounds(&s("1"), &checks).unwrap(), 1);
+        assert_eq!(refinement_rounds(&s("2"), &checks).unwrap(), 2);
+        assert_eq!(refinement_rounds(&s("3"), &checks).unwrap(), 3);
+        assert_eq!(refinement_rounds(&Null, &checks).unwrap(), 1);
+        assert_eq!(
+            refinement_rounds(&s("2"), &Null).unwrap_err(),
+            "Add response checks before selecting a second refinement round"
+        );
+        assert_eq!(
+            refinement_rounds(&s("3"), &Null).unwrap_err(),
+            "Add response checks before selecting a second refinement round"
+        );
+        assert_eq!(
+            refinement_rounds(&s("4"), &checks).unwrap_err(),
+            "Select one, two, or three refinement rounds"
+        );
     }
 }
