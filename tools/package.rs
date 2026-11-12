@@ -2043,7 +2043,7 @@ struct ToolPython {
 const TOOL_PYTHON: &[ToolPython] = &[
     ToolPython {
         name: "checks.py",
-        role: "full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep, Python-only)",
+        role: "full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep; native orchestration and record writing is harness sweep over the Python group scripts)",
     },
     ToolPython {
         name: "package.py",
@@ -3725,7 +3725,7 @@ mod checks {
             "{err}"
         );
         assert!(census_line(&err).contains("tools files 3 lines 3"), "{err}");
-        assert!(census_line(&err).contains("checks.py (full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep, Python-only))"), "{err}");
+        assert!(census_line(&err).contains("checks.py (full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep; native orchestration and record writing is harness sweep over the Python group scripts))"), "{err}");
         assert!(census_line(&err).contains("package.py (publisher until a signed candidate is published with the native package binary)"), "{err}");
     }
 
@@ -3747,8 +3747,11 @@ mod checks {
         assert!(!selected.contains("--all-units"), "{selected}");
         assert!(!selected.contains("Python-only"), "native-equivalent --units role is described as Python-only: {selected}");
         assert!(sweep.contains("no-flag"), "{sweep}");
-        assert!(sweep.contains("sweep"), "{sweep}");
-        assert!(sweep.contains("Python-only"), "the no-flag connected-group sweep is not named Python-only: {sweep}");
+        assert!(sweep.contains("harness sweep"), "{sweep}");
+        assert!(sweep.contains("native orchestration and record writing"), "{sweep}");
+        assert!(sweep.contains("Python group scripts"), "{sweep}");
+        assert!(!sweep.contains("native twin harness sweep"), "the no-flag sweep is orchestration over Python group scripts, not a native twin of those scripts: {sweep}");
+        assert!(!sweep.contains("Python-only"), "the no-flag connected-group sweep is still labeled Python-only: {sweep}");
     }
 
     #[test]
@@ -3851,7 +3854,7 @@ mod checks {
         assert!(line.contains("tools files 2 lines 2"), "{line}");
         assert!(line.contains("verification files 73 lines 73 ceiling files 73 lines 8570"), "{line}");
         assert!(line.contains("elsewhere files 0 lines 0"), "{line}");
-        assert!(line.contains("checks.py (full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep, Python-only))"), "{line}");
+        assert!(line.contains("checks.py (full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep; native orchestration and record writing is harness sweep over the Python group scripts))"), "{line}");
         assert!(line.contains("package.py (publisher until a signed candidate is published with the native package binary)"), "{line}");
     }
 

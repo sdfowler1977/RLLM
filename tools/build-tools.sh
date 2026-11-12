@@ -15,7 +15,7 @@ project_dir=$(cd "$(dirname "$0")/.." && pwd)
 output=${1:-"$project_dir/output/tools"}
 mkdir -p "$output"
 printf 'tools compiler: %s\n' "$("$CLIENT_RUST/bin/rustc" --version)"
-for tool in alignment readback checkpoint signature apk toolchain gate package; do
+for tool in alignment readback checkpoint signature apk toolchain gate package harness; do
   LD_LIBRARY_PATH="$CLIENT_RUST/lib:${LD_LIBRARY_PATH:-}" \
     "$CLIENT_RUST/bin/rustc" --edition=2021 --crate-name "$tool" \
     --remap-path-prefix "$project_dir=RLLM" -C opt-level=2 -C codegen-units=1 \

@@ -1,6 +1,14 @@
-// Connected-check runner. Replaces the Python driver's role and reports the
-// difference between a product failure and a missing development input.
+// Connected-check runner.
+// `harness sweep` is native orchestration and record writing over the Python
+// group scripts. It runs a group only when that group's development inputs are
+// present, reads each group's JSON, and writes the connected object in
+// verification/RESULTS.json. A missing development input is unavailable and is
+// not charged as a product failure. A product failure leaves that record
+// untouched. The bare run and `harness <group>` do not write the record.
 use std::collections::BTreeSet;
+use std::io::Read;
+use std::os::unix::io::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime};
@@ -479,6 +487,25 @@ impl<'a> Scan<'a> {
         Some(text.parse::<usize>().ok())
     }
 
+    // A leading '-' is a signed integer here. Fractional and exponent forms stay
+    // Some(None) so the caller can reject them as non-integers.
+    fn take_executed_int(&mut self) -> Option<Option<i64>> {
+        let start = self.i;
+        let negative = self.peek() == Some(b'-');
+        match self.take_json_int() {
+            Some(Some(value)) => Some(Some(value as i64)),
+            Some(None) if negative => {
+                let token = std::str::from_utf8(self.text.get(start..self.i)?).ok()?;
+                match token.parse::<i64>() {
+                    Ok(value) => Some(Some(value)),
+                    Err(_) => Some(None),
+                }
+            }
+            Some(None) => Some(None),
+            None => None,
+        }
+    }
+
     fn skip_number(&mut self) -> Option<()> {
         self.take_json_int()?;
         Some(())
@@ -787,15 +814,429 @@ fn row_json(row: &Row) -> String {
     )
 }
 
-// The delivered record keeps every existing comparator. Only the connected
-// census is replaced, and only after the same reader that enforces inventory
-// drift accepts the new counts object.
-fn publish_record(root: &Path, rows: &[Row]) -> bool {
+// The report file package reads for each group. Four names are not the
+// hyphenated group name, and the identity groups keep their underscores.
+fn group_report_file(name: &str) -> String {
+    let stem = match name {
+        "provider_process" => "current-results".to_string(),
+        "network_drive" => "network-results".to_string(),
+        "question_process" => "process-results".to_string(),
+        "history" => "history-results".to_string(),
+        "desktop_runtime" | "turn_background" | "permission_modes" | "services" | "media" | "jobs" | "voice"
+        | "media_stream" | "media_upload" | "voice_interruption" | "voice_background" | "voice_session"
+        | "capture_lifecycle" | "scene" | "apk_alignment" | "audio_route" | "document_providers"
+        | "snapshot_identity" | "storage_auth" | "storage_oauth" | "credential_rotation" | "voice_settings"
+        | "acp" | "oauth" | "device_authorization" => name.to_string(),
+        other => other.replace('_', "-"),
+    };
+    format!("{stem}.json")
+}
+
+struct CountedJson {
+    count: usize,
+    passed_int: bool,
+    saw_checks: bool,
+}
+
+// Same count the publisher uses: `passed` when that key is present (list length
+// or integer), otherwise `count`. A `checks` list and a `count` field have to
+// agree. Zero, negatives, and non-integers are rejected so they cannot be
+// stored as a pass.
+fn executed_count_of(text: &str) -> Result<CountedJson, &'static str> {
+    let bytes = text.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() && matches!(bytes[start], b' ' | b'\n' | b'\r' | b'\t') {
+        start += 1;
+    }
+    if bytes.get(start) != Some(&b'{') {
+        return Err("group json is not an object");
+    }
+    let mut scan = Scan { text: bytes, i: start };
+    if !scan.eat(b'{') {
+        return Err("group json is not an object");
+    }
+    let mut passed_int: Option<i64> = None;
+    let mut passed_len = None;
+    let mut passed_bad = false;
+    let mut count_int: Option<i64> = None;
+    let mut count_bad = false;
+    let mut checks_len = None;
+    let mut checks_bad = false;
+    let mut saw_passed = false;
+    let mut saw_count = false;
+    let mut saw_checks = false;
+    loop {
+        scan.skip_ws();
+        if scan.eat(b'}') {
+            break;
+        }
+        let key = scan.key().ok_or("group json")?;
+        scan.skip_ws();
+        if !scan.eat(b':') {
+            return Err("group json");
+        }
+        scan.skip_ws();
+        match key.as_str() {
+            "passed" => {
+                saw_passed = true;
+                if scan.starts_number() {
+                    match scan.take_executed_int() {
+                        Some(Some(value)) => passed_int = Some(value),
+                        _ => passed_bad = true,
+                    }
+                } else if scan.peek() == Some(b'[') {
+                    passed_len = Some(scan.array_len().ok_or("group json")?);
+                } else {
+                    passed_bad = true;
+                    scan.skip_value().ok_or("group json")?;
+                }
+            }
+            "count" => {
+                saw_count = true;
+                if scan.starts_number() {
+                    match scan.take_executed_int() {
+                        Some(Some(value)) => count_int = Some(value),
+                        _ => count_bad = true,
+                    }
+                } else {
+                    count_bad = true;
+                    scan.skip_value().ok_or("group json")?;
+                }
+            }
+            "checks" => {
+                saw_checks = true;
+                if scan.peek() == Some(b'[') {
+                    checks_len = Some(scan.array_len().ok_or("group json")?);
+                } else {
+                    checks_bad = true;
+                    scan.skip_value().ok_or("group json")?;
+                }
+            }
+            _ => {
+                scan.skip_value().ok_or("group json")?;
+            }
+        }
+        scan.skip_ws();
+        if scan.eat(b',') {
+            continue;
+        }
+        if scan.eat(b'}') {
+            break;
+        }
+        return Err("group json");
+    }
+    if passed_bad || count_bad {
+        return Err("executed count is not an integer");
+    }
+    if checks_bad {
+        return Err("checks cross-check");
+    }
+    let (count, passed_is_int) = if saw_passed {
+        match (passed_len, passed_int) {
+            (Some(len), None) => (len as i64, false),
+            (None, Some(value)) => (value, true),
+            _ => return Err("executed count is not an integer"),
+        }
+    } else if let Some(value) = count_int {
+        (value, false)
+    } else if saw_count {
+        return Err("executed count is not an integer");
+    } else {
+        return Err("executed count is missing");
+    };
+    if count <= 0 {
+        return Err("executed count is not a positive integer");
+    }
+    let count = count as usize;
+    if saw_checks {
+        let len = checks_len.ok_or("checks cross-check")?;
+        if len != count {
+            return Err("checks cross-check");
+        }
+    }
+    if saw_passed && saw_count {
+        let declared = count_int.ok_or("executed count is not an integer")?;
+        if declared != count as i64 {
+            return Err("executed count differs from count");
+        }
+    }
+    Ok(CountedJson { count, passed_int: passed_is_int, saw_checks })
+}
+
+fn sweep_usage() -> &'static str {
+    "usage: harness sweep [--previous-scene-controller PATH] [--previous-controller PATH] [--previous-flow-controller PATH] [--previous-auth-controller PATH] [--auth-baseline PATH] [--auth-baseline-sha256 HEX]\n       harness [group ...]"
+}
+
+struct SweepOpts {
+    previous_scene: Option<PathBuf>,
+    previous_controller: Option<PathBuf>,
+    previous_flow: Option<PathBuf>,
+    previous_auth: Option<PathBuf>,
+    auth_baseline: Option<PathBuf>,
+    auth_baseline_sha256: Option<String>,
+}
+
+fn parse_sweep(args: &[String]) -> Result<SweepOpts, String> {
+    let mut opts = SweepOpts {
+        previous_scene: None,
+        previous_controller: None,
+        previous_flow: None,
+        previous_auth: None,
+        auth_baseline: None,
+        auth_baseline_sha256: None,
+    };
+    let mut index = 0;
+    while index < args.len() {
+        let flag = &args[index];
+        let Some(value) = args.get(index + 1) else {
+            return Err(format!("missing value for {flag}"));
+        };
+        if value.starts_with("--") {
+            return Err(format!("missing value for {flag}"));
+        }
+        match flag.as_str() {
+            "--previous-scene-controller" => opts.previous_scene = Some(PathBuf::from(value)),
+            "--previous-controller" => opts.previous_controller = Some(PathBuf::from(value)),
+            "--previous-flow-controller" => opts.previous_flow = Some(PathBuf::from(value)),
+            "--previous-auth-controller" => opts.previous_auth = Some(PathBuf::from(value)),
+            "--auth-baseline" => opts.auth_baseline = Some(PathBuf::from(value)),
+            "--auth-baseline-sha256" => opts.auth_baseline_sha256 = Some(value.clone()),
+            other => return Err(format!("unknown sweep argument {other}")),
+        }
+        index += 2;
+    }
+    Ok(opts)
+}
+
+fn resolved_path(path: &Path) -> String {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical.display().to_string();
+    }
+    if path.is_absolute() {
+        return path.display().to_string();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+// Argument rules copied from the no-flag path in tools/checks.py.
+fn sweep_arguments(name: &str, root: &Path, opts: &SweepOpts) -> Vec<String> {
+    let mut arguments = Vec::new();
+    if name == "scene" {
+        if let Some(path) = &opts.previous_scene {
+            arguments.push("--previous-scene-controller".into());
+            arguments.push(resolved_path(path));
+        }
+    }
+    let controller = opts.previous_controller.clone().unwrap_or_else(|| root.join("output/previous-controller"));
+    if name == "history_migration" || (name == "prompt_reference" && controller.is_file()) {
+        arguments.push("--previous-controller".into());
+        arguments.push(resolved_path(&controller));
+    }
+    if name == "binary_flow" {
+        let flow = opts.previous_flow.clone().unwrap_or_else(|| root.join("output/pre-branch-controller"));
+        let auth = opts.previous_auth.clone().unwrap_or_else(|| root.join("output/pre-auth-controller"));
+        arguments.push("--previous-flow-controller".into());
+        arguments.push(resolved_path(&flow));
+        arguments.push("--previous-auth-controller".into());
+        arguments.push(resolved_path(&auth));
+        if let Some(path) = &opts.auth_baseline {
+            arguments.push("--auth-baseline".into());
+            arguments.push(resolved_path(path));
+        }
+        if let Some(digest) = &opts.auth_baseline_sha256 {
+            arguments.push("--auth-baseline-sha256".into());
+            arguments.push(digest.clone());
+        }
+    }
+    arguments
+}
+
+extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+    fn poll(fds: *mut PollFd, nfds: usize, timeout: i32) -> i32;
+}
+
+#[repr(C)]
+struct PollFd {
+    fd: i32,
+    events: i16,
+    revents: i16,
+}
+
+fn python_group(root: &Path, name: &str, arguments: &[String]) -> Command {
+    let mut command = Command::new("python3");
+    command
+        .arg(root.join(format!("verification/{name}.py")))
+        .args(arguments)
+        .current_dir(root)
+        .process_group(0);
+    command
+}
+
+// Signal the child's process group. process_group(0) made that group id the
+// child's pid, so grandchildren that inherited it die with the deadline.
+fn kill_child_group(child: &mut std::process::Child) {
+    let pid = child.id() as i32;
+    unsafe {
+        kill(-pid, 9);
+    }
+    let _ = child.kill();
+    let deadline = Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => break,
+            Ok(None) if Instant::now() >= deadline => break,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    }
+}
+
+// poll bounds the read. A grandchild that still holds the write end cannot
+// keep join() blocked after the deadline.
+fn drain_bounded(mut pipe: impl Read + AsRawFd, deadline: Instant) -> Vec<u8> {
+    let fd = pipe.as_raw_fd();
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        if Instant::now() >= deadline {
+            break;
+        }
+        let mut pollfd = PollFd { fd, events: 1, revents: 0 };
+        let ready = unsafe { poll(&mut pollfd, 1, 200) };
+        if ready == 0 {
+            continue;
+        }
+        if ready < 0 {
+            continue;
+        }
+        match pipe.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(_) => break,
+        }
+    }
+    buffer
+}
+
+fn sweep_run(root: &Path, name: &str, arguments: &[String], seconds: u64) -> (i32, Vec<u8>, u64) {
+    let started = Instant::now();
+    let drain_deadline = started + std::time::Duration::from_secs(seconds.saturating_add(5));
+    let spawned = python_group(root, name, arguments).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(error) => return (-1, format!("runner could not start the group: {error}").into_bytes(), 0),
+    };
+    let stdout = child.stdout.take().expect("stdout");
+    let stderr = child.stderr.take().expect("stderr");
+    let out_handle = std::thread::spawn(move || drain_bounded(stdout, drain_deadline));
+    let err_handle = std::thread::spawn(move || drain_bounded(stderr, drain_deadline));
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.code().unwrap_or(-1),
+            Ok(None) => {
+                if started.elapsed().as_secs() >= seconds {
+                    kill_child_group(&mut child);
+                    timed_out = true;
+                    break 124;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Err(error) => {
+                kill_child_group(&mut child);
+                let elapsed = started.elapsed().as_secs();
+                let _ = out_handle.join();
+                let _ = err_handle.join();
+                return (-1, format!("runner could not wait for the group: {error}").into_bytes(), elapsed);
+            }
+        }
+    };
+    let stdout_bytes = out_handle.join().unwrap_or_default();
+    let stderr_bytes = err_handle.join().unwrap_or_default();
+    let mut log = stdout_bytes.clone();
+    log.extend_from_slice(&stderr_bytes);
+    if timed_out {
+        log.extend(format!("\nDevelopment check exceeded {seconds} seconds.\n").into_bytes());
+    }
+    std::fs::write(root.join(format!("output/checks/{name}.log")), &log).ok();
+    (status, stdout_bytes, started.elapsed().as_secs())
+}
+
+// response_fields and chunk_fields print their JSON and do not write it.
+// checks.py persists that object; the sweep stores the printed bytes unchanged.
+fn persist_printed_json(root: &Path, name: &str, stdout: &[u8]) -> Result<usize, String> {
+    let counted = executed_count_of(&String::from_utf8_lossy(stdout)).map_err(|err| err.to_string())?;
+    if !counted.passed_int || !counted.saw_checks {
+        return Err("printed json needs an integer passed and a checks list".into());
+    }
+    let path = root.join("output/checks").join(group_report_file(name));
+    std::fs::write(&path, stdout).map_err(|err| format!("could not write {}: {err}", path.display()))?;
+    Ok(counted.count)
+}
+
+struct SweepRow {
+    name: &'static str,
+    code: Option<i32>,
+    checks: Option<usize>,
+    missing: Vec<String>,
+    reason: String,
+}
+
+fn row_failed(row: &SweepRow) -> bool {
+    match row.code {
+        None => false,
+        Some(0) => !matches!(row.checks, Some(count) if count > 0),
+        Some(_) => true,
+    }
+}
+
+fn reason_for(code: i32, count_error: Option<&str>, report: &Path, log: &Path, seconds: u64) -> String {
+    let (sentence, path): (String, &Path) = if code == 124 {
+        (format!("timed out after {seconds} seconds"), log)
+    } else if let Some(error) = count_error {
+        let sentence: String = error.lines().next().unwrap_or(error).chars().take(240).collect();
+        (sentence, report)
+    } else {
+        (format!("exited {code}"), log)
+    };
+    format!("{sentence} ({})", path.display())
+}
+
+fn unavailable_line(name: &str, missing: &[Input]) -> String {
+    let list = missing.iter().map(|input| format!("{} {}", input.kind, input.detail)).collect::<Vec<_>>().join("; ");
+    format!("{name} UNAVAILABLE (not executed, missing: {list})")
+}
+
+fn unavailable_object(row: &SweepRow) -> String {
+    match row.code {
+        None => {
+            let missing = row.missing.iter().map(|item| format!("\"{}\"", json_escape(item))).collect::<Vec<_>>().join(", ");
+            format!(
+                "      {{\n        \"name\": \"{}\",\n        \"code\": null,\n        \"missing\": [{missing}],\n        \"recorded_as\": 0\n      }}",
+                json_escape(row.name)
+            )
+        }
+        Some(code) => format!(
+            "      {{\n        \"name\": \"{}\",\n        \"code\": {code},\n        \"reason\": \"{}\"\n      }}",
+            json_escape(row.name),
+            json_escape(&row.reason)
+        ),
+    }
+}
+
+// Replaces only the connected object. Comparators and selected_rust_* stay.
+// A product failure does not reach this writer: commit_sweep refuses first.
+fn publish_sweep(root: &Path, rows: &[SweepRow]) -> Result<(), String> {
     let path = root.join("verification/RESULTS.json");
     let original = read(&path);
     if original.is_empty() {
-        eprintln!("delivered record left untouched: verification/RESULTS.json is empty");
-        return false;
+        return Err("verification/RESULTS.json is empty".into());
     }
     let mut counts = String::new();
     let mut total = 0usize;
@@ -803,75 +1244,181 @@ fn publish_record(root: &Path, rows: &[Row]) -> bool {
     let mut unavailable = String::new();
     let mut zero_names = Vec::new();
     for name in GROUPS {
-        let Some(row) = rows.iter().find(|row| row.name == *name) else {
-            eprintln!("delivered record left untouched: group {name} has no row");
-            return false;
-        };
-        let value = if row.verdict == "unavailable" {
+        let row = rows.iter().find(|row| row.name == *name).ok_or_else(|| format!("group {name} has no row"))?;
+        let value = if row.code == Some(0) { row.checks.unwrap_or(0) } else { 0 };
+        if value == 0 {
             zero_names.push(*name);
-            0
-        } else if let Some(value) = row.checks {
-            if row.verdict == "pass" {
-                passed += 1;
-            }
-            value
-        } else {
-            eprintln!("delivered record left untouched: {name} has no harvested count");
-            return false;
-        };
+        }
+        if row.code == Some(0) && value > 0 {
+            passed += 1;
+        }
         total += value;
         if !counts.is_empty() {
             counts.push_str(",\n");
         }
         counts.push_str(&format!("      \"{name}\": {value}"));
-        if row.verdict == "unavailable" {
+        if row.code != Some(0) {
             if !unavailable.is_empty() {
                 unavailable.push_str(",\n");
             }
-            let reasons = row.missing.iter().map(|item| format!("          \"{}\"", json_escape(item))).collect::<Vec<_>>().join(",\n");
-            unavailable.push_str(&format!(
-                "      {{\n        \"name\": \"{name}\",\n        \"missing\": [\n{reasons}\n        ],\n        \"recorded_as\": 0\n      }}"
-            ));
+            unavailable.push_str(&unavailable_object(row));
         }
     }
-    let disclosure = if zero_names.len() == 1 {
+    let unavailable_field = if unavailable.is_empty() {
+        "[]".to_string()
+    } else {
+        format!("[\n{unavailable}\n    ]")
+    };
+    let disclosure = if zero_names.is_empty() {
+        ",\n    \"zero_count_disclosure\": \"No group was recorded as 0.\"".to_string()
+    } else if zero_names.len() == 1 {
         format!(
-            "{} is recorded as 0 because that group was not executed. A 0 is not a pass and not a harvested check total.",
-            zero_names[0]
+            ",\n    \"zero_count_disclosure\": \"{} is recorded as 0 because that group produced no positive check count. A 0 is not a pass and not a harvested check total.\"",
+            json_escape(zero_names[0])
         )
     } else {
         format!(
-            "{} are recorded as 0 because those groups were not executed. A 0 is not a pass and not a harvested check total.",
-            zero_names.join(", ")
+            ",\n    \"zero_count_disclosure\": \"{} are recorded as 0 because those groups produced no positive check count. A 0 is not a pass and not a harvested check total.\"",
+            json_escape(&zero_names.join(", "))
         )
     };
     let body = format!(
-        "{{\n    \"counts\": {{\n{counts}\n    }},\n    \"total_executed\": {total},\n    \"groups_passed\": {passed},\n    \"groups\": {},\n    \"unavailable\": [\n{unavailable}\n    ],\n    \"zero_count_disclosure\": \"{}\"\n  }}",
-        GROUPS.len(),
-        json_escape(&disclosure)
+        "{{\n    \"counts\": {{\n{counts}\n    }},\n    \"total_executed\": {total},\n    \"groups_passed\": {passed},\n    \"groups\": {},\n    \"unavailable\": {unavailable_field}{disclosure}\n  }}",
+        GROUPS.len()
     );
     let Some(updated) = replace_connected(&original, &body) else {
-        eprintln!("delivered record left untouched: connected object was not found");
-        return false;
+        return Err("connected object was not found".into());
     };
     if !updated.contains("\"published_comparator\"") || !updated.contains("\"flow_comparator\"") || !updated.contains("\"authentication_comparator\"") {
-        eprintln!("delivered record left untouched: a comparator field would have been dropped");
-        return false;
+        return Err("a comparator field would have been dropped".into());
     }
     let Some((groups, recorded_total)) = counts_in(&updated) else {
-        eprintln!("delivered record left untouched: the new counts object is not readable");
-        return false;
+        return Err("the new counts object is not readable".into());
     };
     if groups != GROUPS.len() || recorded_total != total {
-        eprintln!("delivered record left untouched: writer produced {groups} groups and {recorded_total} checks");
-        return false;
+        return Err(format!("writer produced {groups} groups and {recorded_total} checks"));
     }
-    if std::fs::write(&path, &updated).is_err() {
-        eprintln!("delivered record left untouched: verification/RESULTS.json could not be written");
-        return false;
+    let temporary = path.with_extension("json.new");
+    if std::fs::write(&temporary, &updated).is_err() {
+        return Err("verification/RESULTS.json could not be written".into());
+    }
+    if std::fs::rename(&temporary, &path).is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err("verification/RESULTS.json could not be written".into());
     }
     println!("delivered record written: {groups} groups, {recorded_total} checks");
-    true
+    Ok(())
+}
+
+// Failures block publication. Unavailable groups do not.
+fn commit_sweep(root: &Path, rows: &[SweepRow]) -> bool {
+    if rows.iter().any(row_failed) {
+        eprintln!("delivered record left untouched: a group failed");
+        return false;
+    }
+    match publish_sweep(root, rows) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("delivered record left untouched: {error}");
+            false
+        }
+    }
+}
+
+fn project_root() -> PathBuf {
+    let root = PathBuf::from(std::env::args().next().unwrap_or_default())
+        .parent()
+        .and_then(|value| value.parent())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    std::env::current_dir().unwrap_or(root)
+}
+
+fn sweep_one(root: &Path, name: &'static str, opts: &SweepOpts, seconds: u64) -> SweepRow {
+    let source = read(&root.join(format!("verification/{name}.py")));
+    let missing: Vec<Input> = required_inputs(root, &source).into_iter().filter(|input| !input.present).collect();
+    if !missing.is_empty() {
+        println!("{}", unavailable_line(name, &missing));
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        return SweepRow {
+            name,
+            code: None,
+            checks: Some(0),
+            missing: missing.iter().map(|input| input.detail.clone()).collect(),
+            reason: String::new(),
+        };
+    }
+    let arguments = sweep_arguments(name, root, opts);
+    let output = root.join("output/checks");
+    let report = output.join(group_report_file(name));
+    let log = output.join(format!("{name}.log"));
+    let started_at = SystemTime::now();
+    let (code, stdout, elapsed) = sweep_run(root, name, &arguments, seconds);
+    let counted = if name == "response_fields" || name == "chunk_fields" {
+        if code == 0 {
+            persist_printed_json(root, name, &stdout)
+        } else {
+            Err("group did not exit 0, so its printed json was not stored".into())
+        }
+    } else if file_is_fresh(&report, started_at) {
+        executed_count_of(&read(&report)).map(|counted| counted.count).map_err(|err| err.to_string())
+    } else {
+        Err(format!("no fresh {}", group_report_file(name)))
+    };
+    let checks = match &counted {
+        Ok(count) => Some(*count),
+        Err(error) => {
+            eprintln!("  {name}: {error}");
+            None
+        }
+    };
+    let failed = code != 0 || checks.is_none();
+    let reason = if failed {
+        reason_for(code, counted.as_ref().err().map(String::as_str), &report, &log, seconds)
+    } else {
+        String::new()
+    };
+    let verdict = if failed { "fail" } else { "pass" };
+    let shown = match checks {
+        Some(count) => count.to_string(),
+        None => "absent".into(),
+    };
+    println!("{name} {} (exit {code}, {elapsed}s, {shown} checks)", verdict.to_uppercase());
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    if code != 0 {
+        let text = read(&log);
+        let tail: String = text.lines().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ");
+        if !tail.is_empty() {
+            eprintln!("  {name}: {tail}");
+        }
+    }
+    SweepRow { name, code: Some(code), checks, missing: Vec::new(), reason }
+}
+
+fn run_sweep(args: &[String]) -> Result<i32, String> {
+    let opts = parse_sweep(args)?;
+    let root = project_root();
+    let output = root.join("output/checks");
+    if std::fs::create_dir_all(&output).is_err() {
+        return Err(format!("could not create {}", output.display()));
+    }
+    println!("harness sweep: {} groups", GROUPS.len());
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let rows: Vec<SweepRow> = GROUPS.iter().map(|name| sweep_one(&root, name, &opts, SECONDS)).collect();
+    let passed = rows.iter().filter(|row| !row_failed(row) && row.code.is_some()).count();
+    let failed = rows.iter().filter(|row| row_failed(row)).count();
+    let unavailable = rows.iter().filter(|row| row.code.is_none()).count();
+    let absent = rows.iter().filter(|row| row.code.is_some() && row.checks.is_none()).count();
+    let total: usize = rows.iter().map(|row| if row.code == Some(0) { row.checks.unwrap_or(0) } else { 0 }).sum();
+    let wrote = commit_sweep(&root, &rows);
+    println!(
+        "summary: {passed} pass, {failed} fail, {unavailable} unavailable, {absent} absent of {} groups, {total} checks",
+        GROUPS.len()
+    );
+    if !wrote || failed > 0 || absent > 0 {
+        return Ok(1);
+    }
+    Ok(0)
 }
 
 fn replace_connected(text: &str, replacement: &str) -> Option<String> {
@@ -896,10 +1443,7 @@ fn run(root: &Path, name: &str, arguments: &[String]) -> (i32, String, u64) {
         Ok(file) => file,
         Err(error) => return (-1, format!("runner could not write the log: {error}"), 0),
     };
-    let spawned = Command::new("python3")
-        .arg(root.join(format!("verification/{name}.py")))
-        .args(arguments)
-        .current_dir(root)
+    let spawned = python_group(root, name, arguments)
         .stdout(Stdio::from(file.try_clone().expect("log handle")))
         .stderr(Stdio::from(file))
         .spawn();
@@ -913,16 +1457,14 @@ fn run(root: &Path, name: &str, arguments: &[String]) -> (i32, String, u64) {
             Ok(Some(status)) => break status.code().unwrap_or(-1),
             Ok(None) => {
                 if started.elapsed().as_secs() >= SECONDS {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_child_group(&mut child);
                     timed_out = true;
                     break 124;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_child_group(&mut child);
                 eprintln!("  {name}: runner could not wait for the group: {error}");
                 break -1;
             }
@@ -937,13 +1479,20 @@ fn run(root: &Path, name: &str, arguments: &[String]) -> (i32, String, u64) {
 }
 
 fn main() {
-    let root = PathBuf::from(std::env::args().next().unwrap_or_default())
-        .parent()
-        .and_then(|value| value.parent())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let root = std::env::current_dir().unwrap_or(root);
-    let only: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("sweep") {
+        let code = match run_sweep(&args[1..]) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("{error}");
+                eprintln!("{}", sweep_usage());
+                2
+            }
+        };
+        std::process::exit(code);
+    }
+    let root = project_root();
+    let only = args;
     let output = root.join("output/checks");
     let _ = std::fs::create_dir_all(&output);
     let controller = root.join("output/headless/RLLM");
@@ -1044,9 +1593,6 @@ fn main() {
         rows.iter().map(row_json).collect::<Vec<_>>().join(",\n")
     );
     std::fs::write(output.join("harness-ledger.json"), &ledger).ok();
-    if only.is_empty() && problems.is_empty() && failed == 0 && unparsed.is_empty() {
-        publish_record(&root, &rows);
-    }
     println!("summary: {passed} pass, {failed} fail, {unavailable} unavailable of {} groups", GROUPS.len());
     if let Some((groups, total)) = recorded_counts {
         println!("recorded in verification/RESULTS.json: {groups} groups, {total} checks");
@@ -1059,5 +1605,354 @@ fn main() {
     }
     if !problems.is_empty() || failed > 0 || !unparsed.is_empty() {
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod checks {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP: AtomicU64 = AtomicU64::new(0);
+
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("rllm-harness-{}-{}", std::process::id(), TEMP.fetch_add(1, Ordering::Relaxed)));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn bare_opts() -> SweepOpts {
+        SweepOpts {
+            previous_scene: None,
+            previous_controller: None,
+            previous_flow: None,
+            previous_auth: None,
+            auth_baseline: None,
+            auth_baseline_sha256: None,
+        }
+    }
+
+    fn pass_rows() -> Vec<SweepRow> {
+        GROUPS.iter().map(|name| SweepRow {
+            name,
+            code: Some(0),
+            checks: Some(3),
+            missing: Vec::new(),
+            reason: String::new(),
+        }).collect()
+    }
+
+    fn delivered_record() -> String {
+        "{\n  \"published_comparator\": {\"note\": \"keep-me\"},\n  \"connected\": {\"counts\": {\"old\": 1}, \"total_executed\": 1, \"groups_passed\": 1, \"groups\": 1, \"unavailable\": []},\n  \"flow_comparator\": {\"note\": \"flow\"},\n  \"authentication_comparator\": {\"note\": \"auth\"}\n}\n".to_string()
+    }
+
+    fn plant_record(root: &Path) -> PathBuf {
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        let record = root.join("verification/RESULTS.json");
+        std::fs::write(&record, delivered_record()).unwrap();
+        record
+    }
+
+    fn repo_root() -> PathBuf {
+        let mut starts = Vec::new();
+        if let Ok(path) = std::env::current_exe() {
+            starts.push(path);
+        }
+        if let Ok(path) = std::env::current_dir() {
+            starts.push(path);
+        }
+        for start in starts {
+            let mut dir = std::fs::canonicalize(&start).unwrap_or(start);
+            loop {
+                if dir.join("tools/package.rs").is_file() && dir.join("tools/harness.rs").is_file() {
+                    return dir;
+                }
+                if !dir.pop() {
+                    break;
+                }
+            }
+        }
+        panic!("cannot locate the RLLM project root");
+    }
+
+    fn rust_quoted(source: &str, marker: &str) -> Vec<String> {
+        let at = source.find(marker).unwrap_or_else(|| panic!("package.rs has no {marker}"));
+        let rest = &source[at..];
+        let end = rest.find("];").unwrap_or_else(|| panic!("{marker} does not end"));
+        let body = &rest[..end];
+        let bytes = body.as_bytes();
+        let mut names = Vec::new();
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'/') {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+                continue;
+            }
+            if bytes[index] == b'"' {
+                index += 1;
+                let start = index;
+                while index < bytes.len() && bytes[index] != b'"' {
+                    index += 1;
+                }
+                names.push(body[start..index].to_string());
+                index += 1;
+                continue;
+            }
+            index += 1;
+        }
+        names
+    }
+
+    fn process_running(pid: i32) -> bool {
+        if pid <= 0 {
+            return false;
+        }
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+        status.lines().find_map(|line| line.strip_prefix("State:")).map(|rest| rest.trim().starts_with('S') || rest.trim().starts_with('R') || rest.trim().starts_with('D')).unwrap_or(false)
+    }
+
+    #[test]
+    fn executed_count_rejects_a_negative_count() {
+        assert_eq!(executed_count_of(r#"{"passed": -4}"#).err(), Some("executed count is not a positive integer"), "negative count");
+    }
+
+    #[test]
+    fn executed_count_rejects_zero() {
+        assert_eq!(executed_count_of(r#"{"passed": 0}"#).err(), Some("executed count is not a positive integer"), "zero count");
+        assert_eq!(executed_count_of(r#"{"count": 0}"#).err(), Some("executed count is not a positive integer"), "zero count field");
+    }
+
+    #[test]
+    fn executed_count_rejects_passed_and_count_disagreeing() {
+        assert_eq!(executed_count_of(r#"{"passed": 2, "count": 3}"#).err(), Some("executed count differs from count"), "passed and count differ");
+    }
+
+    #[test]
+    fn executed_count_rejects_checks_that_are_not_an_array_or_disagree() {
+        assert_eq!(executed_count_of(r#"{"passed": 1, "checks": {"n": 1}}"#).err(), Some("checks cross-check"), "checks present but not an array");
+        assert_eq!(executed_count_of(r#"{"passed": 2, "checks": [1]}"#).err(), Some("checks cross-check"), "checks length disagrees");
+    }
+
+    #[test]
+    fn executed_count_rejects_when_neither_passed_nor_count_is_present() {
+        assert_eq!(executed_count_of(r#"{"scope": "only"}"#).err(), Some("executed count is missing"), "neither passed nor count");
+    }
+
+    #[test]
+    fn executed_count_rejects_a_non_object() {
+        assert_eq!(executed_count_of("[1, 2]").err(), Some("group json is not an object"), "top level not an object");
+    }
+
+    #[test]
+    fn executed_count_rejects_passed_string_or_bool() {
+        assert_eq!(executed_count_of(r#"{"passed": "4"}"#).err(), Some("executed count is not an integer"), "passed string");
+        assert_eq!(executed_count_of(r#"{"passed": true}"#).err(), Some("executed count is not an integer"), "passed bool");
+    }
+
+    #[test]
+    fn executed_count_uses_passed_list_length() {
+        let counted = executed_count_of(r#"{"passed": ["a", "b", "c"]}"#);
+        assert_eq!(counted.as_ref().map(|item| item.count).ok(), Some(3), "passed list length");
+        assert_eq!(counted.as_ref().map(|item| item.passed_int).ok(), Some(false), "passed list is not an integer");
+    }
+
+    #[test]
+    fn executed_count_accepts_a_count_only_report() {
+        let counted = executed_count_of(r#"{"count": 4}"#);
+        assert_eq!(counted.as_ref().map(|item| item.count).ok(), Some(4), "count-only report");
+        assert_eq!(counted.as_ref().map(|item| item.passed_int).ok(), Some(false), "count-only report is not a passed integer");
+    }
+
+    #[test]
+    fn group_report_file_matches_the_publisher_for_every_group() {
+        let source = std::fs::read_to_string(repo_root().join("tools/package.rs")).unwrap();
+        let explicit = rust_quoted(&source, "const EXPLICIT_PAIRS:");
+        let identity = rust_quoted(&source, "const IDENTITY_PAIRS:");
+        let hyphen = rust_quoted(&source, "const HYPHEN_PAIRS:");
+        assert_eq!(explicit.len() % 2, 0, "explicit pairs are not paired");
+        assert_eq!(GROUPS.len(), 71, "runner group count");
+        assert_eq!(explicit.len() / 2 + identity.len() + hyphen.len(), 71, "publisher pair count");
+        for name in GROUPS {
+            let expected = if let Some(chunk) = explicit.chunks(2).find(|chunk| chunk[0] == *name) {
+                format!("{}.json", chunk[1])
+            } else if identity.iter().any(|group| group == name) {
+                format!("{name}.json")
+            } else if hyphen.iter().any(|group| group == name) {
+                format!("{}.json", name.replace('_', "-"))
+            } else {
+                panic!("publisher has no report for {name}");
+            };
+            assert_eq!(group_report_file(name), expected, "report file diverges for {name}");
+        }
+    }
+
+    #[test]
+    fn publish_sweep_records_a_failing_group_with_reason() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let record = plant_record(root);
+        let report = PathBuf::from("output/checks/history.json");
+        let log = PathBuf::from("output/checks/history.log");
+        let reason = reason_for(1, None, &report, &log, SECONDS);
+        assert_eq!(reason, "exited 1 (output/checks/history.log)", "exit classification");
+        assert_eq!(
+            reason_for(124, Some("no fresh history.json"), &report, &log, SECONDS),
+            "timed out after 180 seconds (output/checks/history.log)",
+            "timeout reason"
+        );
+        assert_eq!(
+            reason_for(1, Some("executed count is not a positive integer"), &report, &log, SECONDS),
+            "executed count is not a positive integer (output/checks/history.json)",
+            "count refusal reason"
+        );
+        let mut rows = pass_rows();
+        let slot = rows.iter_mut().find(|row| row.name == "history").unwrap();
+        slot.code = Some(1);
+        slot.checks = Some(9);
+        slot.reason = reason.clone();
+        publish_sweep(root, &rows).unwrap_or_else(|err| panic!("publish_sweep refused a direct failing row: {err}"));
+        let text = std::fs::read_to_string(&record).unwrap();
+        let prefix = "{\n  \"published_comparator\": {\"note\": \"keep-me\"},\n  \"connected\": ";
+        let suffix = ",\n  \"flow_comparator\": {\"note\": \"flow\"},\n  \"authentication_comparator\": {\"note\": \"auth\"}\n}\n";
+        assert!(text.starts_with(prefix), "published_comparator bytes changed");
+        assert!(text.ends_with(suffix), "comparator bytes changed");
+        assert!(text.contains("\"history\": 0"), "failing group recorded as 0");
+        assert!(text.contains("\"code\": 1"), "failing group code");
+        assert!(text.contains(&format!("\"reason\": \"{reason}\"")), "failing group reason");
+        assert!(text.contains("history is recorded as 0 because that group produced no positive check count"), "zero_count_disclosure");
+        let (groups, total) = counts_in(&text).expect("counts");
+        assert_eq!(groups, 71, "counts groups");
+        assert_eq!(total, 70 * 3, "totals equal the sum of counts");
+        assert!(text.contains("\"groups_passed\": 70"), "groups_passed");
+    }
+
+    #[test]
+    fn publish_sweep_refuses_when_a_group_has_no_row() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let record = plant_record(root);
+        let original = std::fs::read(&record).unwrap();
+        let rows: Vec<_> = pass_rows().into_iter().filter(|row| row.name != "history").collect();
+        assert_eq!(publish_sweep(root, &rows).err().as_deref(), Some("group history has no row"), "writer refused without naming the missing group");
+        assert_eq!(std::fs::read(&record).unwrap(), original, "record changed when a group has no row");
+    }
+
+    #[test]
+    fn publish_sweep_keeps_zero_count_disclosure_when_nothing_is_zero() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let record = plant_record(root);
+        publish_sweep(root, &pass_rows()).unwrap_or_else(|err| panic!("{err}"));
+        let text = std::fs::read_to_string(&record).unwrap();
+        assert!(text.contains("\"zero_count_disclosure\": \"No group was recorded as 0.\""), "no group was recorded as 0");
+    }
+
+    #[test]
+    fn sweep_arguments_pass_controllers_only_when_the_file_exists() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let opts = bare_opts();
+        let absent = sweep_arguments("prompt_reference", root, &opts);
+        assert!(absent.is_empty(), "prompt_reference must not receive --previous-controller when that file is absent");
+        std::fs::create_dir_all(root.join("output")).unwrap();
+        std::fs::write(root.join("output/previous-controller"), b"controller").unwrap();
+        let present = sweep_arguments("prompt_reference", root, &opts);
+        assert_eq!(present.first().map(String::as_str), Some("--previous-controller"), "prompt_reference must receive --previous-controller when that file exists");
+        assert_eq!(present.len(), 2, "prompt_reference arguments");
+        let flow = sweep_arguments("binary_flow", root, &opts);
+        assert_eq!(flow.first().map(String::as_str), Some("--previous-flow-controller"), "binary_flow flow argument");
+        assert!(flow.get(1).is_some_and(|path| path.ends_with("output/pre-branch-controller")), "binary_flow flow default: {flow:?}");
+        assert_eq!(flow.get(2).map(String::as_str), Some("--previous-auth-controller"), "binary_flow auth argument");
+        assert!(flow.get(3).is_some_and(|path| path.ends_with("output/pre-auth-controller")), "binary_flow auth default: {flow:?}");
+    }
+
+    #[test]
+    fn missing_input_is_unavailable_and_the_record_carries_missing() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        let script = root.join("verification/apk_alignment.py");
+        std::fs::write(&script, "raise SystemExit('output/tools/alignment')\n").unwrap();
+        let row = sweep_one(root, "apk_alignment", &bare_opts(), SECONDS);
+        assert!(row.code.is_none(), "missing input is unavailable, not a failure");
+        assert_eq!(row.checks, Some(0), "missing input is recorded as 0");
+        assert!(row.missing.iter().any(|item| item.contains("output/tools/alignment")), "missing input names the absent development input: {:?}", row.missing);
+        let blocked: Vec<Input> = required_inputs(root, &read(&script)).into_iter().filter(|input| !input.present).collect();
+        let line = unavailable_line("apk_alignment", &blocked);
+        assert!(line.contains("UNAVAILABLE (not executed, missing:"), "unavailable line");
+        assert!(!line.contains("FAIL"), "unavailable line charged a failure");
+        let mut rows = pass_rows();
+        *rows.iter_mut().find(|item| item.name == "apk_alignment").unwrap() = row;
+        let record = plant_record(root);
+        assert!(commit_sweep(root, &rows), "unavailable sweep must still publish");
+        let text = std::fs::read_to_string(&record).unwrap();
+        assert!(text.contains("\"name\": \"apk_alignment\""), "unavailable name");
+        assert!(text.contains("\"code\": null"), "unexecuted code is null");
+        assert!(text.contains("\"recorded_as\": 0"), "recorded_as 0");
+        assert!(text.contains("output/tools/alignment"), "record entry carries missing");
+        assert!(text.contains("\"apk_alignment\": 0"), "counts record 0");
+        assert!(text.contains("zero_count_disclosure"), "zero_count_disclosure");
+    }
+
+    #[test]
+    fn failing_sweep_leaves_the_record_byte_identical() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let record = plant_record(root);
+        let original = std::fs::read(&record).unwrap();
+        let mut rows = pass_rows();
+        let slot = rows.iter_mut().find(|row| row.name == "history").unwrap();
+        slot.code = Some(1);
+        slot.checks = None;
+        slot.reason = reason_for(1, None, &root.join("output/checks/history.json"), &root.join("output/checks/history.log"), SECONDS);
+        assert!(!commit_sweep(root, &rows), "a failing sweep published");
+        assert_eq!(std::fs::read(&record).unwrap(), original, "failing sweep changed the record");
+    }
+
+    #[test]
+    fn sweep_timeout_kills_the_grandchild_holding_stdout() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        std::fs::write(root.join("verification/scene.py"), "import os, sys, time\nchild = os.fork()\nif child == 0:\n    open('output/checks/grandchild', 'w').write(str(os.getpid()))\n    sys.stdout.write('held\\n')\n    sys.stdout.flush()\n    time.sleep(120)\n    sys.exit(0)\ntime.sleep(120)\n").unwrap();
+        let started = Instant::now();
+        let (code, _stdout, _elapsed) = sweep_run(root, "scene", &[], 2);
+        let wall = started.elapsed().as_secs();
+        let pid = std::fs::read_to_string(root.join("output/checks/grandchild")).unwrap_or_default().trim().parse::<i32>().unwrap_or(0);
+        let alive = process_running(pid);
+        if pid > 0 {
+            unsafe { kill(pid, 9); }
+        }
+        assert_eq!(code, 124, "grandchild holding stdout must be a 124 timeout");
+        assert!(wall < 15, "timeout wall time {wall}s was not bounded");
+        assert!(pid > 0, "grandchild pid was not recorded");
+        assert!(!alive, "grandchild was still alive after the timeout");
+    }
+
+    #[test]
+    fn persist_printed_json_keeps_the_original_bytes() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        let mut body = br#"{"passed": 1, "checks": [1]}"#.to_vec();
+        body.push(0xff);
+        let count = persist_printed_json(root, "response_fields", &body).unwrap_or_else(|err| panic!("printed json count: {err}"));
+        assert_eq!(count, 1, "printed json count");
+        let written = std::fs::read(root.join("output/checks").join(group_report_file("response_fields"))).unwrap();
+        assert_eq!(written, body, "persist_printed_json altered the printed bytes");
     }
 }

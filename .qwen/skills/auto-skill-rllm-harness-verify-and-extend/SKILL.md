@@ -21,7 +21,7 @@ python3 tools/checks.py --all-units output/units      # expect: "Rust cases pass
 bash -c 'set -euo pipefail; : "${CLIENT_RUST:?}"; bash tools/build-harness.sh 2>/dev/null || \
   LD_LIBRARY_PATH="$CLIENT_RUST/lib" "$CLIENT_RUST/bin/rustc" --edition=2021 \
   --crate-name harness "$PWD/tools/harness.rs" -o output/harness'
-output/harness > output/checks-sweep.log 2>&1; echo SWEEP_EXIT=$?
+output/harness sweep > output/checks-sweep.log 2>&1; echo SWEEP_EXIT=$?
 grep -E '^summary:' output/checks-sweep.log            # "summary: 62 pass, 0 fail, 6 unavailable of 68 groups"
 grep -c CENSUS output/checks-sweep.log                 # must be 0
 ```
@@ -31,9 +31,9 @@ the contents of `verification/`. A mismatch prints `CENSUS: …` lines and inval
 `INVENTORY DRIFT: the delivered report counts N groups while the runner has M` compares the runner with the
 record read **before** the run, so the run that grows the inventory prints it exactly once and the next run
 is clean — that line alone is not a product red. `output/checks/<name>.json` +
-`output/checks/harness-ledger.json` are the per-group evidence. Only a **full, clean** run republishes
-`verification/RESULTS.json`; passing group names as argv (`output/harness turn_background`) re-runs single
-groups without touching the delivered record.
+`output/checks/harness-ledger.json` are the per-group evidence. `harness sweep` is the record-writing
+verb: `output/harness sweep` rewrites `verification/RESULTS.json`. The bare run (`output/harness`) and
+`harness <group>` (`output/harness turn_background`) do not write the record.
 
 ## 2. Adding a verification group (three steps, never two)
 

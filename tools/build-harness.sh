@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Builds the connected-check runner (tools/harness.rs): the sanctioned connected
-# instrument whose console summary and verification/RESULTS.json census are the
-# measurement. Never run it from a lane: the sweep rewrites the delivered record.
+# Builds the connected-check runner (tools/harness.rs).
+# `harness sweep` is the sanctioned record-writing verb: its console summary and
+# verification/RESULTS.json census are the measurement. The bare run and
+# `harness <group>` do not write the record. Never run `harness sweep` from a
+# lane: it rewrites the delivered record.
 set -euo pipefail
 project_dir=$(cd "$(dirname "$0")/.." && pwd)
 : "${CLIENT_RUST:?Set CLIENT_RUST to the Rust toolchain directory}"
