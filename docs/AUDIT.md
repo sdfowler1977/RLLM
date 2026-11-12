@@ -7,7 +7,10 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **763/763 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
+  report bytes — re-witnessed at `ecbff24`: from one HEAD-built units binary, both printed
+  `Rust cases passed: 763/763; isolated application cases: 55` with exit 0 and both produced
+  `output/checks/full-units.json` sha256 `5a131e40e7315753dfec87c22608f52199477d426f4973112254eb9b082607aa`):
+  **763/763 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
   69-group record is backed by 638/638, measured at `c34b170`), measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the 638 count is the tree at `c34b170`: 597 at `600e44d`,
   +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
