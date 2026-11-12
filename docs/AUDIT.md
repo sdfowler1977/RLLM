@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T17:0Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T17:2Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -1277,6 +1277,54 @@ certifies — and it convicted three things on its first live run:
    are two unit tests in `core/rrsi.rs`. A fresh process with the ledger and `experience.jsonl` on disk reads the
    library into the propose prompt but never rebuilds the ledger prompt, so a refinement cannot be resumed across
    processes. That is the "resume across tasks" leg of GAP3, now with an instrument attached to it.
+
+### Two GAP3 defects closed, and the loop group narrows to one real red — 2026-11-12T17:1Z–17:2Z
+
+`4758d28` (`core/self_build.rs`) closes the F3 ordering defect the previous audit found: `reap()` used to
+append the durable reap row with `?` **before** clearing `tracked.child`, so a failed append returned before
+the state transition and the next `reap()` journalled the same child exit twice. The transition is now
+committed first and a failed append costs only a missing witness row. It also closes the three tamper legs the
+audit listed as untested, each designed so the intended check is the one that fires — the flipped reap payload
+stays parseable (content-address check), the rewritten parent has its digest recomputed (only the link check
+can fire), and the dropped middle row leaves both survivors individually content-addressed.
+
+`5c93aed` (`core/rrsi.rs`, `core/harness.rs`) closes GAP3 defects 1 and 2: one candidate's git failure used to
+abort `evaluate_pool` and lose every ledger row for the round — the refusal is now carried in that candidate's
+own pool row (`commit_candidate:` / `fast_forward_evolve:` / `apply_accepted:` / `incumbent_base:`, truncated at
+240 chars) with `commit`/`branch` left empty, so a row cannot claim a commit that did not happen; and the
+winning candidate is now actually applied to the caller's file after the fast-forward, guarded by the source
+digest recorded at candidate time and verified by read-back (`candidate target write did not land`). Slot
+directories are discarded when a round does not finish, a stale slot is re-initialised rather than reused, and a
+path containing `.rllm-worktrees` is refused as a workspace.
+
+Attribution, measured with one lane's file per room: `4758d28` alone → **642/642 + 55** (= 638 + 4);
+`5c93aed` alone → **645/645 + 55** (= 638 + 7). Both rooms then rebuilt the product and the harness runner,
+because `output/headless/RLLM` is still the 06:13 artifact.
+
+Two instrument corrections from those runs:
+- A group that needs `output/tools/gate` reports **UNAVAILABLE** in a room that has no tools build, so the
+  first `self_rebuild` witness was vacuous. After `bash tools/build-tools.sh output/tools` inside the room, the
+  same run gives `self_rebuild PASS (exit 0, 1s, 8 checks)`. Rooms that run git- or gate-dependent groups must
+  build tools, product and runner, not just units.
+- With a rebuilt product plus `5c93aed`, the `rrsi_loop` group narrows from three reds to **two of six**:
+  `refine entry copies approval_root onto task_run.workspace` now **passes**, which confirms the stale-binary
+  diagnosis rather than a product defect. The remaining reds are the group's `edits.jsonl` naming expectation
+  (production writes `<run_digest>.jsonl`) and the cross-process resume leg, which is the real defect.
+
+The resume defect is what the group's last red convicts: `rrsi::resume_run` has exactly two callers, both unit
+tests, so a fresh process reads `experience.jsonl` into the propose prompt (`harness_in_prompt=True`) while
+rebuilding nothing from the ledger (`edit_history=False`, `phase=probe`) and re-proposes a hypothesis the
+previous run already rejected. Dispatched as lane `resume` (`core/rrsi.rs`, `core/harness.rs` only).
+
+Audit adjudication for these two landings: the `succfix` seat CONFIRMED claims 1–2 with quoted lines and found
+no defect, so its NOT-MEASURED claims (repo-wide string stability, census) were measured by me instead —
+refusal strings byte-unchanged, room census 642/642. The `pooll2` seat could not confirm most claims from a
+34 KB diff, so I measured its open points: the diff's two added `std::process::Command::new("git")` lines are
+test-only scratch-repo helpers while production git stays on `git_run` → `execution::BoundedOutput`; its
+"pool row claiming a commit that did not happen" is refuted by reading `refuse_pool` and `push_pool_row`; and
+`apply_accepted`'s guard order is size/NUL → slot path → digest compare → write → read-back. One limitation is
+recorded rather than papered over: the digest compare and the write are not atomic (no rename, no `O_EXCL`), so
+a writer landing between them is not caught — acceptable for this single-process route, but not atomicity.
 
 ## Historical baseline audit (original text)
 
