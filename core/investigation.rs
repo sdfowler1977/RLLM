@@ -58,6 +58,28 @@ fn inspect_using(p:&Path,cancelled:&impl Fn()->bool,scope:(&Path,&str,&operation
 fn inspect_projected<'a>(root:&Path,relative:&str,access:&'a operation::InspectionAccess)->Result<file_evidence::Source<'a>>{
     file_evidence::Source::open(root,relative,"inspect",&obj(vec![("path",s(relative))]),access)
 }
+fn map_file_status(root:&Path,module_relative:&str,target:&str,access:&operation::InspectionAccess)->super::super::js_evidence::MapFile{
+    let Some(relative)=resolve_map_relative(module_relative,target) else{return super::super::js_evidence::MapFile::Unreadable;};
+    if super::file_evidence::normalize(&relative).is_err(){return super::super::js_evidence::MapFile::Unreadable;}
+    let args=obj(vec![("path",s(&relative))]);
+    match super::file_evidence::Source::open(root,&relative,"inspect",&args,access){
+        Ok(_)=>super::super::js_evidence::MapFile::Present,
+        Err(error) if error.contains("os error 2")||error.contains("No such file")=>super::super::js_evidence::MapFile::Absent,
+        Err(_)=>super::super::js_evidence::MapFile::Unreadable,
+    }
+}
+fn resolve_map_relative(module_relative:&str,target:&str)->Option<String>{
+    if target.is_empty()||target.starts_with('/')||target.contains('\\')||target.contains('\0')||target.contains(':'){return None;}
+    let mut parts:Vec<&str>=module_relative.rsplit_once('/').map(|(dir,_)|dir).unwrap_or("").split('/').filter(|part|!part.is_empty()).collect();
+    for part in target.split('/'){
+        match part{
+            ""|"."=>{},
+            ".."=>{parts.pop()?;}
+            other=>parts.push(other),
+        }
+    }
+    if parts.is_empty(){None}else{Some(parts.join("/"))}
+}
 /// Inspect one reviewed regular file and return its bounded static observation.
 /// The opened source is the reviewed workspace file: its policy guard and
 /// component bindings are re-checked on every read step.
@@ -81,7 +103,9 @@ pub(super) fn inspect(p:&Path,source:&file_evidence::Source<'_>,cancelled:&impl 
     }
     if let Some(kind)=super::super::js_evidence::node_kind(p) {
         if cancelled(){return Err("Inspection cancelled".into());}
-        structure.push('\n');structure.push_str(&super::super::js_evidence::observe(&data,kind,complete).text);
+        let (root,relative,access)=scope;
+        let text=super::file_evidence::javascript_observation(&data,meta.len(),complete,kind,relative,&|target| Some(map_file_status(root,relative,target,access)));
+        structure.push('\n');structure.push_str(&text);
     }
     if data.starts_with(b"\x89PNG\r\n\x1a\n") {
         structure.push('\n');

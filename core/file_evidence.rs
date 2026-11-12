@@ -82,6 +82,14 @@ pub(super) fn saved_file_capture(root:&Path,relative:&str,access:&operation::Ins
     g.check()?;
     Ok(super::super::har_evidence::file_capture(&kept,true))
 }
+/// JavaScript and ASAR bytes use the same reader limit as a saved capture.
+/// A file above the limit is a named refusal. The bytes are not parsed.
+pub(super) fn javascript_observation(bytes:&[u8],file_len:u64,complete:bool,kind:js_evidence::Kind,module_label:&str,map_file:&dyn Fn(&str)->Option<js_evidence::MapFile>)->String{
+    if file_len>super::super::archive::UNPACK_BYTE_LIMIT as u64||bytes.len()>super::super::archive::UNPACK_BYTE_LIMIT{
+        return "JavaScript/Electron observation\nRefusal: javascript file exceeds the reader limit. No listing returned.\n".to_string();
+    }
+    js_evidence::observe_with(bytes,kind,complete,module_label,map_file).text
+}
 pub(super) fn compare(root:&Path,args:&Json,access:&operation::InspectionAccess)->Result<String>{let(a,ga)=observe(root,args,access,"compare",&text(args,"path"))?;let(b,gb)=observe(root,args,access,"compare",&text(args,"other"))?;let left=&array(&ga,"nodes")[0];let right=&array(&gb,"nodes")[0];let equal=get(get(left,"sample"),"length")==get(get(right,"sample"),"length")&&get(get(left,"sample"),"sha256")==get(get(right,"sample"),"sha256");let display=format!("Sequential independent complete-file observations, not an atomic pair. Lengths and SHA-256 {}. Digest equality is not byte-by-byte proof.\n{a}\n{b}",if equal{"match"}else{"differ"});Ok(if access.graph{observation_graph::envelope(display,Ok(vec![ga,gb]),access.budget)}else{display})}
 pub(super) fn validate_graph(g:&Json)->Result<()>{let fail=||"Malformed complete-file observation; textual record remains available".to_string();if super::super::mcp_schema::state_bytes(g)>16384||get(g,"schema")!=&Num("1".into())||text(g,"kind")!="complete_file"||text(g,"coverage")!="Complete"||get(g,"workspace_identity")==&Null||!observation_graph::valid_identity(get(g,"workspace_identity"))||!matches!(get(g,"notes"),Arr(a)if a.is_empty())||!matches!(get(g,"edges"),Arr(a)if a.is_empty()){return Err(fail());}let nodes=get(g,"nodes").array()?;if nodes.len()!=1{return Err(fail());}let n=&nodes[0];let raw=reconstruction::raw(&text(n,"path_hex"))?;let sample=get(n,"sample");let len=u64_value(get(sample,"length"))?;let hash=text(sample,"sha256");if get(n,"id")!=&Num("0".into())||text(g,"selected_hex")!=text(n,"path_hex")||text(n,"path")!=String::from_utf8_lossy(&raw)||text(n,"kind")!="File"||text(n,"coverage")!="Complete"||get(n,"identity")==&Null||!observation_graph::valid_identity(get(n,"identity"))||len>u64::MAX/8||len!=u64_value(get(get(n,"identity"),"size"))?||len!=u64_value(get(g,"sampled_bytes"))?||len!=u64_value(get(g,"bytes_read"))?||get(sample,"offset")!=&Num("0".into())||get(sample,"complete_file")!=&Bool(true)||text(sample,"method")!=METHOD||hash.len()!=64||!hash.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))||!matches!(get(n,"format_candidates"),Arr(a)if a.is_empty())||!matches!(get(n,"notes"),Arr(a)if a.len()<=4&&a.iter().all(|s|matches!(s,Str(t)if t.len()<=512))){return Err(fail());}Ok(())}
 pub(super) fn is_complete(node:&Json)->bool{text(get(node,"sample"),"method")==METHOD}
@@ -214,5 +222,16 @@ fn write_clean_room(held:&mut Held,g:&Guard,args:&Json,bound:&Json,n:u64,hash:&s
   assert!(response.contains(&format!("Verification matched 5, missing 0, unknown 0 on the {} bytes read back from disk",generated.len())),"{response}");
   assert!(response.contains("matched edge require electron"),"{response}");
   drop(held);
+ }
+ #[test]fn javascript_reader_limit_names_the_refusal_and_returns_no_listing(){
+  let bytes=b"require(\"kept-specifier\");\n";
+  let over=javascript_observation(bytes,u64::MAX,true,super::super::super::js_evidence::Kind::Script,"note.js",&|_|None);
+  assert!(over.contains("Refusal: javascript file exceeds the reader limit. No listing returned."),"{over}");
+  assert!(!over.contains("kept-specifier"),"{over}");
+  assert!(!over.contains("Kind: javascript module"),"{over}");
+  let kept=javascript_observation(bytes,bytes.len() as u64,true,super::super::super::js_evidence::Kind::Script,"note.js",&|_|None);
+  assert!(kept.contains("Kind: javascript module"),"{kept}");
+  assert!(kept.contains("kept-specifier"),"{kept}");
+  assert!(kept.contains("specifier \"kept-specifier\" bare."),"{kept}");
  }
 }

@@ -1,7 +1,10 @@
 //! Bounded JavaScript and Electron observation over bytes already retained.
-//! Static import/export forms, `require("literal")` targets, package.json entry
-//! fields, an app.asar directory, IPC and router string literals, and
-//! `sourceMappingURL` directives are recorded only when those bytes contain them.
+//! A file is a JavaScript module only when its bytes contain an import, an export
+//! declaration, or a `require` call. A valid ASAR header is an Electron payload.
+//! Plain text is a named refusal. Specifiers are classed bare, relative, or absolute.
+//! `sourceMappingURL` is reported present, absent, or unreadable, and the map is
+//! not decoded. ASAR members and `.node` add-ons are listed from the header.
+//! A truncated or self-contradicting header refuses the listing.
 //! Computed specifiers stay unknown. Nothing is executed, fetched, or treated as behaviour.
 use super::{parse, Json, Json::*};
 
@@ -25,12 +28,30 @@ const SPECIFIER_CAP: &str = "javascript specifier-length cap";
 const STATEMENT_CAP: &str = "javascript statement-bound cap";
 const TEMPLATE_NEST_CAP: &str = "javascript template-nesting cap";
 const REPORT_CAP: &str = "javascript report cap";
+const MODULE_FILE_LIMIT: usize = 128;
+const ADDON_LIMIT: usize = 64;
+const MODULE_FILE_CAP: &str = "javascript module-file cap";
+const ADDON_CAP: &str = "javascript native-addon cap";
 
 const ASAR_LENGTH_REFUSAL: &str = "asar directory length exceeds the container";
 const ASAR_UTF8_REFUSAL: &str = "asar directory is not UTF-8";
 const MAP_DANGLING: &str = "source map reference has no target";
 const MAP_UNRESOLVED: &str = "unresolved; the target is not in this observation node";
 const MAP_INLINE: &str = "inline data target present in the directive; contents not decoded";
+const MAP_PRESENT: &str = "present";
+const MAP_ABSENT: &str = "absent";
+const MAP_UNREADABLE: &str = "unreadable";
+const MAP_REMOTE: &str = "remote source map was not fetched";
+const NOT_MODULE: &str = "file is not a JavaScript module";
+const ASAR_PREFIX: &str = "asar container was not read whole";
+const ASAR_OVERFLOW: &str = "asar entry range overflows";
+const ASAR_PAST_END: &str = "asar entry range exceeds the container";
+const ASAR_OVERLAP: &str = "asar member ranges overlap";
+const ASAR_BOTH: &str = "asar entry is both a file and a directory";
+const ASAR_ESCAPE: &str = "asar entry path escapes the container";
+const ASAR_DUPLICATE: &str = "asar entry name is duplicated";
+const ADDON_UNKNOWN: &str = "native add-on ABI, exports, and whether the add-on loads are not in this file";
+const SCRIPT_ADDON_UNKNOWN: &str = "a script file has no container member list; add-ons outside this file were not searched";
 const NOT_UTF8: &str = "Retained bytes are not UTF-8 JavaScript source. Module graph and string census are empty.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,11 +61,27 @@ pub(super) enum Kind {
     Asar,
 }
 
+/// Whether a source-map file could be opened. The map bytes are never decoded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MapFile {
+    Present,
+    Absent,
+    Unreadable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpecClass {
+    Bare,
+    Relative,
+    Absolute,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Edge {
     offset: usize,
     form: &'static str,
     specifier: Option<String>,
+    class: Option<SpecClass>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,6 +102,20 @@ struct MapRef {
     offset: usize,
     target: String,
     resolution: &'static str,
+    module: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ModuleFile {
+    name: String,
+    size: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Addon {
+    name: String,
+    size: u64,
+    offset: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,8 +151,13 @@ pub(super) struct Observation {
     asar_entries: Vec<AsarEntry>,
     asar_refusal: Option<&'static str>,
     asar_header_end: Option<u64>,
+    modules: Vec<ModuleFile>,
+    addons: Vec<Addon>,
     caps: Vec<&'static str>,
     script_note: Option<&'static str>,
+    saw_module: bool,
+    byte_len: usize,
+    label: String,
     kind: Kind,
     complete: bool,
 }
@@ -150,6 +206,17 @@ pub(super) fn node_kind(path: &std::path::Path) -> Option<Kind> {
 
 /// Read one retained node. `complete` is false when the caller kept only a prefix.
 pub(super) fn observe(bytes: &[u8], kind: Kind, complete: bool) -> Observation {
+    observe_with(bytes, kind, complete, ".", &|_| None)
+}
+
+/// `map_file` answers a relative source-map path. `None` leaves the reference unresolved.
+pub(super) fn observe_with(
+    bytes: &[u8],
+    kind: Kind,
+    complete: bool,
+    module_label: &str,
+    map_file: &dyn Fn(&str) -> Option<MapFile>,
+) -> Observation {
     let mut out = Observation {
         text: String::new(),
         graph: Vec::new(),
@@ -162,18 +229,48 @@ pub(super) fn observe(bytes: &[u8], kind: Kind, complete: bool) -> Observation {
         asar_entries: Vec::new(),
         asar_refusal: None,
         asar_header_end: None,
+        modules: Vec::new(),
+        addons: Vec::new(),
         caps: Vec::new(),
         script_note: None,
+        saw_module: false,
+        byte_len: bytes.len(),
+        label: module_label.to_string(),
         kind,
         complete,
     };
     match kind {
-        Kind::Script => read_script(bytes, complete, &mut out),
+        Kind::Script => read_script_or_payload(bytes, complete, module_label, map_file, &mut out),
         Kind::Package => read_package(bytes, &mut out),
-        Kind::Asar => read_asar(bytes, &mut out),
+        Kind::Asar => read_asar(bytes, complete, &mut out),
     }
     out.text = render(&out);
     out
+}
+
+fn read_script_or_payload(
+    bytes: &[u8],
+    complete: bool,
+    module_label: &str,
+    map_file: &dyn Fn(&str) -> Option<MapFile>,
+    out: &mut Observation,
+) {
+    if bytes.len() >= 8 && u32_at(bytes, 0) == Some(4) {
+        match asar_directory(bytes) {
+            Ok(directory) => {
+                out.kind = Kind::Asar;
+                if complete {
+                    finish_asar(bytes, directory.entries, directory.header_end, out);
+                } else {
+                    out.asar_refusal = Some(ASAR_PREFIX);
+                }
+                return;
+            }
+            Err(_) => {}
+        }
+    }
+    read_script(bytes, complete, module_label, out);
+    apply_map_files(out, None, map_file);
 }
 
 fn note_cap(caps: &mut Vec<&'static str>, name: &'static str) {
@@ -182,12 +279,22 @@ fn note_cap(caps: &mut Vec<&'static str>, name: &'static str) {
     }
 }
 
-fn read_script(bytes: &[u8], complete: bool, out: &mut Observation) {
+fn read_script(bytes: &[u8], complete: bool, module_label: &str, out: &mut Observation) {
     let Ok(text) = std::str::from_utf8(bytes) else {
         out.script_note = Some(NOT_UTF8);
         return;
     };
+    let bom = text.starts_with('\u{feff}');
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let origin = if bom { 3 } else { 0 };
+    lex_source(text, complete, origin, module_label, out);
+    if out.saw_module {
+        let name = if module_label.is_empty() { "." } else { module_label };
+        out.modules.push(ModuleFile { name: name.to_string(), size: out.byte_len as u64 });
+    }
+}
+
+fn lex_source(text: &str, complete: bool, origin: usize, module_name: &str, out: &mut Observation) {
     let mut lexer = Lexer {
         text,
         i: 0,
@@ -196,6 +303,8 @@ fn read_script(bytes: &[u8], complete: bool, out: &mut Observation) {
         stop_brace: None,
         expr_end: false,
         template_depth: 0,
+        origin,
+        module_name,
         out,
     };
     if text.starts_with("#!") {
@@ -261,15 +370,13 @@ fn at<'a>(value: &'a Json, key: &str) -> Option<&'a Json> {
     }
 }
 
-fn read_asar(bytes: &[u8], out: &mut Observation) {
+fn read_asar(bytes: &[u8], complete: bool, out: &mut Observation) {
+    if !complete {
+        out.asar_refusal = Some(ASAR_PREFIX);
+        return;
+    }
     match asar_directory(bytes) {
-        Ok(directory) => {
-            out.asar_header_end = Some(directory.header_end);
-            out.asar_entries = directory.entries;
-            if directory.capped {
-                note_cap(&mut out.caps, ASAR_ENTRY_CAP);
-            }
-        }
+        Ok(directory) => finish_asar(bytes, directory.entries, directory.header_end, out),
         Err(reason) => {
             out.asar_entries.clear();
             out.asar_refusal = Some(reason);
@@ -277,10 +384,169 @@ fn read_asar(bytes: &[u8], out: &mut Observation) {
     }
 }
 
+fn finish_asar(bytes: &[u8], mut entries: Vec<AsarEntry>, header_end: u64, out: &mut Observation) {
+    let content_len = (bytes.len() as u64).saturating_sub(header_end);
+    if let Err(reason) = certify_entries(&mut entries, content_len) {
+        out.asar_entries.clear();
+        out.asar_refusal = Some(reason);
+        return;
+    }
+    let mut modules: Vec<AsarEntry> = entries.iter().filter(|entry| is_module_name(&entry.name)).cloned().collect();
+    modules.sort_by(|left, right| left.name.cmp(&right.name));
+    if modules.len() > MODULE_FILE_LIMIT {
+        note_cap(&mut out.caps, MODULE_FILE_CAP);
+        modules.truncate(MODULE_FILE_LIMIT);
+    }
+    let mut addons: Vec<AsarEntry> = entries.iter().filter(|entry| is_addon_name(&entry.name)).cloned().collect();
+    addons.sort_by(|left, right| left.name.cmp(&right.name));
+    if addons.len() > ADDON_LIMIT {
+        note_cap(&mut out.caps, ADDON_CAP);
+        addons.truncate(ADDON_LIMIT);
+    }
+    out.modules = modules.iter().map(|entry| ModuleFile { name: entry.name.clone(), size: entry.size }).collect();
+    out.addons = addons.iter().map(|entry| Addon { name: entry.name.clone(), size: entry.size, offset: entry.offset }).collect();
+    for module in &modules {
+        if module.unpacked {
+            push_obs_unknown(out, member_origin(header_end, module), "module bytes are not in the container");
+            continue;
+        }
+        let Some(slice) = member_bytes(bytes, header_end, module) else {
+            push_obs_unknown(out, member_origin(header_end, module), "module bytes are not in the container");
+            continue;
+        };
+        let Ok(text) = std::str::from_utf8(slice) else {
+            push_obs_unknown(out, member_origin(header_end, module), "module bytes are not UTF-8");
+            continue;
+        };
+        let bom = text.starts_with('\u{feff}');
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let origin = member_origin(header_end, module).saturating_add(if bom { 3 } else { 0 });
+        lex_source(text, true, origin, &module.name, out);
+    }
+    apply_map_files(out, Some(&entries), &|_| None);
+    if entries.len() > ASAR_ENTRY_LIMIT {
+        note_cap(&mut out.caps, ASAR_ENTRY_CAP);
+        entries.truncate(ASAR_ENTRY_LIMIT);
+    }
+    out.asar_header_end = Some(header_end);
+    out.asar_entries = entries;
+}
+
+fn certify_entries(entries: &mut Vec<AsarEntry>, content_len: u64) -> Result<(), &'static str> {
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    if entries.windows(2).any(|pair| pair[0].name == pair[1].name) {
+        return Err(ASAR_DUPLICATE);
+    }
+    let mut ranges = Vec::new();
+    for entry in entries.iter() {
+        if entry.unpacked {
+            continue;
+        }
+        let end = entry.offset.checked_add(entry.size).ok_or(ASAR_OVERFLOW)?;
+        if end > content_len {
+            return Err(ASAR_PAST_END);
+        }
+        ranges.push((entry.offset, end));
+    }
+    ranges.sort_unstable();
+    let mut last = 0u64;
+    let mut seen = false;
+    for (start, end) in ranges {
+        if seen && start < last {
+            return Err(ASAR_OVERLAP);
+        }
+        last = end;
+        seen = true;
+    }
+    Ok(())
+}
+
+fn member_origin(header_end: u64, entry: &AsarEntry) -> usize {
+    usize::try_from(header_end.saturating_add(entry.offset)).unwrap_or(usize::MAX)
+}
+
+fn member_bytes<'a>(bytes: &'a [u8], header_end: u64, entry: &AsarEntry) -> Option<&'a [u8]> {
+    let start = usize::try_from(header_end.checked_add(entry.offset)?).ok()?;
+    let end = start.checked_add(usize::try_from(entry.size).ok()?)?;
+    bytes.get(start..end)
+}
+
+fn file_extension(name: &str) -> Option<&str> {
+    let file = name.rsplit('/').next().unwrap_or(name);
+    let (base, ext) = file.rsplit_once('.')?;
+    if base.is_empty() || ext.is_empty() { None } else { Some(ext) }
+}
+
+fn is_module_name(name: &str) -> bool {
+    matches!(file_extension(name), Some("js" | "mjs" | "cjs"))
+}
+
+fn is_addon_name(name: &str) -> bool {
+    file_extension(name) == Some("node")
+}
+
+fn push_obs_unknown(out: &mut Observation, offset: usize, reason: &'static str) {
+    if out.unknowns.len() >= MODULE_UNKNOWN_LIMIT {
+        note_cap(&mut out.caps, MODULE_UNKNOWN_CAP);
+        return;
+    }
+    out.unknowns.push(Unknown { offset, reason });
+}
+
+fn apply_map_files(out: &mut Observation, entries: Option<&[AsarEntry]>, map_file: &dyn Fn(&str) -> Option<MapFile>) {
+    for map in &mut out.maps {
+        if map.resolution != MAP_UNRESOLVED {
+            continue;
+        }
+        if map.target.contains("://") {
+            map.resolution = MAP_REMOTE;
+            continue;
+        }
+        let status = if let Some(entries) = entries {
+            Some(lookup_asar(entries, &map.module, &map.target))
+        } else {
+            map_file(&map.target)
+        };
+        map.resolution = match status {
+            None => MAP_UNRESOLVED,
+            Some(MapFile::Present) => MAP_PRESENT,
+            Some(MapFile::Absent) => MAP_ABSENT,
+            Some(MapFile::Unreadable) => MAP_UNREADABLE,
+        };
+    }
+}
+
+fn lookup_asar(entries: &[AsarEntry], module: &str, target: &str) -> MapFile {
+    let Some(path) = archive_map_path(module, target) else {
+        return MapFile::Unreadable;
+    };
+    match entries.iter().find(|entry| entry.name == path) {
+        None => MapFile::Absent,
+        Some(entry) if entry.unpacked => MapFile::Unreadable,
+        Some(_) => MapFile::Present,
+    }
+}
+
+fn archive_map_path(module: &str, target: &str) -> Option<String> {
+    if target.is_empty() || target.starts_with('/') || target.contains('\\') || target.contains('\0') || target.contains(':') {
+        return None;
+    }
+    let mut parts: Vec<&str> = module.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("").split('/').filter(|part| !part.is_empty()).collect();
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            other => parts.push(other),
+        }
+    }
+    if parts.is_empty() { None } else { Some(parts.join("/")) }
+}
+
 struct Directory {
     header_end: u64,
     entries: Vec<AsarEntry>,
-    capped: bool,
 }
 
 fn asar_directory(bytes: &[u8]) -> Result<Directory, &'static str> {
@@ -312,40 +578,47 @@ fn asar_directory(bytes: &[u8]) -> Result<Directory, &'static str> {
         return Err("asar directory is not a JSON object");
     }
     let mut entries = Vec::new();
-    let mut capped = false;
-    walk(&value, "", &mut entries, &mut capped)?;
+    walk(&value, "", &mut entries)?;
     Ok(Directory {
         header_end: (8 + header_len) as u64,
         entries,
-        capped,
     })
 }
 
-fn walk(node: &Json, prefix: &str, entries: &mut Vec<AsarEntry>, capped: &mut bool) -> Result<(), &'static str> {
+fn component_name(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() || name.contains('\0') {
+        return Err("asar entry name is empty");
+    }
+    if name.len() > NAME_LIMIT {
+        return Err("asar entry name exceeds the name bound");
+    }
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err(ASAR_ESCAPE);
+    }
+    Ok(())
+}
+
+fn walk(node: &Json, prefix: &str, entries: &mut Vec<AsarEntry>) -> Result<(), &'static str> {
     let files = at(node, "files").ok_or("asar directory has no files object")?;
     let Obj(map) = files else {
         return Err("asar directory files object is absent or not an object");
     };
     for (name, child) in map {
-        if name.is_empty() || name.contains('\0') {
-            return Err("asar entry name is empty");
-        }
-        if name.len() > NAME_LIMIT {
-            return Err("asar entry name exceeds the name bound");
-        }
+        component_name(name)?;
         let Obj(_) = child else {
             return Err("asar directory entry is not an object");
         };
+        let directory = at(child, "files").is_some();
+        let file = at(child, "size").is_some() || at(child, "offset").is_some();
+        if directory && file {
+            return Err(ASAR_BOTH);
+        }
         let path = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
-        if at(child, "files").is_some() {
-            walk(child, &path, entries, capped)?;
+        if directory {
+            walk(child, &path, entries)?;
         }
         if let Some(entry) = file_entry(child, path)? {
-            if entries.len() >= ASAR_ENTRY_LIMIT {
-                *capped = true;
-            } else {
-                entries.push(entry);
-            }
+            entries.push(entry);
         }
     }
     Ok(())
@@ -402,6 +675,8 @@ struct Lexer<'a> {
     stop_brace: Option<i32>,
     expr_end: bool,
     template_depth: usize,
+    origin: usize,
+    module_name: &'a str,
     out: &'a mut Observation,
 }
 
@@ -584,6 +859,7 @@ impl<'a> Lexer<'a> {
         }
         if next == Some(b'(') {
             self.i += 1;
+            self.out.saw_module = true;
             if !self.gap() {
                 return;
             }
@@ -614,8 +890,14 @@ impl<'a> Lexer<'a> {
             self.from_clause(start, "export");
             return;
         }
-        self.push_edge(start, "export", None);
-        self.expr_end = false;
+        let end = ident_end(self.text, self.i);
+        let word = self.text.get(self.i..end).unwrap_or("");
+        if matches!(word, "function" | "class" | "const" | "let" | "var" | "async" | "default") {
+            self.push_edge(start, "export", None);
+            self.expr_end = false;
+            return;
+        }
+        self.expr_end = true;
     }
 
     fn after_require(&mut self, start: usize) {
@@ -630,6 +912,7 @@ impl<'a> Lexer<'a> {
             return;
         }
         self.i += 1;
+        self.out.saw_module = true;
         if !self.gap() {
             return;
         }
@@ -755,9 +1038,7 @@ impl<'a> Lexer<'a> {
             if self.i >= limit {
                 self.note(STATEMENT_CAP);
                 self.push_unknown(start, "module statement exceeds the observation bound");
-            } else if form == "import" {
-                self.push_unknown(start, "import statement has no specifier");
-            } else {
+            } else if form == "export" {
                 self.push_edge(start, form, None);
             }
             return;
@@ -765,11 +1046,14 @@ impl<'a> Lexer<'a> {
         if !self.gap() {
             return;
         }
-        let computed = if form == "import" { "computed import specifier" } else { "computed export specifier" };
+        // A static import/export specifier is a string. An identifier here is not a computed module edge.
         match self.literal_argument() {
             Arg::Literal(value) => self.push_edge(start, form, Some(value)),
-            Arg::Computed => self.push_unknown(start, computed),
-            Arg::Incomplete(reason) => self.push_unknown(start, reason),
+            Arg::Computed => {}
+            Arg::Incomplete(reason) => {
+                self.out.saw_module = true;
+                self.push_unknown(start, reason);
+            }
         }
     }
 
@@ -1093,7 +1377,13 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn at(&self, local: usize) -> usize {
+        self.origin.saturating_add(local)
+    }
+
     fn push_edge(&mut self, offset: usize, form: &'static str, specifier: Option<String>) {
+        self.out.saw_module = true;
+        let class = specifier.as_deref().map(spec_class);
         if let Some(value) = &specifier {
             if value.len() > SPECIFIER_LIMIT {
                 self.note(SPECIFIER_CAP);
@@ -1105,7 +1395,7 @@ impl<'a> Lexer<'a> {
             self.note(MODULE_EDGE_CAP);
             return;
         }
-        self.out.graph.push(Edge { offset, form, specifier });
+        self.out.graph.push(Edge { offset: self.at(offset), form, specifier, class });
     }
 
     fn push_unknown(&mut self, offset: usize, reason: &'static str) {
@@ -1113,7 +1403,7 @@ impl<'a> Lexer<'a> {
             self.note(MODULE_UNKNOWN_CAP);
             return;
         }
-        self.out.unknowns.push(Unknown { offset, reason });
+        self.out.unknowns.push(Unknown { offset: self.at(offset), reason });
     }
 
     fn push_site(&mut self, offset: usize, kind: &'static str, value: String) {
@@ -1126,7 +1416,7 @@ impl<'a> Lexer<'a> {
             self.note(CENSUS_CAP);
             return;
         }
-        self.out.census.push(Site { offset, kind, value });
+        self.out.census.push(Site { offset: self.at(offset), kind, value });
     }
 
     fn push_map(&mut self, offset: usize, target: String, resolution: &'static str) {
@@ -1139,7 +1429,7 @@ impl<'a> Lexer<'a> {
             self.note(SOURCE_MAP_CAP);
             return;
         }
-        self.out.maps.push(MapRef { offset, target, resolution });
+        self.out.maps.push(MapRef { offset: self.at(offset), target, resolution, module: self.module_name.to_string() });
     }
 
     fn push_map_unknown(&mut self, offset: usize, reason: &'static str) {
@@ -1147,7 +1437,7 @@ impl<'a> Lexer<'a> {
             self.note(SOURCE_MAP_CAP);
             return;
         }
-        self.out.map_unknowns.push(Unknown { offset, reason });
+        self.out.map_unknowns.push(Unknown { offset: self.at(offset), reason });
     }
 
     fn note(&mut self, name: &'static str) {
@@ -1245,6 +1535,36 @@ fn classify_directive(body: &str) -> MapNote {
     }
 }
 
+fn spec_class(specifier: &str) -> SpecClass {
+    if specifier == "." || specifier == ".." || specifier.starts_with("./") || specifier.starts_with("../") {
+        SpecClass::Relative
+    } else if specifier.starts_with('/') {
+        SpecClass::Absolute
+    } else {
+        SpecClass::Bare
+    }
+}
+
+fn class_word(class: SpecClass) -> &'static str {
+    match class {
+        SpecClass::Bare => "bare",
+        SpecClass::Relative => "relative",
+        SpecClass::Absolute => "absolute",
+    }
+}
+
+fn display_name(name: &str) -> String {
+    let raw = if name.is_empty() { "." } else { name };
+    let mut cleaned = String::new();
+    for ch in raw.chars() {
+        cleaned.push(match ch {
+            '"' | '\n' | '\r' => '\'',
+            other => other,
+        });
+    }
+    shown(&cleaned)
+}
+
 fn render(out: &Observation) -> String {
     let mut text = String::new();
     let mut caps = out.caps.clone();
@@ -1256,12 +1576,6 @@ fn render(out: &Observation) -> String {
         "Scope: retained prefix only; bytes outside this node remain unknown."
     };
     push(&mut text, &mut caps, scope);
-    let kind = match out.kind {
-        Kind::Script => "Kind: script source",
-        Kind::Package => "Kind: package.json",
-        Kind::Asar => "Kind: asar container",
-    };
-    push(&mut text, &mut caps, kind);
     for cap in &out.caps {
         push(&mut text, &mut caps, &format!("Refusal: {cap}."));
     }
@@ -1269,69 +1583,129 @@ fn render(out: &Observation) -> String {
         push(&mut text, &mut caps, note);
     }
     match out.kind {
-        Kind::Script => {
-            push(&mut text, &mut caps, &format!("Module graph: {} edges.", out.graph.len()));
-            for edge in &out.graph {
-                let target = match &edge.specifier {
-                    Some(value) => format!(" specifier \"{}\"", shown(value)),
-                    None => " local form, no external specifier".into(),
-                };
-                push(&mut text, &mut caps, &format!("{} at byte {}{target}.", edge.form, edge.offset));
-            }
-            push(&mut text, &mut caps, &format!("Unknowns: {}.", out.unknowns.len()));
-            for unknown in &out.unknowns {
-                push(&mut text, &mut caps, &format!("Unknown at byte {}: {}.", unknown.offset, unknown.reason));
-            }
-            push(&mut text, &mut caps, &format!("String census: {} sites.", out.census.len()));
-            for site in &out.census {
-                push(&mut text, &mut caps, &format!("{} at byte {} literal \"{}\".", site.kind, site.offset, shown(&site.value)));
-            }
-            push(&mut text, &mut caps, &format!("Source maps: {} references, {} unknowns. A dangling reference is an unknown, not an error. Which directive a runtime would select is not claimed.", out.maps.len(), out.map_unknowns.len()));
-            for map in &out.maps {
-                push(&mut text, &mut caps, &format!("Reference at byte {} target \"{}\" resolution {}.", map.offset, shown(&map.target), map.resolution));
-            }
-            for unknown in &out.map_unknowns {
-                push(&mut text, &mut caps, &format!("Unknown at byte {}: {}.", unknown.offset, unknown.reason));
-            }
-        }
-        Kind::Package => {
-            push(&mut text, &mut caps, "Module graph and string census are not read for a package.json node.");
-            if let Some(note) = out.package_withheld {
-                push(&mut text, &mut caps, note);
-            } else {
-                for fact in &out.package {
-                    push(&mut text, &mut caps, &fact_line(fact));
-                }
-            }
-        }
-        Kind::Asar => {
-            push(&mut text, &mut caps, "Module graph and string census are not read from concatenated asar payloads.");
-            if let Some(reason) = out.asar_refusal {
-                push(&mut text, &mut caps, &format!("Refusal: {reason}. No listing returned."));
-            } else if let Some(header_end) = out.asar_header_end {
-                push(&mut text, &mut caps, &format!("ASAR header ends at byte {header_end}. Content offsets are relative to that byte. Entries: {}.", out.asar_entries.len()));
-                for entry in &out.asar_entries {
-                    let container = header_end.checked_add(entry.offset);
-                    let container = match container {
-                        Some(value) => value.to_string(),
-                        None => "unknown".into(),
-                    };
-                    push(
-                        &mut text,
-                        &mut caps,
-                        &format!(
-                            "entry \"{}\" size {} unpacked {} content-offset {} container-offset {container}.",
-                            shown(&entry.name),
-                            entry.size,
-                            entry.unpacked,
-                            entry.offset
-                        ),
-                    );
-                }
-            }
-        }
+        Kind::Script => render_script(out, &mut text, &mut caps),
+        Kind::Package => render_package(out, &mut text, &mut caps),
+        Kind::Asar => render_asar(out, &mut text, &mut caps),
     }
     text
+}
+
+fn render_script(out: &Observation, text: &mut String, caps: &mut Vec<&'static str>) {
+    if out.script_note.is_some() {
+        push(text, caps, "Kind: not claimed.");
+    } else if out.saw_module {
+        push(text, caps, "Kind: javascript module");
+        push(text, caps, "Modules: 1.");
+        push(text, caps, &format!("module \"{}\" size {}.", display_name(&out.label), out.byte_len));
+    } else {
+        push(text, caps, &format!("Refusal: {NOT_MODULE}."));
+        push(text, caps, "Known: retained bytes contain no import, export declaration, or require call.");
+        push(text, caps, "Unknown: the bytes were not executed.");
+    }
+    render_graph(out, text, caps);
+    push(text, caps, "Native add-ons: unknown.");
+    push(text, caps, &format!("Unknown: {SCRIPT_ADDON_UNKNOWN}."));
+}
+
+fn render_package(out: &Observation, text: &mut String, caps: &mut Vec<&'static str>) {
+    push(text, caps, "Kind: package.json");
+    push(text, caps, "Module graph and string census are not read for a package.json node.");
+    if let Some(note) = out.package_withheld {
+        push(text, caps, note);
+        return;
+    }
+    for fact in &out.package {
+        push(text, caps, &fact_line(fact));
+    }
+    if out.package.iter().any(|fact| fact.field == "electron" && matches!(fact.value, FactValue::Present(_))) {
+        push(text, caps, "Payload: electron manifest field is present.");
+    }
+    push(text, caps, "Native add-ons: unknown.");
+    push(text, caps, "Unknown: package.json does not list native add-on bytes.");
+}
+
+fn render_asar(out: &Observation, text: &mut String, caps: &mut Vec<&'static str>) {
+    if let Some(reason) = out.asar_refusal {
+        push(text, caps, &format!("Refusal: {reason}. No listing returned."));
+        push(text, caps, "Modules: 0.");
+        push(text, caps, "Native add-ons: unknown.");
+        push(text, caps, "Unknown: the container was refused, so members, imports, source maps, and native add-ons were not read.");
+        return;
+    }
+    push(text, caps, "Kind: electron app payload");
+    push(text, caps, "Kind: asar container");
+    push(text, caps, "Module bytes are read per member. They are not read as one concatenated script.");
+    if let Some(header_end) = out.asar_header_end {
+        push(text, caps, &format!("ASAR header ends at byte {header_end}. Content offsets are relative to that byte. Entries: {}.", out.asar_entries.len()));
+        for entry in &out.asar_entries {
+            let container = header_end.checked_add(entry.offset);
+            let container = match container {
+                Some(value) => value.to_string(),
+                None => "unknown".into(),
+            };
+            push(
+                text,
+                caps,
+                &format!(
+                    "entry \"{}\" size {} unpacked {} content-offset {} container-offset {container}.",
+                    display_name(&entry.name),
+                    entry.size,
+                    entry.unpacked,
+                    entry.offset
+                ),
+            );
+        }
+    }
+    push(text, caps, &format!("Modules: {}.", out.modules.len()));
+    for module in &out.modules {
+        push(text, caps, &format!("module \"{}\" size {}.", display_name(&module.name), module.size));
+    }
+    if out.caps.contains(&MODULE_FILE_CAP) {
+        push(text, caps, "Unknown: module files past the javascript module-file cap were not read.");
+    }
+    render_graph(out, text, caps);
+    push(text, caps, &format!("Native add-ons: {}.", out.addons.len()));
+    for addon in &out.addons {
+        push(text, caps, &format!("addon \"{}\" size {} content-offset {}.", display_name(&addon.name), addon.size, addon.offset));
+    }
+    push(text, caps, "Known: .node names are taken from the container member list.");
+    push(text, caps, &format!("Unknown: {ADDON_UNKNOWN}."));
+    if out.caps.contains(&ADDON_CAP) {
+        push(text, caps, "Unknown: native add-on names past the javascript native-addon cap were not listed.");
+    }
+}
+
+fn render_graph(out: &Observation, text: &mut String, caps: &mut Vec<&'static str>) {
+    push(text, caps, &format!("Module graph: {} edges.", out.graph.len()));
+    for edge in &out.graph {
+        let target = match &edge.specifier {
+            Some(value) => format!(" specifier \"{}\"", shown(value)),
+            None => " local form, no external specifier".into(),
+        };
+        push(text, caps, &format!("{} at byte {}{target}.", edge.form, edge.offset));
+    }
+    push(text, caps, &format!("Unknowns: {}.", out.unknowns.len()));
+    for unknown in &out.unknowns {
+        push(text, caps, &format!("Unknown at byte {}: {}.", unknown.offset, unknown.reason));
+    }
+    push(text, caps, &format!("String census: {} sites.", out.census.len()));
+    for site in &out.census {
+        push(text, caps, &format!("{} at byte {} literal \"{}\".", site.kind, site.offset, shown(&site.value)));
+    }
+    push(text, caps, &format!("Source maps: {} references, {} unknowns. A dangling reference is an unknown, not an error. Which directive a runtime would select is not claimed. Map bytes are not decoded.", out.maps.len(), out.map_unknowns.len()));
+    for map in &out.maps {
+        push(text, caps, &format!("Reference at byte {} target \"{}\" resolution {}.", map.offset, shown(&map.target), map.resolution));
+    }
+    for unknown in &out.map_unknowns {
+        push(text, caps, &format!("Unknown at byte {}: {}.", unknown.offset, unknown.reason));
+    }
+    let classed = out.graph.iter().filter(|edge| edge.specifier.is_some()).count();
+    push(text, caps, &format!("Specifier class: {classed}."));
+    for edge in &out.graph {
+        let Some(value) = &edge.specifier else { continue };
+        let word = edge.class.map(class_word).unwrap_or("unknown");
+        push(text, caps, &format!("{} at byte {} specifier \"{}\" {word}.", edge.form, edge.offset, shown(value)));
+    }
 }
 
 fn fact_line(fact: &Fact) -> String {
@@ -1493,5 +1867,184 @@ mod checks {
         assert_eq!(obs.map_unknowns[0].offset, source.rfind("//# sourceMappingURL=").unwrap());
         assert!(obs.text.contains(MAP_DANGLING));
         assert!(obs.maps.iter().all(|map| !map.target.is_empty()));
+    }
+
+    /// Fails if a prose file is named as a JavaScript module, or if the refusal is omitted.
+    #[test]
+    fn plain_text_with_a_js_name_is_refused() {
+        let source = "This is a note about shipping.\nIt is not a program.\nPlease import the data from the file.\n";
+        let obs = script(source);
+        assert!(obs.graph.is_empty(), "{}", obs.text);
+        assert!(!obs.saw_module);
+        assert!(obs.unknowns.is_empty(), "{:?}", obs.unknowns);
+        assert!(obs.text.contains(&format!("Refusal: {NOT_MODULE}.")), "{}", obs.text);
+        assert!(!obs.text.contains("computed import specifier"), "{}", obs.text);
+        assert!(!obs.text.contains("Kind: javascript module"), "{}", obs.text);
+        assert!(!obs.text.contains("Kind: script source"), "{}", obs.text);
+        assert!(!obs.text.contains("Kind: electron app payload"), "{}", obs.text);
+    }
+
+    /// Fails if a bare package name is marked relative, or a relative path is marked bare.
+    #[test]
+    fn specifier_class_marks_bare_relative_and_absolute() {
+        let source = "import local from \"./rel.js\";\nexport { a } from \"../up.js\";\nconst {app} = require(\"electron\");\nimport \"/abs.js\";\n";
+        let obs = script(source);
+        assert!(obs.text.contains("Kind: javascript module"), "{}", obs.text);
+        assert_eq!(obs.modules.len(), 1);
+        assert_eq!(obs.modules[0].size, source.len() as u64);
+        let class_of = |specifier: &str| {
+            obs.graph.iter().find(|edge| edge.specifier.as_deref() == Some(specifier)).and_then(|edge| edge.class)
+        };
+        assert_eq!(class_of("./rel.js"), Some(SpecClass::Relative));
+        assert_eq!(class_of("../up.js"), Some(SpecClass::Relative));
+        assert_eq!(class_of("electron"), Some(SpecClass::Bare));
+        assert_eq!(class_of("/abs.js"), Some(SpecClass::Absolute));
+        assert!(obs.text.contains("specifier \"./rel.js\" relative."), "{}", obs.text);
+        assert!(obs.text.contains("specifier \"electron\" bare."), "{}", obs.text);
+        assert!(obs.text.contains("specifier \"/abs.js\" absolute."), "{}", obs.text);
+        assert!(obs.text.contains("Native add-ons: unknown."), "{}", obs.text);
+        assert!(obs.text.contains(SCRIPT_ADDON_UNKNOWN), "{}", obs.text);
+    }
+
+    /// Fails if a looked-up map is left unresolved, or if the data URL is decoded into a mapping.
+    #[test]
+    fn source_map_file_is_present_absent_or_unreadable() {
+        let source = "import \"./a.js\";\n//# sourceMappingURL=there.js.map\n//# sourceMappingURL=gone.js.map\n//# sourceMappingURL=locked.js.map\n//# sourceMappingURL=data:application/json,{\"mappings\":\"SENTINEL\"}\n";
+        let obs = observe_with(source.as_bytes(), Kind::Script, true, "app.js", &|target| {
+            match target {
+                "there.js.map" => Some(MapFile::Present),
+                "gone.js.map" => Some(MapFile::Absent),
+                "locked.js.map" => Some(MapFile::Unreadable),
+                _ => None,
+            }
+        });
+        let resolution = |target: &str| obs.maps.iter().find(|map| map.target == target).map(|map| map.resolution);
+        assert_eq!(resolution("there.js.map"), Some(MAP_PRESENT));
+        assert_eq!(resolution("gone.js.map"), Some(MAP_ABSENT));
+        assert_eq!(resolution("locked.js.map"), Some(MAP_UNREADABLE));
+        let inline = obs.maps.iter().find(|map| map.target.starts_with("data:")).unwrap();
+        assert_eq!(inline.resolution, MAP_INLINE);
+        assert!(obs.text.contains("resolution present"), "{}", obs.text);
+        assert!(obs.text.contains("resolution absent"), "{}", obs.text);
+        assert!(obs.text.contains("resolution unreadable"), "{}", obs.text);
+        assert!(!obs.text.contains("\"sources\""), "{}", obs.text);
+        assert_eq!(obs.modules[0].name, "app.js");
+        assert_eq!(obs.modules[0].size, source.len() as u64);
+        assert!(obs.text.contains("module \"app.js\""), "{}", obs.text);
+    }
+
+    /// Fails if overlapping member ranges still return the named files.
+    #[test]
+    fn overlapping_asar_ranges_return_no_listing() {
+        let json = r#"{"files":{"a.js":{"offset":"0","size":4},"b.js":{"offset":"2","size":4}}}"#;
+        let refused = observe(&asar_bytes(json, b"abcdefgh"), Kind::Asar, true);
+        assert!(refused.asar_entries.is_empty());
+        assert!(refused.modules.is_empty());
+        assert!(refused.addons.is_empty());
+        assert_eq!(refused.asar_refusal, Some(ASAR_OVERLAP));
+        assert!(refused.text.contains(&format!("Refusal: {ASAR_OVERLAP}. No listing returned.")), "{}", refused.text);
+        assert!(!refused.text.contains("a.js"), "{}", refused.text);
+        assert!(!refused.text.contains("b.js"), "{}", refused.text);
+        assert!(!refused.text.contains("Kind: electron app payload"), "{}", refused.text);
+    }
+
+    /// Fails if a packed range past the tail is kept, or if a directory that is also a file is listed.
+    #[test]
+    fn asar_range_past_the_container_and_a_mixed_entry_are_refusals() {
+        let past = observe(&asar_bytes(r#"{"files":{"late.js":{"offset":"0","size":50}}}"#, b"short"), Kind::Asar, true);
+        assert!(past.asar_entries.is_empty());
+        assert_eq!(past.asar_refusal, Some(ASAR_PAST_END));
+        assert!(!past.text.contains("late.js"), "{}", past.text);
+    }
+
+    /// Fails if a node that is both a file and a directory is listed.
+    #[test]
+    fn asar_file_and_directory_is_a_refusal() {
+        let mixed = observe(&asar_bytes(r#"{"files":{"both.js":{"offset":"0","size":1,"files":{}}}}"#, b"Z"), Kind::Asar, true);
+        assert!(mixed.asar_entries.is_empty());
+        assert_eq!(mixed.asar_refusal, Some(ASAR_BOTH));
+        assert!(!mixed.text.contains("both.js"), "{}", mixed.text);
+    }
+
+    /// Fails if a prefix is parsed into a member list.
+    #[test]
+    fn asar_prefix_returns_no_listing() {
+        let prefix = observe(&asar_bytes(r#"{"files":{"kept.js":{"offset":"0","size":1}}}"#, b"Z"), Kind::Asar, false);
+        assert!(prefix.asar_entries.is_empty());
+        assert_eq!(prefix.asar_refusal, Some(ASAR_PREFIX));
+        assert!(!prefix.text.contains("kept.js"), "{}", prefix.text);
+    }
+
+    /// Fails if member imports, module sizes, source-map presence, or the .node census are dropped,
+    /// or if the map file's mapping text is copied into the observation.
+    #[test]
+    fn asar_modules_imports_source_maps_and_native_addons() {
+        let main = "require(\"electron\");\n//# sourceMappingURL=main.js.map\n";
+        let nested = "import helper from \"./helper.js\";\n//# sourceMappingURL=missing.js.map\n";
+        let map = b"{\"mappings\":\"SENTINEL\"}";
+        let addon = b"NODE";
+        let map_at = main.len();
+        let addon_at = map_at + map.len();
+        let nested_at = addon_at + addon.len();
+        let files = format!(
+            "{{\"files\":{{\"main.js\":{{\"offset\":\"0\",\"size\":{}}},\"main.js.map\":{{\"offset\":\"{map_at}\",\"size\":{}}},\"build\":{{\"files\":{{\"native.node\":{{\"offset\":\"{addon_at}\",\"size\":{}}}}}}},\"lib\":{{\"files\":{{\"a.js\":{{\"offset\":\"{nested_at}\",\"size\":{}}}}}}}}}}}",
+            main.len(),
+            map.len(),
+            addon.len(),
+            nested.len()
+        );
+        let mut tail = Vec::new();
+        tail.extend_from_slice(main.as_bytes());
+        tail.extend_from_slice(map);
+        tail.extend_from_slice(addon);
+        tail.extend_from_slice(nested.as_bytes());
+        let obs = observe(&asar_bytes(&files, &tail), Kind::Asar, true);
+        assert!(obs.asar_refusal.is_none(), "{}", obs.text);
+        assert!(obs.text.contains("Kind: electron app payload"), "{}", obs.text);
+        assert_eq!(obs.modules.iter().map(|module| module.name.as_str()).collect::<Vec<_>>(), vec!["lib/a.js", "main.js"]);
+        assert_eq!(obs.modules[0].size, nested.len() as u64);
+        assert_eq!(obs.modules[1].size, main.len() as u64);
+        assert!(obs.text.contains(&format!("module \"lib/a.js\" size {}.", nested.len())), "{}", obs.text);
+        assert!(obs.text.contains(&format!("module \"main.js\" size {}.", main.len())), "{}", obs.text);
+        let header_end = obs.asar_header_end.unwrap() as usize;
+        let electron = obs.graph.iter().find(|edge| edge.specifier.as_deref() == Some("electron")).unwrap();
+        assert_eq!(electron.class, Some(SpecClass::Bare));
+        assert_eq!(electron.offset, header_end + main.find("require").unwrap());
+        let helper = obs.graph.iter().find(|edge| edge.specifier.as_deref() == Some("./helper.js")).unwrap();
+        assert_eq!(helper.class, Some(SpecClass::Relative));
+        assert_eq!(helper.offset, header_end + nested_at + nested.find("import").unwrap());
+        assert_eq!(obs.maps.iter().find(|map| map.target == "main.js.map").unwrap().resolution, MAP_PRESENT);
+        assert_eq!(obs.maps.iter().find(|map| map.target == "missing.js.map").unwrap().resolution, MAP_ABSENT);
+        assert!(!obs.text.contains("SENTINEL"), "{}", obs.text);
+        assert_eq!(obs.addons.len(), 1);
+        assert_eq!(obs.addons[0].name, "build/native.node");
+        assert_eq!((obs.addons[0].size, obs.addons[0].offset), (addon.len() as u64, addon_at as u64));
+        assert!(obs.text.contains(&format!("addon \"build/native.node\" size {} content-offset {addon_at}.", addon.len())), "{}", obs.text);
+        assert!(obs.text.contains(ADDON_UNKNOWN), "{}", obs.text);
+    }
+
+    /// Fails if the extra module is kept, or if the cap is unnamed.
+    #[test]
+    fn module_file_cap_is_named_and_the_extra_module_is_dropped() {
+        let mut files = String::from("{\"files\":{");
+        let mut tail = Vec::new();
+        for index in 0..=MODULE_FILE_LIMIT {
+            if index > 0 {
+                files.push(',');
+            }
+            let name = format!("m{index:04}.js");
+            let offset = tail.len();
+            files.push_str(&format!("\"{name}\":{{\"offset\":\"{offset}\",\"size\":1}}"));
+            tail.push(b'x');
+        }
+        files.push_str("}}");
+        let obs = observe(&asar_bytes(&files, &tail), Kind::Asar, true);
+        assert!(obs.asar_refusal.is_none(), "{}", obs.text);
+        assert_eq!(obs.modules.len(), MODULE_FILE_LIMIT);
+        assert!(obs.caps.contains(&MODULE_FILE_CAP));
+        assert!(obs.text.contains(&format!("Refusal: {MODULE_FILE_CAP}.")), "{}", obs.text);
+        let dropped = format!("m{MODULE_FILE_LIMIT:04}.js");
+        assert!(obs.modules.iter().all(|module| module.name != dropped));
+        assert_eq!(obs.modules[0].name, "m0000.js");
     }
 }
