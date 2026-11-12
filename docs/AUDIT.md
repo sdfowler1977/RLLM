@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T11:4Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T13:3Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -7,7 +7,7 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **576/576 cases plus 55 isolated application cases, exit 0**, measured with the pinned
+  report bytes): **597/597 cases plus 55 isolated application cases, exit 0**, measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the earlier 517 tally was additionally reproduced on the
   drifted `rustc 1.95.0` build, `output/units` vs `output/units-pinned`, log `output/units-pinned.log`). A bare
   `rustc --test core/console.rs` from the
@@ -34,7 +34,7 @@ their original counts and wording.
   `services` 69 → 72, against `apk_alignment` 11 → 0 and `turn_background` 28 → 0 from the off-host signed
   APK, and the group total moved 68 → 69 on `permission_modes` alone.
   **The record's Rust-case leg is stale and is a measured drift, not a pass:** `full_rust_suite` pins
-  **513/513 cases + 55 isolated** with `binary_sha256 b621eccf4208…`, while the tree measures 576/576 + 55
+  **513/513 cases + 55 isolated** with `binary_sha256 b621eccf4208…`, while the tree measures 597/597 + 55
   today. Only `tools/package.py:52` writes that leg, and a packaging run is blocked behind the signed-APK
   publication inputs (`apk['build_inputs']` digests are asserted per path, measured 130 match / 31 drift /
   1 absent), so refreshing it is the owner-gated `PUB-INPUT-DRIFT` leg, not a coordinator action. The group
@@ -932,6 +932,58 @@ refinement candidate — a leakage invariant, not a style rule. Repaired in `2b8
 rebuilt bytes: `hosted_phases PASS (exit 0, 1s, 118 checks)` and eight groups 8 pass / 0 fail. **Rule taken from
 this:** an only-mode group run against a binary built before the change is a no-regression witness only; a change
 to product state shape must be re-run after `bash headless.sh`.
+
+**Four gap legs land, and the recursion loop catches a boundary defect in its own new code — 2026-11-12T13:3Z.**
+`GAP1` (commit `3390359`): the successor now **consumes** the job it was handed. `inherited()` is the only
+reader of `RLLM_SELF_JOB` / `RLLM_SELF_INSTRUCTION`; a caller-supplied `job` still wins, an omitted one takes
+the carried value for the journal row **and** for the next handover, over-cap carried values refuse before the
+edit, and `reload=exec` no longer drops the identity it had just validated (the arm used to call
+`execution::exec_replace(&binary, &[], root, &[])` — an empty environment). Witnessed end to end in a room
+archived from that commit (`docs/SELF-BUILD-RUNLOG.md`): a `reload=spawn` job recorded revision
+`abff31fd087c…` naming successor pid 3061720; `/proc/3061720/stat` showed state `Z`, ppid = the product, comm
+`(RLLM)`; the next self-build in the same process appended revision `630c16acf19e…` with parent
+`abff31fd087c…` and the receipt clause `reaped 1 successor(s)`, and `/proc/3061720` was then **gone** — a
+zombie before, reaped after, read from outside the product. Four journal rows, each digest recomputed by an
+independent reader, each `parent` equal to the previous row, with a no-environment control recording
+`job_source none` so the new key cannot be a constant.
+**The same run went red on the next leg, and that is the finding:** a successor process carrying exactly what
+the spawn arm hands over refused its own gate — `reload refused: unit gate is not green (579/581)`. Same room,
+same unit binary, `--test-threads=1`, only the two variables changed: 16 failures without them (the bare-run
+fixture failures) versus 18 with them, the two extra being
+`self_build::checks::journal_mode_is_none_without_reload_and_exec_records_exec_only_when_it_writes` and
+`self_build::checks::spawn_journal_stores_job_and_instruction_verbatim_and_absent_job_is_empty`. The seam's
+builder and gate children inherit the parent environment, so an identity meant for a successor product reached
+the product's own test children. A second boundary defect came from the same room: an edit that does not parse
+emits 7,078,364 bytes of rustc stderr and the seam refuses with `builder output exceeded its bound` **before**
+it reports the child's exit status, so a broken edit hides its own compile error. Both are open on the `GAP1`
+ledger entry.
+`GAP2` (commit `600e44d`): three more RRSI features — every edit records its component, hypothesis, diff digest,
+both scores, both costs and the verdict, and a rejected component+hypothesis pair cannot be proposed again in
+the same run; a leakage critic runs **before** any score is computed, refusing a candidate that reproduces a
+recorded task, quotes 17 or more contiguous bytes of an expected value, or changes nothing in the component it
+claims; a component with no strictly positive gain across a three-round window is pruned and refused
+afterwards. 16 new cases; the whole tree gates at **597/597 + 55**.
+`GAP4` (commit `d8d0881`): `pe_declarations` now drives `reconstruct mode=behaviour` and `mode=implement`
+through the product — provenance digest, unit/refused markers counted from the artifact bytes, independently
+recomputed `matched`/`missing`/`conflicting` verdicts, and every refusal leg stats the artifact afterwards to
+prove it was never written — taking that group from 18 to **28** recorded checks. Two refusal legs are caught at
+the reviewed-dispatch permit rather than at the render seam, so they prove refusal and absence, not the render
+message; that limitation is recorded rather than papered over. **The delivered record has not moved yet:** the
+18 → 28 delta needs a coordinator sweep, and the record's `total_executed` will follow it.
+`GAP5` (commit `dc62928`): the publisher is now a native tool. `tools/package.rs` (2,630 lines, 17 cases run by
+`tools/build-tools.sh`, which now builds **8** tools twice and requires executed == declared for each) derives
+the group inventory from `tools/checks.py` instead of trusting a count, enforces the executed-count arms, names
+the path it refused on, and adds `--dry-run`, which prints the pinned-input censuses and writes nothing.
+Measured by me on this host: `build_inputs: pinned 162 match 129 drift 32 absent 1` and
+`files: pinned 281 match 231 drift 44 absent 6`, then `refusing: output/checks/apk.json absent`, exit 1, and
+`/tmp/pkg-dryv` left empty. `tools/package.py` stays — deleting it is gated on a real native publish, which
+needs the owner's signed companion APK. Python exposure is unchanged this window: **73 tracked `.py` files /
+7,755 lines**, 71 of them under `verification/` (69 connected groups plus `live_web.py` and `transport.py`),
+zero `python3` references under `core/`.
+Method held: each lane was verified on attributable bytes before commit — lane C3 in a room holding only its own
+file (581/581 + 55), lane B3 on the whole tree (597/597 + 55, built and gated by me, not by the lane) — and
+after all four landed the product was rebuilt and `commands`, `hosted_phases`, `provider_evidence` and
+`pe_declarations` were re-run on the new bytes: **4 pass, 0 fail** (79 / 118 / 40 / 28 checks).
 
 ## Historical baseline audit (original text)
 

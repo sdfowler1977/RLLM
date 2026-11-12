@@ -359,3 +359,79 @@ but the successor does not act on them, so gap-report step 5 ("continue the same
 identity rather than a resumed job. The spawn arm never waits on the child, which is how `/proc` caught it as
 a zombie — the parent does not track or reap its successor. `self_build` is still absent from
 `REFINEMENT_TOOLS` and no connected group exercises it.
+
+## One job survives the reload, and the parent reaps its successor — 2026-11-12T13:2Z, commit `3390359`
+
+Room `.qwen/tmp/gap1-chain-room2` is `git archive` of `3390359` plus a symlinked `tooling/`, with
+`output/units` (581 cases), `output/tools` (8 native tools) and `output/headless/RLLM` built inside it,
+so nothing below can be attributed to any other lane's file. Driver `/tmp/gap1-chain-witness.py`,
+log `/tmp/chain-witness2.log`, journal `self/journal.jsonl` in the room. Each leg edits
+`core/lib.rs` (appending `pub fn self_chainwitness_*() {}` items, which compile), builds with
+`bash tools/build-units.sh output/units` and gates with `output/tools/gate output/units`.
+
+Leg 1 — `reload=spawn`, `job=gap1-chain-job`, `instruction=continue the same job after reload`:
+
+```
+Saved 21798 bytes to core/lib.rs. recorded revision abff31fd087c94d8cce06d66e10c065f4f47c082
+abbdf9d174542b34a4af060d in self/journal.jsonl successor pid 3061720
+```
+
+`/proc/3061720/stat` read while the parent product (pid 3059815) was alive reported state `Z`,
+ppid `3059815`, comm `(RLLM)`: the named pid is the product's own child, and a zombie is exactly what
+the pre-lane seam left behind.
+
+Leg 2 — same product process, `reload=''`, builder and gate again:
+
+```
+Saved 21831 bytes to core/lib.rs. recorded revision 630c16acf19ea578878d394aa79098165a260041
+d10c39e55241034d14111dbc in self/journal.jsonl Rust cases passed: 581/581; isolated application cases: 55 reaped 1 successor(s)
+```
+
+and `/proc/3061720` no longer exists. Before: a zombie child of the product. After the next
+self-build call in the same process: gone. That is the `try_wait` registry doing its job, witnessed by
+an external oracle rather than by the lane's own assertion.
+
+The journal, re-read by an independent reader that recomputes each row's digest (canonical compact
+sorted JSON with the `revision` key removed):
+
+```
+revision 649e49235319 recomputed_ok True parent            mode spawn pid 3057376 job gap1-chain-job job_source caller
+revision abff31fd087c recomputed_ok True parent 649e49235319 mode spawn pid 3061720 job gap1-chain-job job_source caller
+revision 630c16acf19e recomputed_ok True parent abff31fd087c mode none pid 3059815 job            job_source none
+revision 9fe323fa20ef recomputed_ok True parent 630c16acf19e mode none pid 3065097 job            job_source none
+```
+
+Four rows, every digest recomputed, every `parent` equal to the previous row's `revision`. The
+no-carried-identity control (a third product process, no environment, `job` omitted) records
+`job_source none`, so the new key is not simply always "inherited".
+
+### What that run also caught: the successor could not build itself
+
+The successor leg — a fresh product process carrying exactly what the spawn arm hands over
+(`RLLM_SELF_JOB=gap1-chain-carried`, `RLLM_SELF_INSTRUCTION=...`), running its own self-build job with
+the `job` argument omitted — **refused its own gate**:
+
+```
+reload refused: unit gate is not green (579/581)
+```
+
+Measured in the same room with the same unit binary and `--test-threads=1`, changing only the two
+environment variables: 16 failures without them (the pre-existing failures of a bare run, whose
+fixtures need the sanctioned runner's scratch root) versus 18 with them, and the two extra cases are
+named:
+
+```
+self_build::checks::journal_mode_is_none_without_reload_and_exec_records_exec_only_when_it_writes
+self_build::checks::spawn_journal_stores_job_and_instruction_verbatim_and_absent_job_is_empty
+```
+
+The seam's builder and gate children inherit the parent environment, so the job identity meant for a
+successor product reached the product's own test children. The fix belongs at the boundary: build and
+test children must not see the carried identity. Lane C4 closes it, together with a second defect from
+the same room — an edit that does not parse produces 7,078,364 bytes of rustc stderr, and the seam
+refuses with `builder output exceeded its bound` **before** it ever reports the child's exit status, so
+a broken edit hides its own compile error.
+
+Still open after this run, and unchanged by it: the successor's exit status is tracked in-process only
+(no journal row for it), and no connected verification group drives `self_build` at all
+(`grep -rln self_build verification/*.py` returns nothing).
