@@ -826,5 +826,14 @@
     "live_3_record_hygiene": "verification/RESULTS.json checks block holds 65 entries while connected.counts holds 71 - missing desktop_runtime, permission_modes, rrsi_loop, self_rebuild, state_sealing, turn_background; release/NOTES.md:5 still reads '64/65 connected groups passed; 4228 executed checks and 513 Rust cases'. Only a packager publish (tools/package.py or tools/package.rs) repairs both, so the settled-tree sequence is: full harness sweep, then a package publish, and the notes line will read 67/71 (not 71/71) because four groups stay unavailable",
     "live_4_scm_hygiene": "no __pycache__ entry in .gitignore and none for toolchain/; three .pyc files are tracked - still owner-gated, unchanged",
     "cleared": "the Co-authored-by: Qwen-Coder trailer flagged in that audit is not on this window's commits - git log shows author Shawn Fowler <sdfowler1977@gmail.com> with no Co-authored-by trailer on 6c41172, 5a5b2f9, d7b68d8, b9a2c5b"
+  },
+  "packager_publish_blocked_behind_signed_apk_2026_11_12T2055": {
+    "at": "2026-11-12T20:55Z",
+    "corrects": "the sequence recorded 20:45Z (full harness sweep, then a package publish) - the publish half is not currently reachable by the coordinator",
+    "measured": "in room /tmp/htools at HEAD: ./tb/package --dry-run --destination /tmp/pkg-dry-dest exits 1 with 'build_inputs: pinned 162 match 127 drift 34 absent 1', 'files: pinned 281 match 229 drift 46 absent 6', 'refusing: output/checks/apk.json absent'",
+    "why_absent": "output/checks/apk.json is written only by tools/apk.rs:1581, and the native apk inspector refuses any unsigned subject - measured: /tmp/htools/tb/apk --version 1794409143 output/2026-11-11__14-59-03Z/resources.apk exits 1 with 'ValueError: APK signature verification failed: resources.apk' and writes no report; the main tree has 148 files under output/checks but no apk.json",
+    "consequence": "the record-hygiene repairs that only a publish performs - checks block 65 -> 71 entries and release/NOTES.md '64/65 ... 4228 executed checks and 513 Rust cases' -> the current totals - stay stale until the owner places the signed companion APK, the same off-host artifact that keeps apk_alignment and turn_background unavailable. --candidate does not bypass it (it allows only the binary_flow gap).",
+    "no_main_tree_writes": "the dry run ran inside the room; the main tree was only read (ls/grep) and the apk refusal wrote nothing",
+    "sequence_after_this_window": "1) settle lanes, 2) full harness sweep on the committed tree (republishes the connected object only), 3) publish remains owner-gated and blocked on the signed APK"
   }
 }
