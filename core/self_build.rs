@@ -26,6 +26,7 @@ const MAX_FILE: u64 = 4 * 1024 * 1024;
 const MAX_TOTAL: u64 = 64 * 1024 * 1024;
 const BINARY_MAX: u64 = 64 * 1024 * 1024;
 const OUTPUT_MAX: usize = 64 * 1024;
+const TAIL_MAX: usize = 400;
 const JOURNAL_MAX: u64 = 1024 * 1024;
 const JOURNAL_LINES: usize = 256;
 const JOB_MAX: usize = 256;
@@ -454,9 +455,77 @@ pub(crate) fn plan(value: &Json) -> Result<Json> {
     ]))
 }
 
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+}
+struct ChildGroup(i32);
+impl Drop for ChildGroup {
+    fn drop(&mut self) {
+        unsafe {
+            kill(-self.0, 9);
+        }
+    }
+}
+fn set_nonblock(fd: i32) -> bool {
+    let flags = unsafe { fcntl(fd, 3) };
+    flags >= 0 && unsafe { fcntl(fd, 4, flags | NONBLOCK) } >= 0
+}
+/// The carried identity belongs to the successor product. Builder and gate children
+/// keep the rest of the environment and lose only these two names.
+fn scrub_carried(command: &mut Command) {
+    command.env_remove("RLLM_SELF_JOB");
+    command.env_remove("RLLM_SELF_INSTRUCTION");
+}
+struct Captured {
+    body: Vec<u8>,
+    tail: Vec<u8>,
+    total: usize,
+}
+impl Captured {
+    fn push(&mut self, chunk: &[u8]) {
+        self.total = self.total.saturating_add(chunk.len());
+        let room = OUTPUT_MAX.saturating_sub(self.body.len());
+        if room > 0 {
+            let take = room.min(chunk.len());
+            self.body.extend_from_slice(&chunk[..take]);
+        }
+        self.tail.extend_from_slice(chunk);
+        if self.tail.len() > TAIL_MAX {
+            let extra = self.tail.len() - TAIL_MAX;
+            self.tail.drain(..extra);
+        }
+    }
+    fn over(&self) -> bool {
+        self.total >= OUTPUT_MAX
+    }
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
+    }
+    fn tail_text(&self) -> String {
+        String::from_utf8_lossy(&self.tail).into_owned()
+    }
+}
+fn drain_captured(input: &mut impl Read, stream: &mut Captured) -> Result<()> {
+    let mut buffer = [0u8; 4096];
+    for _ in 0..32 {
+        match input.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => stream.push(&buffer[..n]),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+// Callers match the leading sentence. The exit and the tail make a compile failure readable.
+fn bound_refusal(code: Option<i32>, out: &Captured, err: &Captured) -> String {
+    let tail = if err.over() { err.tail_text() } else { out.tail_text() };
+    format!("builder output exceeded its bound: exit {code:?}; tail {tail}")
+}
 /// One bounded child runner for every self-build leg. The sanctioned plan steps, a
-/// probe and the reviewed builder/gate all run through the single product runner,
-/// which owns the child process group and stops it on timeout or cancellation.
+/// probe and the reviewed builder/gate all run through this runner, which owns the
+/// child process group and stops it on timeout or cancellation.
 fn bounded_child(
     root: &Path,
     program: &str,
@@ -464,11 +533,55 @@ fn bounded_child(
     wall: Duration,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<super::execution::BoundedOutput> {
-    let output = super::execution::bounded_process(program, args, root, wall, cancelled)?;
-    if output.stdout.len() >= OUTPUT_MAX || output.stderr.len() >= OUTPUT_MAX {
-        return Err("builder output exceeded its bound".into());
+    if wall.is_zero() || wall > Duration::from_secs(900) {
+        return Err("Child process limit must be from 1 millisecond through 900 seconds".into());
     }
-    Ok(output)
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .process_group(0)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    scrub_carried(&mut command);
+    let mut child = command.spawn().map_err(|error| format!("Cannot start {program}: {error}"))?;
+    let group = ChildGroup(child.id() as i32);
+    let mut stdout = child.stdout.take().ok_or("Child output is unavailable")?;
+    let mut stderr = child.stderr.take().ok_or("Child error output is unavailable")?;
+    for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
+        if !set_nonblock(fd) {
+            let _ = child.kill();
+            let _ = child.wait();
+            drop(group);
+            return Err("Unable to configure bounded output".into());
+        }
+    }
+    let mut out = Captured { body: Vec::new(), tail: Vec::new(), total: 0 };
+    let mut err = Captured { body: Vec::new(), tail: Vec::new(), total: 0 };
+    let start = std::time::Instant::now();
+    let status = loop {
+        drain_captured(&mut stdout, &mut out)?;
+        drain_captured(&mut stderr, &mut err)?;
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if cancelled() || start.elapsed() > wall {
+            let _ = child.kill();
+            let _ = child.wait();
+            drop(group);
+            return Err("Child process exceeded its time limit or was cancelled".into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    drop(group);
+    drain_captured(&mut stdout, &mut out)?;
+    drain_captured(&mut stderr, &mut err)?;
+    let code = status.code();
+    if out.over() || err.over() {
+        return Err(bound_refusal(code, &out, &err));
+    }
+    Ok(super::execution::BoundedOutput { code, stdout: out.text(), stderr: err.text() })
 }
 /// The journal verb has no caller-held cancellation handle, so its own legs stay
 /// wall-bound exactly as they were under the runner this seam replaced.
@@ -892,7 +1005,7 @@ pub(crate) fn permission_subject(pending: &Json) -> Json {
     put(&mut subject, "args", write_args(get(pending, "args")));
     subject
 }
-pub(crate) fn validate(args: &Json) -> Result<()> {
+fn validate_with(args: &Json, carried_job: &str, carried_instruction: &str) -> Result<()> {
     let path = text(args, "path");
     relative(&path)?;
     if text(args, "content").len() > MAX_FILE as usize {
@@ -904,10 +1017,13 @@ pub(crate) fn validate(args: &Json) -> Result<()> {
     if text(args, "instruction").len() > INSTRUCTION_MAX {
         return Err(format!("instruction exceeds {INSTRUCTION_MAX} bytes"));
     }
-    let (carried_job, carried_instruction) = inherited();
-    bound_carried(&text(args, "job"), &carried_job, JOB_MAX, "job")?;
-    bound_carried(&text(args, "instruction"), &carried_instruction, INSTRUCTION_MAX, "instruction")?;
+    bound_carried(&text(args, "job"), carried_job, JOB_MAX, "job")?;
+    bound_carried(&text(args, "instruction"), carried_instruction, INSTRUCTION_MAX, "instruction")?;
     Ok(())
+}
+pub(crate) fn validate(args: &Json) -> Result<()> {
+    let (carried_job, carried_instruction) = inherited();
+    validate_with(args, &carried_job, &carried_instruction)
 }
 pub(crate) fn approve(pending: &Json) -> Result<()> {
     validate(get(pending, "args"))
@@ -1225,17 +1341,26 @@ fn with_reaped(receipt: String, reaped: usize) -> String {
 }
 
 pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Result<String> {
+    let (carried_job, carried_instruction) = inherited();
+    run_with(root, value, cancelled, &carried_job, &carried_instruction)
+}
+fn run_with(
+    root: &Path,
+    value: &Json,
+    cancelled: &dyn Fn() -> bool,
+    carried_job: &str,
+    carried_instruction: &str,
+) -> Result<String> {
     let reaped = reap();
     if cancelled() {
         return Err("self-build cancelled".into());
     }
     let args = get(value, "args");
-    validate(args)?;
-    let (carried_job, carried_instruction) = inherited();
-    let (job, job_source) = bound_carried(&text(args, "job"), &carried_job, JOB_MAX, "job")?;
+    validate_with(args, carried_job, carried_instruction)?;
+    let (job, job_source) = bound_carried(&text(args, "job"), carried_job, JOB_MAX, "job")?;
     let (instruction, _) = bound_carried(
         &text(args, "instruction"),
-        &carried_instruction,
+        carried_instruction,
         INSTRUCTION_MAX,
         "instruction",
     )?;
@@ -1317,6 +1442,7 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
         let successor_args = strings(args, "successor_args")?;
         let mut child = Command::new(&binary);
         child.current_dir(root).stdin(Stdio::null()).args(&successor_args);
+        scrub_carried(&mut child);
         let mut handed = Vec::new();
         if !job.is_empty() {
             child.env("RLLM_SELF_JOB", &job);
@@ -1421,9 +1547,17 @@ mod checks {
         let body = without_revision(line).unwrap();
         assert_eq!(text(line, "revision"), sha256(body.string().as_bytes()));
     }
+    fn isolate() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let guard = LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        // Parallel tests must not reap a successor that belongs to another test.
+        successors().clear();
+        guard
+    }
 
     #[test]
     fn green_gate_journals_and_links_parent() {
+        let _isolate = isolate();
         let scratch = project(
             "green",
             "pub fn built() {}\n",
@@ -1489,6 +1623,7 @@ mod checks {
 
     #[test]
     fn red_gate_refuses_and_names_rollback_digest() {
+        let _isolate = isolate();
         let scratch = project(
             "red",
             "pub fn built() {}\n",
@@ -1525,6 +1660,7 @@ mod checks {
 
     #[test]
     fn stale_source_digest_is_detected() {
+        let _isolate = isolate();
         let scratch = Scratch::new("stale");
         let root = scratch.path();
         write(&root.join("src/lib.rs"), b"fn a() {}\n");
@@ -1571,6 +1707,7 @@ mod checks {
 
     #[test]
     fn successor_record_carries_pid_argv_digest() {
+        let _isolate = isolate();
         let scratch = Scratch::new("successor");
         let root = scratch.path();
         write(&root.join("src/lib.rs"), b"fn ready() {}\n");
@@ -1625,6 +1762,7 @@ mod checks {
 
     #[test]
     fn plan_is_ordered_and_green_is_parsed_counts() {
+        let _isolate = isolate();
         let recipe = plan(&obj(vec![("units", s("output/units"))])).unwrap();
         assert_eq!(get(&recipe, "ordered"), &Bool(true));
         assert_eq!(get(&recipe, "bounded"), &Bool(true));
@@ -1648,6 +1786,7 @@ mod checks {
 
     #[test]
     fn fingerprint_does_not_follow_symlinks_out() {
+        let _isolate = isolate();
         let scratch = Scratch::new("symlink");
         let outside = Scratch::new("outside");
         let root = scratch.path();
@@ -1680,6 +1819,7 @@ mod checks {
 
     #[test]
     fn reviewed_edit_lands_on_disk_and_the_receipt_names_the_write() {
+        let _isolate = isolate();
         let scratch = Scratch::new("edit");
         let root = scratch.path();
         write(&root.join("src/lib.rs"), b"fn a() {}\n");
@@ -1722,6 +1862,7 @@ mod checks {
 
     #[test]
     fn reviewed_edit_refuses_a_symlink_a_directory_and_a_non_utf8_source() {
+        let _isolate = isolate();
         let scratch = Scratch::new("edit-refusal");
         let outside = Scratch::new("edit-outside");
         let root = scratch.path();
@@ -1753,6 +1894,7 @@ mod checks {
 
     #[test]
     fn handoff_skips_the_journal_and_the_over_cap_rollback_store() {
+        let _isolate = isolate();
         let scratch = Scratch::new("handoff-skip");
         let root = scratch.path();
         write(&root.join("src/lib.rs"), b"fn shipped() {}\n");
@@ -1815,6 +1957,7 @@ mod checks {
 
     #[test]
     fn wrong_parent_refuses_before_the_builder_runs() {
+        let _isolate = isolate();
         let scratch = Scratch::new("wrong-parent");
         let root = scratch.path();
         write(&root.join("src/lib.rs"), b"fn a() {}\n");
@@ -1850,6 +1993,7 @@ mod checks {
 
     #[test]
     fn journal_commit_skips_over_cap_rollback_and_names_the_revision() {
+        let _isolate = isolate();
         let scratch = Scratch::new("journal-commit");
         let root = scratch.path();
         write(&root.join("src/lib.rs"), b"fn a() {}\n");
@@ -1906,6 +2050,7 @@ mod checks {
 
     #[test]
     fn missing_gate_tool_names_the_build_script() {
+        let _isolate = isolate();
         let scratch = Scratch::new("missing-gate");
         let root = scratch.path();
         let error = match sanctioned_child(
@@ -1982,6 +2127,7 @@ mv "$tmp" "$1.done"
 
     #[test]
     fn spawn_journal_records_the_child_pid_argv_and_env_names() {
+        let _isolate = isolate();
         let scratch = Scratch::new("spawn-pid");
         let root = scratch.path();
         write(&root.join("src/lib.rs"), b"fn a() {}\n");
@@ -2042,6 +2188,7 @@ mv "$tmp" "$1.done"
 
     #[test]
     fn spawn_journal_stores_job_and_instruction_verbatim_and_absent_job_is_empty() {
+        let _isolate = isolate();
         let scratch = Scratch::new("spawn-job");
         let root = scratch.path();
         write(&root.join("src/lib.rs"), b"fn a() {}\n");
@@ -2049,10 +2196,9 @@ mv "$tmp" "$1.done"
         green_builder(root);
         let job = "job-9";
         let instruction = "keep \"both\"\nlines";
-        let live = || false;
         let first_content = "fn a() { let _ = 1; }\n";
         let first_proof = root.join("proof-set");
-        let receipt = run(
+        let receipt = run_with(
             root,
             &spawn_fields(
                 first_content,
@@ -2064,7 +2210,9 @@ mv "$tmp" "$1.done"
                     ("successor_args", Arr(vec![s(first_proof.to_str().unwrap()), s("continue")])),
                 ],
             ),
-            &live,
+            &|| false,
+            "",
+            "",
         )
         .unwrap();
         assert!(receipt.contains("successor pid "), "{receipt}");
@@ -2078,7 +2226,7 @@ mv "$tmp" "$1.done"
         assert_eq!(parts[3], instruction.as_bytes());
         let second_content = "fn a() { let _ = 2; }\n";
         let second_proof = root.join("proof-unset");
-        let absent = run(
+        let absent = run_with(
             root,
             &spawn_fields(
                 second_content,
@@ -2086,7 +2234,9 @@ mv "$tmp" "$1.done"
                 &text(&stored[0], "revision"),
                 vec![("successor_args", Arr(vec![s(second_proof.to_str().unwrap()), s("continue")]))],
             ),
-            &live,
+            &|| false,
+            "",
+            "",
         )
         .unwrap();
         assert!(absent.contains("successor pid "), "{absent}");
@@ -2107,6 +2257,7 @@ mv "$tmp" "$1.done"
 
     #[test]
     fn overbound_job_and_instruction_refuse_before_the_edit() {
+        let _isolate = isolate();
         let scratch = Scratch::new("bounds");
         let root = scratch.path();
         let original = b"fn a() {}\n";
@@ -2134,14 +2285,14 @@ mv "$tmp" "$1.done"
 
     #[test]
     fn journal_mode_is_none_without_reload_and_exec_records_exec_only_when_it_writes() {
+        let _isolate = isolate();
         let scratch = Scratch::new("mode");
         let root = scratch.path();
         write(&root.join("src/lib.rs"), b"fn a() {}\n");
         write(&root.join("bin"), b"not a program\n");
         green_builder(root);
-        let live = || false;
         let first = "fn a() { let _ = 1; }\n";
-        let receipt = run(root, &journal_request(first, "", Vec::new()), &live).unwrap();
+        let receipt = run_with(root, &journal_request(first, "", Vec::new()), &|| false, "", "").unwrap();
         assert!(receipt.contains("recorded revision "), "{receipt}");
         assert!(
             !receipt.contains("successor pid"),
@@ -2153,10 +2304,12 @@ mv "$tmp" "$1.done"
         assert_eq!(get(get(&stored[0], "successor"), "job"), &s(""));
         assert_eq!(get(get(&stored[0], "successor"), "instruction"), &s(""));
         assert_eq!(get(get(&stored[0], "successor"), "env"), &Null);
-        let error = run(
+        let error = run_with(
             root,
             &journal_request(first, &sha256(b"wrong-parent"), vec![("reload", s("exec"))]),
-            &live,
+            &|| false,
+            "",
+            "",
         )
         .unwrap_err();
         assert_eq!(
@@ -2166,7 +2319,7 @@ mv "$tmp" "$1.done"
         assert_eq!(fs::read_to_string(root.join("src/lib.rs")).unwrap(), first);
         assert_eq!(rows(&root.join("self/journal.jsonl")).len(), 1);
         let second = "fn a() { let _ = 2; }\n";
-        let error = run(
+        let error = run_with(
             root,
             &obj(vec![(
                 "args",
@@ -2186,7 +2339,9 @@ mv "$tmp" "$1.done"
                     ("instruction", s("exec-instruction")),
                 ]),
             )]),
-            &live,
+            &|| false,
+            "",
+            "",
         )
         .unwrap_err();
         assert!(
@@ -2239,6 +2394,7 @@ mv "$tmp" "$1.done"
 
     #[test]
     fn effective_identity_prefers_the_caller_then_the_carried_value() {
+        let _isolate = isolate();
         assert_eq!(effective("caller-job", "carried-job"), ("caller-job".into(), "caller"));
         assert_eq!(effective("", "carried-job"), ("carried-job".into(), "inherited"));
         assert_eq!(effective("", ""), (String::new(), "none"));
@@ -2256,6 +2412,7 @@ mv "$tmp" "$1.done"
 
     #[test]
     fn tracked_quiet_row_records_job_source_none() {
+        let _isolate = isolate();
         let _ = reap();
         let scratch = Scratch::new("job-source-none");
         let root = scratch.path();
@@ -2263,8 +2420,7 @@ mv "$tmp" "$1.done"
         write(&root.join("bin"), b"not a program\n");
         green_builder(root);
         let content = "fn a() { let _ = 1; }\n";
-        let live = || false;
-        let receipt = run(root, &journal_request(content, "", Vec::new()), &live).unwrap();
+        let receipt = run_with(root, &journal_request(content, "", Vec::new()), &|| false, "", "").unwrap();
         let stored = rows(&root.join("self/journal.jsonl"));
         assert_eq!(stored.len(), 1);
         addressed(&stored[0]);
@@ -2284,16 +2440,7 @@ mv "$tmp" "$1.done"
 
     #[test]
     fn tracked_carried_identity_is_recorded_and_handed_to_the_successor() {
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _lock = LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        struct Clear;
-        impl Drop for Clear {
-            fn drop(&mut self) {
-                std::env::remove_var("RLLM_SELF_JOB");
-                std::env::remove_var("RLLM_SELF_INSTRUCTION");
-            }
-        }
-        let _clear = Clear;
+        let _isolate = isolate();
         let _ = reap();
         let scratch = Scratch::new("carried");
         let root = scratch.path();
@@ -2301,12 +2448,9 @@ mv "$tmp" "$1.done"
         write(&root.join("src/lib.rs"), original.as_bytes());
         executable(&root.join("bin"), SUCCESSOR_SCRIPT.as_bytes());
         green_builder(root);
-        let live = || false;
-        std::env::set_var("RLLM_SELF_JOB", "carried-job");
-        std::env::set_var("RLLM_SELF_INSTRUCTION", "carried-instruction");
         let first = "fn a() { let _ = 1; }\n";
         let first_proof = root.join("proof-inherited");
-        let receipt = run(
+        let receipt = run_with(
             root,
             &spawn_fields(
                 first,
@@ -2314,7 +2458,9 @@ mv "$tmp" "$1.done"
                 "",
                 vec![("successor_args", Arr(vec![s(first_proof.to_str().unwrap()), s("continue")]))],
             ),
-            &live,
+            &|| false,
+            "carried-job",
+            "carried-instruction",
         )
         .unwrap();
         assert!(!receipt.contains("reaped"), "{receipt}");
@@ -2343,7 +2489,7 @@ mv "$tmp" "$1.done"
         wait_dead(first_pid_num);
         let second = "fn a() { let _ = 2; }\n";
         let second_proof = root.join("proof-caller");
-        let receipt = run(
+        let receipt = run_with(
             root,
             &spawn_fields(
                 second,
@@ -2355,7 +2501,9 @@ mv "$tmp" "$1.done"
                     ("successor_args", Arr(vec![s(second_proof.to_str().unwrap()), s("continue")])),
                 ],
             ),
-            &live,
+            &|| false,
+            "carried-job",
+            "carried-instruction",
         )
         .unwrap();
         assert!(receipt.ends_with(" reaped 1 successor(s)"), "{receipt}");
@@ -2380,8 +2528,6 @@ mv "$tmp" "$1.done"
         assert_eq!(get(&finished, "exit"), &Num("0".into()));
         let before = fs::read(root.join("src/lib.rs")).unwrap();
         assert_eq!(before, second.as_bytes());
-        std::env::set_var("RLLM_SELF_JOB", "j".repeat(JOB_MAX + 1));
-        std::env::set_var("RLLM_SELF_INSTRUCTION", "short");
         let refused = obj(vec![(
             "args",
             obj(vec![
@@ -2391,7 +2537,7 @@ mv "$tmp" "$1.done"
                 ("approved_previous", s(second)),
             ]),
         )]);
-        let error = run(root, &refused, &live).unwrap_err();
+        let error = run_with(root, &refused, &|| false, &"j".repeat(JOB_MAX + 1), "short").unwrap_err();
         assert_eq!(error, "inherited job exceeds 256 bytes");
         assert_eq!(fs::read(root.join("src/lib.rs")).unwrap(), before);
         assert_eq!(rows(&root.join("self/journal.jsonl")).len(), 2);
@@ -2405,12 +2551,10 @@ mv "$tmp" "$1.done"
                 ("job", s(&"j".repeat(JOB_MAX + 1))),
             ]),
         )]);
-        let error = run(root, &caller_over, &live).unwrap_err();
+        let error = run_with(root, &caller_over, &|| false, "ok", "short").unwrap_err();
         assert_eq!(error, "job exceeds 256 bytes");
         assert_eq!(fs::read(root.join("src/lib.rs")).unwrap(), before);
-        std::env::set_var("RLLM_SELF_JOB", "ok");
-        std::env::set_var("RLLM_SELF_INSTRUCTION", "i".repeat(INSTRUCTION_MAX + 1));
-        let error = run(root, &refused, &live).unwrap_err();
+        let error = run_with(root, &refused, &|| false, "ok", &"i".repeat(INSTRUCTION_MAX + 1)).unwrap_err();
         assert_eq!(error, "inherited instruction exceeds 16384 bytes");
         assert_eq!(fs::read(root.join("src/lib.rs")).unwrap(), before);
         assert_eq!(rows(&root.join("self/journal.jsonl")).len(), 2);
@@ -2418,6 +2562,7 @@ mv "$tmp" "$1.done"
 
     #[test]
     fn tracked_reap_reports_an_exited_successor_once() {
+        let _isolate = isolate();
         let _ = reap();
         let scratch = Scratch::new("reap");
         let hold_path = scratch.path().join("hold");
@@ -2474,6 +2619,7 @@ mv "$tmp" "$1.done"
 
     #[test]
     fn tracked_reaped_text_appears_only_after_a_successor_exits() {
+        let _isolate = isolate();
         let _ = reap();
         let scratch = Scratch::new("reaped-text");
         let root = scratch.path();
@@ -2546,5 +2692,242 @@ mv "$tmp" "$1.done"
             third.len()
         );
         assert_eq!(again, format!("{again_base} reaped 1 successor(s)"));
+    }
+
+    fn carried_probe() -> String {
+        let job = "if [ -n \"${RLLM_SELF_JOB+x}\" ]; then printf 'job-set:%s\\n' \"$RLLM_SELF_JOB\"; else printf 'job-unset\\n'; fi";
+        let instruction = "if [ -n \"${RLLM_SELF_INSTRUCTION+x}\" ]; then printf 'instruction-set:%s\\n' \"$RLLM_SELF_INSTRUCTION\"; else printf 'instruction-unset\\n'; fi";
+        format!("{job}\n{instruction}\n")
+    }
+    fn child_text(output: &std::process::Output) -> String {
+        format!(
+            "status {:?}\nstdout {}\nstderr {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    }
+    fn test_child(extra: &[(&str, &str)], exact: &str) -> std::process::Output {
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child.stdin(Stdio::null()).args(["--test-threads=1", "--exact", exact]);
+        for (key, value) in extra {
+            child.env(key, value);
+        }
+        child.output().unwrap()
+    }
+    fn assert_builder_and_gate_are_scrubbed() {
+        let probe = carried_probe();
+        let inherited = Command::new("/bin/sh").arg("-c").arg(&probe).output().unwrap();
+        assert!(inherited.status.success(), "{}", String::from_utf8_lossy(&inherited.stderr));
+        assert_eq!(
+            String::from_utf8(inherited.stdout).unwrap(),
+            "job-set:gap1-chain-carried\ninstruction-set:carried-instruction\n"
+        );
+        let mut scrubbed = Command::new("/bin/sh");
+        scrubbed.arg("-c").arg(&probe);
+        scrub_carried(&mut scrubbed);
+        let scrubbed = scrubbed.output().unwrap();
+        assert!(scrubbed.status.success(), "{}", String::from_utf8_lossy(&scrubbed.stderr));
+        assert_eq!(String::from_utf8(scrubbed.stdout).unwrap(), "job-unset\ninstruction-unset\n");
+        let scratch = Scratch::new("scrub-children");
+        let root = scratch.path();
+        write(&root.join("headless.sh"), format!("#!/bin/sh\n{probe}").as_bytes());
+        fs::create_dir_all(root.join("output/tools")).unwrap();
+        executable(&root.join("output/tools/gate"), format!("#!/bin/sh\n{probe}").as_bytes());
+        let built = sanctioned_child(root, "bash", &["headless.sh".to_string()], Duration::from_secs(5), &|| false).unwrap();
+        assert_eq!(built.code, Some(0), "{}", built.stderr);
+        assert_eq!(built.stdout, "job-unset\ninstruction-unset\n");
+        let gated = sanctioned_child(
+            root,
+            "output/tools/gate",
+            &["units".to_string()],
+            Duration::from_secs(5),
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(gated.code, Some(0), "{}", gated.stderr);
+        assert_eq!(gated.stdout, "job-unset\ninstruction-unset\n");
+        let seen = root.join("builder-saw");
+        write(
+            &root.join("headless.sh"),
+            format!(
+                "#!/bin/sh\n{{\n{probe}}} > '{}'\nprintf '%s\\n' 'Rust cases passed: 2/2; isolated application cases: 1'\n",
+                seen.display()
+            )
+            .as_bytes(),
+        );
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        write(&root.join("bin"), b"binary-v1");
+        run(root, &journal_request("fn a() { let _ = 1; }\n", "", Vec::new()), &|| false).unwrap();
+        let stored = rows(&root.join("self/journal.jsonl"));
+        let successor = get(&stored[0], "successor");
+        assert_eq!(text(successor, "job"), "gap1-chain-carried");
+        assert_eq!(text(successor, "instruction"), "carried-instruction");
+        assert_eq!(text(successor, "job_source"), "inherited");
+        assert_eq!(fs::read_to_string(&seen).unwrap(), "job-unset\ninstruction-unset\n");
+    }
+
+    #[test]
+    fn builder_and_gate_children_do_not_inherit_the_carried_names() {
+        let _isolate = isolate();
+        if std::env::var("RLLM_SELF_BUILD_PROBE").ok().as_deref() == Some("scrub") {
+            assert_builder_and_gate_are_scrubbed();
+            return;
+        }
+        let output = test_child(
+            &[
+                ("RLLM_SELF_JOB", "gap1-chain-carried"),
+                ("RLLM_SELF_INSTRUCTION", "carried-instruction"),
+                ("RLLM_SELF_BUILD_PROBE", "scrub"),
+            ],
+            "self_build::checks::builder_and_gate_children_do_not_inherit_the_carried_names",
+        );
+        assert!(output.status.success(), "{}", child_text(&output));
+    }
+
+    fn exec_handoff() {
+        let root = PathBuf::from(std::env::var("RLLM_EXEC_ROOT").unwrap());
+        let proof = std::env::var("RLLM_EXEC_PROOF").unwrap();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        green_builder(&root);
+        let script = format!(
+            "#!/bin/sh\n{{\nprintf '%s\\0' \"$RLLM_SELF_JOB\"\nprintf '%s\\0' \"$RLLM_SELF_INSTRUCTION\"\nif [ -n \"${{RLLM_SELF_JOB+x}}\" ]; then printf 'job-set\\0'; else printf 'job-unset\\0'; fi\nif [ -n \"${{RLLM_SELF_INSTRUCTION+x}}\" ]; then printf 'instruction-set\\0'; else printf 'instruction-unset\\0'; fi\n}} > '{proof}.part'\nmv '{proof}.part' '{proof}'\n"
+        );
+        executable(&root.join("bin"), script.as_bytes());
+        let result = run_with(
+            &root,
+            &journal_request("fn a() { let _ = 1; }\n", "", vec![("reload", s("exec"))]),
+            &|| false,
+            "exec-carried-job",
+            "exec-carried-instruction",
+        );
+        panic!("exec returned {result:?}");
+    }
+
+    #[test]
+    fn reload_arms_hand_both_carried_names() {
+        let _isolate = isolate();
+        if std::env::var("RLLM_SELF_BUILD_PROBE").ok().as_deref() == Some("exec-handoff") {
+            exec_handoff();
+            return;
+        }
+        let scratch = Scratch::new("spawn-handoff");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        executable(&root.join("bin"), SUCCESSOR_SCRIPT.as_bytes());
+        green_builder(root);
+        let proof = root.join("spawn-proof");
+        run_with(
+            root,
+            &spawn_fields(
+                "fn a() { let _ = 1; }\n",
+                "fn a() {}\n",
+                "",
+                vec![("successor_args", Arr(vec![s(proof.to_str().unwrap()), s("continue")]))],
+            ),
+            &|| false,
+            "spawn-carried-job",
+            "spawn-carried-instruction",
+        )
+        .unwrap();
+        let dumped = wait_bytes(&PathBuf::from(format!("{}.done", proof.display())));
+        let parts: Vec<&[u8]> = dumped.split(|byte| *byte == 0).collect();
+        assert_eq!(parts[2], b"spawn-carried-job");
+        assert_eq!(parts[3], b"spawn-carried-instruction");
+        assert_eq!(parts[4], b"job-set");
+        assert_eq!(parts[5], b"instruction-set");
+        let stored = rows(&root.join("self/journal.jsonl"));
+        assert_eq!(text(get(&stored[0], "successor"), "job_source"), "inherited");
+        let exec_root = Scratch::new("exec-handoff");
+        let proof_file = exec_root.path().join("proof");
+        let output = test_child(
+            &[
+                ("RLLM_SELF_BUILD_PROBE", "exec-handoff"),
+                ("RLLM_EXEC_ROOT", exec_root.path().to_str().unwrap()),
+                ("RLLM_EXEC_PROOF", proof_file.to_str().unwrap()),
+            ],
+            "self_build::checks::reload_arms_hand_both_carried_names",
+        );
+        let dumped = fs::read(&proof_file).unwrap_or_else(|error| panic!("{error}\n{}", child_text(&output)));
+        let parts: Vec<&[u8]> = dumped.split(|byte| *byte == 0).collect();
+        assert_eq!(parts[0], b"exec-carried-job", "{}", child_text(&output));
+        assert_eq!(parts[1], b"exec-carried-instruction");
+        assert_eq!(parts[2], b"job-set");
+        assert_eq!(parts[3], b"instruction-set");
+        assert!(output.status.success(), "{}", child_text(&output));
+        let stored = rows(&exec_root.path().join("self/journal.jsonl"));
+        let successor = get(&stored[0], "successor");
+        assert_eq!(text(successor, "mode"), "exec");
+        assert_eq!(text(successor, "job"), "exec-carried-job");
+        assert_eq!(text(successor, "instruction"), "exec-carried-instruction");
+        assert_eq!(text(successor, "job_source"), "inherited");
+    }
+
+    #[test]
+    fn short_builder_output_matches_the_runner_and_a_bound_names_the_exit_and_tail() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("bound-output");
+        let root = scratch.path();
+        let small = root.join("small.sh");
+        write(&small, b"#!/bin/sh\nprintf 'stdout-marker-17\\n'\nprintf 'stderr-marker-19\\n' >&2\nexit 4\n");
+        let args = vec![small.to_string_lossy().into_owned()];
+        let seam = bounded_child(root, "bash", &args, Duration::from_secs(5), &|| false).unwrap();
+        let runner = super::super::execution::bounded_process("bash", &args, root, Duration::from_secs(5), &|| false).unwrap();
+        assert_eq!(seam.code, runner.code);
+        assert_eq!(seam.stdout, runner.stdout);
+        assert_eq!(seam.stderr, runner.stderr);
+        assert_eq!(seam.code, Some(4));
+        assert_eq!(seam.stdout, "stdout-marker-17\n");
+        assert_eq!(seam.stderr, "stderr-marker-19\n");
+        let mut bytes = vec![b'a'; OUTPUT_MAX + 8192];
+        let marker = b"END-OF-STDERR-MARKER";
+        let marker_at = bytes.len() - marker.len();
+        bytes[marker_at..].copy_from_slice(marker);
+        let payload = root.join("payload");
+        write(&payload, &bytes);
+        let spill = root.join("spill.sh");
+        write(&spill, b"#!/bin/sh\ncat \"$1\" >&2\nexit 1\n");
+        let error = match bounded_child(
+            root,
+            "bash",
+            &[spill.to_string_lossy().into_owned(), payload.to_string_lossy().into_owned()],
+            Duration::from_secs(10),
+            &|| false,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("stderr over the bound was accepted"),
+        };
+        assert!(error.starts_with("builder output exceeded its bound: exit Some(1); tail "), "{error}");
+        assert!(error.ends_with("END-OF-STDERR-MARKER"), "{error}");
+        assert!(error.len() < 600, "{}", error.len());
+        let stdout_spill = root.join("stdout-spill.sh");
+        write(&stdout_spill, b"#!/bin/sh\ncat \"$1\"\nexit 2\n");
+        let error = match bounded_child(
+            root,
+            "bash",
+            &[stdout_spill.to_string_lossy().into_owned(), payload.to_string_lossy().into_owned()],
+            Duration::from_secs(10),
+            &|| false,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("stdout over the bound was accepted"),
+        };
+        assert!(error.starts_with("builder output exceeded its bound: exit Some(2); tail "), "{error}");
+        assert!(error.ends_with("END-OF-STDERR-MARKER"), "{error}");
+    }
+
+    #[test]
+    fn carried_environment_does_not_fail_the_journal_cases() {
+        let _isolate = isolate();
+        for name in [
+            "self_build::checks::journal_mode_is_none_without_reload_and_exec_records_exec_only_when_it_writes",
+            "self_build::checks::spawn_journal_stores_job_and_instruction_verbatim_and_absent_job_is_empty",
+        ] {
+            let output = test_child(
+                &[("RLLM_SELF_JOB", "gap1-chain-carried"), ("RLLM_SELF_INSTRUCTION", "carried-instruction")],
+                name,
+            );
+            assert!(output.status.success(), "{name}\n{}", child_text(&output));
+        }
     }
 }
