@@ -215,7 +215,10 @@ fn refinement_ledger_section(run:&Json)->String{
 }
 fn historical_experience(run:&Json)->String{
  let root=if text(run,"edit_ledger_root").is_empty(){crate::rrsi::default_root()}else{text(run,"edit_ledger_root")};
- match crate::rrsi::historical_section(&root,&text(run,"task")){
+ // The stored index is the library this run resumed. Compare it here, where
+ // the propose and compose prompts already load that library, before the
+ // round is shown history that disk no longer has.
+ match crate::rrsi::historical_section_checked(&root,&text(run,"task"),get(run,"library_index")){
   Ok(section)=>section,
   Err(error)=>format!("\nHISTORICAL EXPERIENCE\n{error}"),
  }
@@ -229,6 +232,8 @@ fn historical_experience(run:&Json)->String{
 // seal, including one line past the library cap, stays off the run and is
 // named by the propose prompt. A readable library whose digest file is
 // unreadable is refused. The receipt's library_index is stored on the run.
+// historical_experience compares those rows with the library it loads for
+// the propose prompt. A replaced, rolled-back, or deleted row is named there.
 // Later rounds keep parsing the in-memory ledger string. That string can be
 // ahead of the file, and reading the file again would drop those rows.
 fn resume_durable_ledger(run:&mut Json)->Result<()>{
@@ -2728,6 +2733,12 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   crate::rrsi::append_experience(root,task,harness,&document,POLICY_RUN).unwrap();
   document
  }
+ fn history_excerpt(prompt:&str)->String{
+  match prompt.rfind("HISTORICAL EXPERIENCE"){
+   Some(at)=>prompt[at..].chars().take(320).collect(),
+   None=>prompt.chars().rev().take(320).collect::<String>().chars().rev().collect(),
+  }
+ }
  fn propose_prompt(st:&Json,baseline:&str)->String{
   let mut next=st.clone();
   let mut run=get(&next,"task_run").clone();
@@ -3046,6 +3057,86 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert!(!prompt.contains("Adopted harness"),"{prompt}");
   assert!(!prompt.contains("EDIT HISTORY"),"{prompt}");
   assert_eq!(std::fs::read(&path).unwrap(),tampered);
+ }
+ #[test]
+ fn stored_library_index_lets_the_propose_round_proceed(){
+  let home=DataHome::set("index-read");
+  let root=home.root();
+  let task="Write the bounded note.";
+  let harness_text="ADOPTED-HARNESS-MARKER";
+  seal_rejected(&root,task,"do-not-repeat",harness_text,true);
+  let library_path=std::path::Path::new(&root).join("experience.jsonl");
+  let ledger_path=std::path::Path::new(&root).join(format!("{POLICY_RUN}.jsonl"));
+  let library_before=std::fs::read(&library_path).unwrap();
+  let ledger_before=std::fs::read(&ledger_path).unwrap();
+  let mut st=refine_state(task);
+  let run=get(&st,"task_run");
+  let rows=match get(run,"library_index"){Arr(items)=>items.clone(),other=>panic!("resume library index missing: {other:?}")};
+  let revision=text(&rows[0],"revision");
+  assert_ne!(revision,"");
+  let prompt=propose_prompt(&st,"Original reply.");
+  // Fails if the propose leg drops the stored revision or refuses a library that still matches it.
+  assert!(prompt.contains("HISTORICAL EXPERIENCE")&&prompt.contains(&revision)&&prompt.contains(harness_text),"{}",history_excerpt(&prompt));
+  assert!(prompt.contains("historical entry"),"{}",history_excerpt(&prompt));
+  assert!(!prompt.contains(crate::rrsi::LIBRARY_INDEX_MISMATCH),"{}",history_excerpt(&prompt));
+  assert_eq!(std::fs::read(&library_path).unwrap(),library_before);
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),ledger_before);
+  let mut flipped=st.clone();
+  let mut flipped_run=get(&flipped,"task_run").clone();
+  let mut flipped_rows=rows.clone();
+  let mut changed=revision.clone();
+  let next=if changed.as_bytes()[0]==b'a'{'b'}else{'a'};
+  changed.replace_range(0..1,&next.to_string());
+  put(&mut flipped_rows[0],"revision",s(&changed));
+  put(&mut flipped_run,"library_index",Arr(flipped_rows));
+  put(&mut flipped,"task_run",flipped_run);
+  let refused=propose_prompt(&flipped,"Original reply.");
+  // Fails if the propose leg does not read the stored index and renders disk history anyway.
+  assert!(refused.contains(crate::rrsi::LIBRARY_INDEX_MISMATCH),"{}",history_excerpt(&refused));
+  assert!(!refused.contains("historical entry"),"{}",history_excerpt(&refused));
+  assert_eq!(std::fs::read(&library_path).unwrap(),library_before);
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),ledger_before);
+  assert_first_round_accepts(&mut st,"brand new instructions for the note");
+  assert_eq!(std::fs::read(&library_path).unwrap(),library_before);
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),ledger_before);
+ }
+ #[test]
+ fn replaced_library_row_is_named_and_history_is_kept(){
+  let home=DataHome::set("index-replace");
+  let root=home.root();
+  let task="Write the bounded note.";
+  let other="A different indexed task";
+  let document=seal_rejected(&root,task,"do-not-repeat","ADOPTED-HARNESS-MARKER",true);
+  let other_run=crate::rrsi::digest(b"other-run");
+  crate::rrsi::append_experience(&root,other,"OTHER-HARNESS","",&other_run).unwrap();
+  let st=refine_state(task);
+  let run=get(&st,"task_run");
+  let rows=match get(run,"library_index"){Arr(items)=>items.clone(),other=>panic!("resume library index missing: {other:?}")};
+  assert_eq!(rows.len(),2);
+  let alt_root=std::path::Path::new(&root).join("replacement");
+  let alt=alt_root.to_str().unwrap();
+  crate::rrsi::append_experience(alt,task,"ADOPTED-HARNESS-MARKER",&document,POLICY_RUN).unwrap();
+  crate::rrsi::append_experience(alt,other,"REPLACED-HARNESS","",&other_run).unwrap();
+  let library_path=std::path::Path::new(&root).join("experience.jsonl");
+  let ledger_path=std::path::Path::new(&root).join(format!("{POLICY_RUN}.jsonl"));
+  let original=std::fs::read(&library_path).unwrap();
+  let replaced=std::fs::read(alt_root.join("experience.jsonl")).unwrap();
+  assert_ne!(replaced,original);
+  std::fs::write(&library_path,&replaced).unwrap();
+  let loaded=crate::rrsi::load_experience(&root).unwrap();
+  assert_eq!(text(&loaded[1],"harness"),"REPLACED-HARNESS");
+  assert_ne!(text(&rows[1],"revision"),text(&loaded[1],"revision"));
+  let library_before=std::fs::read(&library_path).unwrap();
+  let ledger_before=std::fs::read(&ledger_path).unwrap();
+  let prompt=propose_prompt(&st,"Original reply.");
+  let mismatch="stored library index does not match the library on disk; history was kept and no line was dropped";
+  assert_eq!(crate::rrsi::LIBRARY_INDEX_MISMATCH,mismatch);
+  // Fails if a replaced library row is rendered as intact history, or the refusal string changes.
+  assert!(prompt.contains(&format!("\nHISTORICAL EXPERIENCE\n{mismatch}")),"{}",history_excerpt(&prompt));
+  assert!(!prompt.contains("historical entry"),"{}",history_excerpt(&prompt));
+  assert!(!prompt.contains("REPLACED-HARNESS"),"{}",history_excerpt(&prompt));
+  assert_eq!(std::fs::read(&library_path).unwrap(),library_before);
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),ledger_before);
  }
  #[test]
  fn three_refinement_rounds_record_budget_floor_leakage_prune_held_out_and_commit(){

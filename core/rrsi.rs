@@ -1329,8 +1329,43 @@ pub(crate) fn render_historical(records: &[Json], task: &str) -> String {
     }
     section
 }
+pub(crate) const LIBRARY_INDEX_MISMATCH: &str =
+    "stored library index does not match the library on disk; history was kept and no line was dropped";
+
+fn index_row_agrees(stored: &Json, disk: &Json) -> bool {
+    text(stored, "key") == text(disk, "key")
+        && text(stored, "revision") == text(disk, "revision")
+        && text(stored, "run_digest") == text(disk, "run_digest")
+}
+
+// A missing index is the first round, before resume stored one. Any other
+// value is the history this run was built on and must be the loaded sequence.
+fn index_disagrees(stored: &Json, records: &[Json]) -> bool {
+    let Arr(rows) = stored else {
+        return false;
+    };
+    let fresh = library_index(records);
+    rows.len() != fresh.len()
+        || rows
+            .iter()
+            .zip(fresh.iter())
+            .any(|(row, disk)| !index_row_agrees(row, disk))
+}
+
 pub(crate) fn historical_section(root: &str, task: &str) -> Result<String> {
+    historical_section_checked(root, task, &Null)
+}
+
+/// The propose prompt calls this with the run's stored `library_index`.
+/// `load_experience` is the only loader and the only line cap. A stored row
+/// whose key, revision, or run_digest is not the loaded row at that position,
+/// or a library that gained or lost a row, returns `LIBRARY_INDEX_MISMATCH`.
+/// This reads the library and does not write it.
+pub(crate) fn historical_section_checked(root: &str, task: &str, stored: &Json) -> Result<String> {
     let records = load_experience(root).map_err(library_error)?;
+    if index_disagrees(stored, &records) {
+        return Err(LIBRARY_INDEX_MISMATCH.into());
+    }
     Ok(render_historical(&records, task))
 }
 
@@ -2157,6 +2192,43 @@ mod checks {
         assert!(append_error.contains("unchanged"), "{append_error}");
         assert_eq!(fs::read_to_string(&path).unwrap(), tampered);
         assert!(load_experience(root).is_err());
+    }
+
+    #[test]
+    fn stored_index_refuses_a_replaced_row_and_keeps_the_file() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        append_experience(root, "task t", "adopted harness", "", RUN).unwrap();
+        append_experience(root, "task u", "other harness", "", OTHER).unwrap();
+        let loaded = load_experience(root).unwrap();
+        let stored = Arr(library_index(&loaded));
+        let section = historical_section_checked(root, "task t", &stored).unwrap();
+        assert_eq!(section, historical_section(root, "task t").unwrap());
+        assert!(section.contains(&text(&loaded[0], "revision")), "{section}");
+        assert!(!section.contains(LIBRARY_INDEX_MISMATCH), "{section}");
+        let path = scratch.0.join("experience.jsonl");
+        let before = fs::read(&path).unwrap();
+        let alt = scratch.0.join("alt");
+        let alt_root = alt.to_str().unwrap();
+        append_experience(alt_root, "task t", "adopted harness", "", RUN).unwrap();
+        append_experience(alt_root, "task u", "replaced harness", "", OTHER).unwrap();
+        let replaced = fs::read(alt.join("experience.jsonl")).unwrap();
+        assert_ne!(replaced, before);
+        fs::write(&path, &replaced).unwrap();
+        let parked = fs::read(&path).unwrap();
+        assert_eq!(
+            LIBRARY_INDEX_MISMATCH,
+            "stored library index does not match the library on disk; history was kept and no line was dropped"
+        );
+        match historical_section_checked(root, "task t", &stored) {
+            Err(error) => assert_eq!(error, LIBRARY_INDEX_MISMATCH),
+            Ok(section) => panic!(
+                "replaced row was accepted: {}",
+                section.chars().take(180).collect::<String>()
+            ),
+        }
+        assert_eq!(fs::read(&path).unwrap(), parked);
+        assert_eq!(text(&load_experience(root).unwrap()[1], "harness"), "replaced harness");
     }
 
     #[test]
