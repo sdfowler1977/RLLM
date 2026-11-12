@@ -192,6 +192,29 @@
   },
   "test_delta": "core/harness.rs 75 -> 80 (+5), core/rrsi.rs 42 -> 42"
  },
+ "gap2stop2_pre_adjudication_census": {
+  "clean_channels_measured": [
+   "round_best_gains/component_rounds/pruned_components/live_components (edit_gain returns None for unscored rows)",
+   "incumbent_diff and incumbent_cost (require verdict accepted)",
+   "recorded_noise_floor (requires numeric noise_floor)",
+   "gains/stall windows otherwise"
+  ],
+  "gate_for_the_repair": [
+   "a control-row marker must be filtered in component_counts, budget_for, falsified, prior_rejection, and either library_index+render_historical or handled so index_disagrees stays green",
+   "the marker must be optional for legacy rows and must seal with the row",
+   "the round identity must be the real closed-round index, not index.max(1)"
+  ],
+  "pollution_channels_measured_by_coordinator": [
+   "component_counts (core/rrsi.rs:694) counts a control row: prompt enters untried_components/reserved_slot_refusal",
+   "budget_for: `if id == round { spent += 1 }` spends a slot for the control row, AND `prior.push(id)` makes it a distinct prior round feeding annealed_budget - a second channel the repair brief did not name; combined with stop_edit's index.max(1), a round-0 STOP row claims round 1 and inflates the annealed budget",
+   "falsified and prior_rejection admit control rows (prior_rejection matches run_digest+component+verdict+hypothesis with no trial check)",
+   "library_index / render_historical include the control row in the stored library and the prompt EDIT HISTORY, so a load-time filter in records_of would desync index_disagrees (stored index length vs freshly computed index)"
+  ],
+  "seat": "/tmp/mm-g2ctrl.out (packet /tmp/g2ctrl-seat-msg.json, 19 consumer functions inline), read in full",
+  "seat_claim_refuted": [
+   "progress_stalled does NOT return false unconditionally: the guard is `if delta == 0 { return false; }` (delta is the noise band), so reserved_slot_refusal is reachable whenever a band is in force - the seat's conclusion that reserved_slot_refusal is 'currently unreachable' is wrong, and the F2 pollution stands"
+  ]
+ },
  "gap3_halves_census_2026_11_12": "Measured, not assumed: experience.jsonl is written (core/harness.rs:284) and READ BACK in the product at core/harness.rs:226 (historical_section_checked over the stored library_index) and :256 (load_experience), so 'the library is never read by later tasks' is false. Absent: grep -rn 'invariant|domain' over core/rrsi.rs core/harness.rs core/improvement.rs core/harness_rules.rs -> 0 hits (Gap 3 item 5 invariant-vs-domain scoping); 'anonym' and 'selector' over core/*.rs -> 0 hits outside the CSS parser (item 7, choosing among anonymised deliverables when k>1). Present already: CANDIDATE_MAX=3 / WORKTREE_MAX=3 (core/rrsi.rs:95-96) is the parallel candidate pool with one worktree per slot.",
  "gap3_headline_bar_already_witnessed": {
   "at": "2026-11-12T20:10Z",
