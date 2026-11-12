@@ -38,6 +38,50 @@ fn lesson_data(run:&Json)->String{
  let data=context.string();if data.len()>8192{return String::new();}
  format!("\nSAVED LESSON DATA (historical examples; assess relevance against the current task, permissions and evidence):\n{data}")
 }
+fn refinement_digest(run:&mut Json)->String{
+ let existing=text(run,"run_digest");
+ if existing.len()==64&&existing.bytes().all(|byte|byte.is_ascii_hexdigit()&&!byte.is_ascii_uppercase()){return existing;}
+ let digest=crate::rrsi::digest(format!("{}\n{}\n{}",text(run,"task"),text(run,"chat"),now()).as_bytes());
+ put(run,"run_digest",s(&digest));digest
+}
+fn note_refinement_edit(run:&mut Json,hypothesis:&str,verdict:&str,before:usize,after:usize,prior:&str,round:usize){
+ if hypothesis.is_empty(){return;}
+ let run_digest=refinement_digest(run);
+ let edit=match crate::rrsi::edit("prompt",hypothesis,&crate::rrsi::diff_digest(prior,hypothesis),before as u64,after as u64,prior.len() as u64,hypothesis.len() as u64,verdict,round as u64,&run_digest){
+  Ok(edit)=>edit,
+  Err(error)=>{put(run,"edit_ledger_error",s(&error));return;}
+ };
+ let saved=match crate::rrsi::append_document(&text(run,"edit_ledger"),&edit,&run_digest){
+  Ok(saved)=>saved,
+  Err(error)=>{put(run,"edit_ledger_error",s(&error));return;}
+ };
+ put(run,"edit_ledger",get(&saved,"document").clone());
+ if text(run,"edit_ledger_root").is_empty(){
+  put(run,"edit_ledger_root",s(&crate::rrsi::default_root()));
+  put(run,"edit_ledger_path",s(&format!("{run_digest}.jsonl")));
+ }
+ if let Err(error)=crate::rrsi::append_file(&text(run,"edit_ledger_root"),&text(run,"edit_ledger_path"),&edit,&run_digest){
+  put(run,"edit_ledger_file_error",s(&error));
+ }
+}
+fn record_round_edit(run:&mut Json,retain_probe:bool,composed:&str,candidate:&str,verdict:&str,before:usize,replay_passed:usize,selected_passed:usize,prior:&str,round:usize){
+ if retain_probe{
+  note_refinement_edit(run,composed,"rejected",before,replay_passed,prior,round);
+  if candidate!=composed{note_refinement_edit(run,candidate,verdict,before,selected_passed,prior,round);}
+ }else{
+  note_refinement_edit(run,composed,verdict,before,replay_passed,prior,round);
+ }
+}
+fn refinement_ledger_section(run:&Json)->String{
+ let digest=text(run,"run_digest");if digest.is_empty(){return String::new();}
+ let document=text(run,"edit_ledger");
+ let file=crate::rrsi::load_file(&text(run,"edit_ledger_root"),&text(run,"edit_ledger_path")).unwrap_or_default();
+ let source=if !file.is_empty()&&file==document{file}else{document};
+ match crate::rrsi::prompt_document(&source,&digest){
+  Ok(section)=>section,
+  Err(_)=>"\nEDIT HISTORY\nThe edit ledger could not be read. Existing history was left unchanged.".into(),
+ }
+}
 pub(super) fn active_agent(st:&Json)->Json{array(st,"agents").get(interaction::agent_index(st)).cloned().unwrap_or(obj(vec![("name",s("General")),("instructions",s("")),("tools",s(&TOOLS.join(",")))]))}
 pub(super) fn route(st: &Json, role: &str) -> Result<usize> {
     if role=="subagent"&&get(get(st,"task_run"),"connection")!=&Null{return Ok(number(get(st,"task_run"),"connection"));}
@@ -406,6 +450,7 @@ pub(super) fn request_messages(st:&Json,mut messages:Vec<Json>)->Result<Vec<Json
  if mode=="refine"&&matches!(phase.as_str(),"propose"|"compose"){
   if get(run,"baseline_score")!=&Null{prompt.push_str(&format!("\nAPP RESPONSE CHECK OUTCOMES\n{}\nUse partial progress to target the next rewrite. Reserve completion for all required checks.",improvement::refinement_summary(run)));}
   prompt.push_str(&lesson_data(run));
+  prompt.push_str(&refinement_ledger_section(run));
  }
  let mut messages=vec![obj(vec![("role",s("system")),("content",s(&system))]),obj(vec![("role",s("user")),("content",s(&prompt))])];
  if phase=="compact"{for mut original in array(&chat(st),"messages").into_iter().take(number(run,"count")){mcp_history::project(&mut original);let images=crate::attachments::images(&original)?;let mut item=obj(vec![("role",s("user")),("content",s(&format!("Original {} message:\n{}",text(&original,"role"),text(&original,"content"))))]);if !images.is_empty(){put(&mut item,"attachments",Arr(images));}messages.push(item);}}
@@ -476,24 +521,41 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
   }
  }else{fallback};
  let selected=if retain_probe{probe.clone()}else{replay.clone()};
+ let score_before=number(reference,"passed");
+ let replay_passed=number(replay,"passed");
+ let selected_passed=number(&selected,"passed");
+ let composed=text(&run,"composition");
+ let candidate=text(&run,"candidate");
+ let prior=if first==&Null{text(get(&run,"agent"),"instructions")}else{text(first,"instructions")};
+ let round_index=if first==&Null{1}else{2};
  if retain_probe{
   let verified=get(&run,"candidate").clone();let revision=get(&run,"composition").clone();
   put(&mut run,"rejected_revision",revision);put(&mut run,"composition",verified);put(&mut run,"retained_probe",Bool(true));
  }
- if !iterative{return queue_evaluation(st,run,"evaluation_base");}
+ if !iterative{
+  record_round_edit(&mut run,retain_probe,&composed,&candidate,"accepted",score_before,replay_passed,selected_passed,&prior,round_index);
+  return queue_evaluation(st,run,"evaluation_base");
+ }
  let first=get(&run,"first_refinement");
  if first!=&Null{
-  if !improvement::check_gain(get(first,"score"),&selected){
+  let verdict=if !improvement::check_gain(get(first,"score"),&selected){
    keep_first_refinement(&mut run,"The first round was retained because the second did not add passing checks while preserving earlier passes under comparable conditions.");
+   "rejected"
   }else{
-   put(&mut run,"selected_score",selected);put(&mut run,"round_note",s("The second round added passing checks and preserved earlier passes under comparable conditions."));
-  }
+   put(&mut run,"selected_score",selected);
+   put(&mut run,"round_note",s("The second round added passing checks and preserved earlier passes under comparable conditions."));
+   "accepted"
+  };
+  record_round_edit(&mut run,retain_probe,&composed,&candidate,verdict,score_before,replay_passed,selected_passed,&prior,round_index);
   return queue_evaluation(st,run,"evaluation_base");
  }
  if boolean(&selected,"strict")||!improvement::check_gain(get(&run,"baseline_score"),&selected){
+  let verdict=if boolean(&selected,"strict"){"accepted"}else{"rejected"};
   put(&mut run,"round_note",s("The first round ended the refinement. A second round requires a comparable partial gain."));
+  record_round_edit(&mut run,retain_probe,&composed,&candidate,verdict,score_before,replay_passed,selected_passed,&prior,round_index);
   return queue_evaluation(st,run,"evaluation_base");
  }
+ record_round_edit(&mut run,retain_probe,&composed,&candidate,"accepted",score_before,replay_passed,selected_passed,&prior,round_index);
  let first=obj(vec![("instructions",get(&run,"composition").clone()),("reply",get(&run,if retain_probe{"probe"}else{"replay"}).clone()),("score",selected)]);
  put(&mut run,"first_refinement",first);put(&mut run,"phase",s("propose"));
  for key in ["candidate","probe","probe_score","replay","replay_score","composition","rejected_revision","retained_probe","tool_trail"]{put(&mut run,key,Null);}

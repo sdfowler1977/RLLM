@@ -1,5 +1,6 @@
 mod application;
 mod self_build;
+mod rrsi;
 mod archive;
 mod compression;
 mod layout;
