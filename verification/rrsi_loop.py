@@ -150,9 +150,7 @@ with tempfile.TemporaryDirectory(prefix='rrsi-loop-',dir=PROJECT/'output') as tm
   source=run.get('source_digest')
   expected=source_digest_of(approval) if isinstance(approval,str) and approval else ''
   held['after_entry']=opened
-  check('refine entry copies approval_root onto task_run.workspace and records source_digest',
-        isinstance(approval,str) and approval==str(room.resolve()) and workspace==approval and source==expected and expected!='',
-        'approval_root='+str(approval)+' workspace='+str(workspace)+' source_digest='+str(source)+' expected='+str(expected)+' canonical='+str(room.resolve())+' keys='+str(sorted(run)))
+  check('refine entry copies approval_root onto task_run.workspace and records source_digest', isinstance(approval,str) and approval==str(room.resolve()) and workspace==approval and source==expected and expected!='', 'approval_root='+str(approval)+' workspace='+str(workspace)+' source_digest='+str(source)+' expected='+str(expected)+' canonical='+str(room.resolve())+' keys='+str(sorted(run)))
  def non_refine_leg():
   event(held['after_entry']['state'],'cancel')
   before=files_here()
@@ -179,16 +177,7 @@ with tempfile.TemporaryDirectory(prefix='rrsi-loop-',dir=PROJECT/'output') as tm
   for name in after:
    pool_text+= (default_root/name).read_text()
   worktrees=(room/'.rllm-worktrees').exists() or (default_root/'.rllm-worktrees').exists()
-  check('a non-refine run carries no workspace and does not attempt the pool',
-        delegated['state'].get('approval_root')==str(room.resolve())
-        and delegate_run.get('mode')=='delegate' and not delegate_workspace
-        and delegate_left is None and delegate_note=='Agent task result saved'
-        and compact_run.get('mode')=='compact' and compact_workspace in (None,'')
-        and done['state'].get('task_run') is None and summary=='candidates: 2\nrewritten harness\n---\nanother rewrite'
-        and not grew and 'pool_status' not in pool_text and not worktrees,
-        'delegate_workspace='+str(delegate_workspace)+' delegate_note='+delegate_note
-        +' compact_workspace='+str(compact_workspace)+' summary='+str(summary)
-        +' grew='+str(grew)+' worktrees='+str(worktrees))
+  check('a non-refine run carries no workspace and does not attempt the pool', delegated['state'].get('approval_root')==str(room.resolve()) and delegate_run.get('mode')=='delegate' and not delegate_workspace and delegate_left is None and delegate_note=='Agent task result saved' and compact_run.get('mode')=='compact' and compact_workspace in (None,'') and done['state'].get('task_run') is None and summary=='candidates: 2\nrewritten harness\n---\nanother rewrite' and not grew and 'pool_status' not in pool_text and not worktrees, 'delegate_workspace='+str(delegate_workspace)+' delegate_note='+delegate_note +' compact_workspace='+str(compact_workspace)+' summary='+str(summary) +' grew='+str(grew)+' worktrees='+str(worktrees))
  def critic_leg():
   pending=event(fresh(),'refine',{'task':TASK,'response_checks':CHECKS,'refinement_rounds':'2'})
   pending=reply(pending,'Original reply.')
@@ -201,11 +190,7 @@ with tempfile.TemporaryDirectory(prefix='rrsi-loop-',dir=PROJECT/'output') as tm
   treated_text=outcome_text(treated)
   held['refusal']=treated
   held['critic_files']=files_here()
-  check('a second round decision changes when the ledger already rejected that component',
-        control['state']['task_run']['phase']=='probe' and REFUSAL not in control_text
-        and REFUSAL in treated_text and control_text!=treated_text
-        and treated['state'].get('task_run',{}).get('phase')!='probe',
-        'control='+control_text+'\ntreated='+treated_text)
+  check('a second round decision changes when the ledger already rejected that component', control['state']['task_run']['phase']=='probe' and REFUSAL not in control_text and REFUSAL in treated_text and control_text!=treated_text and treated['state'].get('task_run',{}).get('phase')!='probe', 'control='+control_text+'\ntreated='+treated_text)
  def journal_leg():
   if held.get('refusal'):event(held['refusal']['state'],'cancel')
   pending=event(fresh(),'refine',{'task':TASK,'response_checks':CHECKS})
@@ -228,14 +213,7 @@ with tempfile.TemporaryDirectory(prefix='rrsi-loop-',dir=PROJECT/'output') as tm
   named=settled.get('edit_ledger_root')==str(default_root) and settled.get('edit_ledger_path')==ledger_name and ledger_name!='edits.jsonl'
   no_fixed_name=not (default_root/'edits.jsonl').is_file()
   chain=[(row.get('previous')==('' if index==0 else ledger_rows[index-1].get('revision')), row.get('run_digest')==digest, row_seal(row), row.get('verdict'), (row.get('hypothesis') or '')[:64]) for index,row in enumerate(ledger_rows)]
-  check('the digest-named ledger chains each revision to this run and experience.jsonl seals the settled row',
-        named and linked and chained and library_ok and no_fixed_name and settled.get('phase')=='review',
-        'root='+str(settled.get('edit_ledger_root'))+' path='+str(settled.get('edit_ledger_path'))
-        +' digest='+digest+' phase='+str(settled.get('phase'))+' files='+str(files_here())
-        +' edits.jsonl='+str((default_root/'edits.jsonl').is_file())
-        +' rows='+str(len(ledger_rows))+' linked='+str(linked)+' chained='+str(chained)
-        +' library_ok='+str(library_ok)+' chain='+str(chain)
-        +' library_error='+str(settled.get('library_error')))
+  check('the digest-named ledger chains each revision to this run and experience.jsonl seals the settled row', named and linked and chained and library_ok and no_fixed_name and settled.get('phase')=='review', 'root='+str(settled.get('edit_ledger_root'))+' path='+str(settled.get('edit_ledger_path')) +' digest='+digest+' phase='+str(settled.get('phase'))+' files='+str(files_here()) +' edits.jsonl='+str((default_root/'edits.jsonl').is_file()) +' rows='+str(len(ledger_rows))+' linked='+str(linked)+' chained='+str(chained) +' library_ok='+str(library_ok)+' chain='+str(chain) +' library_error='+str(settled.get('library_error')))
  def resume_leg():
   close_product()
   open_product()
@@ -277,14 +255,7 @@ with tempfile.TemporaryDirectory(prefix='rrsi-loop-',dir=PROJECT/'output') as tm
    gap='The propose prompt has neither the library section nor a ledger prompt rebuilt from '+ledger_name+'.'
   else:
    gap='The resumed decision did not refuse the hypothesis recorded in '+ledger_name+'.'
-  check('files alone rebuild the resumed phase and decision',
-        library_read and ledger_rebuilt and decision_resumed and files_alone,
-        gap+'\nlibrary_read='+str(library_read)+' ledger_rebuilt='+str(ledger_rebuilt)
-        +' decision_resumed='+str(decision_resumed)+' files_alone='+str(files_alone)
-        +'\ndecision='+decision+' phase='+phase+' ledger='+ledger_name
-        +' hypothesis='+hypothesis[:180]+'\nedit_history='+str(history_at>=0)
-        +' historical='+str(library_at>=0)+' files='+str(files_here())
-        +'\nprompt_tail='+wire[-700:])
+  check('files alone rebuild the resumed phase and decision', library_read and ledger_rebuilt and decision_resumed and files_alone, gap+'\nlibrary_read='+str(library_read)+' ledger_rebuilt='+str(ledger_rebuilt) +' decision_resumed='+str(decision_resumed)+' files_alone='+str(files_alone) +'\ndecision='+decision+' phase='+phase+' ledger='+ledger_name +' hypothesis='+hypothesis[:180]+'\nedit_history='+str(history_at>=0) +' historical='+str(library_at>=0)+' files='+str(files_here()) +'\nprompt_tail='+wire[-700:])
  def recursion_leg():
   phrases='PHRASE-ONE\nPHRASE-TWO'
   skills_refusal='refused because component skills with that hypothesis was already rejected in round 1'
@@ -411,9 +382,7 @@ with tempfile.TemporaryDirectory(prefix='rrsi-loop-',dir=PROJECT/'output') as tm
   got=[(row.get('round'),row.get('component'),row.get('hypothesis'),row.get('verdict'),row.get('edit_budget'),row.get('noise_floor'),row.get('decision'),row.get('score_before'),row.get('score_after')) for row in rows]
   wanted=[(1,'skills','flat one','rejected',4,0,'rejected revision',0,0),(1,'plugins','keep the index','accepted',4,0,'cost not recorded',0,1),(2,'skills','flat three','rejected',3,0,'cost not recorded',1,0)]
   detail='crash='+str(observed.get('crash') or '')+'\nrows='+str(got)+'\nresumed='+str(observed.get('resumed'))+' digest='+str(observed.get('digest'))+'\nwires='+str((observed.get('wire1'),observed.get('wire2'),observed.get('wire3')))
-  check('three propose prompts anneal remaining edits from 4 to 3 to 1',
-        observed.get('wire1') is True and observed.get('wire2') is True and observed.get('wire3') is True and got==wanted and observed.get('resumed')==observed.get('digest') and len(str(observed.get('digest')))==64,
-        detail)
+  check('three propose prompts anneal remaining edits from 4 to 3 to 1', observed.get('wire1') is True and observed.get('wire2') is True and observed.get('wire3') is True and got==wanted and observed.get('resumed')==observed.get('digest') and len(str(observed.get('digest')))==64, detail)
   drive=observed.get('drive') or {}
   drive_rows=drive.get('rows') or []
   def quoted_digest(value):
@@ -431,41 +400,74 @@ with tempfile.TemporaryDirectory(prefix='rrsi-loop-',dir=PROJECT/'output') as tm
   propose3='Edits remaining this round: 2. The annealed budget is 2.' in drive.get('propose3','') and 'Pruned:' not in drive.get('propose3','')
   commit=next((row.get('commit') for row in drive_rows if row.get('branch')=='rllm-evolve'),None)
   held_keys=('held_out_known','held_out_passed','held_out_task_key','held_out_verifier')
-  check('three refinement rounds record budgets 4, 3 and 2, a leakage refusal, noise floor 2, pruned skills, the evolve commit, and held-out keys',
-        propose1 and propose2 and propose3 and budgets=={1:{4},2:{3},3:{2}}
-        and len(leak)==1 and leak[0].get('round')==1 and leak[0].get('decision')=='refused because the candidate contains a recorded task'
-        and 'score_before' not in leak[0] and 'score_after' not in leak[0] and leak[0].get('verdict')=='rejected'
-        and floor_row.get('decision')=='refused because the gain 1 does not exceed the noise floor 2'
-        and floor_row.get('noise_floor')==2 and floor_row.get('round')==2 and floor_row.get('score_before')==1 and floor_row.get('score_after')==2
-        and skills==[1,2,3] and drive.get('pruned')==['skills'] and 'Pruned: skills.' in drive.get('evidence','') and 'The annealed budget is 1.' in drive.get('evidence','')
-        and commit_hex(commit) and len(commit)==40 and commit==drive.get('tip') and commit==drive.get('head') and drive.get('harness')=='{"a":""}' and drive.get('main')==drive.get('seed')
-        and floor_row.get('held_out_known') is True and floor_row.get('held_out_passed')==1
-        and floor_row.get('held_out_task_key')==quoted_digest('Held out drive task.')
-        and floor_row.get('held_out_verifier')==quoted_digest(['HELD-TOKEN'])
-        and all(key in floor_row for key in held_keys) and drive.get('phase')=='review',
-        'crash='+str(observed.get('crash') or '')+'\nbudgets='+str(budgets)+'\nskills='+str(skills)+'\nleak='+str([{key:row.get(key) for key in ('round','decision','verdict','leakage','score_before','score_after')} for row in leak])+'\nfloor='+str({key:floor_row.get(key) for key in ('decision','noise_floor','round','score_before','score_after',*held_keys)})+'\npruned='+str(drive.get('pruned'))+'\ncommit='+str(commit)+' tip='+str(drive.get('tip'))+' head='+str(drive.get('head'))+' harness='+str(drive.get('harness'))+' main='+str(drive.get('main'))+' seed='+str(drive.get('seed'))+'\nphases='+str((drive.get('opened_phase'),drive.get('after_base'),drive.get('after_pool'),drive.get('after_round3'),drive.get('phase')))+'\nrows='+str([(row.get('round'),row.get('component'),row.get('hypothesis'),row.get('verdict'),row.get('edit_budget'),row.get('noise_floor'),row.get('decision'),row.get('score_before'),row.get('score_after')) for row in drive_rows]))
-  check('a re-proposed skills hypothesis is refused by name for round 1',
-        observed.get('refusal')==skills_refusal and observed.get('refusal_notice')==skills_refusal and observed.get('refusal_phase')=='propose',
-        'note='+str(observed.get('refusal'))+' notice='+str(observed.get('refusal_notice'))+' phase='+str(observed.get('refusal_phase')))
+  check('three refinement rounds record budgets 4, 3 and 2, a leakage refusal, noise floor 2, pruned skills, the evolve commit, and held-out keys', propose1 and propose2 and propose3 and budgets=={1:{4},2:{3},3:{2}} and len(leak)==1 and leak[0].get('round')==1 and leak[0].get('decision')=='refused because the candidate contains a recorded task' and 'score_before' not in leak[0] and 'score_after' not in leak[0] and leak[0].get('verdict')=='rejected' and floor_row.get('decision')=='refused because the gain 1 does not exceed the noise floor 2' and floor_row.get('noise_floor')==2 and floor_row.get('round')==2 and floor_row.get('score_before')==1 and floor_row.get('score_after')==2 and skills==[1,2,3] and drive.get('pruned')==['skills'] and 'Pruned: skills.' in drive.get('evidence','') and 'The annealed budget is 1.' in drive.get('evidence','') and commit_hex(commit) and len(commit)==40 and commit==drive.get('tip') and commit==drive.get('head') and drive.get('harness')=='{"a":""}' and drive.get('main')==drive.get('seed') and floor_row.get('held_out_known') is True and floor_row.get('held_out_passed')==1 and floor_row.get('held_out_task_key')==quoted_digest('Held out drive task.') and floor_row.get('held_out_verifier')==quoted_digest(['HELD-TOKEN']) and all(key in floor_row for key in held_keys) and drive.get('phase')=='review', 'crash='+str(observed.get('crash') or '')+'\nbudgets='+str(budgets)+'\nskills='+str(skills)+'\nleak='+str([{key:row.get(key) for key in ('round','decision','verdict','leakage','score_before','score_after')} for row in leak])+'\nfloor='+str({key:floor_row.get(key) for key in ('decision','noise_floor','round','score_before','score_after',*held_keys)})+'\npruned='+str(drive.get('pruned'))+'\ncommit='+str(commit)+' tip='+str(drive.get('tip'))+' head='+str(drive.get('head'))+' harness='+str(drive.get('harness'))+' main='+str(drive.get('main'))+' seed='+str(drive.get('seed'))+'\nphases='+str((drive.get('opened_phase'),drive.get('after_base'),drive.get('after_pool'),drive.get('after_round3'),drive.get('phase')))+'\nrows='+str([(row.get('round'),row.get('component'),row.get('hypothesis'),row.get('verdict'),row.get('edit_budget'),row.get('noise_floor'),row.get('decision'),row.get('score_before'),row.get('score_after')) for row in drive_rows]))
+  check('a re-proposed skills hypothesis is refused by name for round 1', observed.get('refusal')==skills_refusal and observed.get('refusal_notice')==skills_refusal and observed.get('refusal_phase')=='propose', 'note='+str(observed.get('refusal'))+' notice='+str(observed.get('refusal_notice'))+' phase='+str(observed.get('refusal_phase')))
   quiet_rows=observed.get('quiet_rows') or []
   quiet_row=quiet_rows[-1] if len(quiet_rows)==1 else {}
-  check('a round that gains nothing records noise floor 0 and decision cost not recorded',
-        len(quiet_rows)==1 and quiet_row.get('noise_floor')==0 and quiet_row.get('decision')=='cost not recorded' and quiet_row.get('score_before')==0 and quiet_row.get('score_after')==0 and observed.get('quiet_note')==ended,
-        'note='+str(observed.get('quiet_note'))+' rows='+str([{key:row.get(key) for key in ('noise_floor','decision','score_before','score_after','round')} for row in quiet_rows]))
-  check('two flat skills rounds leave the budget line unpruned',
-        observed.get('wire1') is True and observed.get('wire2') is True and observed.get('wire3_pruned') is False and not observed.get('pruned_run') and got==wanted and all('was pruned' not in str(row.get('decision')) for row in rows),
-        'pruned_run='+str(observed.get('pruned_run'))+' wire3_pruned='+str(observed.get('wire3_pruned'))+' decisions='+str([row.get('decision') for row in rows]))
+  check('a round that gains nothing records noise floor 0 and decision cost not recorded', len(quiet_rows)==1 and quiet_row.get('noise_floor')==0 and quiet_row.get('decision')=='cost not recorded' and quiet_row.get('score_before')==0 and quiet_row.get('score_after')==0 and observed.get('quiet_note')==ended, 'note='+str(observed.get('quiet_note'))+' rows='+str([{key:row.get(key) for key in ('noise_floor','decision','score_before','score_after','round')} for row in quiet_rows]))
+  check('two flat skills rounds leave the budget line unpruned', observed.get('wire1') is True and observed.get('wire2') is True and observed.get('wire3_pruned') is False and not observed.get('pruned_run') and got==wanted and all('was pruned' not in str(row.get('decision')) for row in rows), 'pruned_run='+str(observed.get('pruned_run'))+' wire3_pruned='+str(observed.get('wire3_pruned'))+' decisions='+str([row.get('decision') for row in rows]))
   pool=observed.get('pool') or {}
   commit=pool.get('commit')
-  check('the incumbent commit in .rllm-worktrees is the evolve tip',
-        commit_hex(commit) and len(commit)==40 and commit!=pool.get('seed') and commit==pool.get('tip') and commit==pool.get('head') and pool.get('branch')=='rllm-evolve' and pool.get('status')=='admissible' and pool.get('harness')=='{"flag":""}' and pool.get('parent') is True and pool.get('main')==pool.get('seed') and pool.get('before')==0 and pool.get('after')==1 and pool.get('note')=='kept candidate 0',
-        'pool='+str(pool))
-  check('the separate evaluation score 0 differs from the in-round score 1 and is not a held-out key',
-        pool.get('held')==[] and pool.get('eval_base')==1 and pool.get('eval_cand')==0 and pool.get('after')==1 and pool.get('eval_cand')!=pool.get('after'),
-        'pool='+str({key:pool.get(key) for key in ('held','eval_base','eval_cand','after','before')}))
+  check('the incumbent commit in .rllm-worktrees is the evolve tip', commit_hex(commit) and len(commit)==40 and commit!=pool.get('seed') and commit==pool.get('tip') and commit==pool.get('head') and pool.get('branch')=='rllm-evolve' and pool.get('status')=='admissible' and pool.get('harness')=='{"flag":""}' and pool.get('parent') is True and pool.get('main')==pool.get('seed') and pool.get('before')==0 and pool.get('after')==1 and pool.get('note')=='kept candidate 0', 'pool='+str(pool))
+  check('the separate evaluation score 0 differs from the in-round score 1 and is not a held-out key', pool.get('held')==[] and pool.get('eval_base')==1 and pool.get('eval_cand')==0 and pool.get('after')==1 and pool.get('eval_cand')!=pool.get('after'), 'pool='+str({key:pool.get(key) for key in ('held','eval_base','eval_cand','after','before')}))
  def recursion_follow():
   for name in recursion:
    if name not in evaluated:check(name,False,'recursion leg did not record this check')
+ STALL_CHECK='a stalled ledger refuses an already-tried component and does not refuse one that was never tried'
+ SHAPE_CHECK='a new flat shape is accepted for structural novelty and the same shape is refused as a duplicate'
+ def settle_gap():
+  state=event(None,'resume')['state']
+  if state.get('task_run'):state=event(state,'cancel')['state']
+  if state.get('refinement_pending'):state=event(event(state,'refinement_discard_review')['state'],'refinement_discard')['state']
+  state['profiles']=[dict(PROFILE)];state['agents']=[dict(AGENT)];return state
+ def drive_gap(task,checks,steps):
+  pending=event(settle_gap(),'refine',{'task':task,'response_checks':checks,'refinement_rounds':'3'})
+  for text in steps:pending=reply(pending,text)
+  return pending
+ def ledger_gap(pending):
+  run=pending['state'].get('refinement_pending') or pending['state'].get('task_run') or {};digest=run.get('run_digest') if isinstance(run.get('run_digest'),str) else ''
+  return read_rows(default_root/(digest+'.jsonl')) if len(digest)==64 else []
+ def edit_text(name,hypothesis,body):return 'component: '+name+'\nhypothesis: '+hypothesis+'\n'+body
+ def round_trip(text):return [text,'nothing here',text,'nothing here']
+ def scored_band(rows):
+  best,floor,components={},0,set()
+  for row in rows:
+   if isinstance(row.get('component'),str):components.add(row['component'])
+   if isinstance(row.get('score_before'),int) and isinstance(row.get('score_after'),int):
+    gain=row['score_after']-row['score_before'];rnd=row.get('round');best[rnd]=max(best.get(rnd,gain),gain);floor=max(floor,row['noise_floor']) if isinstance(row.get('noise_floor'),int) else floor
+  return best,floor,components
+ def require_check(ok,name,detail):
+  if not ok:print(detail,flush=True)
+  assert ok,name;check(name,True)
+ def stall_leg():
+  task,checks,sentence='Stall band task.','BAND-A\nBAND-B','refused because component skills was already tried while progress stayed inside the noise band for 3 rounds'
+  drive_gap(task,checks,['baseline says nothing',*round_trip(edit_text('skills','stall one','skills body one')),'BAND-A is the second base',*round_trip(edit_text('memory','stall two','memory body two')),*round_trip(edit_text('tools','stall three','tools body three'))])
+  pending=drive_gap(task,checks,['baseline says nothing',*round_trip(edit_text('subagents','stall extra','subagents body extra')),'BAND-A opens the live floor',edit_text('skills','stall again','skills body again')])
+  run=pending['state'].get('task_run') or {};rows=ledger_gap(pending);best,floor,components=scored_band(rows)
+  tried=next((row for row in rows if row.get('hypothesis')=='stall again'),{})
+  refused=run.get('round_note')==sentence and run.get('phase')=='propose' and tried.get('decision')==sentence and len(best)>=3 and floor>=1 and all(gain<=floor for gain in best.values()) and 'config' not in components
+  retried=event(pending['state'],'retry');control=reply(retried,edit_text('config','never tried','config body fresh'))
+  control_run=control['state'].get('task_run') or {};control_rows=ledger_gap(control);notice=control['state'].get('notice') or ''
+  same=len(control_rows)==len(rows) and not any(row.get('component')=='config' for row in control_rows) and control_run.get('phase')=='probe' and sentence not in notice
+  detail='note='+str(run.get('round_note'))+' phase='+str(run.get('phase'))+' best='+str(sorted((str(key),value) for key,value in best.items()))+' floor='+str(floor)+' components='+str(sorted(components))+' tried='+str(tried.get('decision'))+' control_phase='+str(control_run.get('phase'))+' notice='+notice+' rows='+str(len(rows))+'/'+str(len(control_rows))
+  require_check(refused and same,STALL_CHECK,detail)
+ def shape_leg():
+  task,checks,novel,duplicate='Novelty dup task.','MARK-A\nMARK-B','accepted because of structural novelty','refused because the duplicate shape was already recorded'
+  one,two=edit_text('memory','flat one','body alpha'),edit_text('memory','flat two','body beta')
+  drive_gap(task,checks,['baseline says nothing',*round_trip(edit_text('skills','opener','body opener')),'MARK-A is the second base',*round_trip(one),*round_trip(two)])
+  pending=event(settle_gap(),'refine',{'task':task,'response_checks':checks,'refinement_rounds':'3'})
+  pending=reply(pending,'baseline says nothing')
+  for component in ['prompt','control flow','config','context management','tools','subagents','skills']:
+   pending=reply(pending,'component: '+component+'\nhypothesis: leak '+component+'\nLeak task '+task);pending=event(pending['state'],'retry')
+  for text in [*round_trip(edit_text('prompt','filler','body filler')),'MARK-A opens the floor',*round_trip(one)]:pending=reply(pending,text)
+  rows=ledger_gap(pending)
+  first=next((row for row in rows if row.get('hypothesis')=='flat one' and row.get('decision')==novel),{})
+  again=next((row for row in rows if row.get('hypothesis')=='flat one' and row.get('decision')==duplicate),{})
+  other=next((row for row in rows if row.get('hypothesis')=='flat two' and row.get('decision')==novel),{})
+  triple=lambda row:tuple(row.get(key) for key in ('component','hypothesis','diff_digest'))
+  ok=bool(first) and bool(again) and bool(other) and triple(first)==triple(again) and other.get('diff_digest')!=first.get('diff_digest') and first.get('accept_reason')=='structural novelty' and again.get('accept_reason')=='duplicate shape' and first.get('beta0')==0 and again.get('beta0')==0 and first.get('beta1')==64 and again.get('beta1')==64 and first.get('verdict')=='accepted' and again.get('verdict')=='rejected' and first.get('score_before')==again.get('score_before')==0 and first.get('score_after')==again.get('score_after')==0 and first.get('noise_floor')==again.get('noise_floor')==1 and first.get('decision')!=again.get('decision')
+  detail='first='+str({key:first.get(key) for key in ('decision','accept_reason','diff_digest','verdict','beta0','beta1','hypothesis')})+' again='+str({key:again.get(key) for key in ('decision','accept_reason','diff_digest','verdict','beta0','beta1','hypothesis')})+' other='+str(other.get('diff_digest'))+' n='+str(len(rows))
+  require_check(ok,SHAPE_CHECK,detail)
  def tamper_leg():
   library=default_root/'experience.jsonl'
   if not library.is_file():
@@ -489,12 +491,10 @@ with tempfile.TemporaryDirectory(prefix='rrsi-loop-',dir=PROJECT/'output') as tm
   after=sha256(library)
   refused='library record digest does not match its body; existing history was left unchanged' in wire
   adopted='Adopted harness (historical)' in wire
-  check('a tampered library entry is refused and its bytes stay unchanged',
-        refused and not adopted and before==after and library.read_bytes()==bytes(tampered),
-        'refused='+str(refused)+' adopted_line='+str(adopted)+' before='+before+' after='+after)
+  check('a tampered library entry is refused and its bytes stay unchanged', refused and not adopted and before==after and library.read_bytes()==bytes(tampered), 'refused='+str(refused)+' adopted_line='+str(adopted)+' before='+before+' after='+after)
  recursion=['three propose prompts anneal remaining edits from 4 to 3 to 1','three refinement rounds record budgets 4, 3 and 2, a leakage refusal, noise floor 2, pruned skills, the evolve commit, and held-out keys','a re-proposed skills hypothesis is refused by name for round 1','a round that gains nothing records noise floor 0 and decision cost not recorded','two flat skills rounds leave the budget line unpruned','the incumbent commit in .rllm-worktrees is the evolve tip','the separate evaluation score 0 differs from the in-round score 1 and is not a held-out key']
- names=['refine entry copies approval_root onto task_run.workspace and records source_digest','a non-refine run carries no workspace and does not attempt the pool','a second round decision changes when the ledger already rejected that component','the digest-named ledger chains each revision to this run and experience.jsonl seals the settled row','files alone rebuild the resumed phase and decision',*recursion,'a tampered library entry is refused and its bytes stay unchanged']
- bodies=[workspace_leg,non_refine_leg,critic_leg,journal_leg,resume_leg,recursion_leg,*([recursion_follow]*(len(recursion)-1)),tamper_leg]
+ names=['refine entry copies approval_root onto task_run.workspace and records source_digest','a non-refine run carries no workspace and does not attempt the pool','a second round decision changes when the ledger already rejected that component','the digest-named ledger chains each revision to this run and experience.jsonl seals the settled row','files alone rebuild the resumed phase and decision',*recursion,STALL_CHECK,SHAPE_CHECK,'a tampered library entry is refused and its bytes stay unchanged']
+ bodies=[workspace_leg,non_refine_leg,critic_leg,journal_leg,resume_leg,recursion_leg,*([recursion_follow]*(len(recursion)-1)),stall_leg,shape_leg,tamper_leg]
  try:
   open_product()
  except Exception:
@@ -508,7 +508,7 @@ with tempfile.TemporaryDirectory(prefix='rrsi-loop-',dir=PROJECT/'output') as tm
   close_product()
   err_text=err_path.read_text()[-4000:] if err_path.exists() else ''
   if err_text and problems:print(err_text,flush=True)
- record=dict(checks=evaluated,count=len(evaluated),failed=problems,scope='Owner checks through the product JSON-lines route: refine copies approval_root onto task_run.workspace and records source_digest, the digest-named ledger chains revisions for that run and experience.jsonl seals the settled row, a second round reads a recorded rejection, resume rebuilds the ledger prompt and decision from those files alone, a tampered library entry is refused without a rewrite, and delegate or compact carries no workspace and does not run the pool. A resumed refine records propose budgets 4/4, 3/3 and 3/1, refuses a repeated skills hypothesis by the round 1 name, records noise floor 0 and decision cost not recorded when a round gains nothing, leaves two flat skills rounds unpruned, stores the accepted incumbent as the rllm-evolve worktree commit, and keeps the separate evaluation score off the held-out keys. A three-round refine records budgets 4, 3 and 2, a leakage refusal before scoring, noise floor 2, pruned skills, the evolve commit, and the four held-out keys.')
+ record=dict(checks=evaluated,count=len(evaluated),failed=problems,scope='Owner checks through the product JSON-lines route: refine copies approval_root onto task_run.workspace and records source_digest, the digest-named ledger chains revisions for that run and experience.jsonl seals the settled row, a second round reads a recorded rejection, resume rebuilds the ledger prompt and decision from those files alone, a tampered library entry is refused without a rewrite, and delegate or compact carries no workspace and does not run the pool. A resumed refine records propose budgets 4/4, 3/3 and 3/1, refuses a repeated skills hypothesis by the round 1 name, records noise floor 0 and decision cost not recorded when a round gains nothing, leaves two flat skills rounds unpruned, stores the accepted incumbent as the rllm-evolve worktree commit, and keeps the separate evaluation score off the held-out keys. A three-round refine records budgets 4, 3 and 2, a leakage refusal before scoring, noise floor 2, pruned skills, the evolve commit, and the four held-out keys. A stalled ledger refuses an already-tried component while an untried component is not refused. A flat shape inside the noise band is accepted once for structural novelty and refused when that same shape is recorded again.')
  if not problems:record['passed']=passed
  out=PROJECT/'output/checks'
  out.mkdir(parents=True,exist_ok=True)
