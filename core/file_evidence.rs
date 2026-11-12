@@ -1,8 +1,10 @@
 //! Complete held-file observations and streaming reproduction of observed bytes.
 use super::*;
+use super::super::js_evidence;
 use std::os::{fd::{AsRawFd,FromRawFd},unix::{ffi::OsStrExt,fs::{MetadataExt,OpenOptionsExt}}};
 use std::io::{Seek,SeekFrom};
 use std::time::Instant;
+#[path="clean_room.rs"] mod clean_room;
 const CHUNK:usize=65536;
 const METHOD:&str="SHA-256 of every byte read from the complete held regular file";
 fn u64_value(v:&Json)->Result<u64>{match v{Num(s)=>s.parse().map_err(|_|"Invalid complete-file byte count".into()),_=>Err("Complete-file byte count must be an integer".into())}}
@@ -65,10 +67,79 @@ pub(super) fn validate_graph(g:&Json)->Result<()>{let fail=||"Malformed complete
 pub(super) fn is_complete(node:&Json)->bool{text(get(node,"sample"),"method")==METHOD}
 pub(super) fn reconstruct(root:&Path,v:&Json,access:&operation::InspectionAccess)->Result<String>{if !access.read{return Err("Streaming reconstruction requires read permission".into());}if access.budget<2*CHUNK+32768{return Err("Current response allowance cannot admit streaming copy/readback buffers".into());}let args=get(v,"args");let bound=get(v,"reconstruction_source");let node=get(bound,"node");let g=Guard::new("reconstruct",args,access)?;if g.policy!=text(bound,"policy"){return Err("Reconstruction policy changed since review".into());}g.check()?;let mut held=Held::open(root,reconstruction::raw(&text(node,"path_hex"))?,access)?;let sample=get(node,"sample");if !is_complete(node)||get(sample,"complete_file")!=&Bool(true)||get(sample,"offset")!=&Num("0".into())||held.identity!=*get(node,"identity")||u64_value(get(sample,"length"))?!=u64_value(get(&held.identity,"size"))?{return Err("Fresh source does not match the complete observed file".into());}
  let(n,hash)=held.scan(&g,|_|Ok(()))?;if hash!=text(sample,"sha256"){return Err("Fresh entire source digest differs; no output created".into());}held.rewind()?;g.check()?;held.binding()?;
+ if text(args,"mode")=="clean_room"{return write_clean_room(&mut held,&g,args,bound,n,&hash);}
  let output=text(args,"output");unsafe extern "C"{fn openat(fd:i32,path:*const std::ffi::c_char,flags:i32,...)->i32;}let name=std::ffi::CString::new(output.as_bytes()).map_err(|_|"Invalid output name")?;let fd=unsafe{openat(held.handles[0].as_raw_fd(),name.as_ptr(),0x80000|0x20000|0x80|0x40|2,0o600u32)};if fd<0{return Err(format!("Cannot create new streaming output: {}",std::io::Error::last_os_error()));}let mut target=unsafe{fs::File::from_raw_fd(fd)};
  let checked=(||->Result<()>{let(written,second)=held.scan(&g,|chunk|{g.check()?;target.write_all(chunk).map_err(|e|e.to_string())?;g.check()})?;if written!=n||second!=hash{return Err("Selected source changed between verification and copy".into());}g.check()?;target.sync_all().map_err(|e|e.to_string())?;g.check()?;let before=reconstruction::identity(&target.metadata().map_err(|e|e.to_string())?);held.rewind()?;target.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;let mut buffer=[0u8;CHUNK];let(read,third)=held.scan(&g,|chunk|{g.check()?;target.read_exact(&mut buffer[..chunk.len()]).map_err(|e|e.to_string())?;g.check()?;if chunk!=&buffer[..chunk.len()]{return Err("Created file readback differs from the source".into());}Ok(())})?;let mut end=[0u8;1];if target.read(&mut end).map_err(|e|e.to_string())?!=0||read!=n||third!=hash||before!=reconstruction::identity(&target.metadata().map_err(|e|e.to_string())?){return Err("Created file changed during readback".into());}let named=open_at(&held.handles[0],output.as_bytes(),false)?;if before!=reconstruction::identity(&named.metadata().map_err(|e|e.to_string())?){return Err("Created output name binding changed".into());}held.binding()?;g.check()?;Ok(())})();checked.map_err(|e|format!("New file {output} retained but streaming reconstruction unconfirmed: {e}; no automatic replay"))?;
  Ok(format!("Streaming reconstruction created new file {output}; all {n} bytes read back exactly in 64 KiB chunks. SHA-256 {hash}. Complete source record {}, snapshot {}, node {}, raw path {}. Entire fresh source was verified before creation and again across copy/readback. This reproduces observed bytes, not inferred behavior.",text(bound,"record"),get(bound,"snapshot").string(),get(node,"id").string(),text(node,"path_hex")))}
+fn shown_number(v:&Json)->String{match v{Num(n)|Str(n)=>n.clone(),other=>other.string()}}
+fn create_exclusive(root:&fs::File,output:&str)->Result<fs::File>{
+ unsafe extern "C"{fn openat(fd:i32,path:*const std::ffi::c_char,flags:i32,...)->i32;}
+ let name=std::ffi::CString::new(output.as_bytes()).map_err(|_|"Invalid output name")?;
+ let fd=unsafe{openat(root.as_raw_fd(),name.as_ptr(),0x80000|0x20000|0x80|0x40|2,0o600u32)};
+ if fd<0{return Err(format!("Cannot create new streaming output: {}",std::io::Error::last_os_error()));}
+ Ok(unsafe{fs::File::from_raw_fd(fd)})
+}
+fn write_clean_room(held:&mut Held,g:&Guard,args:&Json,bound:&Json,n:u64,hash:&str)->Result<String>{
+ if n>clean_room::SUBJECT_BYTE_CAP as u64{return Err(format!("Refusal: {}. {n} exceeds {}. No output was written.",clean_room::SUBJECT_BYTE_NAME,clean_room::SUBJECT_BYTE_CAP));}
+ let mut retained=Vec::new();
+ let(read,second)=held.scan(g,|chunk|{g.check()?;if retained.len().saturating_add(chunk.len())>clean_room::SUBJECT_BYTE_CAP{return Err(format!("Refusal: {}. {} exceeds {}. No output was written.",clean_room::SUBJECT_BYTE_NAME,n,clean_room::SUBJECT_BYTE_CAP));}retained.extend_from_slice(chunk);Ok(())})?;
+ if read!=n||second!=hash{return Err("Selected source changed before clean-room generation; no output created".into());}
+ g.check()?;held.binding()?;
+ let path=String::from_utf8(held.path.clone()).map_err(|_|String::from("Refusal: clean-room subject path is not UTF-8. No output was written."))?;
+ let identity=&held.identity;
+ let citation=clean_room::Citation{path:path.clone(),dev:shown_number(get(identity,"dev")),ino:shown_number(get(identity,"ino")),size:shown_number(get(identity,"size")),sha256:hash.to_string(),record:text(bound,"record"),snapshot:shown_number(get(bound,"snapshot")),node:shown_number(get(get(bound,"node"),"id")),path_hex:text(get(bound,"node"),"path_hex")};
+ let outcome=clean_room::rebuild(&retained,&path,&citation)?;
+ let output=text(args,"output");
+ let generated=outcome.generated.as_bytes();
+ let mut target=create_exclusive(&held.handles[0],&output)?;
+ let checked=(||->Result<()>{
+  let mut written=0usize;
+  while written<generated.len(){g.check()?;let end=(written+CHUNK).min(generated.len());target.write_all(&generated[written..end]).map_err(|e|e.to_string())?;written=end;g.check()?;}
+  g.check()?;target.sync_all().map_err(|e|e.to_string())?;g.check()?;
+  let before=reconstruction::identity(&target.metadata().map_err(|e|e.to_string())?);
+  target.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;
+  let mut buffer=[0u8;CHUNK];let mut read_back=0usize;
+  while read_back<generated.len(){g.check()?;let end=(read_back+CHUNK).min(generated.len());let expect=&generated[read_back..end];target.read_exact(&mut buffer[..expect.len()]).map_err(|e|e.to_string())?;g.check()?;if expect!=&buffer[..expect.len()]{return Err("Created file readback differs from the generated clean-room bytes".into());}read_back=end;}
+  let mut end=[0u8;1];
+  if target.read(&mut end).map_err(|e|e.to_string())?!=0||read_back!=generated.len()||before!=reconstruction::identity(&target.metadata().map_err(|e|e.to_string())?){return Err("Created file changed during readback".into());}
+  let named=open_at(&held.handles[0],output.as_bytes(),false)?;
+  if before!=reconstruction::identity(&named.metadata().map_err(|e|e.to_string())?){return Err("Created output name binding changed".into());}
+  held.binding()?;g.check()?;Ok(())
+ })();
+ checked.map_err(|e|format!("New file {output} retained but clean-room reconstruction unconfirmed: {e}; no automatic replay"))?;
+ let out_hash=harness_rules::sha256(generated);
+ Ok(format!("Clean-room reconstruction created new file {output}; {} generated bytes read back exactly. Output SHA-256: {out_hash}. Reference SHA-256 {hash}. Spec items: {}. Generated file: {output}.\n{}Verification matched {}, missing {}, unknown {}. Known: complete source identity dev {} ino {} size {} matched the held file before generation. Unknown: the new file is a generated skeleton from the observer specification, not a copy of the reference body. Record {}, snapshot {}, node {}, raw path {}.",generated.len(),outcome.items,outcome.lines,outcome.matched,outcome.missing,outcome.unknown,citation.dev,citation.ino,citation.size,citation.record,citation.snapshot,citation.node,citation.path_hex))
+}
 #[cfg(test)]mod checks{use super::*;
  #[test]fn deadline_precedes_reads_and_is_not_reset(){let access=operation::InspectionAccess{list:true,read:true,graph:false,budget:1024*1024,root_identity:None,cancellation_token:super::super::super::execution::cancellation_token(),deadline:Instant::now()-std::time::Duration::from_secs(1)};let args=obj(vec![("path",s("missing")),("content",s("complete_digest"))]);let g=Guard::new("inspect",&args,&access).unwrap();assert!(g.check().unwrap_err().contains("deadline"));assert!(inspect(Path::new("/unopened"),&args,&access).unwrap_err().contains("deadline"));}
  #[test]fn complete_graph_declared_length_and_shape_are_checked(){let bad=obj(vec![("schema",Num("1".into())),("kind",s("complete_file"))]);assert!(validate_graph(&bad).is_err());assert!(validate_mode(&obj(vec![("content",s("all_apps"))])).is_err());assert!(normalize("../other").is_err());assert!(normalize("/other").is_err());assert!(normalize("./safe/file").is_ok());}
+ #[test]fn clean_room_route_cites_generates_and_verifies(){
+  let dir=std::env::temp_dir().join(format!("rllm-clean-room-{}",std::process::id()));
+  let _=fs::remove_dir_all(&dir);fs::create_dir_all(&dir).unwrap();let root=dir.canonicalize().unwrap();
+  struct DropDir(std::path::PathBuf);impl Drop for DropDir{fn drop(&mut self){let _=fs::remove_dir_all(&self.0);}}
+  let _drop=DropDir(dir.clone());
+  let source="const {app} = require(\"electron\");\nconst helper = require(\"./helper.js\");\nipcMain.on(\"window:open\", function () {});\nrouter.get(\"/status\", function () {});\nexport function openWindow() {}\n";
+  fs::write(root.join("feature.js"),source).unwrap();
+  let file_meta=fs::metadata(root.join("feature.js")).unwrap();let root_meta=fs::metadata(&root).unwrap();
+  let bytes=fs::read(root.join("feature.js")).unwrap();let hash=harness_rules::sha256(&bytes);let path_hex=hex(b"feature.js");
+  let node=obj(vec![("id",Num("0".into())),("path_hex",s(&path_hex)),("path",s("feature.js")),("kind",s("File")),("identity",reconstruction::identity(&file_meta)),("coverage",s("Complete")),("sample",obj(vec![("offset",Num("0".into())),("length",Num(file_meta.len().to_string())),("complete_file",Bool(true)),("sha256",s(&hash)),("method",s(METHOD))])),("format_candidates",Arr(vec![])),("notes",Arr(vec![]))]);
+  let policy=harness_rules::digest(&harness_rules::gateway_current(&Null).unwrap());
+  let workspace=root.to_string_lossy().to_string();
+  let bound=obj(vec![("schema",Num("1".into())),("record",s("rec-clean")),("snapshot",Num("0".into())),("node",node),("workspace",s(&workspace)),("workspace_identity",s(&format!("{}:{}",root_meta.dev(),root_meta.ino()))),("coverage",s("Complete")),("policy",s(&policy))]);
+  let args=obj(vec![("record",s("rec-clean")),("snapshot",Num("0".into())),("node",Num("0".into())),("mode",s("clean_room")),("output",s("feature-rebuild.js")),("path",s("feature.js")),("source_tool",s("read")),("source_args",obj(vec![("path",s("feature.js"))]))]);
+  super::super::super::execution::reset();
+  let access=operation::InspectionAccess{list:true,read:true,graph:false,budget:2*1024*1024,root_identity:Some((root_meta.dev(),root_meta.ino())),cancellation_token:super::super::super::execution::cancellation_token(),deadline:Instant::now()+std::time::Duration::from_secs(30)};
+  let response=reconstruction::run(&root,&obj(vec![("args",args),("reconstruction_source",bound)]),&access).unwrap_or_else(|e|panic!("{e}"));
+  assert!(response.contains("Spec items: 5"),"{response}");
+  assert!(response.contains("Generated file: feature-rebuild.js"),"{response}");
+  assert!(response.contains("Verification matched 5, missing 0, unknown 0"),"{response}");
+  assert!(response.contains("matched edge require electron"),"{response}");
+  assert!(response.contains("matched site ipcMain.on window:open"),"{response}");
+  assert!(response.contains("matched site router.get /status"),"{response}");
+  assert!(response.contains("known:"),"{response}");
+  assert!(response.contains("unknown:"),"{response}");
+  assert!(response.contains(&hash),"{response}");
+  let generated=fs::read(root.join("feature-rebuild.js")).unwrap();
+  assert_ne!(generated,bytes);
+ }
 }
