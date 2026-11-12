@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T23:3Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-13T01:0Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -7,7 +7,7 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **708/708 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
+  report bytes): **723/723 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
   69-group record is backed by 638/638, measured at `c34b170`), measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the 638 count is the tree at `c34b170`: 597 at `600e44d`,
   +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
@@ -15,7 +15,8 @@ their original counts and wording.
   +4 durable-successor cases in `12cdc6b`, +5 cross-reference cap-disclosure cases in `c34b170`; continued by
   +4 in `4758d28` → 642 and +7 in `5c93aed` → 645, then 649 re-measured in a room at `e4b7452` — that +4 was not
   re-derived per commit — and +1 in `98fb0d9` → 650, +8 in `e4118b1` → 658, +9 in `e7d13ec` → 667, +5 in
-  `db16ffa` → 672, +14 in `436b281` → 686, +15 in `28b29d3` → 701, +7 in `2b041bc` → 708; the sums were
+  `db16ffa` → 672, +14 in `436b281` → 686, +15 in `28b29d3` → 701, +7 in `2b041bc` → 708, +10 in `06d1f6b` → 718,
+  +5 in `b6457b0` → 723; the sums were
   re-derived by counting added `#[test]` lines per commit with `git show`, which is why `3e5eda1` (+3) and
   `112e251` (+1) are absent from the chain — those are `tools/` package-test legs, not core unit cases; every delta was
   re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
@@ -1602,6 +1603,59 @@ committing documentation promptly rather than leaving it staged.
 The delivered record is unchanged this window: 71 groups, 4,215 checks, 67 pass, 4 unavailable, still backed
 by the 09:23:49 mixed-provenance binary. A single sweep on a settled tree must supersede it, and that sweep
 is gated behind five in-flight lanes plus the signed-APK inputs that keep `apk_alignment` and
+`turn_background` unavailable.
+
+## A white-room rebuild lands, cross-references become typed rows, and a git-archive room turns out to be the wrong instrument for a sweep — 2026-11-12T22:3Z–2026-11-13T01:0Z
+
+`room6` landed the GAP4 white-room rebuild as `06d1f6b` (`core/clean_room.rs` new, `core/file_evidence.rs`,
+`core/reconstruction.rs`). A `clean_room` mode rides the existing `reconstruct` route: `reconstruction::validate`
+accepts the mode, `run` requires a complete unchanged file and dispatches to `file_evidence::reconstruct`, which
+retains the subject only under the named 128 KiB cap, builds a citation bound to `dev`/`ino`/`size`/`sha256` and
+the record/snapshot/node **before** generation, generates a skeleton from the parsed observer items
+(`core/clean_room.rs:379`), refuses a byte-identical result as `clean-room copy` (`:65`), creates the output with
+`openat(O_CREAT|O_EXCL|O_NOFOLLOW)` relative to the held directory fd, and reads the written bytes back chunk by
+chunk. Caps are named (`clean-room item cap`, `spec-size cap`, `generated-byte cap`, `subject-byte cap`).
+Coordinator witness: a `git archive` room of HEAD plus those three files, md5-identical to the worktree, measures
+**718/718 unit cases plus 55 isolated application cases, exit 0** (708 + 10). Two mutants in that room each go
+red for exactly their own reason: deleting only the `clean_room` dispatch from `reconstruction::run` gives
+**717/718** with `application::file_evidence::checks::clean_room_route_cites_generates_and_verifies` panicking at
+`core/file_evidence.rs:133`, and neutering the copy refusal at `core/clean_room.rs:65` gives **717/718** with
+`application::file_evidence::clean_room::checks::byte_identical_artifact_is_refused_as_a_copy` red. Restoring both
+files reproduces the original md5s. The audit seat found no Critical defect and three real gaps, all open:
+`clean_room::verify_artifact` (`:468`) has **no production caller**, so re-observation runs over the generator's
+buffer while the disk read-back is only compared byte-for-byte; `byte_identical_artifact_is_refused_as_a_copy`
+drives the `reject_identical` helper directly rather than the route, so it cannot convict a generator that copies;
+and the item/spec caps are checked *after* `observe_items`, so the observer's own intermediate output is bounded
+only by the 128 KiB subject cap.
+
+`natx` landed GAP4 stage 2's typed graph as `b6457b0` (`core/binary_declarations.rs`, `core/control_flow.rs`).
+`derive` now emits a **fourth** group, `cross_references`, with `observed`/`retained`/`omitted`/`rows`, and the
+document carries `cross_reference_inventory_complete`; `Observation.xrefs` is read in the product at
+`core/binary_declarations.rs:62`/:66, which is what clears `field xrefs is never read`, and `Observation` gained
+`xrefs_complete` — `Some(false)` when the pass is withheld or an edge/unknown cap fired, `Some(true)` only when the
+stored edges and unknowns are the whole record, `None` when the pass never ran. A resolved PE target above
+`2**32` is refused by name while the same wide target stays valid for `ELF declared VA`. Witness: the same room
+with these two files overlaid measures **723/723 plus 55, exit 0** (+5 cases). The seat found no Critical defect;
+its Important limitation predates the lane (the projection materialises rows and only then compares `state_bytes`
+with the budget, so the document shell is never pre-reserved), and it flagged one Minor inconsistency that is now
+an open item — the emitted `meaning` sentence still names only mappings, labels and relocations although a fourth
+group is emitted.
+
+**Instrument finding, measured:** a `git archive` room is the wrong instrument for the connected sweep. A full
+sweep inside such a room (tools, product and runner all built inside it) reports **63 pass, 1 fail, 7 unavailable
+of 71 groups** and publishes nothing. Five groups are `UNAVAILABLE` there that pass on this machine —
+`binary_flow`, `history_migration`, `field_flow`, `flags_flow`, `product_flow` — because their declared inputs are
+`output/*-controller` files, and `output/` is gitignored so the room never had them; the two APK-gated groups stay
+unavailable as before. The single FAIL is `verification/rrsi_loop.py`'s leg
+`refine entry copies approval_root onto task_run.workspace and records source_digest` (exit 1, 6 checks,
+reproduced standalone in about a second), and it is a substrate artifact, not a product red: an archive room has no
+`.git`, so `require_recorded_worktree` (root3, `436b281`) falls back to the raw `approval_root` and
+`source_digest` is never recorded — the leg expects it. Consequence recorded for the pending sweep: the delivered
+record must be produced in a tree with real git state (the main tree, or a `git worktree`), not an archive room.
+
+The delivered record is unchanged this window: 71 groups, 4,215 checks, 67 pass, 4 unavailable, still backed
+by the 09:23:49 mixed-provenance binary. A single sweep on a settled tree must supersede it, and that sweep
+is gated behind the four in-flight lanes plus the signed-APK inputs that keep `apk_alignment` and
 `turn_background` unavailable.
 
 ## Historical baseline audit (original text)
