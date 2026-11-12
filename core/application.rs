@@ -3097,6 +3097,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     else{experiment_records::approve_author(&st,get(&pending,"args"),model)?;let mut next=st.clone();let output=experiment_records::execute(&mut next,get(&pending,"args"),model);synchronous_tool_failed=output.is_err();synchronous_tool_completed=!synchronous_tool_failed;if synchronous_tool_failed{put(&mut st,"approval_rules",previous_rules.clone());}effect=synchronous_result(&mut st,next,"experiments",output,steps)?;return Ok(());}
                 }
                 if text(&pending,"tool")=="reconstruct"{reconstruction::approve(&st,&pending,boolean(&st,"agent_pending"))?;}
+                if text(&pending,"tool")=="self_build"{self_build::approve(&pending)?;harness_rules::check(&st,"write",&self_build::write_args(get(&pending,"args")),boolean(&st,"agent_pending"))?;}
                 let active_tool=text(&pending,"tool");
                 inquiry::prepare(&mut st,&pending);
                 inquiry::approve_export(&mut st,&mut pending,boolean(&approval_dispatch_base,"agent_pending"))?;
@@ -3455,14 +3456,17 @@ fn event_inner(v: &Json) -> Result<Json> {
 }
 fn automatic_approval(st:&Json)->bool{
  let pending=get(st,"pending");
+ let governed;
+ let subject=if text(pending,"tool")=="self_build"{governed=self_build::permission_subject(pending);&governed}else{pending};
  !boolean(pending,"format_review")&&!search::requires_review(st,pending)
-  &&(harness_rules::standing(st,pending)||search::standing(st,pending)
+  &&(harness_rules::standing(st,subject)||search::standing(st,pending)
      ||(boolean(st,"agent_pending")&&web_operation::standing_read(st,pending))||approval_rules::matches(st)
-     ||permissions::stands_down(st,pending))
+     ||permissions::stands_down(st,subject))
 }
 fn validate_tool(v: &Json) -> Result<()> {
     if text(v,"tool")=="service"{return services::validate_args(get(v,"args"));}
     if text(v,"tool")=="reconstruct"{return reconstruction::validate(get(v,"args"));}
+    if text(v,"tool")=="self_build"{return self_build::validate(get(v,"args"));}
     if text(v,"tool")=="experiments"{return experiment_records::validate(get(v,"args"));}
     if text(v,"tool")=="hypotheses"{return claim_records::validate_tool(get(v,"args"));}
     if text(v,"tool")=="observations"{return observation_records::validate(get(v,"args"));}
@@ -3620,7 +3624,7 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
     let inquiry_export=inquiry::worker_export(&root,v,&inspection_access)?;
     let args = get(v, "args");
     let p = path(&root, &text(args, "path"))?;
-    if ["write", "script_check", "script_run"].contains(&text(v, "tool").as_str()) {
+    if ["write", "script_check", "script_run", "self_build"].contains(&text(v, "tool").as_str()) {
         let exists = p.exists();
         if get(args, "previous_exists") == &Null {
             return Err("Operation has not been reviewed".into());
@@ -3633,6 +3637,7 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
     }
     let result = match field(v, "tool")? {
         "reconstruct" => reconstruction::run(&root,v,&inspection_access)?,
+        "self_build" => self_build::run(&root, v, &|| inspection_access.cancelled())?,
         "read" => read_file(&p)?,
         "inspect" => if text(args,"content")=="complete_digest"{file_evidence::inspect(&root,args,&inspection_access)?}else{investigation::inspect_scoped(&root,&p,&text(args,"path"),&inspection_access)?},
         "capture" => capture_file::capture(&root,&p,args,&inspection_access)?,
@@ -3814,6 +3819,7 @@ fn proposal(st: &mut Json, root: &str) -> Result<()> {
     let kind = text(&pending, "tool");
     if kind=="service"{services::prepare(st,&mut pending)?;put(st,"pending",pending);return Ok(());}
     if kind=="reconstruct"{reconstruction::prepare(st,&mut pending,boolean(st,"agent_pending"))?;put(st,"pending",pending);return Ok(());}
+    if kind=="self_build"{fs::create_dir_all(root).map_err(|e| e.to_string())?;self_build::prepare(Path::new(root), &mut pending)?;put(st,"pending",pending);return Ok(());}
     if kind=="experiments"{experiment_records::prepare(st,&mut pending,boolean(st,"agent_pending"))?;put(st,"pending",pending);return Ok(());}
     if let Obj(fields)=&mut pending{fields.remove("experiment");}put(st,"pending",pending.clone());
     if web_operation::is_web(&pending) && get(&pending,"web_owner")==&Null {web_operation::own(st,&mut pending);put(st,"pending",pending.clone());}

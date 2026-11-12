@@ -1,4 +1,5 @@
 mod application;
+mod self_build;
 mod archive;
 mod compression;
 mod layout;
@@ -432,6 +433,10 @@ fn operation(input: &str) -> Result<Json> {
             let value = v.get("value")?;
             Ok(value.clone())
         }
+        "self_fingerprint" => self_build::fingerprint(&v),
+        "self_plan" => self_build::plan(&v),
+        "self_journal" => self_build::journal(&v),
+        "self_handoff" => self_build::handoff(&v),
         _ => Err("Unknown operation".into()),
     }
 }

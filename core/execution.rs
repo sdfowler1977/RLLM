@@ -2,6 +2,7 @@ use super::*;
 use std::{
     io::{Read, Write},
     os::unix::{io::AsRawFd, process::CommandExt},
+    path::Path,
     process::{Command, Stdio},
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     sync::{Arc, Mutex, OnceLock, Weak},
@@ -147,6 +148,85 @@ pub fn run(v: &Json) -> Result<Json> {
         String::from_utf8_lossy(&out),
         String::from_utf8_lossy(&err)
     )))
+}
+
+pub(super) struct BoundedOutput {
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Run one child in its own process group and stop it when the time limit or cancellation hits.
+/// The caller keeps any bytes it needs; this function does not remove files.
+pub(super) fn bounded_process(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<BoundedOutput> {
+    if timeout.is_zero() || timeout > Duration::from_secs(600) {
+        return Err("Child process limit must be from 1 millisecond through 600 seconds".into());
+    }
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .process_group(0)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Cannot start {program}: {e}"))?;
+    let group = Group(child.id() as i32);
+    let mut stdout = child.stdout.take().ok_or("Child output is unavailable")?;
+    let mut stderr = child.stderr.take().ok_or("Child error output is unavailable")?;
+    for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
+        let flags = unsafe { fcntl(fd, 3) };
+        if flags < 0 || unsafe { fcntl(fd, 4, flags | 2048) } < 0 {
+            let _ = child.kill();
+            let _ = child.wait();
+            drop(group);
+            return Err("Unable to configure bounded output".into());
+        }
+    }
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let start = Instant::now();
+    let status = loop {
+        drain(&mut stdout, &mut out)?;
+        drain(&mut stderr, &mut err)?;
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        if cancelled() || start.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            drop(group);
+            return Err("Child process exceeded its time limit or was cancelled".into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    drop(group);
+    drain(&mut stdout, &mut out)?;
+    drain(&mut stderr, &mut err)?;
+    Ok(BoundedOutput {
+        code: status.code(),
+        stdout: String::from_utf8_lossy(&out).into_owned(),
+        stderr: String::from_utf8_lossy(&err).into_owned(),
+    })
+}
+
+/// Replace this process with the successor image. Returns only when exec fails.
+pub(super) fn exec_replace(program: &Path, args: &[String], cwd: &Path, env: &[(&str, &str)]) -> Result<()> {
+    let mut command = Command::new(program);
+    command.args(args).current_dir(cwd);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let error = command.exec();
+    Err(format!("Successor exec failed: {error}"))
 }
 
 #[cfg(test)]
