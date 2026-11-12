@@ -310,3 +310,52 @@ envelope instead of its `value` key raises a `KeyError` long after the product a
 No connected verification group covers `self_build`, and `self_build` is absent from
 `REFINEMENT_TOOLS` (`core/harness.rs:274`) while present in `const TOOLS`; adding a group would add a
 `verification/*.py` row, which `GAP5` is meant to remove rather than grow.
+
+## The successor is named honestly — 2026-11-12T10:5Z, commit `dbddae2`
+
+The two defects the single-job chain measured in the arm itself are closed in the source and witnessed
+through the product. Room `.qwen/tmp/gap1-pid-room` = `git archive HEAD` (at `2bb0267`) + the `tooling`
+symlink + the repaired `core/self_build.rs` and nothing else from the live tree, so every number below is
+attributable to that one file. Inside it: `bash tools/build-units.sh output/units` then the Python gate ->
+`Rust cases passed: 564/564; isolated application cases: 55` rc 0 (560 at `HEAD`, +4 new cases), and the
+focused run `output/units self_build` selects exactly 16 tests (12 before), 16 passed / 0 failed / 548
+filtered. `bash headless.sh` built the room product (12,180,952 B). Driver `/tmp/gap1-pid-witness.py`, log
+`/tmp/gap1-pid-witness2.log`.
+
+One model-proposed, owner-approved job with `reload=spawn`, `job=gap1-pid-witness`,
+`instruction="record the successor process honestly"`, `successor_args=["--jsonl"]`, builder
+`tools/build-units.sh output/units-w` and gate `output/tools/gate output/units-w`:
+
+```
+Saved 21845 bytes to core/lib.rs. recorded revision 450b1bef544761a8b0338a19faedacfba2ae829ce88c42f701f43b362b627938 in self/journal.jsonl successor pid 2175150
+```
+
+and the row the journal actually holds, read out of the file by an independent reader
+(`/tmp/journal-check.py`, which recomputes the revision digest from the stored body):
+
+```
+row 0 {"digest_ok": true, "parent_ok": true, "gate": {"cases": 564, "green": true, "isolated": 55, "passed": 564},
+       "argv": ["…/output/headless/RLLM", "--jsonl"], "env": ["RLLM_SELF_JOB", "RLLM_SELF_INSTRUCTION"],
+       "instruction": "record the successor process honestly", "job": "gap1-pid-witness",
+       "mode": "spawn", "pid": 2175150, "revision": "450b1bef…", "verdicts": ["gate-green"]}
+```
+
+The discriminator is `/proc`, not the receipt. While the product was still alive, `/proc/2175150/stat`
+reported state `Z`, parent `2171194`, command `(RLLM)` — and `2171194` is the product's own pid, which the
+driver knows independently. So the recorded pid is a real second process that the product spawned, not the
+product (`same pid as the product? False`), and the receipt and the row cannot disagree because the same value
+is used for both. Before this change the row stored the current process's pid while the receipt named a
+different one (1773485 vs 1787998 in the chain above).
+
+Also witnessed: the refusal path of the native gate is reachable from the product (`unit gate tool is absent;
+build it with bash tools/build-tools.sh` — that is what the first attempt printed in a room where
+`tools/build-tools.sh` had not been run), and the job's own limit is stated honestly — it built only the unit
+binary, so the control leg confirms the still-un-rebuilt product refuses the inserted op
+(`{"error":"Unknown operation"}`), unlike the chain section above where `headless.sh` was the builder.
+
+What this does **not** close. Nothing in `core` reads `RLLM_SELF_JOB` or `RLLM_SELF_INSTRUCTION`: the row and
+the child's environment now carry the job identity, and the unit witness proves the child receives the bytes,
+but the successor does not act on them, so gap-report step 5 ("continue the same job") is still a carried
+identity rather than a resumed job. The spawn arm never waits on the child, which is how `/proc` caught it as
+a zombie — the parent does not track or reap its successor. `self_build` is still absent from
+`REFINEMENT_TOOLS` and no connected group exercises it.
