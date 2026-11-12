@@ -16,7 +16,7 @@ const CLOEXEC: i32 = 524288;
 const PATH_MAX: usize = 1024;
 const NAME_MAX: usize = 128;
 const FILE_MAX: u64 = 4 * 1024 * 1024;
-const LINE_CAP: usize = 64;
+pub(crate) const LINE_CAP: usize = 64;
 const RECORD_MAX: usize = 48 * 1024;
 const HYPOTHESIS_MAX: usize = 32768;
 const PROMPT_REJECTED: usize = 4;
@@ -1160,6 +1160,8 @@ fn linked_library(value: &Json, expected: &str) -> Result<String> {
     Ok(revision)
 }
 fn parse_library(lines: &[String]) -> Result<Vec<Json>> {
+    // load_experience and resume_run both parse here. Exactly LINE_CAP sealed
+    // lines load. One more line is this refusal, before any link or digest check.
     if lines.len() > LINE_CAP {
         return Err("improvement library exceeds its line cap; history was kept and no line was dropped".into());
     }
@@ -1202,6 +1204,11 @@ fn load_experience_unlocked(root: &str) -> Result<Vec<Json>> {
 pub(crate) fn library_index(records: &[Json]) -> Vec<Json> {
     records.iter().map(index_of).collect()
 }
+/// Read `experience.jsonl`. `resume_run` and the propose prompt use this
+/// function, then `library_error` when they show the refusal. There is no
+/// second library loader and no second line cap. Exactly `LINE_CAP` sealed
+/// lines load. One more line returns
+/// "improvement library exceeds its line cap; history was kept and no line was dropped".
 pub(crate) fn load_experience(root: &str) -> Result<Vec<Json>> {
     let _gate = library_gate();
     load_experience_unlocked(root)
@@ -1323,13 +1330,7 @@ pub(crate) fn render_historical(records: &[Json], task: &str) -> String {
     section
 }
 pub(crate) fn historical_section(root: &str, task: &str) -> Result<String> {
-    let records = load_experience(root).map_err(|error| {
-        if error.contains("unchanged") || error.contains("kept") {
-            error
-        } else {
-            format!("{error}; existing history was left unchanged")
-        }
-    })?;
+    let records = load_experience(root).map_err(library_error)?;
     Ok(render_historical(&records, task))
 }
 
@@ -1371,8 +1372,10 @@ fn library_error(error: String) -> String {
     }
 }
 
-/// Load the sealed ledger and library into a new process. This reads both files
-/// and does not rewrite them. The budget is `budget_for` on the recorded rounds.
+/// Load the sealed ledger file and the experience library into a new process.
+/// This reads both files and does not rewrite them. The library is
+/// `load_experience`: the same file, the same line cap, and the same refusals.
+/// The budget is `budget_for` on the round after the highest recorded round.
 pub(crate) fn resume_run(root: &str, ledger_name: &str, task: &str) -> Result<Json> {
     if task.is_empty() || task.contains('\0') || task.len() > LIBRARY_TASK_MAX {
         return Err("resume task must be non-empty text within the library cap".into());
@@ -1414,6 +1417,7 @@ pub(crate) fn resume_run(root: &str, ledger_name: &str, task: &str) -> Result<Js
         ("pruned", Arr(pruned.into_iter().map(|name| s(&name)).collect())),
         ("rejected", n(rejected.len() as u64)),
         ("edit_ledger", s(&document)),
+        ("library_index", Arr(library_index(&library))),
     ]))
 }
 
@@ -2825,5 +2829,122 @@ mod checks {
         // Fails if a zero-length file is returned as an empty successful ledger.
         assert!(empty.contains("resume needs the sealed ledger"), "{empty}");
         assert_eq!(fs::read(&empty_path).unwrap(), b"");
+    }
+
+    #[test]
+    fn resume_receipt_carries_library_index_in_load_order() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let name = format!("{RUN}.jsonl");
+        let row = edit(
+            "prompt",
+            "kept wording",
+            &diff_digest("before", "kept wording"),
+            1,
+            2,
+            4,
+            5,
+            "accepted",
+            1,
+            RUN,
+        )
+        .unwrap();
+        let ledger = text(&append_document("", &row, RUN).unwrap(), "document");
+        append_file(root, &name, &row, RUN).unwrap();
+        let first = append_experience(root, "task alpha", "harness-alpha", &ledger, RUN).unwrap();
+        let second = append_experience(root, "task beta", "harness-beta", "", OTHER).unwrap();
+        let library_path = scratch.0.join("experience.jsonl");
+        let ledger_path = scratch.0.join(&name);
+        let library_bytes = fs::read(&library_path).unwrap();
+        let ledger_bytes = fs::read(&ledger_path).unwrap();
+        let resumed = resume_run(root, &name, "task alpha").unwrap();
+        assert_eq!(fs::read(&library_path).unwrap(), library_bytes);
+        assert_eq!(fs::read(&ledger_path).unwrap(), ledger_bytes);
+        assert_eq!(text(&resumed, "run_digest"), RUN);
+        assert_eq!(text(&resumed, "adopted_harness"), "harness-alpha");
+        assert_eq!(text(&resumed, "harness_digest"), digest(b"harness-alpha"));
+        assert_eq!(text(&resumed, "edit_ledger").as_bytes(), ledger_bytes.as_slice());
+        assert_eq!(number_field(&resumed, "round").unwrap(), 1);
+        let loaded = load_experience(root).unwrap();
+        let rows = match get(&resumed, "library_index") {
+            Arr(items) => items.clone(),
+            other => panic!("library_index missing from the resume receipt: {other:?}"),
+        };
+        assert_eq!(rows, library_index(&loaded));
+        assert_eq!(rows.len(), loaded.len());
+        assert_eq!(rows.len(), 2);
+        assert_eq!(text(&rows[0], "key"), library_key_of("task alpha"));
+        assert_eq!(text(&rows[0], "key"), text(&loaded[0], "key"));
+        assert_eq!(text(&rows[0], "revision"), text(&first, "revision"));
+        assert_eq!(text(&rows[0], "revision"), text(&loaded[0], "revision"));
+        assert_eq!(text(&rows[0], "run_digest"), RUN);
+        assert_eq!(text(&rows[1], "key"), library_key_of("task beta"));
+        assert_eq!(text(&rows[1], "key"), text(&loaded[1], "key"));
+        assert_eq!(text(&rows[1], "revision"), text(&second, "revision"));
+        assert_eq!(text(&rows[1], "revision"), text(&loaded[1], "revision"));
+        assert_eq!(text(&rows[1], "run_digest"), OTHER);
+        let ledger_rows = records_of(&text(&resumed, "edit_ledger")).unwrap();
+        assert_eq!(ledger_rows.len(), 1);
+        assert_ne!(rows.len(), ledger_rows.len());
+    }
+
+    #[test]
+    fn resume_library_accepts_line_cap_and_refuses_one_past() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let name = format!("{RUN}.jsonl");
+        let row = edit(
+            "prompt",
+            "kept wording",
+            &diff_digest("before", "kept wording"),
+            1,
+            2,
+            4,
+            5,
+            "accepted",
+            1,
+            RUN,
+        )
+        .unwrap();
+        append_file(root, &name, &row, RUN).unwrap();
+        for index in 0..LINE_CAP {
+            append_experience(root, &format!("task {index}"), &format!("harness {index}"), "", RUN).unwrap();
+        }
+        let library_path = scratch.0.join("experience.jsonl");
+        let ledger_path = scratch.0.join(&name);
+        let library_bytes = fs::read(&library_path).unwrap();
+        let ledger_bytes = fs::read(&ledger_path).unwrap();
+        assert_eq!(String::from_utf8(library_bytes.clone()).unwrap().lines().count(), LINE_CAP);
+        let resumed = resume_run(root, &name, "task 0").unwrap();
+        assert_eq!(fs::read(&library_path).unwrap(), library_bytes);
+        assert_eq!(fs::read(&ledger_path).unwrap(), ledger_bytes);
+        let loaded = load_experience(root).unwrap();
+        assert_eq!(loaded.len(), LINE_CAP);
+        let rows = match get(&resumed, "library_index") {
+            Arr(items) => items.clone(),
+            other => panic!("library index missing: {other:?}"),
+        };
+        assert_eq!(rows, library_index(&loaded));
+        assert_eq!(rows.len(), LINE_CAP);
+        assert_eq!(text(&rows[0], "key"), library_key_of("task 0"));
+        assert_eq!(text(&rows[0], "run_digest"), RUN);
+        assert_eq!(text(&resumed, "run_digest"), RUN);
+        assert_eq!(text(&resumed, "edit_ledger").as_bytes(), ledger_bytes.as_slice());
+        assert_eq!(number_field(&resumed, "round").unwrap(), 1);
+        assert_eq!(text(&resumed, "adopted_harness"), format!("harness {}", LINE_CAP - 1));
+        let cap = "improvement library exceeds its line cap; history was kept and no line was dropped";
+        let mut over = library_bytes.clone();
+        let end = library_bytes.iter().position(|byte| *byte == b'\n').unwrap() + 1;
+        over.extend_from_slice(&library_bytes[..end]);
+        assert_eq!(String::from_utf8(over.clone()).unwrap().lines().count(), LINE_CAP + 1);
+        fs::write(&library_path, &over).unwrap();
+        let library_before = fs::read(&library_path).unwrap();
+        let ledger_before = fs::read(&ledger_path).unwrap();
+        let refused = resume_run(root, &name, "task 0").unwrap_err();
+        let loaded_error = load_experience(root).unwrap_err();
+        assert_eq!(refused, cap);
+        assert_eq!(loaded_error, cap);
+        assert_eq!(fs::read(&library_path).unwrap(), library_before);
+        assert_eq!(fs::read(&ledger_path).unwrap(), ledger_before);
     }
 }

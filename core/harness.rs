@@ -223,10 +223,14 @@ fn historical_experience(run:&Json)->String{
 // A new process builds task_run with an empty ledger. The propose prompt
 // (request_messages) and gate_candidate/evaluate_pool both read that memory,
 // so the digest-named file has to be loaded here, before either of them runs.
-// resume_run stays the reader. An empty or missing file is the first round:
-// resume_run refuses those on purpose, and calling it would turn that round
-// into an error. A library that fails its seal is already named on the propose
-// prompt; a readable library whose digest file is unreadable is refused.
+// resume_run reads the sealed ledger file and the experience library. An empty
+// or missing file is the first round: resume_run refuses those on purpose, and
+// calling it would turn that round into an error. A library that fails its
+// seal, including one line past the library cap, stays off the run and is
+// named by the propose prompt. A readable library whose digest file is
+// unreadable is refused. The receipt's library_index is stored on the run.
+// Later rounds keep parsing the in-memory ledger string. That string can be
+// ahead of the file, and reading the file again would drop those rows.
 fn resume_durable_ledger(run:&mut Json)->Result<()>{
  if !text(run,"edit_ledger").is_empty()||!text(run,"run_digest").is_empty(){return Ok(());}
  let root=crate::rrsi::default_root();
@@ -255,6 +259,7 @@ fn resume_durable_ledger(run:&mut Json)->Result<()>{
  put(run,"edit_ledger",get(&resumed,"edit_ledger").clone());
  put(run,"edit_ledger_root",s(&root));
  put(run,"edit_ledger_path",s(&name));
+ put(run,"library_index",get(&resumed,"library_index").clone());
  Ok(())
 }
 fn record_settled_library(run:&mut Json){
@@ -2937,6 +2942,87 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert_eq!(got,expected);
   assert_eq!(st,prior);
   assert!(std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+ }
+ #[test]
+ fn fresh_refine_installs_the_resume_library_index(){
+  let home=DataHome::set("index");
+  let root=home.root();
+  let task="Write the bounded note.";
+  let other="A different indexed task";
+  let document=seal_rejected(&root,task,"do-not-repeat","ADOPTED-HARNESS-MARKER",true);
+  let other_run=crate::rrsi::digest(b"other-run");
+  crate::rrsi::append_experience(&root,other,"OTHER-HARNESS","",&other_run).unwrap();
+  let library_path=std::path::Path::new(&root).join("experience.jsonl");
+  let ledger_path=std::path::Path::new(&root).join(format!("{POLICY_RUN}.jsonl"));
+  let library_before=std::fs::read(&library_path).unwrap();
+  let ledger_before=std::fs::read(&ledger_path).unwrap();
+  let st=refine_state(task);
+  assert_eq!(std::fs::read(&library_path).unwrap(),library_before);
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),ledger_before);
+  let run=get(&st,"task_run");
+  assert_eq!(text(run,"edit_ledger"),document);
+  assert_eq!(text(run,"run_digest"),POLICY_RUN);
+  let rows=match get(run,"library_index"){Arr(items)=>items.clone(),other=>panic!("resume library index missing: {other:?}")};
+  let loaded=crate::rrsi::load_experience(&root).unwrap();
+  assert_eq!(rows,crate::rrsi::library_index(&loaded));
+  assert_eq!(rows.len(),2);
+  assert_eq!(text(&rows[0],"key"),crate::rrsi::digest(task.as_bytes()));
+  assert_eq!(text(&rows[0],"run_digest"),POLICY_RUN);
+  assert_eq!(text(&rows[1],"key"),crate::rrsi::digest(other.as_bytes()));
+  assert_eq!(text(&rows[1],"run_digest"),other_run);
+  assert_ne!(text(&rows[0],"revision"),"");
+  assert_ne!(text(&rows[0],"revision"),text(&rows[1],"revision"));
+ }
+ #[test]
+ fn refine_accepts_library_at_line_cap_and_names_one_past(){
+  let home=DataHome::set("cap");
+  let root=home.root();
+  let task="cap task 0";
+  let name=format!("{POLICY_RUN}.jsonl");
+  let row=crate::rrsi::edit("prompt","kept wording",&crate::rrsi::diff_digest("before","kept wording"),1,2,4,5,"accepted",1,POLICY_RUN).unwrap();
+  crate::rrsi::append_file(&root,&name,&row,POLICY_RUN).unwrap();
+  for index in 0..crate::rrsi::LINE_CAP{
+   crate::rrsi::append_experience(&root,&format!("cap task {index}"),&format!("cap harness {index}"),"",POLICY_RUN).unwrap();
+  }
+  let library_path=std::path::Path::new(&root).join("experience.jsonl");
+  let ledger_path=std::path::Path::new(&root).join(&name);
+  let library_bytes=std::fs::read(&library_path).unwrap();
+  let ledger_bytes=std::fs::read(&ledger_path).unwrap();
+  assert_eq!(String::from_utf8(library_bytes.clone()).unwrap().lines().count(),crate::rrsi::LINE_CAP);
+  let mut st=refine_state(task);
+  assert_eq!(std::fs::read(&library_path).unwrap(),library_bytes);
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),ledger_bytes);
+  let run=get(&st,"task_run");
+  let rows=match get(run,"library_index"){Arr(items)=>items.clone(),other=>panic!("resume library index missing: {other:?}")};
+  assert_eq!(rows.len(),crate::rrsi::LINE_CAP);
+  assert_eq!(rows,crate::rrsi::library_index(&crate::rrsi::load_experience(&root).unwrap()));
+  assert_eq!(text(run,"edit_ledger").as_bytes(),ledger_bytes.as_slice());
+  let cap="improvement library exceeds its line cap; history was kept and no line was dropped";
+  put(&mut st,"busy",Bool(false));
+  model_reply(&mut st,"Original reply.").unwrap();
+  let prompt=propose_prompt(&st,"Original reply.");
+  assert!(prompt.contains("HISTORICAL EXPERIENCE")&&!prompt.contains(cap),"at-cap propose prompt lost the library or named the cap");
+  let mut over=library_bytes.clone();
+  let end=library_bytes.iter().position(|byte|*byte==b'\n').unwrap()+1;
+  over.extend_from_slice(&library_bytes[..end]);
+  assert_eq!(String::from_utf8(over.clone()).unwrap().lines().count(),crate::rrsi::LINE_CAP+1);
+  std::fs::write(&library_path,&over).unwrap();
+  let library_before=std::fs::read(&library_path).unwrap();
+  let ledger_before=std::fs::read(&ledger_path).unwrap();
+  let mut over_state=refine_state(task);
+  assert_eq!(std::fs::read(&library_path).unwrap(),library_before);
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),ledger_before);
+  assert_no_ledger_keys(get(&over_state,"task_run"));
+  assert_eq!(get(get(&over_state,"task_run"),"library_index"),&Null);
+  let error=crate::rrsi::load_experience(&root).unwrap_err();
+  assert_eq!(error,cap);
+  put(&mut over_state,"busy",Bool(false));
+  model_reply(&mut over_state,"Original reply.").unwrap();
+  let refused=propose_prompt(&over_state,"Original reply.");
+  assert!(refused.contains(cap),"propose prompt omitted the library line-cap refusal");
+  assert!(!refused.contains("EDIT HISTORY"),"{refused}");
+  assert_eq!(std::fs::read(&library_path).unwrap(),library_before);
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),ledger_before);
  }
  #[test]
  fn tampered_library_stays_on_the_propose_prompt(){
