@@ -1715,6 +1715,56 @@ writer and a `held_out` phase), and `xect`. None of their work is committed; `ve
 from the finished `rrsik` lane) is still awaiting adjudication, and its leg list is still **six** names, so no
 three-round loop witness exists yet.
 
+## Three lanes land, three audit seats hold two of them, and the provenance guard turns out to refuse real git worktrees — 2026-11-13T03:3Z–06:0Z
+
+**The committed tree is green on its own.** A real `git worktree` at `dbfa7db` (not an archive room) built its own
+units binary and measured **729/729 cases plus 55 isolated application cases, 0 failures**. Nothing in the commit
+chain depends on a lane's uncommitted file.
+
+**`gap4v` landed as `2c3f939`** (`verification/product_flow.py`, +13/−1): the clean-room route now has a connected
+leg. Differential witness, main tree, product binary dated `2026-11-12T10:26:49`: HEAD **30 checks / 30 passed /
+exit 0**, with the file **36 / 36 / exit 0**. The seat confirmed the legs drive the real route
+(`inspect_file` → `reconstruction_prepare` → `approve` → tool) and that the exclusive-create leg proves a named
+error (`Cannot create new streaming output: File exists (os error 17)`) plus unchanged bytes. Two legs are weaker
+than their names, and that is recorded rather than glossed: `clean-room generated file exists and its bytes differ
+from the reference` compares the generated file against the **input file** rather than the retained subject bytes,
+and the incomplete-observation leg pins a state **notice** (`Clean-room reconstruction requires a complete
+unchanged observed file; missing or prefix content is not reconstructed`) instead of a tool refusal. The report
+check is substring-based (`'Spec items:'`, `'Verification matched'`), so a generation that implements nothing could
+still pass. Lane `g4v2` is dispatched to strengthen all three.
+
+**Room witnesses for the two Rust lanes.** `git archive dbfa7db` plus `core/improvement.rs`, `core/harness.rs`,
+`verification/rrsi_loop.py` (lane `gap2e`) measures **731/731 plus 55** (+2 cases). Plus
+`core/dotnet_evidence.rs`, `core/investigation.rs` (lane `dotnet6`) measures **739/739 plus 55** (+10 cases).
+Both lanes are held: each audit seat found claim-vs-code mismatches.
+
+**`dotnet6` — three High findings, so the commit is held and lane `dn7` is dispatched to close them.** The new
+caps charge *declared* sizes rather than work actually touched (`fill_names` charges `strings_row.size`,
+`read_table_stream` charges `table.size`), so an image that merely declares a huge stream is refused without being
+scanned, while `examine`'s CLR-header/metadata mapping is not charged at all (`map_range` charges only the
+section-window iterations). The output cap bounds the assembled report, not the intermediate accumulation
+(`heap_lines`, `method_headers` are built before `Sink::line` sees them), so claim 1's "cannot emit unbounded text"
+is only true of the final string. And `partial_methods` (up to 64 method rows, reached from error paths) is outside
+both the work budget and the cancellation token, which is the strongest escape. Cap disclosure itself is real
+(`dotnet observation byte cap`, `dotnet parse work cap`, `WORK_UNREAD`), and the seat's R-rules verdict on the
+production diff is PASS.
+
+**`gap2e` — one Critical, and my own measurement found what it was really about.** The seat flagged that the
+refine arm now records `source_digest` when `require_recorded_worktree` fails for any reason other than an identity
+mismatch, and that the consumer at `core/harness.rs:860` (`if !text(run,"source_digest").is_empty() {…} else {
+recorded_source(root)}`) then skips `recorded_source`. I measured the underlying cause instead: at `dbfa7db` inside
+a **linked git worktree**, with the product built inside that worktree, `verification/rrsi_loop.py` is red on
+exactly one of six legs — `refine entry copies approval_root onto task_run.workspace and records source_digest` —
+while the same group is green in the primary tree. The reason is `locate_worktree` (`core/rrsi.rs`), which requires
+`<root>/.git` to be a **directory**: a linked worktree stores `.git` as a *file* holding a `gitdir:` pointer, so
+RLLM's own provenance guard refuses a legitimate worktree. That is a product defect, it is why the archive-room
+leg went red, and it means the pending delivered sweep cannot be run in a linked worktree until it is fixed. The
+lane's response was to record the pre-existing `SOURCE_ABSENT` marker (`"absent"`) rather than leave the field
+empty — and the group's own model already treats a missing `rllm-harness.txt` as `"absent"` — so the sentinel is
+not invented, but writing it on a failed worktree check conflates "no harness file" with "provenance unproven".
+Held: fix `locate_worktree` to accept a linked worktree, then re-measure; the seat's other High (the `held_out`
+phase is written in production but no connected route is shown reaching it) stands as an open item either way.
+
 ## Historical baseline audit (original text)
 
 # Release audit
