@@ -204,3 +204,410 @@ Historical observation, not current source validation.",age(&r),if boolean(&r,"l
  let summary=match result{Ok(v)=>{for r in array(&v,"records"){buttons.push(button(&format!("{} · {} · {}",text(&r,"tool"),if web_evidence::is_web(&text(&r,"tool")){format!("{} · {}",text(&r,"source"),if text(&r,"tool")=="web_search"{text(get(&r,"args"),"query")}else{text(get(&r,"args"),"url")})}else{text(get(&r,"args"),"path")},age(&r)),&format!("{}:{}",if boolean(&r,"legacy"){"investigation_legacy_record"}else{"investigation_record"},text(&r,"id"))));}if number(st,"investigation_offset")>0{buttons.push(button("Previous records","investigation_records_previous"));}if get(&v,"next_offset")!=&Null{buttons.push(button("Next records","investigation_records_next"));}format!("{} matching historical records; {} records unavailable under current workspace, permissions or changed rules. Saved report text and source/task provenance; these are not current source checks or rules.\n{}",number(&v,"matching"),number(&v,"unavailable"),format!("{}\n{}\n{}",text(st,"investigation_retention"),text(&v,"current_error"),text(&v,"legacy_error")))},Err(e)=>e};
  modal("Investigation records",vec![field_ui("query","Search report or source text",&text(get(st,"edit"),"query"),"text"),field_ui("status","Retained observations",&summary,"readonly")],buttons)
 }
+#[cfg(test)]
+mod checks {
+    use super::*;
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xedb88320u32 & 0u32.wrapping_sub(crc & 1));
+            }
+        }
+        !crc
+    }
+
+    fn is_safe(value: u32) -> bool {
+        value.to_le_bytes().iter().all(|byte| *byte < 0x80)
+    }
+
+    fn crc_is_text(bytes: &[u8]) -> bool {
+        is_safe(crc32(bytes))
+    }
+
+    struct Item {
+        name: String,
+        data: Vec<u8>,
+        offset: u32,
+    }
+
+    struct ZipBuild {
+        locals: Vec<u8>,
+        items: Vec<Item>,
+    }
+
+    impl ZipBuild {
+        fn new() -> Self {
+            Self { locals: Vec::new(), items: Vec::new() }
+        }
+
+        fn add(&mut self, name: &str, data: Vec<u8>) {
+            assert!(is_safe(self.locals.len() as u32), "offset {}", self.locals.len());
+            assert!(is_safe(data.len() as u32), "{name} length {}", data.len());
+            assert!(crc_is_text(&data), "{name} crc");
+            let offset = self.locals.len() as u32;
+            push_local(&mut self.locals, name, &data);
+            self.items.push(Item { name: name.to_string(), data, offset });
+        }
+
+        fn add_blob(&mut self, name: &str, minimum: usize) {
+            let data = fit_blob(self.locals.len(), name, minimum);
+            self.add(name, data);
+        }
+
+        fn add_message(&mut self, name: &str, prefix: &str, body: &str) {
+            let data = fit_message(self.locals.len(), name, prefix, body);
+            self.add(name, data);
+        }
+
+        fn finish(self) -> String {
+            let count = self.items.len() as u32;
+            assert!(is_safe(count), "entry count {count} is not text");
+            assert!(is_safe(self.locals.len() as u32), "directory offset");
+            let base: u32 = self.items.iter().map(|item| 46 + item.name.len() as u32).sum();
+            let comment = safe_comment(base);
+            let mut out = self.locals;
+            let dir_at = out.len();
+            for (index, item) in self.items.iter().enumerate() {
+                let note = if index + 1 == self.items.len() { comment } else { 0 };
+                push_central(&mut out, item, note);
+            }
+            let dir_size = out.len() - dir_at;
+            assert!(is_safe(dir_size as u32), "directory size {dir_size}");
+            push_u32(&mut out, 0x06054b50);
+            push_u16(&mut out, 0);
+            push_u16(&mut out, 0);
+            push_u16(&mut out, count as u16);
+            push_u16(&mut out, count as u16);
+            push_u32(&mut out, dir_size as u32);
+            push_u32(&mut out, dir_at as u32);
+            push_u16(&mut out, 0);
+            assert!(out.len() <= 128 * 1024, "fixture exceeds the retained report bound");
+            String::from_utf8(out).expect("fixture archive is utf-8")
+        }
+    }
+
+    fn push_u16(out: &mut Vec<u8>, value: u16) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_u32(out: &mut Vec<u8>, value: u32) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_local(out: &mut Vec<u8>, name: &str, data: &[u8]) {
+        let name = name.as_bytes();
+        push_u32(out, 0x04034b50);
+        push_u16(out, 20);
+        push_u16(out, 0);
+        push_u16(out, 0);
+        push_u16(out, 0);
+        push_u16(out, 0);
+        push_u32(out, crc32(data));
+        push_u32(out, data.len() as u32);
+        push_u32(out, data.len() as u32);
+        push_u16(out, name.len() as u16);
+        push_u16(out, 0);
+        out.extend_from_slice(name);
+        out.extend_from_slice(data);
+    }
+
+    fn push_central(out: &mut Vec<u8>, item: &Item, comment: u16) {
+        let name = item.name.as_bytes();
+        push_u32(out, 0x02014b50);
+        push_u16(out, 20);
+        push_u16(out, 20);
+        push_u16(out, 0);
+        push_u16(out, 0);
+        push_u16(out, 0);
+        push_u16(out, 0);
+        push_u32(out, crc32(&item.data));
+        push_u32(out, item.data.len() as u32);
+        push_u32(out, item.data.len() as u32);
+        push_u16(out, name.len() as u16);
+        push_u16(out, 0);
+        push_u16(out, comment);
+        push_u16(out, 0);
+        push_u16(out, 0);
+        push_u32(out, 0);
+        push_u32(out, item.offset);
+        out.extend_from_slice(name);
+        out.extend(std::iter::repeat(b' ').take(comment as usize));
+    }
+
+    fn safe_comment(base: u32) -> u16 {
+        for delta in 0..4096u32 {
+            if is_safe(delta) && is_safe(base + delta) && delta < 4096 {
+                return delta as u16;
+            }
+        }
+        panic!("no text-safe directory comment for {base}");
+    }
+
+    fn fit_blob(at: usize, name: &str, minimum: usize) -> Vec<u8> {
+        let stem = 30 + name.len();
+        for len in minimum..minimum + 8192 {
+            if !is_safe(len as u32) {
+                continue;
+            }
+            let next = at + stem + len;
+            if next > u32::MAX as usize || !is_safe(next as u32) {
+                continue;
+            }
+            if len < 2 {
+                let data = vec![b'a'; len];
+                if crc_is_text(&data) {
+                    return data;
+                }
+                continue;
+            }
+            let mut data = vec![b'a'; len];
+            for left in 0x20u8..0x7f {
+                for right in 0x20u8..0x7f {
+                    let end = data.len();
+                    data[end - 2] = left;
+                    data[end - 1] = right;
+                    if crc_is_text(&data) {
+                        return data;
+                    }
+                }
+            }
+        }
+        panic!("no text-safe member {name} at {at}");
+    }
+
+    fn message(prefix: &str, body: &str, fill: usize, pad: u32) -> Vec<u8> {
+        format!("{prefix}X-Pad: {pad:04x}\r\nX-Fill: {}\r\n\r\n{body}", "a".repeat(fill)).into_bytes()
+    }
+
+    fn fit_message(at: usize, name: &str, prefix: &str, body: &str) -> Vec<u8> {
+        let stem = 30 + name.len();
+        for fill in 0..4096usize {
+            let len = message(prefix, body, fill, 0).len();
+            if !is_safe(len as u32) {
+                continue;
+            }
+            let next = at + stem + len;
+            if next > u32::MAX as usize || !is_safe(next as u32) {
+                continue;
+            }
+            for pad in 0..0x10000u32 {
+                let data = message(prefix, body, fill, pad);
+                if crc_is_text(&data) {
+                    return data;
+                }
+            }
+        }
+        panic!("no text-safe session text {name} at {at}");
+    }
+
+    fn request(method: &str, url: &str) -> String {
+        format!("{method} {url} HTTP/1.1\r\nHost: example.test\r\nContent-Type: text/plain\r\n")
+    }
+
+    fn response(status: u16, mime: &str) -> String {
+        format!("HTTP/1.1 {status} OK\r\nContent-Type: {mime}\r\nContent-Length: 99999\r\n")
+    }
+
+    fn claim_entries(archive: &mut String, count: u16) {
+        let mut bytes = std::mem::take(archive).into_bytes();
+        let at = bytes.windows(4).rposition(|window| window == b"PK\x05\x06").expect("eocd");
+        bytes[at + 8..at + 10].copy_from_slice(&count.to_le_bytes());
+        bytes[at + 10..at + 12].copy_from_slice(&count.to_le_bytes());
+        *archive = String::from_utf8(bytes).expect("patched archive is utf-8");
+    }
+
+    fn shown(report: &str) -> Json {
+        let args = obj(vec![("path", s("traffic.saz"))]);
+        let mut st = obj(vec![("approval_root", s("/ws")), ("approval_root_identity", s("ws-1"))]);
+        let record = obj(vec![
+            ("schema", Num("1".into())),
+            ("id", s("rec-1")),
+            ("recorded_at", s("1")),
+            ("tool", s("inspect")),
+            ("args", args.clone()),
+            ("workspace", s("/ws")),
+            ("workspace_identity", s("ws-1")),
+            ("policy", access_binding(&st, "inspect", &args)),
+            ("chat", s("c")),
+            ("agent", s("a")),
+            ("task", s("t")),
+            ("mode", s("inspect")),
+            ("depth", Num("0".into())),
+            ("report", s(report)),
+        ]);
+        put(&mut st, "investigation_records", obj(vec![("schema", Num("1".into())), ("items", Arr(vec![record]))]));
+        let output = query(&st, &obj(vec![("id", s("rec-1"))]), false).unwrap_or_else(|error| panic!("{error}"));
+        parse(&output).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn attached(report: &str) -> Json {
+        get(&shown(report), "saved_capture").clone()
+    }
+
+    fn refusal(report: &str) -> String {
+        let found = attached(report);
+        assert_ne!(found, Null, "observations route dropped the archive");
+        assert!(found.get("entries").unwrap().array().unwrap().is_empty());
+        let reason = found.get("refusal").unwrap().text().unwrap().to_string();
+        assert_eq!(found.get("report").unwrap().text().unwrap(), reason);
+        reason
+    }
+
+    fn one_blob(name: &str, minimum: usize) -> String {
+        let mut zip = ZipBuild::new();
+        zip.add_blob(name, minimum);
+        zip.finish()
+    }
+
+    #[test]
+    fn saz_capture_reaches_observations_route() {
+        // Fails if the observations route never reads a SAZ, if session 10 is ordered
+        // before session 2, if MIME comes from the request, or if bytes follow Content-Length.
+        let mut zip = ZipBuild::new();
+        zip.add_blob("index.dat", 1);
+        zip.add_message("raw/2_c.txt", &request("POST", "https://example.test/submit"), "");
+        zip.add_message("raw/2_s.txt", &response(201, "application/json"), "{\"ok\":1}");
+        zip.add_message("raw/10_c.txt", &request("GET", "https://example.test/item"), "");
+        zip.add_message("raw/10_s.txt", &response(200, "text/html"), "hello");
+        let found = attached(&zip.finish());
+        assert_eq!(found.get("refusal").unwrap(), &Null);
+        assert!(found.get("caps").unwrap().array().unwrap().is_empty());
+        let entries = found.get("entries").unwrap().array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].get("index").unwrap(), &Num("2".into()));
+        assert_eq!(entries[0].get("method").unwrap().text().unwrap(), "POST");
+        assert_eq!(entries[0].get("url").unwrap().text().unwrap(), "https://example.test/submit");
+        assert_eq!(entries[0].get("status").unwrap(), &Num("201".into()));
+        assert_eq!(entries[0].get("mime").unwrap().text().unwrap(), "application/json");
+        assert_eq!(entries[0].get("bytes").unwrap(), &Num("8".into()));
+        assert_eq!(entries[1].get("index").unwrap(), &Num("10".into()));
+        assert_eq!(entries[1].get("method").unwrap().text().unwrap(), "GET");
+        assert_eq!(entries[1].get("url").unwrap().text().unwrap(), "https://example.test/item");
+        assert_eq!(entries[1].get("status").unwrap(), &Num("200".into()));
+        assert_eq!(entries[1].get("mime").unwrap().text().unwrap(), "text/html");
+        assert_eq!(entries[1].get("bytes").unwrap(), &Num("5".into()));
+        let report = found.get("report").unwrap().text().unwrap();
+        assert!(report.contains("Saved HTTP Archive capture"), "{report}");
+        assert!(report.contains("content.size"), "{report}");
+        assert!(report.contains("https://example.test/submit"), "{report}");
+        assert!(report.contains("text/html"), "{report}");
+        assert!(!report.contains("99999"), "{report}");
+        assert!(!report.contains("text/plain"), "{report}");
+    }
+
+    #[test]
+    fn har_capture_still_reaches_observations_route() {
+        let raw = r#"{"log":{"version":"1.2","entries":[{"request":{"method":"GET","url":"https://example.test/item"},"response":{"status":200,"content":{"mimeType":"text/html","size":12}}}]}}"#;
+        let found = attached(raw);
+        let entries = found.get("entries").unwrap().array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].get("method").unwrap().text().unwrap(), "GET");
+        assert_eq!(entries[0].get("bytes").unwrap(), &Num("12".into()));
+        assert_eq!(found.get("refusal").unwrap(), &Null);
+    }
+
+    #[test]
+    fn unrelated_report_has_no_saved_capture() {
+        assert_eq!(attached("<html><p>not a capture</p></html>"), Null);
+        assert_eq!(attached(r#"{"page":"ok"}"#), Null);
+    }
+
+    #[test]
+    fn corrupt_archive_directory_is_refused() {
+        let mut archive = one_blob("index.dat", 1);
+        archive.truncate(archive.len() - 20);
+        assert!(archive.starts_with("PK"));
+        assert_eq!(refusal(&archive), "Refusal: saved capture archive directory is corrupt or truncated.");
+    }
+
+    #[test]
+    fn archive_with_no_request_members_is_refused() {
+        let mut zip = ZipBuild::new();
+        zip.add_blob("index.dat", 1);
+        zip.add_message("001_s.txt", &response(200, "text/plain"), "ok");
+        assert_eq!(refusal(&zip.finish()), "Refusal: saved capture has no request members.");
+    }
+
+    #[test]
+    fn member_count_over_cap_is_refused() {
+        let mut zip = ZipBuild::new();
+        for index in 0..321 {
+            zip.add_blob(&format!("m{index:03}.txt"), 0);
+        }
+        assert_eq!(refusal(&zip.finish()), "Refusal: saved-capture member cap.");
+    }
+
+    #[test]
+    fn member_over_byte_cap_is_refused() {
+        let archive = one_blob("wide.txt", 64 * 1024 + 1);
+        assert_eq!(refusal(&archive), "Refusal: saved-capture member byte cap.");
+    }
+
+    #[test]
+    fn zip_without_index_or_pair_is_not_a_session_archive() {
+        // No index.dat and no request/response pair: a zip of something else.
+        let mut zip = ZipBuild::new();
+        zip.add_message("001_c.txt", &request("GET", "https://example.test/only"), "");
+        zip.add_blob("notes.txt", 1);
+        assert_eq!(refusal(&zip.finish()), "Refusal: saved capture is not a session archive.");
+    }
+
+    #[test]
+    fn plain_zip_is_not_a_saved_capture() {
+        let archive = one_blob("src/main.txt", 1);
+        assert_eq!(refusal(&archive), "Refusal: archive is not a saved capture.");
+    }
+
+    #[test]
+    fn damaged_archive_member_is_refused() {
+        let mut zip = ZipBuild::new();
+        zip.add_message("raw/1_c.txt", &request("GET", "https://example.test/item"), "");
+        zip.add_message("raw/1_s.txt", &response(200, "text/plain"), "BODYMARK");
+        zip.add_blob("index.dat", 1);
+        let mut archive = zip.finish();
+        let at = archive.find("BODYMARK").expect("marker");
+        archive.replace_range(at..at + 1, "X");
+        assert_eq!(refusal(&archive), "Refusal: saved capture archive member is damaged.");
+    }
+
+    #[test]
+    fn invalid_archive_member_name_is_refused() {
+        let archive = one_blob("a:b.txt", 1);
+        assert_eq!(refusal(&archive), "Refusal: saved capture archive member name is invalid.");
+    }
+
+    #[test]
+    fn archive_reader_member_count_is_refused() {
+        let mut archive = one_blob("index.dat", 1);
+        claim_entries(&mut archive, 512);
+        assert_eq!(refusal(&archive), "Refusal: saved capture archive exceeds a reader limit.");
+    }
+
+    #[test]
+    fn duplicate_session_member_is_refused() {
+        let mut zip = ZipBuild::new();
+        zip.add_blob("index.dat", 1);
+        zip.add_blob("raw/1_c.txt", 1);
+        zip.add_blob("nest/1_c.txt", 1);
+        assert_eq!(refusal(&zip.finish()), "Refusal: saved capture session 1 is duplicated.");
+    }
+
+    #[test]
+    fn duplicate_archive_path_is_refused() {
+        let mut zip = ZipBuild::new();
+        zip.add_blob("index.dat", 0);
+        zip.add_blob("index.dat", 0);
+        assert_eq!(refusal(&zip.finish()), "Refusal: saved capture archive is unusable.");
+    }
+
+    #[test]
+    fn saz_missing_response_names_the_session() {
+        let mut zip = ZipBuild::new();
+        zip.add_blob("index.dat", 1);
+        zip.add_message("001_c.txt", &request("GET", "https://example.test/pending"), "");
+        assert_eq!(refusal(&zip.finish()), "Refusal: entry 1 missing response.status.");
+    }
+}

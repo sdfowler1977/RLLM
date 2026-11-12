@@ -1,15 +1,30 @@
-//! Saved HTTP Archive captures, read as evidence rows.
-//! A row records the request line plus the response MIME and content.size. It is not a replay.
+//! Saved HTTP Archive and SAZ captures, read as the same evidence rows.
+//! A row records the request line plus the response MIME and content size. It is not a replay.
+//! A SAZ file is a ZIP of Fiddler session text (`index.dat`, `NNN_c.txt`, `NNN_s.txt`).
 use super::{obj, parse, s, Json, Json::*};
 
 const ENTRY_CAP: usize = 64;
 const URL_CAP: usize = 2048;
 const REPORT_CAP: usize = 8192;
+// `archive::unpack` allows 500 members and 1 MiB each. These tighter caps fail
+// closed while a retained report (128 KiB) can still carry the refusal.
+const MEMBER_CAP: usize = 320;
+const MEMBER_BYTE_CAP: usize = 64 * 1024;
 const ENTRY_CAP_NAME: &str = "saved-capture entry cap";
 const URL_CAP_NAME: &str = "saved-capture url cap";
 const REPORT_CAP_NAME: &str = "saved-capture report cap";
 const TRUNCATED: &str = "Refusal: saved capture truncated.";
 const UNUSABLE: &str = "Refusal: saved capture JSON is unusable.";
+const DIRECTORY: &str = "Refusal: saved capture archive directory is corrupt or truncated.";
+const NO_REQUESTS: &str = "Refusal: saved capture has no request members.";
+const NOT_SESSION: &str = "Refusal: saved capture is not a session archive.";
+const NOT_CAPTURE_ZIP: &str = "Refusal: archive is not a saved capture.";
+const MEMBER_CAP_REFUSAL: &str = "Refusal: saved-capture member cap.";
+const MEMBER_BYTE_REFUSAL: &str = "Refusal: saved-capture member byte cap.";
+const DAMAGED: &str = "Refusal: saved capture archive member is damaged.";
+const BAD_NAME: &str = "Refusal: saved capture archive member name is invalid.";
+const READER_LIMIT: &str = "Refusal: saved capture archive exceeds a reader limit.";
+const ARCHIVE_UNUSABLE: &str = "Refusal: saved capture archive is unusable.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Row {
@@ -210,9 +225,193 @@ fn render(candidates: Vec<Row>, mut caps: Vec<&'static str>) -> Read {
     Read::Rows(Capture { rows: emitted, caps, report })
 }
 
+fn archive_prefix(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"PK\x03\x04")
+        || bytes.starts_with(b"PK\x05\x06")
+        || bytes.starts_with(b"PK\x06\x06")
+        || bytes.starts_with(b"PK\x06\x07")
+}
+
+fn archive_refusal(error: &str) -> &'static str {
+    match error {
+        "ZIP footer is missing or truncated"
+        | "Truncated archive"
+        | "Invalid ZIP directory entry"
+        | "Invalid ZIP directory bounds"
+        | "ZIP directory overflow"
+        | "ZIP directory contains extra data"
+        | "ZIP local entry differs from directory"
+        | "ZIP local path differs from directory"
+        | "ZIP descriptor differs from directory"
+        | "ZIP data and directory do not meet"
+        | "Overlapping or hidden ZIP data"
+        | "ZIP member overlaps directory"
+        | "Archive offset overflow"
+        | "ZIP offset overflow"
+        | "Unsupported or invalid ZIP64 footer"
+        | "ZIP64 footer conflicts with ZIP directory"
+        | "Invalid ZIP entry count"
+        | "Required ZIP64 metadata is missing"
+        | "Unexpected ZIP64 metadata fields"
+        | "Duplicate ZIP64 metadata" => DIRECTORY,
+        "ZIP member is damaged" => DAMAGED,
+        "Unsafe project path" | "Project path is not UTF-8" => BAD_NAME,
+        "ZIP64 value exceeds project limit"
+        | "ZIP member exceeds file limit"
+        | "Project ZIP must be at most 5 MiB"
+        | "Project exceeds 4 MiB data limit"
+        | "ZIP size overflow" => READER_LIMIT,
+        _ => ARCHIVE_UNUSABLE,
+    }
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit_once('/').map(|(_, name)| name).unwrap_or(path)
+}
+
+/// `001_c.txt` / `raw/001_s.txt`. The number is the Fiddler session prefix.
+fn session_kind(path: &str) -> Option<(u32, u8)> {
+    let stem = file_name(path).strip_suffix(".txt")?;
+    let (number, kind) = stem.rsplit_once('_')?;
+    if kind != "c" && kind != "s" {
+        return None;
+    }
+    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((number.parse().ok()?, kind.as_bytes()[0]))
+}
+
+fn find_bytes(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|window| window == needle)
+}
+
+fn split_message(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+    if let Some(at) = find_bytes(bytes, b"\r\n\r\n") {
+        return Some((&bytes[..at], &bytes[at + 4..]));
+    }
+    if let Some(at) = find_bytes(bytes, b"\n\n") {
+        return Some((&bytes[..at], &bytes[at + 2..]));
+    }
+    None
+}
+
+fn content_type(head: &str) -> Option<String> {
+    for line in head.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else { continue };
+        if name.trim().eq_ignore_ascii_case("content-type") {
+            return Some(value.trim().to_string());
+        }
+    }
+    None
+}
+
+fn request_target(index: usize, bytes: &[u8]) -> Result<(String, String), Read> {
+    let head = match split_message(bytes) {
+        Some((head, _)) => head,
+        None => bytes,
+    };
+    let head = std::str::from_utf8(head).map_err(|_| refuse_field(index, "request.method"))?;
+    let mut parts = head.lines().next().unwrap_or("").split_whitespace();
+    let method = parts.next().filter(|value| clean(value)).ok_or_else(|| refuse_field(index, "request.method"))?;
+    let url = parts.next().filter(|value| clean(value)).ok_or_else(|| refuse_field(index, "request.url"))?;
+    Ok((method.to_string(), url.to_string()))
+}
+
+fn response_facts(index: usize, bytes: &[u8]) -> Result<(u16, String, u64), Read> {
+    let Some((head, body)) = split_message(bytes) else {
+        return Err(refuse_field(index, "response.content.size"));
+    };
+    let head = std::str::from_utf8(head).map_err(|_| refuse_field(index, "response.status"))?;
+    let mut parts = head.lines().next().unwrap_or("").split_whitespace();
+    if !parts.next().unwrap_or("").starts_with("HTTP/") {
+        return Err(refuse_field(index, "response.status"));
+    }
+    let status_text = parts
+        .next()
+        .filter(|value| value.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| refuse_field(index, "response.status"))?;
+    let status: u64 = status_text.parse().map_err(|_| refuse_field(index, "response.status"))?;
+    if status > 999 {
+        return Err(refuse_field(index, "response.status"));
+    }
+    let mime = content_type(head).ok_or_else(|| refuse_field(index, "response.content.mimeType"))?;
+    if !clean(&mime) {
+        return Err(refuse_field(index, "response.content.mimeType"));
+    }
+    Ok((status as u16, mime, body.len() as u64))
+}
+
+fn session_row(index: usize, request: &[u8], response: &[u8]) -> Result<Row, Read> {
+    let (method, url) = request_target(index, request)?;
+    let (status, mime, bytes) = response_facts(index, response)?;
+    Ok(Row { index, method, url, status, mime, bytes })
+}
+
+fn interpret_saz(members: Vec<(String, Vec<u8>)>) -> Read {
+    let mut has_index = false;
+    let mut saw_session = false;
+    let mut requests = std::collections::BTreeMap::<u32, Vec<u8>>::new();
+    let mut responses = std::collections::BTreeMap::<u32, Vec<u8>>::new();
+    for (name, data) in members {
+        if file_name(&name) == "index.dat" {
+            has_index = true;
+            continue;
+        }
+        let Some((id, kind)) = session_kind(&name) else { continue };
+        saw_session = true;
+        let slot = if kind == b'c' { &mut requests } else { &mut responses };
+        if slot.insert(id, data).is_some() {
+            return Read::Refused(format!("Refusal: saved capture session {id} is duplicated."));
+        }
+    }
+    if !has_index && !saw_session {
+        return Read::Refused(NOT_CAPTURE_ZIP.into());
+    }
+    if !has_index {
+        return Read::Refused(NOT_SESSION.into());
+    }
+    if requests.is_empty() {
+        return Read::Refused(NO_REQUESTS.into());
+    }
+    let mut rows = Vec::new();
+    for (id, request) in &requests {
+        let Some(response) = responses.get(id) else {
+            return refuse_field(*id as usize, "response.status");
+        };
+        match session_row(*id as usize, request, response) {
+            Ok(row) => rows.push(row),
+            Err(refusal) => return refusal,
+        }
+    }
+    for id in responses.keys() {
+        if !requests.contains_key(id) {
+            return refuse_field(*id as usize, "request.method");
+        }
+    }
+    render(rows, Vec::new())
+}
+
+fn read_saz(bytes: &[u8]) -> Read {
+    let members = match super::archive::unpack(bytes) {
+        Ok(members) => members,
+        Err(error) => return Read::Refused(archive_refusal(&error).into()),
+    };
+    if members.len() > MEMBER_CAP {
+        return Read::Refused(MEMBER_CAP_REFUSAL.into());
+    }
+    if members.iter().any(|(_, data)| data.len() > MEMBER_BYTE_CAP) {
+        return Read::Refused(MEMBER_BYTE_REFUSAL.into());
+    }
+    interpret_saz(members)
+}
+
 fn read(bytes: &[u8], complete: bool) -> Read {
     if !complete {
         return Read::Refused(TRUNCATED.into());
+    }
+    if archive_prefix(bytes) {
+        return read_saz(bytes);
     }
     let text = match std::str::from_utf8(bytes) {
         Ok(text) => text,

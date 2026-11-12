@@ -817,7 +817,7 @@ fn valid_name(bytes: &[u8]) -> Result<String> {
     }
     Ok(name.into())
 }
-fn unpack(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
+pub(crate) fn unpack(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
     if bytes.len() > 5 * 1024 * 1024 || bytes.len() < 22 {
         return Err("Project ZIP must be at most 5 MiB".into());
     }
