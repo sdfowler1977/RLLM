@@ -1,8 +1,9 @@
 // Native port of tools/package.py. tools/package.py remains until a signed
 // candidate is published with this binary. Built by tools/build-tools.sh.
-// --dry-run repeats the reads and checks, prints the pinned censuses and the
-// path and byte count of each artifact, and writes nothing except the
-// destination directory.
+// --dry-run repeats the reads and checks, prints the pinned censuses, the
+// Python area census, and the path and byte count of each artifact, and writes
+// nothing except the destination directory. The Python census also runs on a
+// real publish and refuses before any artifact is written.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -2030,6 +2031,30 @@ const SKIP_PARTS: &[&str] = &["output", "__pycache__", ".git"];
 const FORBIDDEN_SUFFIXES: &[&str] = &["p12", "jks", "password", "keystore", "zip", "tar", "xz"];
 const BUILD_ROOTS: &[&str] = &["core", "platform", "res", "notices"];
 const BUILD_FILES: &[&str] = &["AndroidManifest.xml", "package.sh", "tools/alignment.rs"];
+// The publisher walk also sees vendored toolchains and agent scratch. Those
+// roots are not product source, so a Python file there is not an RLLM area.
+const NON_PRODUCT_ROOTS: &[&str] = &[".playwright-mcp", ".qwen", "toolchain", "tooling"];
+
+struct ToolPython {
+    name: &'static str,
+    role: &'static str,
+}
+
+const TOOL_PYTHON: &[ToolPython] = &[
+    ToolPython {
+        name: "checks.py",
+        role: "full-suite unit gate (--all-units), selected-unit runner (--units), and connected-group runner",
+    },
+    ToolPython {
+        name: "package.py",
+        role: "publisher until a signed candidate is published with the native package binary",
+    },
+];
+
+// verification/*.py ceilings measured on 8eff3b5: 73 files, 8570 lines.
+// A larger file count or a larger line count refuses. A smaller count still passes.
+const VERIFICATION_PY_FILE_CEILING: usize = 73;
+const VERIFICATION_PY_LINE_CEILING: usize = 8570;
 
 fn extension_of(relative: &str) -> Option<&str> {
     let name = relative.rsplit('/').next().unwrap_or(relative);
@@ -2104,6 +2129,141 @@ fn screen_files(root: &Path, files: &[String]) -> Result<(), String> {
         screen_relative(relative, symlink)?;
     }
     Ok(())
+}
+
+struct PyBucket {
+    files: usize,
+    lines: usize,
+    paths: Vec<String>,
+}
+
+struct PythonCensus {
+    core: PyBucket,
+    platform: PyBucket,
+    tools: PyBucket,
+    verification: PyBucket,
+    elsewhere: PyBucket,
+}
+
+fn empty_bucket() -> PyBucket {
+    PyBucket { files: 0, lines: 0, paths: Vec::new() }
+}
+
+fn non_product_root(relative: &str) -> bool {
+    let top = relative.split('/').next().unwrap_or(relative);
+    NON_PRODUCT_ROOTS.contains(&top)
+}
+
+fn python_line_count(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let mut lines = bytes.iter().filter(|byte| **byte == b'\n').count();
+    if !bytes.ends_with(b"\n") {
+        lines += 1;
+    }
+    lines
+}
+
+fn tool_python_allowed(relative: &str) -> bool {
+    let Some(name) = relative.strip_prefix("tools/") else {
+        return false;
+    };
+    TOOL_PYTHON.iter().any(|item| item.name == name)
+}
+
+fn tally_python(root: &Path, files: &[String]) -> Result<PythonCensus, String> {
+    let mut census = PythonCensus {
+        core: empty_bucket(),
+        platform: empty_bucket(),
+        tools: empty_bucket(),
+        verification: empty_bucket(),
+        elsewhere: empty_bucket(),
+    };
+    for relative in files {
+        if non_product_root(relative) || extension_of(relative) != Some("py") {
+            continue;
+        }
+        let bytes = fs::read(root.join(relative)).map_err(|_| refuse(&format!("{relative} unreadable")))?;
+        let lines = python_line_count(&bytes);
+        let top = relative.split('/').next().unwrap_or(relative);
+        let bucket = match top {
+            "core" => &mut census.core,
+            "platform" => &mut census.platform,
+            "tools" => &mut census.tools,
+            "verification" => &mut census.verification,
+            _ => &mut census.elsewhere,
+        };
+        bucket.files += 1;
+        bucket.lines += lines;
+        let allowed_tool = top == "tools" && tool_python_allowed(relative);
+        if top != "verification" && !allowed_tool {
+            bucket.paths.push(relative.clone());
+        }
+    }
+    Ok(census)
+}
+
+fn render_python_census(census: &PythonCensus) -> String {
+    let allowlist = TOOL_PYTHON.iter().map(|item| format!("{} ({})", item.name, item.role)).collect::<Vec<_>>().join("; ");
+    format!(
+        "python_census: core files {} lines {}; platform files {} lines {}; tools files {} lines {} [{}]; verification files {} lines {} ceiling files {} lines {}; elsewhere files {} lines {}\n",
+        census.core.files,
+        census.core.lines,
+        census.platform.files,
+        census.platform.lines,
+        census.tools.files,
+        census.tools.lines,
+        allowlist,
+        census.verification.files,
+        census.verification.lines,
+        VERIFICATION_PY_FILE_CEILING,
+        VERIFICATION_PY_LINE_CEILING,
+        census.elsewhere.files,
+        census.elsewhere.lines,
+    )
+}
+
+fn reject_python(census: &PythonCensus) -> Result<(), String> {
+    let mut messages = Vec::new();
+    for path in &census.core.paths {
+        messages.push(refuse(&format!("product-code violation: core/ contains Python {path}")));
+    }
+    for path in &census.platform.paths {
+        messages.push(refuse(&format!("product-code violation: platform/ contains Python {path}")));
+    }
+    for path in &census.tools.paths {
+        messages.push(refuse(&format!("tools/ Python {path} is outside the allowlist")));
+    }
+    if census.verification.files > VERIFICATION_PY_FILE_CEILING {
+        messages.push(refuse(&format!(
+            "verification/ Python files {} exceed the recorded ceiling {}",
+            census.verification.files, VERIFICATION_PY_FILE_CEILING
+        )));
+    }
+    if census.verification.lines > VERIFICATION_PY_LINE_CEILING {
+        messages.push(refuse(&format!(
+            "verification/ Python lines {} exceed the recorded ceiling {}",
+            census.verification.lines, VERIFICATION_PY_LINE_CEILING
+        )));
+    }
+    for path in &census.elsewhere.paths {
+        messages.push(refuse(&format!("Python outside core/, platform/, tools/, and verification/: {path}")));
+    }
+    if messages.is_empty() {
+        Ok(())
+    } else {
+        Err(messages.join("\n"))
+    }
+}
+
+fn enforce_python_census(root: &Path, files: &[String]) -> Result<String, String> {
+    let census = tally_python(root, files)?;
+    let line = render_python_census(&census);
+    if let Err(err) = reject_python(&census) {
+        return Err(format!("{line}{err}"));
+    }
+    Ok(line)
 }
 
 const SUMMARY: &str = r#"Auto chooses a direct reply, a short current-fact lookup, or deeper investigation. The conversation has explicit mode choices. Simple local time and date questions use the device clock. Quick lookups keep full source and error details available on tap, and a verified DJIA daily close is labeled with its observation date. Automatic web access now includes ordinary public HTTPS pages and marketplace searches opened directly by primary or delegated agents. The app checks the resolved address before connecting and applies the same public scope to every redirect. Requests for private destinations, page scripts and captures follow existing review controls. Supported OpenAI, xAI, Anthropic and Gemini connections can use provider-hosted search on both the primary agent and delegated agents. Provider searches run on the selected connection, and RLLM keeps returned source metadata. One evidence-only follow-up can recover an empty answer after search without repeating the query. Automatic web search approval is on by default for configured search sources. A single valid search proposal in model prose runs under the same approval policy, and eligible ambiguous proposals get one bounded model correction. Web-search fallback and subsequent queries stay in the current turn. Chat and local streaming enforce declared lengths and encodings and validate chunk boundaries and trailers before adopting text or completion. Bodyless HTTP 204 responses cannot publish reply text. Owned responses enforce the shared 16 KiB trailer limit. Framed MCP control acknowledgments settle after informational headers without waiting for a close. An explicit search deferral requires fresh approval even when automatic or saved approval is enabled, and omits the provider-hosted search tool for that turn. RLLM offers a second bounded refinement round after a comparable partial gain, keeps the stronger tested instructions, and compares JSON values in separate evaluation. Shared response framing accepts split delimiters at the exact 8 KiB chunk-size and 64 KiB response-header limits. RLLM can evaluate the original and retained agent instructions on up to two separate tasks with local phrase, exact-text, JSON or digest checks. Both retained replies must pass comparable checks before the evaluation can contribute a measured lesson. Evaluation proposals, interrupted responses and incomparable contexts cannot promote a lesson. A completed training candidate remains reviewable after an interrupted evaluation. RLLM learns the default built-in search order from validated same-query fallbacks. Checked agent refinements replay the exact revised instructions and retain a passing candidate when a revision fails. User adoption preserves the original agent profile. Duplicate correlated MCP POST stream replies are refused before result adoption. RLLM retains multiple named MCP connections and uses one selected server for discovery, calls and streams. A refresh publishes only the complete tool catalog and refuses duplicate tool names across pages. Ambiguous names reported by the active connection require a successful refresh before use, including after switching away and back. New conversation leads the plus menu. An explicit request to search the web authorizes built-in queries for the current turn without repeated prompts, including a follow-up command that relies on the current topic. An unavailable built-in source can fail over, and raw search diagnostics stay in message details. Higher-priority destination review remains available. Conversation displays compact web results and keeps raw tool JSON in message details. Storage authorization uses the configured certificate hostname on the matching HTTPS route while separate origins retain their own identity. Shared Rust HTTP request and response handling validates field syntax, credential-header boundaries, gateway request lengths and expectations, informational responses and chunk extensions. Optional pre-filled device verification links retain the manual address and code and fall back on unusable links. Safe WebDAV updates also preserve valid UTF-8 opaque ETags in exact conditional writes while retaining weak, malformed and duplicate validator refusals. Shared token adoption refuses non-text refresh credentials before replacing saved grants and preserves scoped uncertain-refresh recovery. Existing conversation, intrinsic investigation, local storage and optional provider-neutral services remain integrated. The signed candidate matches the recorded cumulative source inputs. Recursive refinement can check individual JSON fields in training and held-out tasks. It keeps expected values local and only treats a partial score increase as progress when earlier passing checks still pass. WebDAV listings respect declared XML namespaces, preserving valid file and folder routing when extension elements use similar names. An owned media feed failure retires its ticket before it can mint a completion receipt, including when the HTTP framer has reached its last byte. Structured refinement can unwrap a single JSON code block for local verification and records the repair separately. A failed owned import cannot issue a receipt for its staged prefix. A failed upload read retires only its own ticket before another read can advance it. Media chunks reject malformed Base64 instead of accepting a decodable prefix."#;
@@ -2545,6 +2705,7 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
         }
     }
     files.sort_by(|left, right| cmp_rel(left, right));
+    let python_line = enforce_python_census(root, &files)?;
     screen_files(root, &files)?;
     let mut file_records = Vec::new();
     let mut member_bytes = Vec::new();
@@ -2688,7 +2849,7 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
         Artifact { path: sums_path, bytes: sums },
         Artifact { path: root.join("output/checks/packaged.json"), bytes: packaged },
     ];
-    let mut preview = String::new();
+    let mut preview = python_line;
     for artifact in before.iter().chain(std::iter::once(&apk_artifact)).chain(after.iter()) {
         push_preview(&mut preview, &artifact.path, &artifact.bytes);
     }
@@ -3431,5 +3592,177 @@ mod checks {
         let comp_len = u32_at(&archive, 18).unwrap() as usize;
         let payload = &archive[30 + name_len..30 + name_len + comp_len];
         assert_eq!(payload, stored_blocks(&plain).as_slice(), "growth case uses stored blocks");
+    }
+
+    fn plant(root: &Path, relative: &str, body: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, body).unwrap();
+    }
+
+    fn refusal_lines(err: &str) -> String {
+        err.lines().filter(|line| line.starts_with("refusing:")).collect::<Vec<_>>().join("\n")
+    }
+
+    fn census_line(report: &str) -> &str {
+        report.lines().find(|line| line.starts_with("python_census:")).unwrap_or("")
+    }
+
+    fn assert_publish_refuses(root: &Path, sentence: &str) {
+        let destination = root.join("destination");
+        let before = snapshot(root);
+        let err = publish(root, &destination, false, false).expect_err(sentence);
+        assert_eq!(snapshot(root), before, "refused publish changed the tree: {err}");
+        assert!(destination.is_dir(), "publish did not reach the destination");
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 0, "refused publish wrote an artifact");
+        assert_eq!(refusal_lines(&err), sentence, "{err}");
+        assert!(err.contains("python_census:"), "{err}");
+        assert!(!err.contains("Source differs"), "{err}");
+    }
+
+    #[test]
+    fn python_line_count_counts_a_final_partial_line() {
+        assert_eq!(python_line_count(b""), 0);
+        assert_eq!(python_line_count(b"a\n"), 1);
+        assert_eq!(python_line_count(b"a\nb"), 2);
+        assert_eq!(python_line_count(b"a\nb\n"), 2);
+    }
+
+    #[test]
+    fn publish_refuses_core_python() {
+        let (_dir, root) = fixture();
+        plant(&root, "core/sub/plant.py", "print(1)\n");
+        assert_publish_refuses(&root, "refusing: product-code violation: core/ contains Python core/sub/plant.py");
+    }
+
+    #[test]
+    fn publish_refuses_platform_python() {
+        let (_dir, root) = fixture();
+        plant(&root, "platform/com/local/plant.py", "print(1)\n");
+        assert_publish_refuses(&root, "refusing: product-code violation: platform/ contains Python platform/com/local/plant.py");
+    }
+
+    #[test]
+    fn publish_refuses_tools_python_outside_allowlist() {
+        let (_dir, root) = fixture();
+        plant(&root, "tools/helper.py", "print(1)\n");
+        plant(&root, "tools/sub/checks.py", "print(1)\n");
+        let destination = root.join("destination");
+        let before = snapshot(&root);
+        let err = publish(&root, &destination, false, false).expect_err("tools python outside the allowlist must refuse");
+        assert_eq!(snapshot(&root), before, "{err}");
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 0, "{err}");
+        assert_eq!(
+            refusal_lines(&err),
+            "refusing: tools/ Python tools/helper.py is outside the allowlist\nrefusing: tools/ Python tools/sub/checks.py is outside the allowlist",
+            "{err}"
+        );
+        assert!(census_line(&err).contains("tools files 3 lines 3"), "{err}");
+        assert!(census_line(&err).contains("checks.py (full-suite unit gate (--all-units), selected-unit runner (--units), and connected-group runner)"), "{err}");
+        assert!(census_line(&err).contains("package.py (publisher until a signed candidate is published with the native package binary)"), "{err}");
+    }
+
+    #[test]
+    fn publish_refuses_verification_python_over_ceiling() {
+        let (_dir, root) = fixture();
+        assert_eq!(VERIFICATION_PY_FILE_CEILING, 73);
+        for index in 0..74 {
+            plant(&root, &format!("verification/debt{index}.py"), "pass\n");
+        }
+        assert_publish_refuses(&root, "refusing: verification/ Python files 74 exceed the recorded ceiling 73");
+    }
+
+    #[test]
+    fn publish_refuses_verification_python_lines_over_ceiling() {
+        let (_dir, root) = fixture();
+        assert_eq!(VERIFICATION_PY_LINE_CEILING, 8570);
+        let mut body = String::new();
+        body.push_str("pass");
+        for _ in 0..8571 {
+            body.push('\n');
+        }
+        plant(&root, "verification/debt.py", &body);
+        assert_publish_refuses(&root, "refusing: verification/ Python lines 8571 exceed the recorded ceiling 8570");
+    }
+
+    #[test]
+    fn publish_refuses_python_elsewhere() {
+        let (_dir, root) = fixture();
+        plant(&root, "docs/notes/plant.py", "print(1)\n");
+        assert_publish_refuses(&root, "refusing: Python outside core/, platform/, tools/, and verification/: docs/notes/plant.py");
+    }
+
+    #[test]
+    fn publish_passes_compliant_python_census() {
+        let (_dir, root) = fixture();
+        plant(&root, "tools/package.py", "# pending native publish\n");
+        plant(&root, "docs/keep.txt", "not python\n");
+        plant(&root, "notes/keep.txt", "not python\n");
+        for index in 0..VERIFICATION_PY_FILE_CEILING {
+            plant(&root, &format!("verification/debt{index}.py"), "pass\n");
+        }
+        plant(&root, "tooling/ndk/helper.py", "print(1)\n");
+        let report = publish(&root, &root.join("destination"), false, true).unwrap();
+        let line = census_line(&report);
+        assert!(report.contains("build_inputs:"), "{report}");
+        assert!(report.contains("would write:"), "{report}");
+        assert!(!report.contains("refusing:"), "{report}");
+        assert!(line.contains("core files 0 lines 0"), "{line}");
+        assert!(line.contains("platform files 0 lines 0"), "{line}");
+        assert!(line.contains("tools files 2 lines 2"), "{line}");
+        assert!(line.contains("verification files 73 lines 73 ceiling files 73 lines 8570"), "{line}");
+        assert!(line.contains("elsewhere files 0 lines 0"), "{line}");
+        assert!(line.contains("checks.py (full-suite unit gate (--all-units), selected-unit runner (--units), and connected-group runner)"), "{line}");
+        assert!(line.contains("package.py (publisher until a signed candidate is published with the native package binary)"), "{line}");
+    }
+
+    #[test]
+    fn publish_python_census_counts_move_when_a_file_is_added() {
+        let (_dir, root) = fixture();
+        let destination = root.join("destination");
+        let first = publish(&root, &destination, false, true).unwrap();
+        assert!(first.contains("build_inputs:"), "{first}");
+        assert!(first.contains("would write:"), "{first}");
+        let before = census_line(&first).to_string();
+        assert!(before.contains("core files 0 lines 0"), "{before}");
+        assert!(before.contains("platform files 0 lines 0"), "{before}");
+        assert!(before.contains("tools files 1 lines 1"), "{before}");
+        assert!(before.contains("verification files 0 lines 0 ceiling files 73 lines 8570"), "{before}");
+        assert!(before.contains("elsewhere files 0 lines 0"), "{before}");
+        plant(&root, "output/hidden.py", "print(1)\n");
+        plant(&root, "tooling/helper.py", "print(1)\n");
+        plant(&root, ".qwen/helper.py", "print(1)\n");
+        plant(&root, "toolchain/helper.py", "print(1)\n");
+        plant(&root, ".playwright-mcp/helper.py", "print(1)\n");
+        let hidden = publish(&root, &destination, false, true).unwrap();
+        assert_eq!(census_line(&hidden), before, "non-product roots moved the census");
+        plant(&root, "verification/debt.py", "print(1)\n");
+        plant(&root, "tools/package.py", "# pending native publish\n");
+        let second = publish(&root, &destination, false, true).unwrap();
+        let after = census_line(&second);
+        assert!(after.contains("tools files 2 lines 2"), "{after}");
+        assert!(after.contains("verification files 1 lines 1"), "{after}");
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn project_python_census_counts_this_tree() {
+        let root = project_root().unwrap();
+        let files = collect_tree(&root).unwrap();
+        assert!(files.iter().any(|path| path == "core/lib.rs"), "walk missed core/");
+        assert!(files.iter().any(|path| path == "tools/checks.py"), "walk missed tools/checks.py");
+        assert!(files.iter().any(|path| path == "tools/package.py"), "walk missed tools/package.py");
+        assert!(files.iter().any(|path| path.starts_with("verification/") && path.ends_with(".py")), "walk missed verification/");
+        let line = enforce_python_census(&root, &files).unwrap();
+        assert_eq!(VERIFICATION_PY_FILE_CEILING, 73);
+        assert!(line.contains("core files 0 lines 0;"), "{line}");
+        assert!(line.contains("platform files 0 lines 0;"), "{line}");
+        assert!(line.contains("tools files 2 lines 189 ["), "{line}");
+        assert!(line.contains("verification files 73 lines 8570 ceiling files 73 lines 8570;"), "{line}");
+        assert_eq!(VERIFICATION_PY_LINE_CEILING, 8570);
+        assert!(line.contains("elsewhere files 0 lines 0"), "{line}");
+        println!("{line}");
     }
 }
