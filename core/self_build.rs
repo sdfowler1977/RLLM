@@ -1477,6 +1477,11 @@ fn append_mark(path: &Path, revisions: &[String]) -> Result<()> {
 /// Publish one mark line by renaming a synced temporary file over `path`.
 /// The temporary file is opened with `O_NOFOLLOW` so a symlink is not followed.
 /// An existing symlink mark is refused. The byte bound matches `journal_lines`.
+/// The parent directory is synced after the rename so the new directory entry
+/// survives a power loss. The file bytes were already synced. If the directory
+/// sync fails, the renamed anchor stays and this function still returns
+/// success. The companion row is already durable and the live mark matches it,
+/// so a later handoff still reads the chain.
 fn rewrite_mark(path: &Path, line: &str) -> Result<()> {
     let mut payload = Vec::with_capacity(line.len() + 1);
     payload.extend_from_slice(line.as_bytes());
@@ -1524,7 +1529,22 @@ fn rewrite_mark(path: &Path, line: &str) -> Result<()> {
         let _ = fs::remove_file(&temp);
         return Err(error.to_string());
     }
+    // The rename has published the anchor. A directory-sync error must not
+    // unpublish it or fail the append. The companion row is already durable,
+    // and this name already points at the synced file, so the two still match.
+    // Returning the error would fail `append_linked` and abort the caller.
+    // A caller that treated that as "not published" and removed the mark would
+    // make every later handoff refuse a chain that is intact.
+    let _ = sync_mark_directory(parent);
     Ok(())
+}
+fn sync_mark_directory(dir: &Path) -> Result<()> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(DIRECTORY | NOFOLLOW | CLOEXEC)
+        .open(dir)
+        .map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())
 }
 fn mark_revisions(value: &Json) -> Result<Vec<String>> {
     let items = match get(value, "revisions") {
@@ -4846,5 +4866,58 @@ mv "$tmp" "$1.done"
         fork_companion(&journal);
         assert_handoff_refuses(scratch.path(), "successor journal rolled back onto a revision already observed");
         assert_eq!(fs::read(&mark).unwrap(), saved_mark, "fork refusal rewrote the pruned mark");
+    }
+
+    #[test]
+    fn directory_synced_mark_stays_one_anchor_and_handoff_reports_the_rows() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("mark-dir-sync");
+        let journal = scratch.path().join("self/journal.jsonl");
+        let witness = successor_journal_path(&journal);
+        append_spawn_row(&witness, 11, "job-a", &sha256(b"source-a"), "spawn").unwrap();
+        append_reap_row(&witness, 11, "job-a", Some(0), None).unwrap();
+        let lines = mark_lines(&journal);
+        assert_eq!(lines.len(), 1, "directory sync changed the sealed anchor into more than one row");
+        let row = parse(&lines[0]).unwrap();
+        addressed(&row);
+        assert_eq!(text(&row, "parent"), "", "sealed anchor parent is not empty");
+        assert_eq!(text(&row, "event"), "mark");
+        let marked = mark_revisions(&row).unwrap();
+        let companion = successor_lines(&journal);
+        let current: Vec<String> = companion
+            .iter()
+            .map(|line| text(&parse(line).unwrap(), "revision"))
+            .collect();
+        assert_eq!(marked, current, "sealed anchor does not record the companion");
+        assert_eq!(current.len(), 2);
+        let seen = handoff_at(scratch.path(), false).unwrap();
+        assert_eq!(get(&seen, "successor_rows"), &n(2));
+        assert_eq!(text(&seen, "successor_tip"), current.last().cloned().unwrap());
+    }
+
+    #[test]
+    fn mark_directory_sync_fails_when_the_directory_cannot_be_opened() {
+        let scratch = Scratch::new("mark-dir-open");
+        let file = scratch.path().join("not-a-directory");
+        fs::write(&file, b"regular-file").unwrap();
+        assert_eq!(
+            sync_mark_directory(&file).unwrap_err(),
+            "Not a directory (os error 20)",
+            "opening a file with O_DIRECTORY did not fail"
+        );
+        let missing = scratch.path().join("missing-directory");
+        assert_eq!(
+            sync_mark_directory(&missing).unwrap_err(),
+            "No such file or directory (os error 2)"
+        );
+        let real = scratch.path().join("real-dir");
+        fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, scratch.path().join("linked-dir")).unwrap();
+        assert_eq!(
+            sync_mark_directory(&scratch.path().join("linked-dir")).unwrap_err(),
+            "Not a directory (os error 20)",
+            "O_NOFOLLOW followed a symlink directory"
+        );
+        assert!(sync_mark_directory(&real).is_ok(), "a real directory did not sync");
     }
 }
