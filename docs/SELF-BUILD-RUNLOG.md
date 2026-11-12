@@ -242,6 +242,69 @@ expected marker is the *edited* arm cannot discriminate a control that wrote a d
 the first control checked for the canary instead of its own `// canary` suffix and reported a
 meaningless `False`.
 
+## The single-job chain — 2026-11-12T09:3Z, commit `55e1e96`
+
+This is the log the `GAP1` done-bar asks for: one model-proposed, owner-approved job that edits a
+workspace source, rebuilds, runs the unit gate, and records the revision, then a successor built from
+those bytes answering the edited behaviour. Room `.qwen/tmp/gap1-chain` = `git archive HEAD` plus the
+`tooling` symlink; inside it `bash tools/build-tools.sh` (7 tools, executed-equals-declared counts),
+`bash tools/build-units.sh output/units-pre` and `bash headless.sh` (product, 12,052,688 bytes, sha256
+`90bed8af12b3…`). Driver `/tmp/gap1-chain.py`, log `/tmp/gap1-chain.log`. Pre-edit control: the copied
+`RLLM.pre` answers `{"op":"self_chain_a"}` with `{"error":"Unknown operation"}`.
+
+Job 1 — the model proposed `self_build` with `builder=bash tools/build-units.sh output/units-post`,
+`gate=output/tools/gate output/units-post`, `journal=self/journal.jsonl`, `rollback=self/rollback`,
+`parent=""`. Product staged it (`dialog=approval`, `pending.tool=self_build`, `agent_pending=true`),
+owner approved, dispatch produced:
+
+```
+Saved 21834 bytes to core/lib.rs. recorded revision 8766fb5f1e53472c17bbb1d7f7b22a11a6daddffe7a2d01fc42ca8b78430458f in self/journal.jsonl Rust cases passed: 551/551; isolated application cases: 55
+```
+
+so edit → build → gate → journal happened inside one reviewed job, with the gate run over the units
+binary built *after* the edit. The room's units binary grew from 548 to 551 cases because the room is
+`55e1e96`, whose `self_build` carries three more cases than the live tree's 548 baseline.
+
+Job 2 — `builder=bash headless.sh`, `gate=output/tools/gate output/units-post`, `parent=<job 1 revision>`,
+`reload=spawn`:
+
+```
+Saved 21908 bytes to core/lib.rs. recorded revision 9c55267eac3f2f54ccc86a36c75e19d83a6620aa5fe45a03f016f307cb0d4ab1 in self/journal.jsonl successor pid 1787998
+```
+
+Job 3 — `builder=bash tools/build-units.sh output/units-final`, gate on those final bytes,
+`parent=<job 2 revision>`:
+
+```
+Saved 21908 bytes to core/lib.rs. recorded revision d84af5e809575fa8daf32f679082e519eaae97fb41320c6cb0627543d91cf1ef in self/journal.jsonl Rust cases passed: 551/551; isolated application cases: 55
+```
+
+The re-exec leg is discriminating, not asserted. The rebuilt product answers both inserted ops —
+`{"op":"self_chain_a"}` → `{"value":{"chain":"gate-units"}}` and `{"op":"self_chain_b"}` →
+`{"value":{"chain":"product-rebuild"}}` — while the pre-edit copy still answers `Unknown operation`.
+Product binary sha moved `90bed8af12b3…` → `fb1360cc642e…`, matching the `build_digest` the journal
+record for job 2 carries.
+
+The journal was then verified independently of the product: all three rows recompute their own revision
+(sha256 over the stored body with `revision` removed, canonical compact form), the `parent` links chain
+`8766fb5f → 9c55267e → d84af5e8`, and every row carries `verdicts ["gate-green"]` with
+`gate {passed 551, cases 551, isolated 55, green true}`. Re-running the room's own gate over the final
+units bytes gives `Rust cases passed: 551/551; isolated application cases: 55` rc 0 — the same counters
+the journal recorded, measured outside the product's child run.
+
+Scope and limits of this log, stated rather than buried. The gate that closes job 2 is over job 1's
+units bytes, not job 2's own edit — a single sanctioned builder per job means job 2 rebuilds the product
+while the gate runs the units binary already built post-edit-A; job 3 exists to close that hole by gating
+the final bytes. The spawn successor is spawned with no argv and no environment, so "the same job
+continues" is witnessed by the journal plus the rebuilt bytes answering the edited ops, not by the
+successor process carrying the session. And the two defects this log measures in the arm itself: the
+journal's `successor.pid` is `std::process::id()` (the product, `1773485`) while the receipt reports the
+real successor `1787998`, and the record carries no `job` or `instruction` field although the tool
+description promises the successor inherits them. Driver defects, for the next driver: a tool call whose
+`name`/`arguments` are not nested under `function` is refused with `Tool proposal has no completed
+provider turn` / `Missing function` and stages nothing, and an `op` helper that returns the reply
+envelope instead of its `value` key raises a `KeyError` long after the product actually refused.
+
 ## Still unowned
 
 No connected verification group covers `self_build`, and `self_build` is absent from

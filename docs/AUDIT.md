@@ -1,33 +1,44 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T07:5Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T10:1Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
 
 ## What was measured
 
-- Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`): **517/517
-  cases plus 55 isolated application cases, exit 0**. Measured on both toolchains: the drifted
-  `rustc 1.95.0` build (`output/units`) and the pinned `rustc 1.99.1` build (`output/units-pinned`,
-  built from `tooling/env.sh`, log `output/units-pinned.log`) give the identical tally. A bare
+- Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
+  window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
+  report bytes): **560/560 cases plus 55 isolated application cases, exit 0**, measured with the pinned
+  `rustc 1.99.1` toolchain from `tooling/env.sh` (the earlier 517 tally was additionally reproduced on the
+  drifted `rustc 1.95.0` build, `output/units` vs `output/units-pinned`, log `output/units-pinned.log`). A bare
   `rustc --test core/console.rs` from the
   repository root reports 503 passed / 14 failed; every one of those 14 is a runner gap, not a product
   defect — the fixtures use the relative scratch root `toolchain/check-workspace`, which the bare run
   never creates, and `capture_job::resource_checks` needs `CLIENT_CAPTURE_TEST_FONT` pointed at a real
   TrueType font. `tools/checks.py` now supplies that font itself instead of leaving the batch red.
-- Connected groups through `tools/harness.rs`: **64 passed, 0 failed, 4 unavailable of 68 groups**,
-  census clean, exit 0 (2026-11-11T21:20Z; a second full sweep wrote a byte-identical record). The runner
+- Connected groups through `tools/harness.rs`: **65 passed, 0 failed, 4 unavailable of 69 groups**,
+  census clean, exit 0 (2026-11-12T10:1Z, after the four commits of this window; `verification/RESULTS.json`
+  came out byte-identical to the committed record — sha256 `7250328b5385…` — so the current source
+  reproduces the delivered record exactly). The runner
   reports a missing development input as `UNAVAILABLE` instead of charging it to the product, and a group
   whose own source guards an optional reference now runs with that comparison recorded as an unexercised
   leg instead of being blocked to a recorded `0`.
-- `verification/RESULTS.json` now carries the current census: **68 groups, 64 passed, 4,155 checks
+- `verification/RESULTS.json` now carries the current census: **69 groups, 65 passed, 4,185 checks
   executed**, with the 4 unavailable groups recorded as 0 plus their missing inputs and a
   `zero_count_disclosure` line (earlier revisions of this document described the record as holding
   65 groups / 4,228 checks — the previously delivered candidate, before `state_sealing` and
   `desktop_runtime` were added — then 67 groups / 4,016 checks before `turn_background` was added,
   4,041 checks before that group gained its turn-lifetime checks, and 4,044 checks before
   `apk_alignment` gained its artifact-resolution checks; 65 passed / 4,142 followed the rebuild of
-  `output/published-controller`, and the current 4,155 comes from `prompt_reference` executing 52 checks
-  while the off-host signed APK blocks `apk_alignment` and `turn_background`).
+  `output/published-controller`). The 4,142 → 4,185 movement is attributed per group, not summed blind:
+  `permission_modes` +27 (the new group), `prompt_reference` 0 → 52 (the optional-guard refcensus fix),
+  `services` 69 → 72, against `apk_alignment` 11 → 0 and `turn_background` 28 → 0 from the off-host signed
+  APK, and the group total moved 68 → 69 on `permission_modes` alone.
+  **The record's Rust-case leg is stale and is a measured drift, not a pass:** `full_rust_suite` pins
+  **513/513 cases + 55 isolated** with `binary_sha256 b621eccf4208…`, while the tree measures 560/560 + 55
+  today. Only `tools/package.py:52` writes that leg, and a packaging run is blocked behind the signed-APK
+  publication inputs (`apk['build_inputs']` digests are asserted per path, measured 130 match / 31 drift /
+  1 absent), so refreshing it is the owner-gated `PUB-INPUT-DRIFT` leg, not a coordinator action. The group
+  sweep itself never touches that leg, which is why a byte-identical sweep record is not a unit-count witness.
   The runner prints `INVENTORY DRIFT` whenever `GROUPS ∪ HELPERS ∪ OPTIONAL` stops matching `verification/`,
   so the record and the runner cannot silently disagree. Note that the runner compares the record it read
   *before* the run, so the run that grows the inventory itself prints one `INVENTORY DRIFT` line naming the
@@ -833,6 +844,58 @@ Repairs include optional service eligibility isolation, stale callback ownership
 One earlier parallel run withheld a large job result during integrity verification. A subsequent retry,8 serial repetitions and8 repetitions during building passed. Its cause was not established; the strict integrity checks were retained. Verification/UPGRADE-AUDIT.json preserves that observation rather than claiming a diagnosed repair.
 
 The signed APK retains RLLM/com.local.client.lab and the existing signing key. Both architectures, exact144build inputs, APK archive integrity, signature and16KiBalignment are inspected. Compilation and core effect checks do not establish physical microphone, decoder, touch/UI, lifecycle or live user endpoint acceptance. Those and independent current-byte review remain open. The earlier broader roadmap is preserved in the canonical engineering record and has not been declared finished.
+
+**Python exposure and the native gate — coordinator measurement, 2026-11-12T09:4Z.** The product
+no longer names the interpreter at all: `grep -rn python3 core/*.rs` returns **zero** files, where
+`core/self_build.rs` carried three such call sites at the start of this window (the sanctioned unit
+gate ran `python3 tools/checks.py --all-units`). `tools/gate.rs` (648 lines, 5 cases, built by
+`tools/build-tools.sh`) is the native port of that one role, and the differential is byte-level, not
+asserted: on one units binary `python3 tools/checks.py --all-units output/units-gate1` and
+`output/tools-verify7/gate output/units-gate1` both exit 0, print the identical line
+`Rust cases passed: 556/556; isolated application cases: 55`, and write `output/checks/full-units.json`
+with identical bytes (sha256 `082dc397bab17162fcb03930900956f7eed0913daf5923383e733a9fc033ca16`).
+Whole-tree Python is now **73 files / 7,755 lines** — `tools/` holds only `checks.py` and `package.py`,
+`verification/` still holds 71 files / 7,560 lines — against **5,956 Rust insertions** in the two
+commits that removed `tools/signature.py`, `tools/apk.py` and `tools/toolchain.py`. The cost is stated
+with the saving: 106 lines of Python toolchain recovery became 2,211 lines of Rust, because gzip, tar
+and pinned-archive verification are now implemented instead of delegated to the interpreter.
+`verification/` row census, measured: 71 `.py` files = **69 group bodies + 2 shared modules**
+(`live_web.py`, `transport.py`), which are imported by group bodies and are not enumerated by either
+sanctioned runner — not orphan rows. Publication drift measured rather than assumed: the manifest's
+`files` list pins 281 paths (233 match / 42 drift / **6 absent**, the six being the deleted Python
+tools), while `build_inputs` pins 162 paths at 130 / 31 / 1 — the deletions did not add absent
+`build_inputs` rows, one row moved to drift because pinned tracked sources changed content.
+`apk_alignment` was re-run after the ports landed (`RLLM_CHECK_APK=… output/harness-verify apk_alignment`):
+`apk_alignment PASS (exit 0, 6s, 11 checks)`, only-mode, `verification/RESULTS.json` unchanged at
+`7250328b5385…`. Its group body shells only `output/tools/alignment`, so the signature/apk/toolchain
+ports still have **no connected consumer** — their evidence is unit-level plus `package.sh`'s signature
+call on a signed leg, which remains owner-gated.
+
+**Two self-build defects measured in the landed journal arm (commit `55e1e96`), not absorbed.**
+`append_journal_revision` writes `successor.pid = std::process::id()` — the *current* process — even when
+`reload=spawn` reports a different successor pid, and the journal record carries no `job` or `instruction`
+field although `core/harness.rs:358` promises that `reload=spawn` "starts a successor that inherits the job
+id and instruction" and accepts `message,job,instruction` as arguments. The spawn arm passes no argv and no
+environment, so gap-report step 5 ("continue the same job") is currently a pid in a receipt, not a carried
+job identity. `GAP1` stays open on that evidence bar, and on reachability: `self_build` is in `const TOOLS`
+(`core/harness.rs:3`) but absent from `REFINEMENT_TOOLS`, and no connected group exercises it.
+
+**Gap stages landed in the same window (each verified by the coordinator, not the lane).** `GAP4`
+stage 1 (commit `2769f19`): `reconstruct` gained `mode=behaviour`, whose document separates cited
+claims from `unknown`, and `refuse_subject_copy` refuses any contiguous run of **17** subject bytes
+(`QUOTED_FRAGMENT_MAX = 16` refuses before the file is created). I ran its five cases straight off the
+units binary — `output/units-gate1 behaviour` selects exactly 5 tests, 5 passed / 0 failed / 551 filtered.
+No connected group requests the new mode, so the eight `reconstruct`-consuming groups still witness only
+the older modes; the lane's own seven-PASS only-mode run drove binaries that predate the change, so it is
+a no-regression witness, not a witness of the mode. `GAP3` stage 1 moves the RRSI store off
+`std::env::temp_dir()` (the durability defect I recorded when `GAP2` landed) onto the desktop state
+directory (`$XDG_DATA_HOME/rllm`, matching `core/desktop.rs` `data_directory()`), and adds an
+append-only `experience.jsonl` library — sealed lines with previous links, a task-keyed index, a
+4,096-byte labelled prompt block that says it does not outrank the current task — written when a
+refinement settles (`record_settled_library` in `finish_refinement`) and read by the next task's
+propose/compose prompt (`historical_experience` beside the existing `lesson_data` injection). That
+write/read pair is the consumer the gap report asks for; its verification and the `556 → 560` gate
+delta are recorded on the ledger entry.
 
 ## Historical baseline audit (original text)
 
