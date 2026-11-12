@@ -661,6 +661,39 @@ byte at offset 4096 refused with `zlib.error: Compressed back-reference outside 
 on Python — `core/self_build.rs:435,556,983` name `python3` where `core/harness.rs` and
 `core/application.rs` named it zero times at the baseline.
 
+**The `GAP5` verification boundary** — coordinator statement, measured 2026-11-12T08:3Z, owner-reviewable.
+The report's bar is *"packaging and verification are native, like the runtime. A bridge is allowed only
+where no native route exists at all, and the work must state why."* So the boundary was measured, not
+asserted. Census over the **71 group bodies** (`verification/*.py`, 7,560 lines) by the external
+mechanism each one actually touches: `subprocess.Popen` driving the product over a JSONL pipe **63**;
+base64 HTTP-wire injection **55**; `http.server` stub peers **26**; `select` **36**; `threading` **32**;
+`hashlib` **24**; `struct` (binary packing) **34**; `tempfile` **70**; `urllib` **7**; `zipfile` **3**;
+`ssl` **1**; `png` as bytes **5**; `aapt`/`zipalign` **1 each**; the JDK/`CLIENT_TOOLS` binaries **6**/
+**2**; `PIL` **0**; `apksigner` by name **0**.
+
+Every one of those has a native route, and in several cases the route is already in this tree: the
+product itself encodes and decodes base64 natively (`core/network.rs:193 b64`, `:210 unbase64`);
+`tools/alignment.rs` and `tools/apk.rs` already parse zip members natively; `std::net::TcpListener`
+replaces `http.server`; `std::thread` and `File`/`create_dir_all` replace `threading`/`tempfile`; and
+the coordinator that *runs* the groups (`tools/harness.rs`) is already native — it simply shells
+`python3 verification/<name>.py`. The JDK, `aapt`, `zipalign` and `apksigner` references are external
+**binaries**, which the R-rule does not forbid; what is forbidden is the Python body driving them.
+
+Therefore the honest boundary is **not** an exemption list, because there is nothing in that census for
+which no native route exists. It is a migration order, with one shape worth naming because it avoids 71
+separate build products: a single native verification binary with one module per group, dispatched by
+group name, so `tools/harness.rs`'s command changes from `python3 verification/<name>.py` to that
+binary. The interlock must be re-pinned in the same change — `verification/<name>.py`,
+`const GROUPS` in `tools/harness.rs`, and the module-level `names` in `tools/checks.py` are 69/69/69
+today and the `runner==names` assert exists precisely to catch drift — and once the bodies are native,
+`tools/checks.py`'s group-sweep role becomes redundant with the native coordinator and should be
+**deleted, not ported**, while its `--all-units` gate role is being ported now (dispatched as
+`tools/gate.rs`). Two facts to keep honest about the cost and the limits: the remaining Python is
+7,560 lines in `verification/`, which is the single largest R-rule item left in the tree, and the rows
+that cannot execute on this host (`DEVICE-ACCEPTANCE`, the owner's signed companion triple, the two
+unrecoverable controller revisions for `binary_flow`/`history_migration`) are unavailable **subjects**,
+i.e. input gates, not Python dependencies — porting them changes nothing until those inputs exist.
+
 Settled by the owner and not reopened by the report: no turn or round cap, YOLO never asks, web
 search and fetch always approved in every mode, shell/git/hosted search fine as tools, and no
 copy of `rrsi`, `harness2` or `rea` anywhere in the tree (re-verified: no such file or directory).
