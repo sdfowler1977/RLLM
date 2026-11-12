@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T06:44Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T07:5Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -595,8 +595,20 @@ room (11,983,664 bytes), `self_handoff` refused with `file exceeds 4194304 bytes
 11,987,760-byte rollback store sat at `self/rollback`, and the same call naming `journal` and
 `rollback` proceeded; the journal commit itself succeeded there (revision `8c61e052…`, gate
 **541/541**, isolated 55, rollback preserved) and refused a wrong parent before spending a rebuild.
-The edit leg is witnessed at unit level — three new refusal cases inside the 541/541 gate, 538 before
-them — but still not through the product's own approval path. `GAP1` also remains unproven in product reachability:
+The edit leg is now witnessed **through the product's own approval path** (2026-11-12T07:3Z, a room
+extracted from `0f36aa3`): a model turn against a stub provider proposed `self_build`, the product
+staged it (`dialog=approval`, `pending.tool=self_build`, `args.previous_exists=true` stamped by
+`inquiry::prepare` at `core/application.rs:3822`), the owner `approve` dispatched it at `:3640`, and
+the receipt read `Saved 21827 bytes to core/lib.rs.` followed by `bash headless.sh`'s own stdout —
+the product wrote the reviewed bytes and then ran the sanctioned builder. The pair discriminates: the
+pre-edit binary copy still answers `self_echo` with `Unknown operation` while the rebuilt binary
+answers `{"canary":"successor-build"}`, and `builder="sh"` in the same proposal is refused with
+`builder is not one of the sanctioned commands` (`docs/SELF-BUILD-RUNLOG.md`). What is **still**
+missing is narrower than before: `self_build::run` (`core/self_build.rs:1005-1056`) has no
+journal-commit arm — its arms are edit, `builder`, `gate`, `reload` — so gap-report step 3
+(record the revision) is reachable only through the `self_journal` headless op, and no single
+model-driven job has yet run edit → build → gate → journal → reload → continue.
+`GAP1` also remains unproven in product reachability:
 `self_build` is in `const TOOLS` and therefore in `agent_new`'s default tool string
 (`core/harness.rs:166`), but it is absent from `REFINEMENT_TOOLS` (`:274`) and **no connected group
 exercises it**. `GAP5`: `tools/alignment.py`, `tools/readback.py`, `tools/checkpoint.py` are deleted

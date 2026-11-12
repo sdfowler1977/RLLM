@@ -176,17 +176,74 @@ refused (`unit gate did not print case counts`) even though the rollback artifac
 `"revision":"1"` is refused (`revision digest must be empty or 64 hexadecimal characters`), and a
 handoff pair is uninformative unless the over-cap artifact is already on disk.
 
-## Not yet witnessed
+## The model-driven leg — 2026-11-12T07:3Z, commit `0f36aa3`
 
-The proposal -> approval -> execute leg driven by a model turn (this log drives the ops directly).
-The seam map for that leg, measured on these bytes: the headless op surface exposes only the four
-`self_*` verbs (`core/lib.rs:436-440`) and no verb that invokes a tool, so the tool path runs only
-through the event/approval flow — a pending record is built at `core/application.rs:3041-3046`
-(`("tool", name) + st.edit`), the `self_build` approve branch is at `:3100` (`self_build::approve`
-plus `harness_rules::check(&st,"write",…)`), and dispatch is at `:3637`. Driving it needs a model
-turn against a stub provider (the connected groups' recipe: `profile_new` + `profile_save` with a
-loopback endpoint, `verification/permission_modes.py:5-13,36`).
+The leg that was previously unwitnessed is now driven by a **model turn through the product's own
+review path**, in a fresh room (`git archive HEAD | tar -x -C .qwen/tmp/gap1-room3`, `tooling/`
+symlinked, controller built inside the room by `bash headless.sh` in 1m49s — 11,983,664 bytes).
 
-Also unowned: no connected verification group covers `self_build`, and `self_build` is absent from
+Driver: the room's own controller over `--jsonl`, one profile (`protocol=chat`, `plain=true`,
+endpoint `http://ROOM.test/v1/chat/completions`) and one agent whose tools are
+`read,write,self_build`. `plain=true` is load-bearing: without it the request is refused with
+`HTTP is disabled. Enable unencrypted access explicitly for a trusted LAN.` and nothing is staged.
+Each model reply was delivered as `network_result` with `purpose=model`, the `model_expected` ticket
+and a base64 `HTTP/1.1 200 OK` wire carrying an OpenAI-style `tool_calls` message — the same stub
+mechanism the connected groups use (`verification/proposal_feedback.py`).
+
+```
+control 0 - the pre-edit binary refuses the verb that the edit will add:
+{"op":"self_echo","echo":"pre-edit"} -> {"error":"Unknown operation"}
+room core/lib.rs: 21,755 bytes, sha256 addbba3643053f02...
+
+control 1 - the model proposes a builder the seam does not sanction (builder="sh"):
+staged: dialog=approval, pending.tool=self_build, effect=None
+approve -> effect {kind:tool, tool:self_build}
+tool op -> {"error":"builder is not one of the sanctioned commands"}
+
+main leg - same proposal with builder="bash", builder_args=["headless.sh"], timeout_seconds=600:
+staged: dialog=approval, pending.tool=self_build, agent_pending=true,
+        args.previous_exists=true, args.approved_previous=21,728 characters
+        (= the 21,755-byte file: 14 multibyte characters, so 27 continuation bytes; the
+        changed-since-review guard at core/application.rs:3627-3636 compares Rust strings and
+        passed, so the stamp is byte-exact)
+approve -> effect {kind:tool, tool:self_build}
+tool op -> "Saved 21827 bytes to core/lib.rs. /home/shawn/RLLM/.qwen/tmp/gap1-room3/output/headless/RLLM"
+           (the tail is headless.sh's own stdout - the sanctioned builder ran as a bounded child)
+
+after: core/lib.rs 21,827 bytes sha256 7c6478b71605a1c0...; the canary arm is on disk;
+output/headless/RLLM is 11,987,760 bytes sha256 69463f2ef2da... (byte-identical to the binary the
+earlier room produced from the same source, which is a determinism witness, not a stale file)
+
+{"op":"self_echo","echo":"post-edit"}  -> {"value":{"canary":"successor-build"}}   (new binary)
+{"op":"self_echo","echo":"post-edit"}  -> {"error":"Unknown operation"}             (RLLM.pre copy)
+{"op":"self_fingerprint",...}          -> stale:false, files 339, source_digest f38b606522eec7...
+```
+
+So the seam now runs **edit → sanctioned build** with the edit applied by the product itself, on a
+proposal the model produced and the owner approved: `inquiry::prepare` stamps
+`previous_exists`/`approved_previous` (`core/application.rs:3822`), the write-posture guard runs at
+`core/application.rs:3627-3636`, the `self_build` approve branch at `:3100` re-checks the write
+rules, dispatch is at `:3640`, and `self_build::run` applies the reviewed bytes with the write
+policy before calling `sanctioned_child`. The refusing arm is real: the same proposal with
+`builder="sh"` is refused at the place a build would start.
+
+Scope of this leg, stated exactly: it exercised `builder`, not `gate`, and it did not journal or
+reload. The gate arm and the journal commit remain witnessed only through the `self_journal` verb
+(the sanctioned legs above), because **`self_build::run` has no journal arm at all** — its arms are
+edit, `builder`, `gate`, and `reload=exec|spawn`. A model-driven job therefore cannot yet perform
+gap-report step 3 (record the revision) inside the tool; it can only do steps 1, 2 and 4.
+
+## Driver defects in this leg (recorded so the next driver does not repeat them)
+
+`shutil.copyfile` does not carry the execute bit, so the `RLLM.pre` control copy raised
+`PermissionError` until it was `chmod`-ed; a profile without `plain=true` never reaches the network
+stage, so the first send produced no model request and no pending record; and a control whose
+expected marker is the *edited* arm cannot discriminate a control that wrote a different marker —
+the first control checked for the canary instead of its own `// canary` suffix and reported a
+meaningless `False`.
+
+## Still unowned
+
+No connected verification group covers `self_build`, and `self_build` is absent from
 `REFINEMENT_TOOLS` (`core/harness.rs:274`) while present in `const TOOLS`; adding a group would add a
 `verification/*.py` row, which `GAP5` is meant to remove rather than grow.
