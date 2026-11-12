@@ -216,6 +216,43 @@ fn historical_experience(run:&Json)->String{
   Err(error)=>format!("\nHISTORICAL EXPERIENCE\n{error}"),
  }
 }
+// A new process builds task_run with an empty ledger. The propose prompt
+// (request_messages) and gate_candidate/evaluate_pool both read that memory,
+// so the digest-named file has to be loaded here, before either of them runs.
+// resume_run stays the reader. An empty or missing file is the first round:
+// resume_run refuses those on purpose, and calling it would turn that round
+// into an error. A library that fails its seal is already named on the propose
+// prompt; a readable library whose digest file is unreadable is refused.
+fn resume_durable_ledger(run:&mut Json)->Result<()>{
+ if !text(run,"edit_ledger").is_empty()||!text(run,"run_digest").is_empty(){return Ok(());}
+ let root=crate::rrsi::default_root();
+ let root_path=std::path::Path::new(&root);
+ match std::fs::symlink_metadata(root_path){
+  Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Ok(()),
+  Err(error)=>return Err(format!("{error}; existing history was left unchanged")),
+  Ok(meta) if meta.file_type().is_symlink()||!meta.is_dir()=>return Err("ledger root must be a real directory".into()),
+  Ok(_)=>{}
+ }
+ let task=text(run,"task");
+ if task.is_empty(){return Ok(());}
+ let records=match crate::rrsi::load_experience(&root){Ok(records)=>records,Err(_)=>return Ok(())};
+ let want=crate::rrsi::digest(task.as_bytes());
+ let Some(entry)=records.iter().rev().find(|record|text(record,"key")==want) else {return Ok(());};
+ let digest=text(entry,"run_digest");
+ if digest.len()!=64{return Ok(());}
+ let name=format!("{digest}.jsonl");
+ match crate::rrsi::load_file(&root,&name){
+  Ok(document) if document.is_empty()=>return Ok(()),
+  Ok(_)=>{}
+  Err(_)=>return crate::rrsi::resume_run(&root,&name,&task).map(|_|()),
+ }
+ let resumed=crate::rrsi::resume_run(&root,&name,&task)?;
+ put(run,"run_digest",get(&resumed,"run_digest").clone());
+ put(run,"edit_ledger",get(&resumed,"edit_ledger").clone());
+ put(run,"edit_ledger_root",s(&root));
+ put(run,"edit_ledger_path",s(&name));
+ Ok(())
+}
 fn record_settled_library(run:&mut Json){
  let harness=text(run,"composition");if harness.trim().is_empty(){return;}
  let run_digest=refinement_digest(run);
@@ -397,7 +434,7 @@ pub(super) fn event_for(st:&mut Json,a:&str,inputs:&Json)->Result<Json>{
  "capture_file"=>{let mut args=get(st,"edit").clone();if boolean(&args,"capture_scripts"){put(&mut args,"scripts",s("inline"));}let pending=obj(vec![("tool",s("capture")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "compare_files"=>{if text(st,"dialog")!="investigation"{return Err("Open File investigation before comparing paths".into());}if interaction::locked(st){return Err("Finish or cancel the current operation before comparing paths".into());}let e=get(st,"edit");let mut args=obj(vec![("path",s(&text(e,"path"))),("other",s(&text(e,"other")))]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("compare")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "inspect_file"=>{let e=get(st,"edit");let mut args=obj(vec![("path",get(e,"path").clone())]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("inspect")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
- "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));let mut task_run=obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]);if a=="refine"{let workspace=text(st,"approval_root");if !workspace.is_empty(){put(&mut task_run,"workspace",s(&workspace));if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&workspace)){put(&mut task_run,"source_digest",s(&digest));}}}put(&mut next,"task_run",task_run);if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
+ "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));let mut task_run=obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]);if a=="refine"{let workspace=text(st,"approval_root");if !workspace.is_empty(){put(&mut task_run,"workspace",s(&workspace));if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&workspace)){put(&mut task_run,"source_digest",s(&digest));}}resume_durable_ledger(&mut task_run)?;}put(&mut next,"task_run",task_run);if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
  "refinement_review"|"refinement_discard_review"=>{
   completed_refinement(st)?;
   put(st,"dialog",s(a));
@@ -2356,6 +2393,289 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert!(!row.string().contains(held_task)&&!row.string().contains(ood_task)&&!row.string().contains("ood-exact")&&!row.string().contains(harness), "{}", row.string());
  }
 
+
+ struct DataHome{home:std::path::PathBuf,previous:Option<String>}
+ impl DataHome{
+  fn set(label:&str)->Self{
+   static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
+   let home=std::env::temp_dir().join(format!("rllm-resume-{label}-{}-{}",std::process::id(),NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed)));
+   std::fs::create_dir_all(&home).unwrap();
+   let previous=std::env::var("XDG_DATA_HOME").ok();
+   unsafe{std::env::set_var("XDG_DATA_HOME",&home);}
+   Self{home,previous}
+  }
+  fn root(&self)->String{crate::rrsi::default_root()}
+ }
+ impl Drop for DataHome{
+  fn drop(&mut self){
+   unsafe{
+    match &self.previous{
+     Some(value)=>std::env::set_var("XDG_DATA_HOME",value),
+     None=>std::env::remove_var("XDG_DATA_HOME"),
+    }
+   }
+   let _=std::fs::remove_dir_all(&self.home);
+  }
+ }
+ fn prepared()->Json{
+  let mut st=configured();
+  put(&mut st,"agents",Arr(vec![obj(vec![("name",s("General")),("instructions",s("INCUMBENT RULES")),("tools",s("read"))])]));
+  st
+ }
+ fn refine_state(task:&str)->Json{
+  let mut st=prepared();
+  event_for(&mut st,"refine",&obj(vec![("task",s(task))])).unwrap();
+  st
+ }
+ fn seal_rejected(root:&str,task:&str,hypothesis:&str,harness:&str,write_ledger:bool)->String{
+  let row=crate::rrsi::edit("prompt",hypothesis,&crate::rrsi::diff_digest("before",hypothesis),1,1,4,4,"rejected",1,POLICY_RUN).unwrap();
+  let document=text(&crate::rrsi::append_document("",&row,POLICY_RUN).unwrap(),"document");
+  let name=format!("{POLICY_RUN}.jsonl");
+  if write_ledger{
+   crate::rrsi::append_file(root,&name,&row,POLICY_RUN).unwrap();
+   assert_eq!(std::fs::read_to_string(std::path::Path::new(root).join(&name)).unwrap(),document);
+  }
+  crate::rrsi::append_experience(root,task,harness,&document,POLICY_RUN).unwrap();
+  document
+ }
+ fn propose_prompt(st:&Json,baseline:&str)->String{
+  let mut next=st.clone();
+  let mut run=get(&next,"task_run").clone();
+  put(&mut run,"phase",s("propose"));
+  put(&mut run,"baseline",s(baseline));
+  put(&mut next,"task_run",run);
+  text(&request_messages(&next,vec![]).unwrap()[1],"content")
+ }
+ fn stripped_prompt(st:&Json,baseline:&str)->String{
+  let mut next=st.clone();
+  let mut run=get(&next,"task_run").clone();
+  if let Obj(fields)=&mut run{
+   fields.remove("edit_ledger");
+   fields.remove("run_digest");
+   fields.remove("edit_ledger_root");
+   fields.remove("edit_ledger_path");
+  }
+  put(&mut next,"task_run",run);
+  propose_prompt(&next,baseline)
+ }
+ fn stable_prompt(prompt:&str)->String{
+  let marker="\"id\":\"question-";
+  let mut out=String::new();
+  let mut rest=prompt;
+  while let Some(at)=rest.find(marker){
+   out.push_str(&rest[..at]);
+   out.push_str("\"id\":\"question\"");
+   let tail=&rest[at+marker.len()..];
+   let Some(end)=tail.find('"') else {out.push_str(tail);return out;};
+   rest=&tail[end..];
+  }
+  out.push_str(rest);
+  out
+ }
+ fn assert_no_ledger_keys(run:&Json){
+  let body=run.string();
+  assert!(!body.contains("\"edit_ledger\""),"{body}");
+  assert!(!body.contains("\"run_digest\""),"{body}");
+  assert!(!body.contains("\"edit_ledger_root\""),"{body}");
+  assert!(!body.contains("\"edit_ledger_path\""),"{body}");
+ }
+ fn assert_first_round_accepts(st:&mut Json,reply:&str){
+  put(st,"busy",Bool(false));
+  model_reply(st,"Original reply.").unwrap();
+  assert_eq!(text(get(st,"task_run"),"phase"),"propose");
+  put(st,"busy",Bool(false));
+  model_reply(st,reply).unwrap();
+  let run=get(st,"task_run");
+  assert_eq!(text(run,"phase"),"probe","{}",text(run,"round_note"));
+  assert_eq!(text(run,"candidate"),reply);
+ }
+ #[test]
+ fn fresh_process_reconstructs_ledger_rows_and_does_not_repropose(){
+  let home=DataHome::set("rows");
+  let root=home.root();
+  let task="Write the bounded note.";
+  let hypothesis="do-not-repeat";
+  let harness_text="ADOPTED-HARNESS-MARKER";
+  let document=seal_rejected(&root,task,hypothesis,harness_text,true);
+  let ledger_path=std::path::Path::new(&root).join(format!("{POLICY_RUN}.jsonl"));
+  let before=std::fs::read(&ledger_path).unwrap();
+  let mut st=refine_state(task);
+  let run=get(&st,"task_run");
+  // Fails if the new process leaves the ledger empty or stores a different document than the digest file.
+  assert_eq!(text(run,"edit_ledger"),document);
+  assert_eq!(text(run,"edit_ledger").as_bytes(),before.as_slice());
+  assert_eq!(text(run,"run_digest"),POLICY_RUN);
+  assert_eq!(text(run,"edit_ledger_root"),root);
+  assert_eq!(text(run,"edit_ledger_path"),format!("{POLICY_RUN}.jsonl"));
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),before);
+  let rows=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap();
+  assert_eq!(rows.len(),1);
+  assert_eq!(text(&rows[0],"hypothesis"),hypothesis);
+  assert_eq!(text(&rows[0],"verdict"),"rejected");
+  let prompt=propose_prompt(&st,"Original reply.");
+  // Fails if the propose prompt still omits the ledger, the rejected hypothesis, or the adopted harness.
+  assert!(prompt.contains("EDIT HISTORY"),"{prompt}");
+  assert!(prompt.contains("Rejected hypotheses (do not propose these again):"),"{prompt}");
+  assert!(prompt.contains(hypothesis),"{prompt}");
+  assert!(prompt.contains(harness_text),"{prompt}");
+  let mut pooled=get(&st,"task_run").clone();
+  let pool_root=home.home.join("pool");
+  std::fs::create_dir_all(&pool_root).unwrap();
+  put(&mut pooled,"edit_ledger_root",s(pool_root.to_str().unwrap()));
+  put(&mut pooled,"edit_ledger_path",s("pool.jsonl"));
+  evaluate_pool(&st,&mut pooled,&[hypothesis.into()],&[]).unwrap();
+  // Fails if evaluate_pool adopts the rejected hypothesis or records some other decision.
+  assert!(text(&pooled,"edit_ledger_error").is_empty(),"{}",text(&pooled,"edit_ledger_error"));
+  assert_eq!(text(&pooled,"composition"),"INCUMBENT RULES");
+  assert_ne!(text(&pooled,"composition"),hypothesis);
+  let pool_rows=crate::rrsi::records_of(&text(&pooled,"edit_ledger")).unwrap();
+  let decision=text(pool_rows.last().unwrap(),"decision");
+  assert!(decision.contains("already rejected in round 1"),"{decision}");
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),before);
+  put(&mut st,"busy",Bool(false));
+  model_reply(&mut st,"Original reply.").unwrap();
+  assert_eq!(text(get(&st,"task_run"),"phase"),"propose");
+  assert_eq!(std::fs::read(&ledger_path).unwrap(),before);
+  put(&mut st,"busy",Bool(false));
+  model_reply(&mut st,hypothesis).unwrap();
+  let run=get(&st,"task_run");
+  // Fails if the rejected hypothesis moves to probe, or the refusal string changes.
+  assert_eq!(text(run,"phase"),"propose");
+  assert_eq!(get(run,"candidate"),&Null);
+  assert_eq!(text(run,"round_note"),crate::rrsi::rejection_refusal("prompt",1));
+  assert!(std::fs::read(&ledger_path).unwrap().starts_with(&before));
+  let mut other=refine_state("A different task entirely");
+  // Fails if a ledger for one task is attached to a different task.
+  assert_no_ledger_keys(get(&other,"task_run"));
+  assert_first_round_accepts(&mut other,hypothesis);
+ }
+ #[test]
+ fn absent_or_empty_ledger_keeps_first_round_bytes(){
+  let baseline="Original reply.";
+  let novel="brand new instructions for the note";
+  let task="Write the bounded note.";
+  let hypothesis="do-not-repeat";
+  {
+   let home=DataHome::set("absent");
+   let root=home.root();
+   let mut first=refine_state(task);
+   let second=refine_state(task);
+   // Fails if refine entry mints a run digest or creates the ledger directory.
+   // Chat ids differ across processes, so the byte check is the prompt below.
+   assert_no_ledger_keys(get(&first,"task_run"));
+   assert_no_ledger_keys(get(&second,"task_run"));
+   assert!(!std::path::Path::new(&root).exists(),"missing ledger root was created at refine entry");
+   let prompt=propose_prompt(&first,baseline);
+   let other=propose_prompt(&second,baseline);
+   // Fails if two fresh prompts differ outside the question id, or if hidden ledger fields change any prompt byte.
+   assert_eq!(stable_prompt(&prompt),stable_prompt(&other));
+   assert_eq!(prompt,stripped_prompt(&first,baseline));
+   assert!(!prompt.contains("EDIT HISTORY"),"{prompt}");
+   assert!(!prompt.contains("do not propose these again"),"{prompt}");
+   assert!(!prompt.contains("Adopted harness"),"{prompt}");
+   assert!(prompt.contains("Edits remaining this round: 4"),"{prompt}");
+   assert_first_round_accepts(&mut first,novel);
+  }
+  {
+   let home=DataHome::set("library-only");
+   let root=home.root();
+   seal_rejected(&root,task,hypothesis,"ADOPTED-HARNESS-MARKER",false);
+   assert!(!std::path::Path::new(&root).join(format!("{POLICY_RUN}.jsonl")).exists());
+   let mut st=refine_state(task);
+   assert_no_ledger_keys(get(&st,"task_run"));
+   let prompt=propose_prompt(&st,baseline);
+   // Fails if a library row without its digest file changes the first-round prompt or blocks the hypothesis.
+   assert_eq!(prompt,stripped_prompt(&st,baseline));
+   assert!(prompt.contains("ADOPTED-HARNESS-MARKER"),"{prompt}");
+   assert!(!prompt.contains("EDIT HISTORY"),"{prompt}");
+   assert!(!prompt.contains("do not propose these again"),"{prompt}");
+   assert!(prompt.contains("Edits remaining this round: 4"),"{prompt}");
+   assert_first_round_accepts(&mut st,hypothesis);
+  }
+  {
+   let home=DataHome::set("empty-file");
+   let root=home.root();
+   seal_rejected(&root,task,hypothesis,"ADOPTED-HARNESS-MARKER",false);
+   let empty=std::path::Path::new(&root).join(format!("{POLICY_RUN}.jsonl"));
+   std::fs::write(&empty,b"").unwrap();
+   let mut st=refine_state(task);
+   assert_no_ledger_keys(get(&st,"task_run"));
+   let prompt=propose_prompt(&st,baseline);
+   // Fails if a zero-length digest file is refused or injected into the prompt.
+   assert_eq!(prompt,stripped_prompt(&st,baseline));
+   assert!(!prompt.contains("EDIT HISTORY"),"{prompt}");
+   assert!(prompt.contains("Edits remaining this round: 4"),"{prompt}");
+   assert_eq!(std::fs::read(&empty).unwrap(),b"");
+   assert_first_round_accepts(&mut st,hypothesis);
+  }
+ }
+ #[test]
+ fn tampered_ledger_refuses_the_fresh_refine(){
+  let home=DataHome::set("tamper");
+  let root=home.root();
+  let task="Write the bounded note.";
+  seal_rejected(&root,task,"do-not-repeat","ADOPTED-HARNESS-MARKER",true);
+  let name=format!("{POLICY_RUN}.jsonl");
+  let path=std::path::Path::new(&root).join(&name);
+  let original=std::fs::read(&path).unwrap();
+  let needle=b"do-not-repeat";
+  let at=original.windows(needle.len()).position(|window|window==needle).unwrap();
+  let mut tampered=original.clone();
+  tampered[at]=b'x';
+  std::fs::write(&path,&tampered).unwrap();
+  let expected=crate::rrsi::resume_run(&root,&name,task).unwrap_err();
+  let mut st=prepared();
+  let prior=st.clone();
+  let got=event_for(&mut st,"refine",&obj(vec![("task",s(task))])).unwrap_err();
+  // Fails if a digest mismatch starts the round on an empty ledger, or if the refusal string changes.
+  assert_eq!(got,expected);
+  assert_eq!(st,prior);
+  assert_eq!(std::fs::read(&path).unwrap(),tampered);
+  event_for(&mut st,"delegate",&obj(vec![("task",s(task))])).unwrap();
+  assert!(text(get(&st,"task_run"),"edit_ledger").is_empty());
+ }
+ #[test]
+ fn unreadable_ledger_refuses_the_fresh_refine(){
+  let home=DataHome::set("symlink");
+  let root=home.root();
+  let task="Write the bounded note.";
+  seal_rejected(&root,task,"do-not-repeat","ADOPTED-HARNESS-MARKER",true);
+  let name=format!("{POLICY_RUN}.jsonl");
+  let path=std::path::Path::new(&root).join(&name);
+  std::fs::remove_file(&path).unwrap();
+  std::os::unix::fs::symlink("elsewhere",&path).unwrap();
+  let expected=crate::rrsi::resume_run(&root,&name,task).unwrap_err();
+  let mut st=prepared();
+  let prior=st.clone();
+  let got=event_for(&mut st,"refine",&obj(vec![("task",s(task))])).unwrap_err();
+  // Fails if a symlink ledger is followed or treated as an empty first round.
+  assert_eq!(got,expected);
+  assert_eq!(st,prior);
+  assert!(std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+ }
+ #[test]
+ fn tampered_library_stays_on_the_propose_prompt(){
+  let home=DataHome::set("library");
+  let root=home.root();
+  let task="Write the bounded note.";
+  seal_rejected(&root,task,"do-not-repeat","ADOPTED-HARNESS-MARKER",true);
+  let path=std::path::Path::new(&root).join("experience.jsonl");
+  let original=std::fs::read(&path).unwrap();
+  let at=original.windows(7).position(|window|window==b"ADOPTED").unwrap();
+  let mut tampered=original.clone();
+  tampered[at]=b'B';
+  std::fs::write(&path,&tampered).unwrap();
+  let mut st=refine_state(task);
+  // Fails if a library seal error refuses the round, or if the ledger is still loaded from the bad index.
+  assert_no_ledger_keys(get(&st,"task_run"));
+  put(&mut st,"busy",Bool(false));
+  model_reply(&mut st,"Original reply.").unwrap();
+  let prompt=propose_prompt(&st,"Original reply.");
+  assert!(prompt.contains("library record digest does not match its body; existing history was left unchanged"),"{prompt}");
+  assert!(!prompt.contains("Adopted harness"),"{prompt}");
+  assert!(!prompt.contains("EDIT HISTORY"),"{prompt}");
+  assert_eq!(std::fs::read(&path).unwrap(),tampered);
+ }
 }
 
 #[cfg(test)] mod negotiation_checks{

@@ -2559,4 +2559,89 @@ mod checks {
         assert_eq!(fs::read(&path).unwrap(), tampered);
         assert_eq!(fs::read(&ledger_path).unwrap(), ledger_before);
     }
+
+    #[test]
+    fn digest_named_ledger_resumes_rows_without_rewriting() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let name = format!("{RUN}.jsonl");
+        let hypothesis = "do-not-repeat";
+        let mut ledger = String::new();
+        let row = edit("prompt", hypothesis, &diff_digest("before", hypothesis), 1, 1, 4, 4, "rejected", 1, RUN).unwrap();
+        ledger = text(&append_document(&ledger, &row, RUN).unwrap(), "document");
+        append_file(root, &name, &row, RUN).unwrap();
+        append_experience(root, "resume task", "ADOPTED-HARNESS-MARKER", &ledger, RUN).unwrap();
+        let ledger_bytes = fs::read(scratch.0.join(&name)).unwrap();
+        let library_bytes = fs::read(scratch.0.join("experience.jsonl")).unwrap();
+        let resumed = resume_run(root, &name, "resume task").unwrap();
+        // Fails if the digest file name is rejected, the row is dropped, or either file is rewritten.
+        assert_eq!(fs::read(scratch.0.join(&name)).unwrap(), ledger_bytes);
+        assert_eq!(fs::read(scratch.0.join("experience.jsonl")).unwrap(), library_bytes);
+        assert_eq!(text(&resumed, "edit_ledger").as_bytes(), ledger_bytes.as_slice());
+        assert_eq!(text(&resumed, "run_digest"), RUN);
+        let rows = records_of(&text(&resumed, "edit_ledger")).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(text(&rows[0], "verdict"), "rejected");
+        assert_eq!(text(&rows[0], "hypothesis"), hypothesis);
+        let prompt = text(&resumed, "prompt");
+        assert!(prompt.contains("EDIT HISTORY"), "{prompt}");
+        assert!(prompt.contains("Rejected hypotheses"), "{prompt}");
+        assert!(prompt.contains(hypothesis), "{prompt}");
+        assert!(prompt.contains("ADOPTED-HARNESS-MARKER"), "{prompt}");
+    }
+
+    #[test]
+    fn tampered_ledger_digest_is_refused_and_bytes_stay() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let row = edit("prompt", "kept-hypothesis", &diff_digest("a", "b"), 1, 1, 4, 4, "rejected", 1, RUN).unwrap();
+        append_file(root, "edits.jsonl", &row, RUN).unwrap();
+        append_experience(root, "resume task", "adopted harness", "", RUN).unwrap();
+        let path = scratch.0.join("edits.jsonl");
+        let original = fs::read(&path).unwrap();
+        let needle = b"kept-hypothesis";
+        let at = original.windows(needle.len()).position(|window| window == needle).unwrap();
+        let mut tampered = original.clone();
+        tampered[at] = b'x';
+        fs::write(&path, &tampered).unwrap();
+        let library_before = fs::read(scratch.0.join("experience.jsonl")).unwrap();
+        let refused = resume_run(root, "edits.jsonl", "resume task").unwrap_err();
+        // Fails if a broken digest is returned as an empty ledger, or if either file is rewritten.
+        assert!(refused.contains("ledger record digest does not match its body"), "{refused}");
+        assert!(refused.contains("existing history was left unchanged"), "{refused}");
+        assert_eq!(fs::read(&path).unwrap(), tampered);
+        assert_eq!(fs::read(scratch.0.join("experience.jsonl")).unwrap(), library_before);
+    }
+
+    #[test]
+    fn unreadable_ledger_is_refused_not_empty() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let path = scratch.0.join("edits.jsonl");
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+        let before = fs::read(&path).unwrap();
+        let refused = resume_run(root, "edits.jsonl", "resume task").unwrap_err();
+        // Fails if bad bytes are treated as a successful empty resume, or if the file is rewritten.
+        assert!(refused.contains("ledger is not UTF-8"), "{refused}");
+        assert!(refused.contains("existing history was left unchanged"), "{refused}");
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(resume_run(root, "edits.jsonl", "resume task").is_err());
+    }
+
+    #[test]
+    fn empty_or_absent_ledger_is_not_a_successful_resume() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let missing = scratch.0.join("missing.jsonl");
+        let absent = resume_run(root, "missing.jsonl", "resume task").unwrap_err();
+        // Fails if the reader is weakened to Ok(empty) for a file that is not there.
+        assert!(absent.contains("resume needs the sealed ledger"), "{absent}");
+        assert!(!missing.exists());
+        let empty_path = scratch.0.join("empty.jsonl");
+        fs::write(&empty_path, b"").unwrap();
+        let empty = resume_run(root, "empty.jsonl", "resume task").unwrap_err();
+        // Fails if a zero-length file is returned as an empty successful ledger.
+        assert!(empty.contains("resume needs the sealed ledger"), "{empty}");
+        assert_eq!(fs::read(&empty_path).unwrap(), b"");
+    }
 }
