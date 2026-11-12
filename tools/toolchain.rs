@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, Write};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -43,10 +43,11 @@ impl PyErr {
         self.message.clone()
     }
     fn traceback_line(&self) -> String {
-        if self.message.is_empty() {
+        let message = self.text();
+        if message.is_empty() {
             self.class.to_string()
         } else {
-            format!("{}: {}", self.class, self.message)
+            format!("{}: {}", self.class, message)
         }
     }
 }
@@ -94,6 +95,7 @@ fn io_err(err: &std::io::Error, path: &str) -> PyErr {
     PyErr { class, message, caught: true }
 }
 
+#[cfg(test)]
 fn sha256(data: &[u8]) -> [u8; 32] {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -938,6 +940,7 @@ fn commit_partial(pin: &Pin, path: &Path, partial: &Path, size: u64, status_ok: 
     Ok(())
 }
 
+#[cfg(test)]
 fn durable_from_reader(pin: &Pin, path: &Path, reader: impl Read) -> Result<(), PyErr> {
     let partial = sibling(path, ".partial");
     let size = stream_partial(pin, &partial, reader)?;
@@ -982,10 +985,11 @@ fn durable_curl(pin: &Pin, path: &Path) -> Result<(), PyErr> {
 }
 
 fn retryable(err: &PyErr) -> bool {
-    matches!(
-        err.class,
-        "ValueError" | "OSError" | "FileNotFoundError" | "PermissionError" | "FileExistsError" | "NotADirectoryError" | "IsADirectoryError"
-    )
+    err.caught
+        && matches!(
+            err.class,
+            "ValueError" | "OSError" | "FileNotFoundError" | "PermissionError" | "FileExistsError" | "NotADirectoryError" | "IsADirectoryError"
+        )
 }
 
 fn shown_target(pin: &Pin) -> &str {
@@ -1027,7 +1031,7 @@ where
                 if attempt == 1 {
                     return Err(err);
                 }
-                println!("Retrying rejected official download once: {} {}", pin.component, err.message);
+                println!("Retrying rejected official download once: {} {}", pin.component, err.text());
                 let _ = io::stdout().flush();
             }
             Err(err) => return Err(err),
@@ -1456,13 +1460,26 @@ fn decompress_tool(tool: &str, path: &Path) -> Result<Vec<u8>, PyErr> {
     Ok(output.stdout)
 }
 
+fn zip_tail(path: &Path) -> Result<Vec<u8>, PyErr> {
+    let mut file = File::open(path).map_err(|err| io_err(&err, &display(path)))?;
+    let len = file.metadata().map_err(|err| io_err(&err, &display(path)))?.len();
+    if len < 22 {
+        return Ok(Vec::new());
+    }
+    let window = len.min(22 + 65535);
+    file.seek(std::io::SeekFrom::Start(len - window)).map_err(|err| io_err(&err, &display(path)))?;
+    let mut tail = vec![0u8; window as usize];
+    file.read_exact(&mut tail).map_err(|err| io_err(&err, &display(path)))?;
+    Ok(tail)
+}
+
 fn extract_archive(path: &Path, dest: &Path) -> Result<usize, PyErr> {
     fs::create_dir_all(dest).map_err(|err| io_err(&err, &display(dest)))?;
-    let data = fs::read(path).map_err(|err| io_err(&err, &display(path)))?;
-    if looks_like_zip(&data) {
-        let archive = Archive::parse(data)?;
+    if looks_like_zip(&zip_tail(path)?) {
+        let archive = Archive::open(path)?;
         return extract_zip(&archive, dest);
     }
+    let data = fs::read(path).map_err(|err| io_err(&err, &display(path)))?;
     let plain = if is_gzip(&data) {
         decompress_tool("gzip", path)?
     } else if is_xz(&data) {
@@ -1725,6 +1742,17 @@ fn object_get<'a>(value: &'a Json, key: &str) -> Option<&'a Json> {
     }
 }
 
+fn pinned_size(value: &Json) -> Result<u64, PyErr> {
+    match value {
+        Json::Number(number) => Ok(*number),
+        // JSON true/false stays a bool in this parser. Python's bool is an int
+        // subclass, and the toolchain this file replaces compared that value
+        // with the download length, so true is 1 and false is 0.
+        Json::Bool(flag) => Ok(if *flag { 1 } else { 0 }),
+        _ => Err(PyErr::uncaught("TypeError", "bytes is not an integer".into())),
+    }
+}
+
 fn load_pins(text: &str) -> Result<Vec<Pin>, PyErr> {
     let value = parse_json(text)?;
     let tools = object_get(&value, "tools").ok_or_else(|| key_error("tools"))?;
@@ -1749,9 +1777,8 @@ fn load_pins(text: &str) -> Result<Vec<Pin>, PyErr> {
             Some(_) => return Err(PyErr::uncaught("TypeError", "sha256 is not a string".into())),
         };
         let bytes = match object_get(item, "bytes").or_else(|| object_get(item, "size")) {
-            Some(Json::Number(value)) => *value,
+            Some(value) => pinned_size(value)?,
             None => return Err(key_error("bytes")),
-            Some(_) => return Err(PyErr::uncaught("TypeError", "bytes is not an integer".into())),
         };
         let target = match object_get(item, "target") {
             Some(Json::String(text)) => Some(text.clone()),
@@ -2244,5 +2271,65 @@ mod checks {
         assert_eq!(parse_cli(&["--".into(), "-h".into()]).unwrap_err(), 2);
         assert_eq!(parse_cli(&["nope".into()]).unwrap_err(), 2);
         assert_eq!(format!("Verified persisted official {} {}", "buildtools", ""), "Verified persisted official buildtools ");
+    }
+
+    #[test]
+    fn uncaught_download_error_is_not_retried() {
+        let dir = scratch("uncaught");
+        let pin = Pin {
+            component: "demo".into(),
+            target: None,
+            url: "https://example.invalid/demo.tar.xz".into(),
+            sha256: hex_digest(&sha256(b"abc")),
+            bytes: 3,
+        };
+        let mut calls = 0;
+        let err = download_with(&pin, &dir.join("once"), |_, _| {
+            calls += 1;
+            Err(PyErr::uncaught("ValueError", "Official tool download failed: demo".into()))
+        })
+        .unwrap_err();
+        assert_eq!(calls, 1);
+        assert_eq!(err.traceback_line(), "ValueError: Official tool download failed: demo");
+        assert_eq!(err.text(), "Official tool download failed: demo");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn boolean_pin_field_is_refused() {
+        let text = "{\"tools\":[{\"component\":true,\"url\":\"https://example.invalid/x\",\"sha256\":\"ab\",\"bytes\":1}]}";
+        let err = load_pins(text).unwrap_err();
+        assert_eq!(err.traceback_line(), "TypeError: component is not a string");
+        let text = "{\"tools\":[{\"component\":false,\"url\":\"https://example.invalid/x\",\"sha256\":\"ab\",\"bytes\":1}]}";
+        let err = load_pins(text).unwrap_err();
+        assert_eq!(err.traceback_line(), "TypeError: component is not a string");
+        let text = "{\"tools\":[{\"component\":\"rustc\",\"url\":\"https://example.invalid/x\",\"sha256\":\"ab\",\"bytes\":null}]}";
+        let err = load_pins(text).unwrap_err();
+        assert_eq!(err.traceback_line(), "TypeError: bytes is not an integer");
+        let text = "{\"tools\":[{\"component\":\"rustc\",\"url\":\"https://example.invalid/x\",\"sha256\":\"ab\",\"bytes\":false}]}";
+        let pins = load_pins(text).unwrap();
+        assert_eq!(pins[0].bytes, 0);
+    }
+
+    #[test]
+    fn boolean_true_pin_size_is_one() {
+        let text = "{\"tools\":[{\"component\":\"rustc\",\"url\":\"https://example.invalid/x\",\"sha256\":\"ab\",\"bytes\":true}]}";
+        let pins = load_pins(text).unwrap();
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].component, "rustc");
+        assert_eq!(pins[0].bytes, 1);
+        assert!(pins[0].target.is_none());
+        let text = "{\"tools\":[{\"component\":\"rustc\",\"url\":\"https://example.invalid/x\",\"sha256\":\"ab\",\"size\":true}]}";
+        let pins = load_pins(text).unwrap();
+        assert_eq!(pins[0].bytes, 1);
+        let text = "{\"tools\":[{\"component\":\"rustc\",\"url\":\"https://example.invalid/x\",\"sha256\":\"ab\",\"bytes\":false}]}";
+        let pins = load_pins(text).unwrap();
+        assert_eq!(pins[0].bytes, 0);
+        let text = "{\"tools\":[{\"component\":\"rustc\",\"url\":\"https://example.invalid/x\",\"sha256\":\"ab\",\"bytes\":1}]}";
+        let pins = load_pins(text).unwrap();
+        assert_eq!(pins[0].bytes, 1);
+        let text = "{\"tools\":[{\"component\":\"rustc\",\"url\":\"https://example.invalid/x\",\"sha256\":\"ab\",\"bytes\":\"1\"}]}";
+        let err = load_pins(text).unwrap_err();
+        assert_eq!(err.traceback_line(), "TypeError: bytes is not an integer");
     }
 }
