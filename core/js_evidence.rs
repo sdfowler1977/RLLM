@@ -1791,6 +1791,26 @@ mod checks {
         out
     }
 
+    fn listed_files(entries: &[(&str, u64)]) -> Vec<u8> {
+        let mut files = String::from("{\"files\":{");
+        let mut tail = Vec::new();
+        for (index, (name, size)) in entries.iter().enumerate() {
+            if index > 0 {
+                files.push(',');
+            }
+            let offset = tail.len();
+            files.push_str(&format!("\"{name}\":{{\"offset\":\"{offset}\",\"size\":{size}}}"));
+            tail.resize(tail.len() + *size as usize, b'x');
+        }
+        files.push_str("}}");
+        asar_bytes(&files, &tail)
+    }
+
+    fn assert_only_cap(obs: &Observation, cap: &'static str) {
+        assert_eq!(obs.caps, vec![cap], "{}", obs.text);
+        assert!(obs.text.contains(&format!("Refusal: {cap}.")), "{}", obs.text);
+    }
+
     /// Fails if a short container still yields the directory fragment, or if a
     /// well-formed header of the same shape is refused along with it.
     #[test]
@@ -2046,5 +2066,307 @@ mod checks {
         let dropped = format!("m{MODULE_FILE_LIMIT:04}.js");
         assert!(obs.modules.iter().all(|module| module.name != dropped));
         assert_eq!(obs.modules[0].name, "m0000.js");
+    }
+
+    /// Fails if the 65th .node is listed, if the cap is unnamed, or if another cap truncated the archive first.
+    #[test]
+    fn native_addon_cap_names_the_omitted_row() {
+        let names: Vec<String> = (0..=ADDON_LIMIT).map(|index| format!("n{index:02}.node")).collect();
+        assert_eq!(names.len(), ADDON_LIMIT + 1);
+        let pairs: Vec<(&str, u64)> = names.iter().map(|name| (name.as_str(), 1)).collect();
+        let obs = observe(&listed_files(&pairs), Kind::Asar, true);
+        assert!(obs.asar_refusal.is_none(), "{}", obs.text);
+        assert_eq!(obs.addons.len(), ADDON_LIMIT);
+        assert_eq!((ADDON_LIMIT + 1) - obs.addons.len(), 1);
+        assert_only_cap(&obs, ADDON_CAP);
+        assert!(obs.text.contains(&format!("Native add-ons: {ADDON_LIMIT}.")), "{}", obs.text);
+        assert!(
+            obs.text.contains("Unknown: native add-on names past the javascript native-addon cap were not listed."),
+            "{}",
+            obs.text
+        );
+        assert_eq!(obs.addons[0].name, "n00.node");
+        assert_eq!(obs.addons.last().unwrap().name, "n63.node");
+        assert!(!obs.text.contains("addon \"n64.node\""), "{}", obs.text);
+        assert_eq!(obs.asar_entries.len(), ADDON_LIMIT + 1);
+        assert!(obs.modules.is_empty());
+        assert!(obs.graph.is_empty());
+        assert!(obs.unknowns.is_empty());
+        assert!(obs.census.is_empty());
+        assert!(obs.maps.is_empty());
+        assert!(!obs.text.contains(REPORT_CAP), "{}", obs.text.len());
+        assert!(!obs.text.contains(ASAR_ENTRY_CAP), "{}", obs.text);
+        assert!(!obs.text.contains(MODULE_FILE_CAP), "{}", obs.text);
+    }
+
+    /// Fails if the 65th computed require is stored, or if the unknown cap is unnamed.
+    #[test]
+    fn module_unknown_cap_drops_the_extra_unknown() {
+        let mut source = String::new();
+        for index in 0..=MODULE_UNKNOWN_LIMIT {
+            source.push_str(&format!("require(n{index});\n"));
+        }
+        let obs = script(&source);
+        let dropped_at = source.rfind(&format!("require(n{MODULE_UNKNOWN_LIMIT});")).unwrap();
+        assert_eq!(obs.unknowns.len(), MODULE_UNKNOWN_LIMIT);
+        assert!(obs.unknowns.iter().all(|item| item.offset != dropped_at));
+        assert_eq!(obs.unknowns[0].offset, 0);
+        assert_eq!(obs.unknowns[0].reason, "computed require specifier");
+        assert!(obs.graph.is_empty(), "{}", obs.text);
+        assert_only_cap(&obs, MODULE_UNKNOWN_CAP);
+        assert!(obs.text.contains(&format!("Unknowns: {MODULE_UNKNOWN_LIMIT}.")), "{}", obs.text);
+        assert!(!obs.text.contains(REPORT_CAP), "{}", obs.text.len());
+    }
+
+    /// Fails if the 65th ipc literal is stored, or if the census cap is unnamed.
+    #[test]
+    fn string_census_cap_drops_the_extra_site() {
+        let mut source = String::new();
+        for index in 0..=CENSUS_LIMIT {
+            source.push_str(&format!("ipcMain.on(\"v{index:02}\");\n"));
+        }
+        let obs = script(&source);
+        let dropped = format!("v{CENSUS_LIMIT:02}");
+        assert_eq!(obs.census.len(), CENSUS_LIMIT);
+        assert!(obs.census.iter().all(|site| site.value != dropped));
+        assert_eq!(obs.census[0].kind, "ipcMain.on");
+        assert_eq!(obs.census[0].value, "v00");
+        assert_eq!(obs.census.last().unwrap().value, "v63");
+        assert!(obs.graph.is_empty(), "{}", obs.text);
+        assert!(obs.unknowns.is_empty(), "{:?}", obs.unknowns);
+        assert_only_cap(&obs, CENSUS_CAP);
+        assert!(obs.text.contains(&format!("String census: {CENSUS_LIMIT} sites.")), "{}", obs.text);
+        assert!(!obs.text.contains(REPORT_CAP), "{}", obs.text.len());
+        assert!(!obs.text.contains(&format!("literal \"{dropped}\".")), "{}", obs.text);
+    }
+
+    /// Fails if the 17th sourceMappingURL is stored, or if the source-map cap is unnamed.
+    #[test]
+    fn source_map_cap_drops_the_extra_reference() {
+        let mut source = String::new();
+        for index in 0..=SOURCE_MAP_LIMIT {
+            source.push_str(&format!("//# sourceMappingURL=m{index:02}.js.map\n"));
+        }
+        let obs = script(&source);
+        let dropped = format!("m{SOURCE_MAP_LIMIT:02}.js.map");
+        assert_eq!(obs.maps.len() + obs.map_unknowns.len(), SOURCE_MAP_LIMIT);
+        assert!(obs.map_unknowns.is_empty(), "{:?}", obs.map_unknowns);
+        assert!(obs.maps.iter().all(|map| map.target != dropped));
+        assert_eq!(obs.maps[0].target, "m00.js.map");
+        assert_eq!(obs.maps.last().unwrap().target, "m15.js.map");
+        assert_only_cap(&obs, SOURCE_MAP_CAP);
+        assert!(
+            obs.text.contains(&format!("Source maps: {SOURCE_MAP_LIMIT} references, 0 unknowns.")),
+            "{}",
+            obs.text
+        );
+        assert!(!obs.text.contains(&dropped), "{}", obs.text);
+        assert!(!obs.text.contains(REPORT_CAP), "{}", obs.text.len());
+    }
+
+    /// Fails if the 129th member is listed, or if the entry cap is unnamed while another cap did the cutting.
+    #[test]
+    fn asar_entry_cap_drops_the_extra_entry() {
+        let names: Vec<String> = (0..=ASAR_ENTRY_LIMIT).map(|index| format!("e{index:03}")).collect();
+        assert_eq!(names.len(), ASAR_ENTRY_LIMIT + 1);
+        let pairs: Vec<(&str, u64)> = names.iter().map(|name| (name.as_str(), 1)).collect();
+        let obs = observe(&listed_files(&pairs), Kind::Asar, true);
+        assert!(obs.asar_refusal.is_none(), "{}", obs.text);
+        assert_eq!(obs.asar_entries.len(), ASAR_ENTRY_LIMIT);
+        assert_eq!(obs.asar_entries[0].name, "e000");
+        assert_eq!(obs.asar_entries.last().unwrap().name, "e127");
+        assert!(obs.asar_entries.iter().all(|entry| entry.name != format!("e{ASAR_ENTRY_LIMIT:03}")));
+        assert!(obs.modules.is_empty());
+        assert!(obs.addons.is_empty());
+        assert!(obs.graph.is_empty());
+        assert_only_cap(&obs, ASAR_ENTRY_CAP);
+        assert!(obs.text.contains(&format!("Entries: {ASAR_ENTRY_LIMIT}.")), "{}", obs.text);
+        assert!(!obs.text.contains(&format!("entry \"e{ASAR_ENTRY_LIMIT:03}\"")), "{}", obs.text);
+        assert!(!obs.text.contains(REPORT_CAP), "{}", obs.text.len());
+        assert!(!obs.text.contains(ADDON_CAP), "{}", obs.text);
+        assert!(!obs.text.contains(MODULE_FILE_CAP), "{}", obs.text);
+    }
+
+    /// Fails if a specifier of length SPECIFIER_LIMIT + 1 is kept, or if length SPECIFIER_LIMIT is refused.
+    /// This bound drops the edge. It does not keep SPECIFIER_LIMIT rows.
+    #[test]
+    fn specifier_length_cap_refuses_one_past_the_bound() {
+        let over = "a".repeat(SPECIFIER_LIMIT + 1);
+        let refused = script(&format!("import \"{over}\";\n"));
+        assert!(refused.graph.is_empty(), "{}", refused.text);
+        assert_eq!(refused.unknowns.len(), 1);
+        assert_eq!(refused.unknowns[0].reason, "specifier exceeds the length bound");
+        assert_only_cap(&refused, SPECIFIER_CAP);
+        assert!(!refused.text.contains(&over), "{}", refused.text.len());
+        let kept_spec = "b".repeat(SPECIFIER_LIMIT);
+        let kept = script(&format!("import \"{kept_spec}\";\n"));
+        assert!(kept.caps.is_empty(), "{}", kept.text);
+        assert_eq!(kept.graph.len(), 1);
+        assert_eq!(kept.graph[0].specifier.as_deref(), Some(kept_spec.as_str()));
+        assert!(kept.unknowns.is_empty(), "{:?}", kept.unknowns);
+        assert!(!kept.text.contains(REPORT_CAP), "{}", kept.text.len());
+    }
+
+    /// Fails if the from-clause scan reads the byte at STATEMENT_LIMIT, or if one byte earlier misses from.
+    /// The cap is a scan window. It does not keep STATEMENT_LIMIT rows.
+    #[test]
+    fn statement_bound_cap_stops_at_the_scan_window() {
+        let clause = |padding: usize| {
+            let mut source = String::from("import ");
+            source.extend(std::iter::repeat('a').take(padding));
+            source.push_str(" from \"./kept.js\";\n");
+            source
+        };
+        let refused = script(&clause(STATEMENT_LIMIT));
+        assert!(refused.graph.is_empty(), "{}", refused.text);
+        assert_eq!(refused.unknowns.len(), 1);
+        assert_eq!(refused.unknowns[0].reason, "module statement exceeds the observation bound");
+        assert_only_cap(&refused, STATEMENT_CAP);
+        assert!(!refused.text.contains("kept.js"), "{}", refused.text);
+        let kept = script(&clause(STATEMENT_LIMIT - 1));
+        assert!(kept.caps.is_empty(), "{}", kept.text);
+        assert_eq!(kept.graph.len(), 1);
+        assert_eq!(kept.graph[0].specifier.as_deref(), Some("./kept.js"));
+        assert!(kept.unknowns.is_empty(), "{:?}", kept.unknowns);
+    }
+
+    /// Fails if the 9th nested template is entered, or if the 8th is already refused.
+    /// The cap is a depth bound. It does not emit TEMPLATE_LIMIT rows.
+    #[test]
+    fn template_nesting_cap_stops_one_past_the_depth() {
+        let nested = |levels: usize| {
+            let mut source = String::new();
+            for _ in 0..levels {
+                source.push('`');
+                source.push_str("${");
+            }
+            source.push_str("import \"./sentinel.js\";");
+            for _ in 0..levels {
+                source.push('}');
+                source.push('`');
+            }
+            source
+        };
+        let refused = script(&nested(TEMPLATE_LIMIT + 1));
+        assert!(refused.graph.is_empty(), "{}", refused.text);
+        assert_eq!(refused.unknowns.len(), 1);
+        assert_eq!(refused.unknowns[0].reason, "template nesting bound reached; remainder not read");
+        assert_only_cap(&refused, TEMPLATE_NEST_CAP);
+        assert!(!refused.text.contains("sentinel.js"), "{}", refused.text);
+        let kept = script(&nested(TEMPLATE_LIMIT));
+        assert!(kept.caps.is_empty(), "{}", kept.text);
+        assert_eq!(kept.graph.len(), 1);
+        assert_eq!(kept.graph[0].specifier.as_deref(), Some("./sentinel.js"));
+        assert!(kept.unknowns.is_empty(), "{:?}", kept.unknowns);
+    }
+
+    /// Fails if 27 long import rows render without the report cap, or if 26 rows already trip it.
+    /// The cap is the rendered byte bound. The graph itself is not truncated to a row count.
+    #[test]
+    fn report_cap_refuses_the_row_that_does_not_fit() {
+        let spec = format!("./{}.js", "a".repeat(175));
+        assert_eq!(spec.len(), 180);
+        assert!(spec.len() <= SPECIFIER_LIMIT);
+        let source_of = |count: usize| {
+            let mut source = String::new();
+            for _ in 0..count {
+                source.push_str(&format!("import \"{spec}\";\n"));
+            }
+            source
+        };
+        let under = script(&source_of(26));
+        assert!(!under.text.contains(REPORT_CAP), "26 edges rendered {} bytes", under.text.len());
+        assert!(under.text.contains(SCRIPT_ADDON_UNKNOWN), "{}", under.text.len());
+        assert!(under.caps.is_empty(), "{:?}", under.caps);
+        let over = script(&source_of(27));
+        assert_eq!(over.graph.len(), 27);
+        assert!(over.graph.len() < MODULE_EDGE_LIMIT);
+        assert!(over.caps.is_empty(), "{:?}", over.caps);
+        assert!(over.text.contains(&format!("Refusal: {REPORT_CAP}.")), "{}", over.text);
+        assert!(over.text.len() <= REPORT_LIMIT, "{}", over.text.len());
+        assert!(!over.text.contains(SCRIPT_ADDON_UNKNOWN), "{}", over.text);
+        assert!(!over.text.contains(MODULE_EDGE_CAP), "{}", over.text);
+        assert!(!over.text.contains(SPECIFIER_CAP), "{}", over.text);
+    }
+
+    /// Fails if a component of NAME_LIMIT + 1 is listed, or if NAME_LIMIT itself is refused.
+    /// The arm refuses the archive. It does not keep NAME_LIMIT names.
+    #[test]
+    fn asar_name_over_the_name_bound_is_a_refusal() {
+        let over = "b".repeat(NAME_LIMIT + 1);
+        assert_eq!(over.len(), NAME_LIMIT + 1);
+        let refused = observe(
+            &asar_bytes(&format!("{{\"files\":{{\"{over}\":{{\"offset\":\"0\",\"size\":0}}}}}}"), b""),
+            Kind::Asar,
+            true,
+        );
+        assert!(refused.asar_entries.is_empty());
+        assert!(refused.caps.is_empty(), "{:?}", refused.caps);
+        assert_eq!(refused.asar_refusal, Some("asar entry name exceeds the name bound"));
+        assert!(
+            refused.text.contains("Refusal: asar entry name exceeds the name bound. No listing returned."),
+            "{}",
+            refused.text
+        );
+        assert!(!refused.text.contains(&over), "{}", refused.text.len());
+        let kept_name = "a".repeat(NAME_LIMIT);
+        let kept = observe(
+            &asar_bytes(&format!("{{\"files\":{{\"{kept_name}\":{{\"offset\":\"0\",\"size\":0}}}}}}"), b""),
+            Kind::Asar,
+            true,
+        );
+        assert!(kept.asar_refusal.is_none(), "{}", kept.text);
+        assert_eq!(kept.asar_entries.len(), 1);
+        assert_eq!(kept.asar_entries[0].name.len(), NAME_LIMIT);
+        assert!(kept.caps.is_empty(), "{:?}", kept.caps);
+    }
+
+    /// Fails if a `..` member is listed, or if the escape arm is unnamed in the refusal row.
+    #[test]
+    fn asar_escape_refusal_names_the_arm() {
+        let obs = observe(&asar_bytes(r#"{"files":{"..":{"offset":"0","size":0}}}"#, b""), Kind::Asar, true);
+        assert!(obs.asar_entries.is_empty());
+        assert!(obs.modules.is_empty());
+        assert!(obs.addons.is_empty());
+        assert!(obs.caps.is_empty(), "{:?}", obs.caps);
+        assert_eq!(obs.asar_refusal, Some(ASAR_ESCAPE));
+        assert!(obs.text.contains(&format!("Refusal: {ASAR_ESCAPE}. No listing returned.")), "{}", obs.text);
+        assert!(!obs.text.contains("Kind: electron app payload"), "{}", obs.text);
+    }
+
+    /// Fails if a node that is both a file and a directory is listed, or if the refusal row omits the arm name.
+    #[test]
+    fn asar_both_refusal_row_names_the_arm() {
+        let obs = observe(
+            &asar_bytes(r#"{"files":{"both.js":{"offset":"0","size":1,"files":{}}}}"#, b"Z"),
+            Kind::Asar,
+            true,
+        );
+        assert!(obs.asar_entries.is_empty());
+        assert!(obs.caps.is_empty(), "{:?}", obs.caps);
+        assert_eq!(obs.asar_refusal, Some(ASAR_BOTH));
+        assert!(obs.text.contains(&format!("Refusal: {ASAR_BOTH}. No listing returned.")), "{}", obs.text);
+        assert!(!obs.text.contains("both.js"), "{}", obs.text);
+        assert!(!obs.text.contains("Kind: electron app payload"), "{}", obs.text);
+    }
+
+    /// Fails if offset u64::MAX plus size 1 is listed, or if the past-end arm is blamed for the overflow.
+    #[test]
+    fn asar_range_overflow_names_the_arm() {
+        let obs = observe(
+            &asar_bytes(
+                r#"{"files":{"a.js":{"offset":"18446744073709551615","size":"1"}}}"#,
+                b"",
+            ),
+            Kind::Asar,
+            true,
+        );
+        assert!(obs.asar_entries.is_empty());
+        assert!(obs.modules.is_empty());
+        assert!(obs.caps.is_empty(), "{:?}", obs.caps);
+        assert_eq!(obs.asar_refusal, Some(ASAR_OVERFLOW));
+        assert!(obs.text.contains(&format!("Refusal: {ASAR_OVERFLOW}. No listing returned.")), "{}", obs.text);
+        assert!(!obs.text.contains(ASAR_PAST_END), "{}", obs.text);
+        assert!(!obs.text.contains("a.js"), "{}", obs.text);
     }
 }
