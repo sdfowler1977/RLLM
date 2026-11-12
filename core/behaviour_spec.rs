@@ -1,8 +1,11 @@
 //! Cited clean-room behavioural specifications from retained observations.
 //! The specification may contain at most QUOTED_FRAGMENT_MAX contiguous
 //! subject bytes. A longer run is a copy of the observed subject and is refused.
+//! `render` emits an implementation only from cited claims. Unknown items are
+//! refusal markers. `verify` reads those markers and reports each claim.
 use super::*;
 use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 
 /// Longest contiguous run of observed subject bytes a behavioural specification may contain.
 /// The reconstruct tool description states this same bound.
@@ -368,14 +371,285 @@ fn specify(subject: &Subject, nodes: &[Json], relations: &[Json], declarations: 
     if !subject.coordinate.is_empty() {
         put(&mut subject_json, "coordinate_kind", s(&subject.coordinate));
     }
-    obj(vec![
+    let mut document = obj(vec![
         ("schema", Num("1".into())),
         ("type", s("clean_room_behaviour")),
         ("subject", subject_json),
         ("claims", Arr(known)),
         ("unknown", Arr(unknown)),
         ("quote_limit", Num(QUOTED_FRAGMENT_MAX.to_string())),
-    ])
+    ]);
+    seal(&mut document);
+    document
+}
+
+/// Digest of the behaviour document with its recorded `digest` field removed.
+pub(super) fn behaviour_digest(document: &Json) -> String {
+    let mut bare = document.clone();
+    if let Obj(fields) = &mut bare {
+        fields.remove("digest");
+    }
+    harness_rules::sha256(bare.string().as_bytes())
+}
+
+fn seal(document: &mut Json) {
+    if let Obj(fields) = document {
+        fields.remove("digest");
+    }
+    let digest = behaviour_digest(document);
+    put(document, "digest", s(&digest));
+}
+
+fn require_digest(document: &Json) -> Result<String> {
+    if get(document, "schema") != &Num("1".into()) || text(document, "type") != "clean_room_behaviour" {
+        return Err("Behavioural specification binding unavailable".into());
+    }
+    let recorded = text(document, "digest");
+    let actual = behaviour_digest(document);
+    if recorded != actual {
+        return Err("Behaviour document digest does not match the handed document".into());
+    }
+    Ok(actual)
+}
+
+fn citation_supported(citation: &Json) -> bool {
+    let parsed = Citation {
+        record: text(citation, "record"),
+        snapshot: id_text(get(citation, "snapshot")),
+        node: id_text(get(citation, "node")),
+        file_offset: u64_of(get(citation, "file_offset")),
+        address: u64_of(get(citation, "address")),
+    };
+    supported(&parsed)
+}
+
+fn cited_units(document: &Json) -> Result<(Vec<Json>, Vec<(String, Json)>)> {
+    let mut citations = Vec::new();
+    let mut units = Vec::new();
+    for claim in array(document, "claims") {
+        let statement = text(&claim, "statement");
+        let citation = get(&claim, "citation");
+        if citation == &Null || !citation_supported(citation) {
+            return Err(format!("Cited claim has no citation: {statement}"));
+        }
+        if statement.is_empty() || statement.chars().any(|c| c == '\n' || c == '\r') {
+            return Err(format!("Cited claim has no statement: {statement}"));
+        }
+        citations.push(citation.clone());
+        units.push((statement, citation.clone()));
+    }
+    Ok((citations, units))
+}
+
+fn format_artifact(digest: &str, citations: &[Json], units: &[(String, Json)], unknown: &[Json]) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "provenance {}",
+        obj(vec![
+            ("behaviour_digest", s(digest)),
+            ("citations", Arr(citations.to_vec())),
+        ])
+        .string()
+    ));
+    for (statement, citation) in units {
+        lines.push(format!(
+            "unit {}",
+            obj(vec![
+                ("citation", citation.clone()),
+                ("kind", s("behaviour")),
+                ("statement", s(statement)),
+            ])
+            .string()
+        ));
+    }
+    for item in unknown {
+        lines.push(format!(
+            "refused {}",
+            obj(vec![
+                ("marker", s("refused")),
+                ("reason", s(&text(item, "reason"))),
+                ("statement", s(&text(item, "statement"))),
+            ])
+            .string()
+        ));
+    }
+    let mut body = lines.join("\n");
+    body.push('\n');
+    body
+}
+
+struct Artifact {
+    digest: String,
+    citations: Vec<Json>,
+    units: Vec<Json>,
+    refusals: Vec<Json>,
+}
+
+fn parse_artifact(artifact: &str) -> Result<Artifact> {
+    let mut digest = String::new();
+    let mut citations = Vec::new();
+    let mut units = Vec::new();
+    let mut refusals = Vec::new();
+    let mut saw_provenance = false;
+    for line in artifact.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("provenance ") {
+            if saw_provenance {
+                return Err("Implementation artifact has conflicting provenance".into());
+            }
+            let block = parse(rest)?;
+            digest = text(&block, "behaviour_digest");
+            citations = array(&block, "citations");
+            saw_provenance = true;
+        } else if let Some(rest) = line.strip_prefix("unit ") {
+            units.push(parse(rest)?);
+        } else if let Some(rest) = line.strip_prefix("refused ") {
+            refusals.push(parse(rest)?);
+        } else {
+            return Err("Implementation artifact has an unrecognized marker".into());
+        }
+    }
+    if !saw_provenance {
+        return Err("Implementation artifact has no provenance".into());
+    }
+    Ok(Artifact { digest, citations, units, refusals })
+}
+
+/// Workspace-root filename only. A slash, empty name, or parent segment is outside the workspace.
+pub(super) fn output_inside_workspace(workspace: &Path, output: &str) -> Result<PathBuf> {
+    if output.is_empty()
+        || output.len() > 255
+        || output == "."
+        || output == ".."
+        || output.contains(['/', '\\', '\0'])
+    {
+        return Err("Implementation artifact path is outside the workspace".into());
+    }
+    let root = workspace
+        .canonicalize()
+        .map_err(|e| format!("Implementation artifact path is outside the workspace: {e}"))?;
+    if !root.is_dir() {
+        return Err("Implementation artifact path is outside the workspace".into());
+    }
+    let path = root.join(output);
+    if path.parent() != Some(root.as_path()) {
+        return Err("Implementation artifact path is outside the workspace".into());
+    }
+    Ok(path)
+}
+
+/// Build the implementation artifact. Cite-check, digest check, and the subject-copy
+/// guard all run before the caller is allowed to create a file.
+pub(super) fn render(document: &Json, subject: &[u8]) -> Result<Vec<u8>> {
+    let digest = require_digest(document)?;
+    let (citations, units) = cited_units(document)?;
+    let unknown = array(document, "unknown");
+    for item in &unknown {
+        let statement = text(item, "statement");
+        if units.iter().any(|(unit, _)| unit == &statement) {
+            return Err(format!("Unknown item would be emitted as behaviour: {statement}"));
+        }
+    }
+    let body = format_artifact(&digest, &citations, &units, &unknown);
+    refuse_subject_copy(body.as_bytes(), subject)?;
+    Ok(body.into_bytes())
+}
+
+/// Per-claim verdicts from the artifact's own `unit` / `refused` markers and provenance.
+pub(super) fn verify(document: &Json, artifact: &str) -> Result<Json> {
+    let parsed = parse_artifact(artifact)?;
+    let recorded = text(document, "digest");
+    let mut used = vec![false; parsed.units.len()];
+    let mut verdicts = Vec::new();
+    let mut matched = 0usize;
+    let mut missing = 0usize;
+    let mut conflicting = 0usize;
+    for claim in array(document, "claims") {
+        let statement = text(&claim, "statement");
+        let citation = get(&claim, "citation").clone();
+        let found = parsed.units.iter().enumerate().find(|(i, unit)| {
+            !used[*i] && text(unit, "statement") == statement
+        });
+        let verdict = match found {
+            None => {
+                missing += 1;
+                "missing"
+            }
+            Some((index, unit)) => {
+                used[index] = true;
+                let cited = citation != Null
+                    && get(unit, "citation") == &citation
+                    && parsed.citations.iter().any(|item| item == &citation);
+                let refused = parsed.refusals.iter().any(|item| text(item, "statement") == statement);
+                if cited && !refused && parsed.digest == recorded && !recorded.is_empty() && text(unit, "kind") == "behaviour" {
+                    matched += 1;
+                    "matched"
+                } else {
+                    conflicting += 1;
+                    "conflicting"
+                }
+            }
+        };
+        verdicts.push(obj(vec![
+            ("statement", s(&statement)),
+            ("verdict", s(verdict)),
+        ]));
+    }
+    for (index, unit) in parsed.units.iter().enumerate() {
+        if used[index] {
+            continue;
+        }
+        conflicting += 1;
+        verdicts.push(obj(vec![
+            ("statement", s(&text(unit, "statement"))),
+            ("verdict", s("conflicting")),
+        ]));
+    }
+    Ok(obj(vec![
+        ("schema", Num("1".into())),
+        ("type", s("clean_room_verification")),
+        ("verdicts", Arr(verdicts)),
+        ("matched", Num(matched.to_string())),
+        ("missing", Num(missing.to_string())),
+        ("conflicting", Num(conflicting.to_string())),
+    ]))
+}
+
+pub(super) fn verification_failure(report: &Json) -> Option<String> {
+    if number(report, "missing") == 0 && number(report, "conflicting") == 0 {
+        return None;
+    }
+    let names = array(report, "verdicts")
+        .into_iter()
+        .filter(|v| text(v, "verdict") != "matched")
+        .map(|v| format!("{}: {}", text(&v, "verdict"), text(&v, "statement")))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(format!("Clean-room implementation does not verify against the behaviour document: {names}"))
+}
+
+#[cfg(test)]
+fn checked(document: &Json, subject: &[u8]) -> Result<(Vec<u8>, Json)> {
+    let bytes = render(document, subject)?;
+    let utf8 = std::str::from_utf8(&bytes).map_err(|_| String::from("Implementation artifact is not UTF-8"))?;
+    let report = verify(document, utf8)?;
+    if let Some(problem) = verification_failure(&report) {
+        return Err(problem);
+    }
+    Ok((bytes, report))
+}
+
+#[cfg(test)]
+fn emit(workspace: &Path, output: &str, document: &Json, subject: &[u8]) -> Result<PathBuf> {
+    let path = output_inside_workspace(workspace, output)?;
+    let (bytes, _) = checked(document, subject)?;
+    if path.exists() {
+        return Err("Implementation artifact already exists".into());
+    }
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    Ok(path)
 }
 
 fn short_label(value: &str) -> String {
@@ -587,6 +861,8 @@ mod checks {
         assert!(text(&claim, "statement").contains("not an executed effect"));
         assert!(!doc.string().contains("DO_NOT_COPY_THIS_SUBJECT_TEXT_EVER"));
         assert_eq!(get(&doc, "quote_limit"), &Num(QUOTED_FRAGMENT_MAX.to_string()));
+        assert_eq!(text(&doc, "digest"), behaviour_digest(&doc));
+        assert_eq!(text(&doc, "digest").len(), 64);
     }
 
     #[test]
@@ -611,5 +887,168 @@ mod checks {
         assert!(refuse_subject_copy(&window[..16], &repeated).is_ok());
         assert!(refuse_subject_copy(b"short", subject).is_ok());
         assert!(refuse_subject_copy(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ", b"tiny").is_ok());
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rllm-gap4-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn claim(statement: &str, node: &str) -> Json {
+        cited(
+            statement,
+            &Citation {
+                record: "rec".into(),
+                snapshot: "0".into(),
+                node: node.into(),
+                file_offset: Some(16),
+                address: Some(4096),
+            },
+        )
+    }
+
+    fn sealed_document(claims: Vec<Json>, unknown: Vec<Json>) -> Json {
+        let mut doc = obj(vec![
+            ("schema", Num("1".into())),
+            ("type", s("clean_room_behaviour")),
+            ("subject", obj(vec![("record", s("rec"))])),
+            ("claims", Arr(claims)),
+            ("unknown", Arr(unknown)),
+            ("quote_limit", Num(QUOTED_FRAGMENT_MAX.to_string())),
+        ]);
+        seal(&mut doc);
+        doc
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut found = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn implement_records_spec_digest_and_refuses_mismatch_without_writing() {
+        let doc = sealed_document(
+            vec![claim("A retained encoding is recorded at the cited coordinate.", "3")],
+            vec![],
+        );
+        let dir = scratch("cited");
+        let written = emit(&dir, "impl.txt", &doc, b"short-subject").unwrap();
+        let body = std::fs::read_to_string(&written).unwrap();
+        let provenance = body.lines().find(|line| line.starts_with("provenance ")).expect("provenance");
+        let block = parse(provenance.strip_prefix("provenance ").unwrap()).unwrap();
+        assert_eq!(text(&block, "behaviour_digest"), text(&doc, "digest"));
+        assert!(!array(&block, "citations").is_empty());
+
+        let mut bad = doc.clone();
+        let mut claims = array(&bad, "claims");
+        put(&mut claims[0], "statement", s("tampered statement after the digest was sealed"));
+        put(&mut bad, "claims", Arr(claims));
+        let before = names(&dir);
+        let err = emit(&dir, "mismatch.txt", &bad, b"short-subject").unwrap_err();
+        assert!(err.contains("digest"), "{err}");
+        assert_eq!(names(&dir), before);
+        assert!(!dir.join("mismatch.txt").exists());
+        assert!(!dir.canonicalize().unwrap().join("mismatch.txt").exists());
+
+        let outside = format!("gap4-outside-{}.txt", std::process::id());
+        let err = emit(&dir, &format!("../{outside}"), &doc, b"short-subject").unwrap_err();
+        assert!(err.contains("outside"), "{err}");
+        assert!(!dir.parent().unwrap().join(&outside).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unknown_item_is_a_refusal_marker_not_generated_behaviour() {
+        let unknown_stmt = "Unclassified retained encodings have an established operation.";
+        let doc = sealed_document(
+            vec![claim("A retained encoding is recorded with mnemonic ADD.", "3")],
+            vec![unknown_item(unknown_stmt, UNCITED)],
+        );
+        let dir = scratch("unknown");
+        let body = std::fs::read_to_string(emit(&dir, "impl.txt", &doc, b"short-subject").unwrap()).unwrap();
+        assert!(body.lines().any(|line| {
+            line.starts_with("refused ") && line.contains("\"marker\":\"refused\"") && line.contains(unknown_stmt)
+        }));
+        assert!(body.lines().filter(|line| line.starts_with("unit ")).any(|line| line.contains("mnemonic ADD")));
+        for line in body.lines().filter(|line| line.starts_with("unit ")) {
+            assert!(!line.contains(unknown_stmt), "code line attributes behaviour to an unknown item: {line}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cited_claim_without_citation_is_refused_before_create() {
+        let statement = "A cited claim whose citation is absent.";
+        let doc = sealed_document(vec![obj(vec![("statement", s(statement))])], vec![]);
+        let dir = scratch("nocite");
+        let err = emit(&dir, "impl.txt", &doc, b"short-subject").unwrap_err();
+        assert!(err.contains("no citation"), "{err}");
+        assert!(err.contains(statement), "{err}");
+        assert!(names(&dir).is_empty(), "citation refusal created {:?}", names(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn verify_matches_faithful_artifact_and_reports_removed_claim_missing() {
+        let alpha = "alpha cited behaviour is the retained mnemonic ADD.";
+        let beta = "beta cited behaviour is the retained mnemonic SUB.";
+        let doc = sealed_document(vec![claim(alpha, "3"), claim(beta, "4")], vec![]);
+        let dir = scratch("verify");
+        let artifact = std::fs::read_to_string(emit(&dir, "impl.txt", &doc, b"short-subject").unwrap()).unwrap();
+        let report = verify(&doc, &artifact).unwrap();
+        assert_eq!(number(&report, "matched"), 2);
+        assert_eq!(number(&report, "missing"), 0);
+        assert_eq!(number(&report, "conflicting"), 0);
+        assert!(array(&report, "verdicts").iter().all(|v| text(v, "verdict") == "matched"));
+
+        let damaged = artifact
+            .lines()
+            .filter(|line| !line.contains(beta))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let report = verify(&doc, &damaged).unwrap();
+        let verdicts = array(&report, "verdicts");
+        let removed = verdicts.iter().find(|v| text(v, "statement").contains(beta)).expect("verdict names the removed claim");
+        assert_eq!(text(removed, "verdict"), "missing");
+        assert_eq!(number(&report, "missing"), 1);
+        assert_eq!(number(&report, "matched"), 1);
+        assert_eq!(number(&report, "conflicting"), 0);
+
+        let broken = artifact.replace(&text(&doc, "digest"), &"ab".repeat(32));
+        let report = verify(&doc, &broken).unwrap();
+        assert_eq!(number(&report, "conflicting"), 2);
+        assert_eq!(number(&report, "missing"), 0);
+        assert!(verdicts_name(&report, beta));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn verdicts_name(report: &Json, statement: &str) -> bool {
+        array(report, "verdicts").iter().any(|v| text(v, "statement").contains(statement) && text(v, "verdict") == "conflicting")
+    }
+
+    #[test]
+    fn implement_refuses_seventeen_contiguous_subject_bytes() {
+        let subject = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let short = "ABCDEFGHIJKLMNOP";
+        let long = "ABCDEFGHIJKLMNOPQ";
+        assert_eq!(short.len(), 16);
+        assert_eq!(long.len(), 17);
+        let dir = scratch("copy");
+        let allowed = sealed_document(vec![claim(&format!("Observed fragment {short} remains cited."), "3")], vec![]);
+        let written = emit(&dir, "allowed.txt", &allowed, subject).unwrap();
+        assert!(std::fs::read_to_string(&written).unwrap().contains(short));
+        let stolen = sealed_document(vec![claim(&format!("Observed fragment {long} remains cited."), "3")], vec![]);
+        let before = names(&dir);
+        let err = emit(&dir, "stolen.txt", &stolen, subject).unwrap_err();
+        assert!(err.contains("17"), "{err}");
+        assert_eq!(names(&dir), before);
+        assert!(!dir.join("stolen.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
