@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T13:3Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T14:4Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -7,8 +7,11 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **597/597 cases plus 55 isolated application cases, exit 0**, measured with the pinned
-  `rustc 1.99.1` toolchain from `tooling/env.sh` (the earlier 517 tally was additionally reproduced on the
+  report bytes): **611/611 cases plus 55 isolated application cases, exit 0**, measured with the pinned
+  `rustc 1.99.1` toolchain from `tooling/env.sh` (the 611 count is the tree at `63bf5c5`: 597 at `600e44d`,
+  +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`; both deltas were
+  re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
+  `git archive f2a6ad8` plus its file, which is exactly the tree at `63bf5c5`. The earlier 517 tally was additionally reproduced on the
   drifted `rustc 1.95.0` build, `output/units` vs `output/units-pinned`, log `output/units-pinned.log`). A bare
   `rustc --test core/console.rs` from the
   repository root reports 503 passed / 14 failed; every one of those 14 is a runner gap, not a product
@@ -34,7 +37,7 @@ their original counts and wording.
   `services` 69 → 72, against `apk_alignment` 11 → 0 and `turn_background` 28 → 0 from the off-host signed
   APK, and the group total moved 68 → 69 on `permission_modes` alone.
   **The record's Rust-case leg is stale and is a measured drift, not a pass:** `full_rust_suite` pins
-  **513/513 cases + 55 isolated** with `binary_sha256 b621eccf4208…`, while the tree measures 597/597 + 55
+  **513/513 cases + 55 isolated** with `binary_sha256 b621eccf4208…`, while the tree measures 611/611 + 55
   today. Only `tools/package.py:52` writes that leg, and a packaging run is blocked behind the signed-APK
   publication inputs (`apk['build_inputs']` digests are asserted per path, measured 130 match / 31 drift /
   1 absent), so refreshing it is the owner-gated `PUB-INPUT-DRIFT` leg, not a coordinator action. The group
@@ -984,6 +987,49 @@ Method held: each lane was verified on attributable bytes before commit — lane
 file (581/581 + 55), lane B3 on the whole tree (597/597 + 55, built and gated by me, not by the lane) — and
 after all four landed the product was rebuilt and `commands`, `hosted_phases`, `provider_evidence` and
 `pe_declarations` were re-run on the new bytes: **4 pass, 0 fail** (79 / 118 / 40 / 28 checks).
+
+### GAP1 closes its last proof leg; the pool lands and immediately shows a live-reachability hole — 2026-11-12T14:5Z
+
+`GAP1` (commit `63bf5c5`): the boundary defect the chain witness caught is fixed and the **same witness,
+re-run on the rebuilt room, is now green end to end**. A parent product spawns a successor (receipt names
+pid 3141890; `/proc/3141890/stat` reads state `Z`, ppid equal to the product, comm `(RLLM)`), the next call in
+the same process prints `reaped 1 successor(s)` and the `/proc` entry is then absent. A fresh product process
+carrying only what the spawn arm hands over — and giving no `job` argument — now passes its own gate
+(**585/585 + 55**, where the same leg before the fix printed `unit gate is not green (579/581)`) and journals
+`job gap1-chain-carried` with `job_source inherited`; the no-environment control still journals
+`job_source none`, so the key discriminates. All eight journal rows re-digest under an independent reader and
+each `parent` equals the previous `revision`. Lane C4 also stopped the unit cases mutating the process-global
+environment, which the coordinator measured as **25 multi-thread failures at `f2a6ad8` → 19 at `63bf5c5`**,
+five of them the named carried-environment cases and **zero** new names. The whole tree at `63bf5c5` gates
+**611/611 + 55**.
+`GAP2`/`GAP3` (commit `f2a6ad8`): a round can now answer with a bounded pool of up to three candidates, each
+criticised before it is scored, and each candidate is committed in its own `git worktree` under
+`.rllm-worktrees/` — the accepted one fast-forwards the `rllm-evolve` branch while the caller's `HEAD`, index
+and work tree stay untouched, verified by a case that compares `rev-parse HEAD` and `status --porcelain`
+before and after. Held-out and out-of-distribution legs are scored separately and a missing leg is recorded as
+unknown rather than as a pass; `resume_run` rebuilds the prompt, adopted harness, prune and rejection state and
+the annealed budget from the ledger and the sealed library alone, and a tampered library entry refuses with the
+existing bytes proven unchanged. Verified alone in a room holding only those three files: **607/607 + 55**,
+which is 597 plus the 10 new cases, and the re-run's own ledger rows show the three pool outcomes — incumbent
+refused for changing nothing, one accepted row with `branch rllm-evolve` and a 40-hex commit, and a leaking
+candidate refused for reproducing a recorded task.
+The defect that came out of reading that code, measured rather than inferred: `evaluate_pool` reads
+`run["workspace"]` (`core/harness.rs:724`), but that key is written **only inside `mod checks`** of the same
+file (`:1958`, `:1975`, `:1997`); the live `refine` entry that builds `task_run` (`core/harness.rs:400`) never
+sets it. So every real refinement round takes the empty-workspace arm — one recorded refusal per candidate,
+`incumbent_kept true`, and no `commit_candidate`, no `fast_forward_evolve`, no `rllm-evolve` branch. The pool's
+scoring and critic legs do run live; its git legs are unreachable. Lane F is closing that by putting the
+product's own workspace authority (`approval_root`, the same key `core/claim_records.rs:83` records as
+`workspace`) on the refine `task_run`.
+Related census for the same surface: **no connected verification group exercises the improvement loop at all**
+— `grep -rln "experience.jsonl|edits.jsonl|rrsi" verification/*.py` returns nothing — even though the loop is
+product-reachable (`harness::request_messages` at `core/application.rs:852`, `harness::model_reply` at
+`core/application.rs:2657` and `core/tool_format.rs:186`). That is the same reachability hole the new
+`self_rebuild` group is closing for `self_build`.
+Python exposure this window: **73 tracked `.py` files / 7,807 lines**, +52 lines since the 13:3Z measurement,
+all of it `verification/pe_declarations.py` (+55/−3 in `d8d0881`) — the R-rule tension is recorded, not hidden:
+the connected groups are still Python, `tools/package.py` is still the publisher of record until a real native
+publish replaces it, and `core/` still has zero `python3` references.
 
 ## Historical baseline audit (original text)
 

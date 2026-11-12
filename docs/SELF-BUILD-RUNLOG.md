@@ -435,3 +435,75 @@ a broken edit hides its own compile error.
 Still open after this run, and unchanged by it: the successor's exit status is tracked in-process only
 (no journal row for it), and no connected verification group drives `self_build` at all
 (`grep -rln self_build verification/*.py` returns nothing).
+
+## The same witness, re-run after the boundary fix — 2026-11-12T14:5Z, commit `63bf5c5`
+
+Lane C4 moved the fix to the spawn boundary: `scrub_carried` (`core/self_build.rs:476`) removes
+`RLLM_SELF_JOB` and `RLLM_SELF_INSTRUCTION` with `Command::env_remove`, and `bounded_child` (`:529`) —
+which is what actually spawns the builder, gate and probe children — calls it before every child. The two
+reload arms still hand the pair over: the exec arm keeps calling `execution::exec_replace`, the spawn arm
+scrubs and then re-sets both names on the child. The bound refusal (`bound_refusal`, `:522`) keeps its old
+leading clause and now appends the child's exit status and the last 400 bytes, so a broken edit names its
+own compile error instead of only its size.
+
+Rebuilt in the same room (`.qwen/tmp/gap1-chain-room2`, tree = `3390359` plus C4's `core/self_build.rs`,
+`bash tools/build-units.sh output/units` then `bash headless.sh`) and re-ran the identical witness script.
+
+Run A — one product process, spawn then reap:
+
+```
+job 1 (reload=spawn): ... recorded revision bcf8f2846245... successor pid 3141890
+/proc before the next call: {'state': 'Z', 'ppid': '3136216', 'comm': '(RLLM)'}
+job 2 (reload=none, same process): ... recorded revision 4d7b5c635f77... Rust cases passed: 585/585; isolated application cases: 55 reaped 1 successor(s)
+receipt names a reap? True
+/proc after the next call: None
+product exit: 0
+```
+
+Run B — a fresh product process carrying exactly what the spawn arm hands over, `job` omitted. This is the
+leg that was red before the fix, and it is now green:
+
+```
+job 3 (inherited identity, gate only): Saved 21864 bytes to core/lib.rs. recorded revision 7283200b3f26... Rust cases passed: 585/585; isolated application cases: 55
+```
+
+`unit gate is not green (579/581)` is gone. The control leg (no carried environment, `job` omitted) still
+records `job_source none`, so `inherited` is a measured branch, not a constant. The journal after the run,
+with each row's digest recomputed by an independent reader:
+
+```
+revision 649e49235319 recomputed_ok True parent  mode spawn pid 3057376 job gap1-chain-job         job_source caller     instruction_len 34
+revision abff31fd087c recomputed_ok True parent 649e49235319 mode spawn pid 3061720 job gap1-chain-job         job_source caller     instruction_len 34
+revision 630c16acf19e recomputed_ok True parent abff31fd087c mode none  pid 3059815 job                      job_source none       instruction_len 0
+revision 9fe323fa20ef recomputed_ok True parent 630c16acf19e mode none  pid 3065097 job                      job_source none       instruction_len 0
+revision bcf8f2846245 recomputed_ok True parent 9fe323fa20ef mode spawn pid 3141890 job gap1-chain-job         job_source caller     instruction_len 34
+revision 4d7b5c635f77 recomputed_ok True parent bcf8f2846245 mode none  pid 3136216 job                      job_source none       instruction_len 0
+revision 7283200b3f26 recomputed_ok True parent 4d7b5c635f77 mode none  pid 3148160 job gap1-chain-carried   job_source inherited  instruction_len 41
+revision 05ca17d80461 recomputed_ok True parent 7283200b3f26 mode none  pid 3149289 job                      job_source none       instruction_len 0
+```
+
+Row 7 is the one the gap report asked for: a product process that never saw a `job` argument journals the
+job it was *handed*, records `job_source inherited`, and chains onto row 6, the revision that spawned it.
+
+### The same fix removed five thread-sensitive cases
+
+C4 also stopped the unit cases from mutating the process-global environment. Measured by the coordinator
+with the two room binaries, default thread count, one variable changed (C4's file), names compared exactly:
+
+| binary | tree | passed | failed |
+|---|---|---:|---:|
+| `output/units-B5v` | `f2a6ad8` (607 cases) | 582 | 25 |
+| `output/units-C4v` | `63bf5c5` (611 cases) | 592 | 19 |
+
+Zero failure names appear only in the second column. Six names appear only in the first: the five
+carried-environment cases (`spawn_journal_stores_job_and_instruction_verbatim_and_absent_job_is_empty`,
+`tracked_carried_identity_is_recorded_and_handed_to_the_successor`, `tracked_quiet_row_records_job_source_none`,
+`tracked_reap_reports_an_exited_successor_once`, `tracked_reaped_text_appears_only_after_a_successor_exits`)
+plus `application::scene::checks::queued_close_releases_admission_and_does_not_render`, which C4 does not
+touch and which is scheduling-flaky, not something this change fixed. The first attempt at this comparison
+printed zero failures for both sides because the grep pattern did not match the runner's row shape; the
+numbers above come from re-parsing the saved output and cross-checking it against the `test result:`
+summary lines.
+
+Sanctioned-runner truth is unchanged: `python3 tools/checks.py --all-units` always passes
+`--test-threads=1`, and under it the tree gates 611/611 + 55.
