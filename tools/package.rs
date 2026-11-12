@@ -1121,6 +1121,7 @@ const HYPHEN_PAIRS: &[&str] = &[
     "mcp_images",
     "mcp_continuation",
     "mcp_history",
+    "self_rebuild",
 ];
 
 fn report_pairs() -> Vec<(String, String)> {
@@ -2266,12 +2267,12 @@ mod checks {
         let root = project_root().unwrap();
         let source = fs::read_to_string(root.join("tools/checks.py")).unwrap();
         let names = parse_names_list(&source).unwrap();
-        assert_eq!(names.len(), 69, "{}", names.len());
+        assert_eq!(names.len(), 70, "{}", names.len());
         assert_eq!(names.first().map(String::as_str), Some("provider_process"));
-        assert_eq!(names.last().map(String::as_str), Some("permission_modes"));
+        assert_eq!(names.last().map(String::as_str), Some("self_rebuild"));
         duplicate_groups(&names).unwrap();
         pairs_cover(&names).unwrap();
-        assert_eq!(report_pairs().len(), 69);
+        assert_eq!(report_pairs().len(), 70);
     }
 
     #[test]
@@ -2616,7 +2617,7 @@ mod checks {
         assert!(root.join("output/checks/packaged.json").is_file());
         let notes = fs::read_to_string(root.join("release/NOTES.md")).unwrap();
         assert!(notes.contains("Auto chooses a direct reply"), "{notes}");
-        assert!(notes.contains("69/69 connected groups passed"), "{notes}");
+        assert!(notes.contains("70/70 connected groups passed"), "{notes}");
         assert!(notes.contains("4 Rust cases from the full suite"), "{notes}");
         let readme = fs::read_to_string(root.join("README.md")).unwrap();
         assert!(readme.contains("Current signed candidate 7"), "{readme}");

@@ -18,7 +18,7 @@ const GROUPS: &[&str] = &[
     "field_flow", "flags_flow", "product_flow", "diagnostics", "services", "media", "jobs", "voice",
     "media_stream", "media_upload", "voice_interruption", "voice_background", "voice_session",
     "capture_lifecycle", "scene", "apk_alignment", "audio_route", "state_sealing", "desktop_runtime",
-    "turn_background", "permission_modes",
+    "turn_background", "permission_modes", "self_rebuild",
 ];
 
 // Scripts under verification/ that are not runner groups. A file outside these
