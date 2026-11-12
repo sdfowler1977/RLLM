@@ -28,10 +28,11 @@ their original counts and wording.
   leg instead of being blocked to a recorded `0`.
   **That equivalence is now stale and the drift is measured, not assumed.** `2c6b792` registered
   `self_rebuild`, so the runner declares **70** names while the delivered record still holds **69**, and the
-  runner says so: `INVENTORY DRIFT: the delivered report counts 69 groups while the runner has 70`. The record
-  will not be republished until a full sweep runs with every group executable and nothing failing, because
-  `tools/harness.rs:1047` refuses to publish otherwise; until then the record's `pe_declarations` leg (18) also
-  stays behind the 28 that group now runs.
+  runner says so: `INVENTORY DRIFT: the delivered report counts 69 groups while the runner has 70`. Publication
+  is blocked by a failing group, a census problem, or an unparseable count — **not** by groups being
+  `UNAVAILABLE`: measured twice, a sweep with all 70 groups unavailable still wrote a record, and a sweep with 7
+  unavailable wrote one too (see the 16:2Z block). Until the record is republished, its `pe_declarations` leg (18)
+  also stays behind the 28 that group now runs.
 - `verification/RESULTS.json` now carries the current census: **69 groups, 65 passed, 4,185 checks
   executed**, with the 4 unavailable groups recorded as 0 plus their missing inputs and a
   `zero_count_disclosure` line (earlier revisions of this document described the record as holding
@@ -1168,6 +1169,34 @@ about the code, so each of its objections was checked against the tree instead o
   coverage, meaning the two-rules-must-agree invariant could regress silently. A follow-up lane (`bg_8d39f05e`)
   is closing it and is additionally required to prove that every output cap discloses its own truncation, so a
   partial call graph cannot be read as a complete one.
+
+### A sweep at `HEAD` with the product binary: 63 pass, 0 fail, and my own publish-rule sentence corrected — 2026-11-12T16:2Z
+
+To de-risk the record republish before touching the delivered file, the whole chain ran in a `git archive` room of
+`1622ab4` **with** the product built inside it (`bash headless.sh` exit 0):
+
+| Stage | Result |
+|---|---|
+| `bash tools/build-units.sh` | exit 0 |
+| `python3 tools/checks.py --all-units` | **629/629 + 55**, exit 0 |
+| `bash tools/build-tools.sh` | exit 0 |
+| `bash tools/build-harness.sh` | exit 0 |
+| `./output/harness-run` (full sweep) | exit 0 — `summary: 63 pass, 0 fail, 7 unavailable of 70 groups` |
+| room record after publish | `delivered record written: 70 groups, 4,108 checks` |
+
+Two things follow. First, **nothing fails at `HEAD`**, so a main-tree sweep will republish the record cleanly; the
+70-group census and the corrected `pe_declarations` count go in together. Second, the sentence I wrote earlier
+today — "the record will not be republished until a full sweep runs with every group executable" — was **wrong**,
+and it is corrected above: `UNAVAILABLE` groups never block publication. They are written as `0` with
+`missing` inputs listed and a `zero_count_disclosure` line naming them, which is what the delivered record's four
+zero entries are. The blockers at `tools/harness.rs:1047` are a failed group, a census `problem`, or an unharvestable
+count. The practical hazard is the mirror image of what I wrote: because publication does happen with unavailable
+groups, a sweep run somewhere that lacks reference inputs silently rewrites real counts to `0` — the seven groups
+that went to zero in this room (`binary_flow`, `history_migration`, `field_flow`, `flags_flow`, `product_flow`,
+`apk_alignment`, plus the off-host signed-APK leg) are the same inputs already tracked as owner-gated
+(`output/previous-controller`, `output/pre-branch-controller`, `output/pre-auth-controller`,
+`output/published-controller`, and the companion APK named by `PUBLICATION-MANIFEST.json`). A room can therefore
+never produce the delivered record's real totals; only the main tree, which holds those reference builds, can.
 
 ## Historical baseline audit (original text)
 
