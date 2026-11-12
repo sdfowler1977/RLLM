@@ -800,5 +800,16 @@
     "production_dependency": "tools/package.rs:1917 refuses 'tools/checks.py absent', so the file cannot be deleted before the parser is repointed",
     "restored": "room tools/checks.py md5 35efe63d7df2ea47f7a768dd45272549 after restore (mutant md5 2029492d615b304d033eafb7d9acc60a)",
     "still_load_bearing_after_repoint": "tools/harness.rs:297-301 pushes 'group <name> has no verification/<name>.py' for every GROUPS entry, and tools/package.py:25 reads checks.py names via AST - both survive step 1"
+  },
+  "unavailable_groups_are_structural_not_open": {
+    "at": "2026-11-12T20:35Z",
+    "record_unavailable_set": "verification/RESULTS.json connected.unavailable lists exactly: binary_flow (missing output/pre-branch-controller and output/pre-auth-controller), history_migration (missing output/previous-controller), apk_alignment and turn_background (both missing the companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json)",
+    "correction": "field_flow, flags_flow and product_flow are NOT unavailable - they use output/published-controller, which is present. Measured: verification/field_flow.py run in room /tmp/dtn (product binary built in-room at 09:44:33) exited 0 with count 37 and no unavailable entry.",
+    "structural_reason": "project-progress.md:30 - revisions 1793395702 and 1793592809 are unrecoverable because git history starts at the baseline commit 727a33d (84 commits total, no tags); docs/AUDIT.md:733 states binary_flow and history_migration require built binaries of exactly those revisions",
+    "consequence": "the delivered record cannot exceed 67 passed of 71 groups on this host without owner-supplied external inputs (the prior-release source or the companion APK); substituting a current-tree build as a comparator would violate the stated rule that an unavailable comparator is reported explicitly and never replaced",
+    "open_items_removed": [
+      "make binary_flow pass",
+      "make history_migration pass"
+    ]
   }
 }
