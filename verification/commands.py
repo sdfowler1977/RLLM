@@ -6,17 +6,14 @@ with tempfile.TemporaryDirectory(prefix='commands-',dir=PROJECT/'output') as tem
  root=pathlib.Path(temp);(root/'evidence.txt').write_text('Actual evidence from a normal command.')
  p=subprocess.Popen([str(PROJECT/'output/headless/RLLM'),'--jsonl'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
  def raw(v):p.stdin.write(json.dumps(v)+'\n');p.stdin.flush();return json.loads(p.stdout.readline())
- def op(v):
-  r=raw(v);assert 'value'in r,r;return r['value']
+ def op(v):r=raw(v);assert 'value'in r,r;return r['value']
  def event(st,a,i=None):return op(dict(op='event',state=st,action=a,inputs=i or {},root=str(root)))
  def reply(d,text):
-  body=json.dumps({'choices':[{'message':{'content':text},'finish_reason':'stop'}]}).encode();wire=b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(body)).encode()+b'\r\n\r\n'+body
-  return event(d['state'],'network_result',{'purpose':'model','model_ticket':d['state']['model_expected'],'data':base64.b64encode(wire).decode()})
+  body=json.dumps({'choices':[{'message':{'content':text},'finish_reason':'stop'}]}).encode();wire=b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(body)).encode()+b'\r\n\r\n'+body;return event(d['state'],'network_result',{'purpose':'model','model_ticket':d['state']['model_expected'],'data':base64.b64encode(wire).decode()})
  try:
   st=event(None,'resume')['state'];st[old]={'endpoint':'http://127.0.0.1:9127/mcp','key':'migration-fixture'};st[old+'_expected']=old+'_server:expired';st['busy']=True;st['agents']=[{'name':'General','tools':'read,'+old,'instructions':'User-authored instructions','investigation_skill':False}];st['investigation_skill']={'enabled':False,'instructions':'Preserve my additional guidance'}
   migrated=event(st,'resume');st=migrated['state'];check('saved connection migrates into protocol settings',st['mcp']['endpoint']=='http://127.0.0.1:9127/mcp' and st['mcp']['key']=='migration-fixture' and old not in st)
-  check('saved tool permission migrates without an alias',st['agents'][0]['tools']=='read,mcp')
-  check('old in-flight owner cannot resume',st.get('mcp_client_expected') is None and not st['busy'])
+  check('saved tool permission migrates without an alias',st['agents'][0]['tools']=='read,mcp');check('old in-flight owner cannot resume',st.get('mcp_client_expected') is None and not st['busy'])
   check('optional preferences and user instructions are preserved',st['investigation_preferences']['instructions']=='Preserve my additional guidance' and st['agents'][0]['investigation_preferences'] is False and st['agents'][0]['instructions']=='User-authored instructions')
   settings=event(st,'instruction_settings');buttons=settings['ui']['modal']['buttons'];check('preferences are in agent settings',any(x['event']=='investigation_preferences' for x in buttons))
   skills=event(st,'skills');check('core process is not presented as a selectable skill',all(x['event']!='investigation_preferences' for x in skills['ui']['modal']['buttons']))
@@ -24,22 +21,17 @@ with tempfile.TemporaryDirectory(prefix='commands-',dir=PROJECT/'output') as tem
   unknown=event(st,old+'_list');check('removed action is not an active alias',unknown['effect'] is None)
   listed=event(st,'mcp_client_list');check('migrated connection emits an actual protocol initialization',listed['effect']['kind']=='network' and listed['effect']['purpose'].startswith('mcp_client_init:') and 'initialize' in listed['effect']['wire'])
   event(listed['state'],'cancel')
-  # No peer, no assigned skill, no optional guidance, and an unavailable journal.
   st=event(None,'resume')['state'];st['profiles']=[dict(name='Controlled',endpoint='http://model.test/v1/chat/completions',protocol='chat',model='controlled',plain=True,stream=False)];st['agents']=[dict(name='General',tools='read',investigation_preferences=False)];st['investigation_preferences']={'enabled':False};st['inquiry_records']={'schema':999,'items':[]}
-  d=event(st,'send',{'draft':'Read the evidence file and answer from what it says.'});check('ordinary command runs without a peer or journal',d['effect']['purpose']=='model');wire=d['effect']['wire'];check('ordinary mode preserves evidence access with additional guidance off','Choose the smallest useful response' in wire and 'Investigation preferences:' not in wire)
-  check('no branded workflow or remote activation is required',not re.search(r'(?i)\b'+old+r'(?:\b|_)',wire) and 'request mcp args' not in wire)
+  d=event(st,'send',{'draft':'Read the evidence file and answer from what it says.'});check('ordinary command runs without a peer or journal',d['effect']['purpose']=='model');wire=d['effect']['wire'];check('ordinary mode preserves evidence access with additional guidance off','Choose the smallest useful response' in wire and 'Investigation preferences:' not in wire);check('no branded workflow or remote activation is required',not re.search(r'(?i)\b'+old+r'(?:\b|_)',wire) and 'request mcp args' not in wire)
   d=reply(d,json.dumps({'tool':'read','args':{'path':'evidence.txt'}}));check('normal evidence operation uses existing review',d['state']['dialog']=='approval')
   d=event(d['state'],'approve');e=d['effect'];check('normal command dispatches the actual file operation',e['kind']=='tool' and e['tool']=='read')
   output=op(dict(e,op='tool',root=str(root)));check('file operation executes despite unavailable bookkeeping',output=='Actual evidence from a normal command.')
   i={k:e[k] for k in ['purpose','tool_ticket','tool_binding','child_ticket','child_owner'] if k in e};i['output']=output;d=event(d['state'],'tool_result',i);check('actual evidence feeds directly back into command continuation',output in d['effect']['wire'] and 'Choose the smallest useful response' in d['effect']['wire'])
   d=reply(d,'The answer follows the actual file observation.');check('normal command completes through the existing answer path',not d['state']['busy'] and d['effect'] is None)
-  # Both provider encodings and text prompts describe the same real availability.
-  def enums(value):
-   if isinstance(value,dict):
-    if isinstance(value.get('properties'),dict) and isinstance(value['properties'].get('tool'),dict) and 'enum'in value['properties']['tool']:yield value['properties']['tool']['enum']
-    for item in value.values():yield from enums(item)
-   elif isinstance(value,list):
-    for item in value:yield from enums(item)
+  def enums(v):
+   items=v.values() if isinstance(v,dict) else v if isinstance(v,list) else ()
+   if isinstance(v,dict) and isinstance(v.get('properties'),dict) and isinstance(v['properties'].get('tool'),dict) and 'enum'in v['properties']['tool']:yield v['properties']['tool']['enum']
+   for item in items:yield from enums(item)
   for fmt in ['chat','local','messages','content']:
    candidate=event(None,'resume')['state'];candidate['profiles']=[dict(name='Controlled',protocol=fmt,endpoint='http://model.test/v1/chat/completions',model='controlled',plain=True,stream=False,tool_format='structured')];candidate['agents']=[dict(name='General',tools='read,mcp,delegate',subagents=[],investigation_preferences=False)]
    outgoing=event(candidate,'send',{'draft':'Understand the evidence.'});body=json.loads(outgoing['effect']['wire'].split('\r\n\r\n',1)[1]);allowed=list(enums(body));check(fmt+' structured catalog excludes absent connections and children',allowed and all(v==['read'] for v in allowed))
@@ -57,16 +49,24 @@ with tempfile.TemporaryDirectory(prefix='commands-',dir=PROJECT/'output') as tem
    refined=event(candidate,'refine',{'task':'Read evidence and improve the instructions.'});wire=refined['effect']['wire'];body=json.loads(wire.split('\r\n\r\n',1)[1]);allowed=list(enums(body));check(fmt+' refinement structured catalog matches executor restrictions',allowed and all(v==['read'] for v in allowed))
    check(fmt+' refinement text catalog and child guidance match','Available operations for this agent: read.' in wire and 'Callable subagents:' not in wire and 'request mcp args' not in wire)
    candidate['profiles'][0]['tool_format']='json';refined=event(candidate,'refine',{'task':'Read the same evidence.'});assert refined['effect'],(fmt,refined['state'].get('notice'),refined['state'].get('dialog'));wire=refined['effect']['wire'];check(fmt+' text-only refinement has the same real availability','Available operations for this agent: read.' in wire and 'Callable subagents:' not in wire)
-
   st['profiles'][0]['tool_format']='structured';d=event(st,'send',{'draft':'Read the evidence within the current operation allowance.'})
-  for attempt in range(8):
-   d=reply(d,json.dumps({'tool':'read','args':{'path':'evidence.txt'}}));assert d['state']['dialog']=='approval';d=event(d['state'],'approve');e=d['effect'];actual=op(dict(e,op='tool',root=str(root)));assert actual==output
-   i={k:e[k] for k in ['purpose','tool_ticket','tool_binding','child_ticket','child_owner'] if k in e};i['output']=actual;d=event(d['state'],'tool_result',i)
+  for attempt in range(8):d=reply(d,json.dumps({'tool':'read','args':{'path':'evidence.txt'}}));assert d['state']['dialog']=='approval';d=event(d['state'],'approve');e=d['effect'];actual=op(dict(e,op='tool',root=str(root)));assert actual==output;i={k:e[k] for k in ['purpose','tool_ticket','tool_binding','child_ticket','child_owner'] if k in e};i['output']=actual;d=event(d['state'],'tool_result',i)
   check('eight actual reviewed operations reach their existing allowance',d['state']['steps']==8 and d['effect']['purpose']=='model')
   wire=d['effect']['wire'];request=json.loads(wire.split('\r\n\r\n',1)[1]);check('exhausted request offers an evidence-based answer without unusable tools','tools' not in request and 'operation allowance is exhausted' in wire and output in wire)
   refused=reply(d,json.dumps({'tool':'read','args':{'path':'evidence.txt'}}));check('ninth proposal is refused before an impossible review',refused['effect'] is None and refused['state'].get('pending') is None and refused['state']['dialog']!='approval' and refused['state']['notice_error'])
   continued=event(refused['state'],'send',{'draft':'Answer from the returned evidence.'});wire=continued['effect']['wire'];check('a new user instruction restores its ordinary operation allowance',continued['state']['steps']==0 and 'tools' in json.loads(wire.split('\r\n\r\n',1)[1]));continued=reply(continued,'Answer from the actual evidence.');assert not continued['state']['busy']
-  failed=raw({'op':'tool','root':str(root),'tool':'read','args':{'path':'missing.txt'}});check('legitimate missing input stays scoped','error' in failed)
-  check('unrelated work remains available after scoped failure',op({'op':'tool','root':str(root),'tool':'read','args':{'path':'evidence.txt'}})==output)
+  failed=raw({'op':'tool','root':str(root),'tool':'read','args':{'path':'missing.txt'}});check('legitimate missing input stays scoped','error' in failed);check('unrelated work remains available after scoped failure',op({'op':'tool','root':str(root),'tool':'read','args':{'path':'evidence.txt'}})==output)
+  st=event(None,'resume')['state'];st['profiles']=[dict(name='Controlled',endpoint='http://127.0.0.1:9/v1/chat/completions',protocol='chat',model='controlled',plain=True,hosted_search='off')];st['agents']=[dict(name='General',tools='web_search',investigation_preferences=False)];st['investigation_preferences']={'enabled':False}
+  d=event(st,'send',{'draft':'Gather the fixture topic from permitted sources.'});check('search evidence request streams through the chat provider',d['effect']['purpose']=='model' and d['effect'].get('stream') is True and d['effect'].get('stream_protocol')=='chat')
+  proposal=json.dumps({'tool':'web_search','args':{'query':'fixture topic'}});offered='data: '+json.dumps({'choices':[{'index':0,'delta':{'content':proposal},'finish_reason':None}]})+'\n\ndata: '+json.dumps({'choices':[{'index':0,'delta':{},'finish_reason':'stop'}]})+'\n\ndata: [DONE]\n\n'
+  def finish_stream(protocol,text):
+   body=text.encode();wire=b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(body)).encode()+b'\r\n\r\n'+body;sid=op(dict(op='stream_open',protocol=protocol));op(dict(op='stream_feed',id=sid,data=base64.b64encode(wire).decode()));return raw(dict(op='stream_finish',id=sid,eof=False))
+  done=finish_stream('chat',offered);d=event(d['state'],'network_result',{'purpose':'model','model_ticket':d['state']['model_expected'],'data':done['value']['data'],'sent':True});check('streamed search proposal dispatches without a review dialog',d['effect'] and d['effect'].get('purpose')=='web_tool' and 'q=fixture%20topic' in d['effect']['wire'])
+  payload=json.dumps({'query':'fixture topic','number_of_results':1,'results':[{'url':'https://example.test/page','title':'A title','content':'Snippet','engine':'user'}]}).encode();http=b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(payload)).encode()+b'\r\n\r\n'+payload
+  d=event(d['state'],'network_result',{'purpose':'web_tool','web_ticket':d['effect']['web_ticket'],'data':base64.b64encode(http).decode()});check('search evidence reaches the streamed follow-up prompt',d['effect'] and d['effect'].get('purpose')=='model' and d['effect'].get('stream') is True and 'Search results for: fixture topic' in d['effect']['wire'] and 'Returned results' in d['effect']['wire'] and isinstance(d['state'].get('web_answer_binding'),dict))
+  empty='data: {"choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}\n\ndata: [DONE]\n\n';stopped=finish_stream(d['effect']['stream_protocol'],empty);reason=stopped.get('error','');check('provider stop reason survives an empty streamed completion',reason=='Server returned no text response: content_filter')
+  d=event(d['state'],'failure',{'purpose':'model','model_ticket':d['state']['model_expected'],'error':reason,'sent':True});check('suffixed empty reply asks for an answer from the saved search',d['state'].get('notice')=='Search evidence saved. Asking the same model to answer from those results…' and d['effect'] and d['effect'].get('purpose')=='model' and d['state'].get('web_answer_only') is True and 'Search results for: fixture topic' in d['effect']['wire'])
+  follow=d['effect'];stopped=finish_stream(follow.get('stream_protocol') or 'chat',empty);reason=stopped.get('error','');check('recovery completion stop reason is produced by the product parser',reason=='Server returned no text response: content_filter')
+  d=event(d['state'],'failure',{'purpose':'model','model_ticket':d['state']['model_expected'],'error':reason,'sent':True});refusal='Search evidence is still in this conversation. The model returned an empty answer after one recovery attempt.';check('visible refusal is the one recovery attempt',d['state'].get('notice')==refusal and d['ui'].get('status')==refusal and d['ui'].get('visible_status')==refusal and d.get('effect') is None)
  finally:p.stdin.close();p.wait(timeout=10)
 print(json.dumps({'passed':len(passed),'checks':passed,'scope':'Owner connected checks: controlled provider responses and actual shared-core command/file operations.'},indent=2));(PROJECT/'output/checks/commands.json').write_text(json.dumps({'passed':passed},indent=2)+'\n')
