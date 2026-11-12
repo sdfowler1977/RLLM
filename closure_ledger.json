@@ -893,13 +893,6 @@
       "no cancellation hook inside the CLI parser; the single cancelled() check sits before it"
     ]
   },
-  "lanes_in_flight_2026_11_12T2210": [
-    "defl5 (core/compression.rs, tools/package.rs)",
-    "room6 (core/clean_room.rs + clean_room reconstruct kind)",
-    "selfreb (verification/self_rebuild.py leg() swallow + report shape)",
-    "gap2e (core/improvement.rs, core/rrsi.rs, core/harness.rs, verification/rrsi_loop.py)",
-    "natx (core/binary_declarations.rs typed cross-references; must clear the 'field xrefs is never read' product warning by consuming Observation.xrefs)"
-  ],
   "gap2_rounds_ceiling_interlocks": {
     "status": "coordinator census, feeds the gap2e adjudication",
     "validator": "core/improvement.rs:113-119 accepts only 1/2; 'Select one or up to two refinement rounds' is asserted only at verification/rrsi_loop.py:382 (plus the scope prose at :448)",
@@ -922,5 +915,39 @@
       "no aggregate output/work cap charged against the inspect budget for a large PE with directory 14",
       "no cancellation hook inside the CLI parser"
     ]
-  }
+  },
+  "defl5_landed_2b041bc": {
+    "status": "committed",
+    "files": "core/compression.rs tools/package.rs",
+    "claim": "native LZ77+Huffman DEFLATE (32 KiB window, lazy matches, chain cap 4096/128, 64 KiB blocks, fixed-or-dynamic, stored fallback) replacing stored-only archive members",
+    "coordinator_witness": "git-archive room of 28b29d3 + these two files: 708/708 units + 55 isolated, exit 0 (= 701 + 7); tools build clean; package-tests 29 passed / 0 failed (was 20)",
+    "independent_conformance": "standalone probe compiled in that room against core/compression.rs and cross-checked with python zlib: 230,800-byte corpus -> 21,519 bytes; zlib raw-DEFLATE decoder returns the original bytes exactly; two runs byte-identical (deterministic); native inflater accepts zlib level-9 output byte-identical. Size within 0.14% of zlib -9 (21,519 vs 21,489) - near parity, NOT byte parity",
+    "seat_open_legs": [
+      "dynamic-header field-level decode (HLIT/HDIST/HCLEN, CL_ORDER, RLE 16/17/18) - partially answered by zlib accepting the stream end to end",
+      "BFINAL/BTYPE framing across multi-block members",
+      "which of the 16 tests survive removing dynamic Huffman or the stored fallback"
+    ],
+    "gap5_still_open": [
+      "the Python writer (tools/package.py zipfile.ZIP_DEFLATED level 9) cannot be retired: no publication archive has been produced and compared end to end, still blocked behind output/checks/apk.json",
+      "the compressor exists twice (core module + standalone tool); no shared-module mechanism is used, so drift must be guarded by hand"
+    ]
+  },
+  "selfreb_landed_fb2adc9": {
+    "status": "committed",
+    "files": "verification/self_rebuild.py (+43/-5), group checks 8 -> 9",
+    "fix": "a leg that raises after recording its own pass is now moved from passed into problems once; record 'passed' is len(passed) on green and omitted on red",
+    "coordinator_legs_closed": [
+      "tools/harness.rs:577-594 watches only count/passed/checks (int or array length); Measure::finish at :362-378 compares only the present fields, so a red record with count and checks equal parses as a value, not 'unparsed'",
+      "no leg name is reused in this group (9 unique names), so the seat's duplicate-name scenarios cannot occur here",
+      "verification/RESULTS.json:73 pins self_rebuild at 8 - that is the delivered record and the next sweep rewrites it"
+    ],
+    "same_defect_elsewhere": "verification/rrsi_loop.py:77/:405/:440 still has the 'if name not in evaluated' swallow and the list-shaped passed; that file is owned by the in-flight GAP2 lane"
+  },
+  "lanes_in_flight_2026_11_12T2325": [
+    "room6 (core/clean_room.rs new + core/file_evidence.rs + core/reconstruction.rs - GAP4 white-room rebuild)",
+    "gap2e (core/improvement.rs, core/rrsi.rs, core/harness.rs, verification/rrsi_loop.py - GAP2 route ceiling)",
+    "natx (core/binary_declarations.rs typed xrefs)",
+    "gap1b (core/self_build.rs successor readback - GAP1)",
+    "dotnet6 (core/dotnet_evidence.rs + investigation.rs - .NET caps, cancellation, depth)"
+  ]
 }
