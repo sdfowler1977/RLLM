@@ -724,7 +724,8 @@ fn web_answer_binding(st:&Json,index:usize,p:&Json)->Json{
  obj(vec![("owner",hosted_owner(st)),("index",Num(index.to_string())),("profile",s(&harness_rules::digest(p)))])
 }
 fn recover_web_answer(st:&mut Json,original:&Json,inputs:&Json,error:&str)->Result<Option<Json>>{
- if text(inputs,"purpose")!="model"||error!=super::provider::EMPTY_REPLY{return Ok(None);}
+ // A suffixed refusal still means the same thing.
+ if text(inputs,"purpose")!="model"||!(error==super::provider::EMPTY_REPLY||error.strip_prefix(super::provider::EMPTY_REPLY).is_some_and(|rest|rest.starts_with(": "))){return Ok(None);}
  if boolean(original,"web_answer_only"){return Err("Search evidence is still in this conversation. The model returned an empty answer after one recovery attempt.".into());}
  let index=number(original,"request_index");
  let profiles=array(st,"profiles");
@@ -5271,6 +5272,24 @@ mod checks {
         let mut st=configured();put(&mut st,"drive",obj(vec![("phone_default",Bool(false)),("url",s("https://nas.test/shared/"))]));put(&mut st,"phone_uri",s("content://documents/tree/phone"));
         let r=step(st,"project_save",Null);let r=step(get(&r,"state").clone(),"archive_built",obj(vec![("ticket",get(get(&r,"effect"),"ticket").clone()),("archive",s(&network::b64(b"ZIP")))]));assert_eq!(text(get(&r,"effect"),"kind"),"network");
         let fail=step(get(&r,"state").clone(),"failure",obj(vec![("purpose",get(get(&r,"effect"),"purpose").clone())]));assert_eq!(get(&fail,"effect"),&Null);assert_ne!(get(get(&fail,"state"),"project_transfer"),&Null);assert!(!text(get(&fail,"state"),"notice").contains("saved to"));
+    }
+    #[test]
+    fn suffixed_empty_reply_uses_web_answer_recovery_arm() {
+        let inputs=obj(vec![("purpose",s("model"))]);
+        let original=obj(vec![("web_answer_only",Bool(true))]);
+        let mut plain_state=obj(vec![]);
+        let plain=recover_web_answer(&mut plain_state,&original,&inputs,provider::EMPTY_REPLY);
+        let mut suffixed_state=obj(vec![]);
+        let suffixed=recover_web_answer(&mut suffixed_state,&original,&inputs,"Server returned no text response: content_filter");
+        assert_eq!(suffixed,plain);
+        assert_eq!(suffixed,Err("Search evidence is still in this conversation. The model returned an empty answer after one recovery attempt.".into()));
+    }
+    #[test]
+    fn unrelated_model_error_skips_web_answer_recovery() {
+        let inputs=obj(vec![("purpose",s("model"))]);
+        let original=obj(vec![("web_answer_only",Bool(true))]);
+        let mut st=obj(vec![]);
+        assert_eq!(recover_web_answer(&mut st,&original,&inputs,"connection reset"),Ok(None));
     }
 
 }
