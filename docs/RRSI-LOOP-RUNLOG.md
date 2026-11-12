@@ -3,7 +3,7 @@
 Transcripts of product runs, not readings of source. Each section is one Gap evidence bar from
 `docs/RLLM-recursion-gap-report.md` §4, made on committed bytes inside a `git archive` room.
 
-## Gap 2 — an RRSI run of three rounds on committed bytes — 2026-11-12T19:2Z, commit `b8b0e71`
+## Gap 2 — an RRSI run of three rounds on committed bytes — 2026-11-12T23:00Z, commit `b8b0e71`
 
 The bar: *an RRSI run of at least three rounds showing the budget shrinking; at least one rejected
 leaking candidate; a noise-floor decision; a pruned component; the incumbent as a worktree commit; a
@@ -146,7 +146,7 @@ in `output/g2-xdg/rllm/experience.jsonl`, which is what the next section follows
 - Nothing above is the driver's arithmetic: each value is printed from the product's request wire, its
   ledger file, its review evidence, or git files the product created.
 
-## Gap 3 — task t+1 reading the library entry written by task t — 2026-11-12T19:4Z, commit `b8b0e71`
+## Gap 3 — task t+1 reading the library entry written by task t — 2026-11-12T23:13Z, commit `b8b0e71`
 
 The bar: *task t+1 visibly reading the library entry written by task t.* Driver `/tmp/g3drive.py`,
 transcript `/tmp/g3drive-run7.log`. The room is built the same way (`git archive HEAD` at `b8b0e71`,
