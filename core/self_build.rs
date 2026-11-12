@@ -1214,24 +1214,63 @@ fn append_journal_revision(
     append_record(&locate(root, &text(args, "journal"), true)?, &record.string())?;
     Ok(revision)
 }
+enum SanctionedKind {
+    Direct,
+    GateTool,
+}
+/// The only sanctioned-argv match. Preflight and the spawn site both go through
+/// `require_sanctioned`, so an arm cannot be accepted in one place and refused in the other.
+fn classify_sanctioned(program: &str, args: &[String]) -> Option<SanctionedKind> {
+    match (program, args) {
+        ("bash", [only]) if only == "headless.sh" => Some(SanctionedKind::Direct),
+        ("bash", [script, units]) if script == "tools/build-units.sh" && relative(units).is_ok() => {
+            Some(SanctionedKind::Direct)
+        }
+        (GATE_REL, [units]) if relative(units).is_ok() => Some(SanctionedKind::GateTool),
+        _ => None,
+    }
+}
+fn require_sanctioned(role: &str, program: &str, args: &[String]) -> Result<SanctionedKind> {
+    classify_sanctioned(program, args).ok_or_else(|| format!("{role} is not one of the sanctioned commands"))
+}
+/// Reload, timeout, builder argv, gate argv, and the binary path are settled
+/// before any workspace write. A shape the seam will not run leaves the source,
+/// the rollback copy, and the journal untouched.
+fn require_command_shape(root: &Path, args: &Json) -> Result<Duration> {
+    let reload = text(args, "reload");
+    if !reload.is_empty() && reload != "exec" && reload != "spawn" {
+        return Err("reload must be exec, spawn, or empty".into());
+    }
+    let timeout = reviewed_timeout(args)?;
+    let builder = text(args, "builder");
+    if !builder.is_empty() {
+        require_sanctioned("builder", &builder, &strings(args, "builder_args")?)?;
+    }
+    let gate = text(args, "gate");
+    if !gate.is_empty() {
+        require_sanctioned("gate", &gate, &strings(args, "gate_args")?)?;
+    }
+    let binary = text(args, "binary");
+    if !text(args, "journal").is_empty() || reload == "exec" || reload == "spawn" || !binary.is_empty() {
+        resolve_file(root, &binary)?;
+    }
+    Ok(timeout)
+}
 fn sanctioned_child(
     root: &Path,
+    role: &str,
     program: &str,
     args: &[String],
     timeout: Duration,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<super::execution::BoundedOutput> {
-    match (program, args) {
-        ("bash", [only]) if only == "headless.sh" => bounded_child(root, program, args, timeout, cancelled),
-        ("bash", [script, units]) if script == "tools/build-units.sh" && relative(units).is_ok() => {
-            bounded_child(root, program, args, timeout, cancelled)
-        }
-        (GATE_REL, [units]) if relative(units).is_ok() => {
+    match require_sanctioned(role, program, args)? {
+        SanctionedKind::Direct => bounded_child(root, program, args, timeout, cancelled),
+        SanctionedKind::GateTool => {
             let path = gate_tool_path(root)?;
             let path = path.to_string_lossy().into_owned();
             bounded_child(root, &path, args, timeout, cancelled)
         }
-        _ => Err("builder is not one of the sanctioned commands".into()),
     }
 }
 fn inherited() -> (String, String) {
@@ -1364,11 +1403,9 @@ fn run_with(
         INSTRUCTION_MAX,
         "instruction",
     )?;
+    // Command shape, including sanctioned argv, is refused before the reviewed edit.
+    let timeout = require_command_shape(root, args)?;
     let reload = text(args, "reload");
-    if !reload.is_empty() && reload != "exec" && reload != "spawn" {
-        return Err("reload must be exec, spawn, or empty".into());
-    }
-    let timeout = reviewed_timeout(args)?;
     let journal_rel = text(args, "journal");
     if !journal_rel.is_empty() {
         require_journal_parent(root, args)?;
@@ -1385,7 +1422,7 @@ fn run_with(
     }
     let mut gate_text = String::new();
     if !text(args, "builder").is_empty() {
-        let built = sanctioned_child(root, &text(args, "builder"), &strings(args, "builder_args")?, timeout, cancelled)?;
+        let built = sanctioned_child(root, "builder", &text(args, "builder"), &strings(args, "builder_args")?, timeout, cancelled)?;
         if built.code != Some(0) {
             return Err(format!(
                 "builder failed: exit {:?} {}",
@@ -1396,7 +1433,7 @@ fn run_with(
         gate_text = built.stdout;
     }
     if !text(args, "gate").is_empty() {
-        let gate = sanctioned_child(root, &text(args, "gate"), &strings(args, "gate_args")?, timeout, cancelled)?;
+        let gate = sanctioned_child(root, "gate", &text(args, "gate"), &strings(args, "gate_args")?, timeout, cancelled)?;
         let parsed = parse_gate(&gate.stdout).map_err(|error| format!("{error}; stderr {}", gate.stderr.chars().take(400).collect::<String>()))?;
         if !parsed.green {
             return Err(format!("reload refused: unit gate is not green ({}/{})", parsed.passed, parsed.cases));
@@ -2055,6 +2092,7 @@ mod checks {
         let root = scratch.path();
         let error = match sanctioned_child(
             root,
+            "gate",
             "output/tools/gate",
             &["output/units".to_string()],
             Duration::from_secs(5),
@@ -2734,11 +2772,12 @@ mv "$tmp" "$1.done"
         write(&root.join("headless.sh"), format!("#!/bin/sh\n{probe}").as_bytes());
         fs::create_dir_all(root.join("output/tools")).unwrap();
         executable(&root.join("output/tools/gate"), format!("#!/bin/sh\n{probe}").as_bytes());
-        let built = sanctioned_child(root, "bash", &["headless.sh".to_string()], Duration::from_secs(5), &|| false).unwrap();
+        let built = sanctioned_child(root, "builder", "bash", &["headless.sh".to_string()], Duration::from_secs(5), &|| false).unwrap();
         assert_eq!(built.code, Some(0), "{}", built.stderr);
         assert_eq!(built.stdout, "job-unset\ninstruction-unset\n");
         let gated = sanctioned_child(
             root,
+            "gate",
             "output/tools/gate",
             &["units".to_string()],
             Duration::from_secs(5),
@@ -2929,5 +2968,237 @@ mv "$tmp" "$1.done"
             );
             assert!(output.status.success(), "{name}\n{}", child_text(&output));
         }
+    }
+
+    fn refusal<T>(result: Result<T>) -> String {
+        match result {
+            Err(error) => error,
+            Ok(_) => panic!("expected a refusal"),
+        }
+    }
+    fn subject_stamp(path: &Path) -> (u64, u64, String) {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::symlink_metadata(path).unwrap();
+        let bytes = fs::read(path).unwrap();
+        (meta.ino(), meta.len(), sha256(&bytes))
+    }
+    fn refused_shape(extra: Vec<(&str, Json)>) -> Json {
+        let mut fields = vec![
+            ("path", s("src/lib.rs")),
+            ("content", s("fn marker() { let _ = \"unsanctioned\"; }\n")),
+            ("previous_exists", Bool(true)),
+            ("approved_previous", s("fn a() {}\n")),
+            ("binary", s("bin")),
+            ("journal", s("self/journal.jsonl")),
+            ("rollback", s("self/rollback")),
+            ("parent", s("")),
+            ("reload", s("spawn")),
+            ("job", s("lane-h-refuse")),
+            ("instruction", s("do not run this command")),
+        ];
+        fields.extend(extra);
+        obj(vec![("args", obj(fields))])
+    }
+    fn assert_refused_before_write(root: &Path, request: &Json, reason: &str) {
+        let source = root.join("src/lib.rs");
+        let before = subject_stamp(&source);
+        let before_bytes = fs::read(&source).unwrap();
+        let journal = root.join("self/journal.jsonl");
+        let rollback = root.join("self/rollback");
+        assert!(!journal.exists());
+        assert!(!rollback.exists());
+        let error = run(root, request, &|| false).unwrap_err();
+        assert_eq!(error, reason);
+        assert_eq!(subject_stamp(&source), before, "subject inode, size, or sha256 changed");
+        assert_eq!(fs::read(&source).unwrap(), before_bytes);
+        assert!(!journal.exists(), "a refused command appended a journal revision");
+        assert!(!rollback.exists(), "a refused command created a rollback copy");
+        assert!(successor_states().is_empty(), "a refused command tracked a successor");
+        let pending = fs::read_dir(root.join("src"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| entry.file_name().to_string_lossy().starts_with(".pending-"));
+        assert!(!pending, "a refused command left a pending file");
+    }
+
+    #[test]
+    fn unsanctioned_builder_refuses_before_the_source_bytes_change() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("unsanctioned-builder");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        write(&root.join("bin"), b"binary-v1");
+        assert_refused_before_write(
+            root,
+            &refused_shape(vec![
+                ("builder", s("bash")),
+                ("builder_args", Arr(vec![s("echo"), s("unsanctioned")])),
+            ]),
+            "builder is not one of the sanctioned commands",
+        );
+    }
+
+    #[test]
+    fn unsanctioned_gate_refuses_before_the_source_bytes_change() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("unsanctioned-gate");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        write(&root.join("bin"), b"binary-v1");
+        assert_refused_before_write(
+            root,
+            &refused_shape(vec![
+                ("gate", s("bash")),
+                ("gate_args", Arr(vec![s("echo"), s("unsanctioned")])),
+            ]),
+            "gate is not one of the sanctioned commands",
+        );
+    }
+
+    #[test]
+    fn builder_with_an_extra_argument_refuses_before_the_source_bytes_change() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("extra-builder-arg");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        write(&root.join("bin"), b"binary-v1");
+        assert_refused_before_write(
+            root,
+            &refused_shape(vec![
+                ("builder", s("bash")),
+                (
+                    "builder_args",
+                    Arr(vec![s("tools/build-units.sh"), s("output/units"), s("extra")]),
+                ),
+            ]),
+            "builder is not one of the sanctioned commands",
+        );
+    }
+
+    #[test]
+    fn sanctioned_spawn_still_edits_rolls_back_journals_and_hands_both_carried_names() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("sanctioned-spawn");
+        let root = scratch.path();
+        let original = "fn a() {}\n";
+        write(&root.join("src/lib.rs"), original.as_bytes());
+        executable(&root.join("bin"), SUCCESSOR_SCRIPT.as_bytes());
+        let binary_before = fs::read(root.join("bin")).unwrap();
+        green_builder(root);
+        let content = "fn a() { let _ = 1; }\n";
+        let proof = root.join("proof-shape");
+        let source = root.join("src/lib.rs");
+        let source_before = subject_stamp(&source);
+        let receipt = run_with(
+            root,
+            &spawn_fields(
+                content,
+                original,
+                "",
+                vec![("successor_args", Arr(vec![s(proof.to_str().unwrap()), s("continue")]))],
+            ),
+            &|| false,
+            "carried-job",
+            "carried-instruction",
+        )
+        .unwrap();
+        assert_ne!(subject_stamp(&source), source_before);
+        assert_eq!(fs::read_to_string(&source).unwrap(), content);
+        assert_eq!(fs::read(root.join("self/rollback")).unwrap(), binary_before);
+        let stored = rows(&root.join("self/journal.jsonl"));
+        assert_eq!(stored.len(), 1);
+        addressed(&stored[0]);
+        let successor = get(&stored[0], "successor");
+        assert_eq!(text(successor, "mode"), "spawn");
+        assert_eq!(text(successor, "job_source"), "inherited");
+        assert_eq!(text(successor, "job"), "carried-job");
+        assert_eq!(text(successor, "instruction"), "carried-instruction");
+        assert_eq!(
+            get(successor, "env").array().unwrap(),
+            &vec![s("RLLM_SELF_JOB"), s("RLLM_SELF_INSTRUCTION")]
+        );
+        assert!(receipt.contains("successor pid "), "{receipt}");
+        let dumped = wait_bytes(&PathBuf::from(format!("{}.done", proof.display())));
+        let parts: Vec<&[u8]> = dumped.split(|byte| *byte == 0).collect();
+        assert_eq!(parts[2], b"carried-job");
+        assert_eq!(parts[3], b"carried-instruction");
+        assert_eq!(parts[4], b"job-set");
+        assert_eq!(parts[5], b"instruction-set");
+        let Num(pid) = get(successor, "pid") else { panic!("successor pid is not a number") };
+        wait_dead(pid.parse::<u64>().unwrap());
+    }
+
+    /// A local copy with the build-units arm removed. The production sites must
+    /// keep agreeing with `require_sanctioned`, not with this copy.
+    fn copy_without_build_units(program: &str, args: &[String]) -> bool {
+        match (program, args) {
+            ("bash", [only]) if only == "headless.sh" => true,
+            (GATE_REL, [units]) if relative(units).is_ok() => true,
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn preflight_and_spawn_use_the_same_sanctioned_classifier() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("same-classifier");
+        let root = scratch.path();
+        let units = vec!["tools/build-units.sh".to_string(), "output/units".to_string()];
+        assert!(classify_sanctioned("bash", &units).is_some());
+        assert!(
+            !copy_without_build_units("bash", &units),
+            "the local copy still contains the build-units arm"
+        );
+        let accepted = sanctioned_child(root, "builder", "bash", &units, Duration::from_secs(5), &|| false);
+        let accepted = match accepted {
+            Ok(output) => output,
+            Err(error) => panic!("spawn site refused a sanctioned arm: {error}"),
+        };
+        assert_ne!(accepted.code, Some(0), "a missing build script was treated as success");
+        let shape = obj(vec![
+            ("builder", s("bash")),
+            ("builder_args", Arr(vec![s("tools/build-units.sh"), s("output/units")])),
+            ("reload", s("")),
+        ]);
+        assert!(require_command_shape(root, &shape).is_ok());
+        let extra = vec![
+            "tools/build-units.sh".to_string(),
+            "output/units".to_string(),
+            "extra".to_string(),
+        ];
+        assert!(classify_sanctioned("bash", &extra).is_none());
+        assert!(!copy_without_build_units("bash", &extra));
+        let from_classifier = refusal(require_sanctioned("builder", "bash", &extra));
+        let from_spawn = refusal(sanctioned_child(root, "builder", "bash", &extra, Duration::from_secs(5), &|| false));
+        let from_preflight = require_command_shape(
+            root,
+            &obj(vec![
+                ("builder", s("bash")),
+                (
+                    "builder_args",
+                    Arr(vec![s("tools/build-units.sh"), s("output/units"), s("extra")]),
+                ),
+                ("reload", s("")),
+            ]),
+        )
+        .unwrap_err();
+        assert_eq!(from_classifier, "builder is not one of the sanctioned commands");
+        assert_eq!(from_spawn, from_classifier);
+        assert_eq!(from_preflight, from_classifier);
+        let bad_gate = vec!["echo".to_string(), "unsanctioned".to_string()];
+        let gate_classifier = refusal(require_sanctioned("gate", "bash", &bad_gate));
+        let gate_spawn = refusal(sanctioned_child(root, "gate", "bash", &bad_gate, Duration::from_secs(5), &|| false));
+        let gate_preflight = require_command_shape(
+            root,
+            &obj(vec![
+                ("gate", s("bash")),
+                ("gate_args", Arr(vec![s("echo"), s("unsanctioned")])),
+                ("reload", s("")),
+            ]),
+        )
+        .unwrap_err();
+        assert_eq!(gate_classifier, "gate is not one of the sanctioned commands");
+        assert_eq!(gate_spawn, gate_classifier);
+        assert_eq!(gate_preflight, gate_classifier);
     }
 }
