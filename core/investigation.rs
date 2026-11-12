@@ -101,6 +101,8 @@ pub(super) fn inspect(p:&Path,source:&file_evidence::Source<'_>,cancelled:&impl 
     if data.starts_with(b"MZ") {
         if graph{let observation=super::pe_observation::observe_with_cancel(&data,complete,after.len(),cancelled)?;structure.push('\n');structure.push_str(&observation.text);binary=Some(observation);}
         else{let text=super::pe_observation::analyze(&data,complete,after.len(),cancelled)?;structure.push('\n');structure.push_str(&text);}
+        if cancelled(){return Err("Inspection cancelled".into());}
+        if let Some(dotnet)=super::super::dotnet_evidence::cli_evidence(&data){structure.push('\n');structure.push_str(&dotnet);}
     }
     if data.starts_with(b"\x7fELF") {
         if graph{let observation=super::elf_observation::observe_with_cancel(&data,complete,after.len(),cancelled)?;structure.push('\n');structure.push_str(&observation.text);binary=Some(observation);}
@@ -313,4 +315,182 @@ pub(super) fn byte_limit(text:&str,max:usize)->String{let mut n=text.len().min(m
   assert!(compare_scoped(&root,&root.join("a"),&root.join("b"),&args,&access).unwrap_err().contains("cancelled"));
   access.cancellation_token=exec();assert!(inspect_scoped(&root,&root.join("a"),"a",&access).is_ok());assert!(inspect_scoped(&root,&root,"",&access).is_ok());assert!(compare_scoped(&root,&root.join("a"),&root.join("b"),&args,&access).is_ok());
  }
+}
+
+#[cfg(test)]
+mod dotnet_inspect_checks {
+    use super::*;
+    const PE_TAIL: &str = "Control-flow instruction interpretation unavailable for PE machine0x8664/class; mixed Arm64EC/Arm64X is not interpreted as uniform AArch64. Existing structural observations remain available.\n";
+    const FOOTER: &str = "Signatures and symbolic instruction IR describe the captured bytes. File sizes and sampled byte counts identify the observation coverage.";
+
+    fn put16(buf: &mut [u8], at: usize, value: u16) {
+        buf[at..at + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put32(buf: &mut [u8], at: usize, value: u32) {
+        buf[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn push16(buf: &mut Vec<u8>, value: u16) {
+        buf.extend_from_slice(&value.to_le_bytes());
+    }
+    fn push32(buf: &mut Vec<u8>, value: u32) {
+        buf.extend_from_slice(&value.to_le_bytes());
+    }
+    fn pe(section: &[u8], cli_rva: u32, cli_size: u32, directories: u32) -> Vec<u8> {
+        let mut file = vec![0u8; 0x200 + section.len()];
+        file[0] = b'M';
+        file[1] = b'Z';
+        put32(&mut file, 0x3c, 0x80);
+        file[0x80..0x84].copy_from_slice(b"PE\0\0");
+        put16(&mut file, 0x84, 0x8664);
+        put16(&mut file, 0x86, 1);
+        put16(&mut file, 0x94, 240);
+        let optional = 0x98;
+        put16(&mut file, optional, 0x20b);
+        put32(&mut file, optional + 60, 0x200);
+        put32(&mut file, optional + 108, directories);
+        if directories >= 15 {
+            put32(&mut file, optional + 224, cli_rva);
+            put32(&mut file, optional + 228, cli_size);
+        } else {
+            put32(&mut file, optional + 224, 0x2000);
+            put32(&mut file, optional + 228, 72);
+        }
+        let section_at = optional + 240;
+        file[section_at..section_at + 5].copy_from_slice(b".text");
+        put32(&mut file, section_at + 8, section.len() as u32);
+        put32(&mut file, section_at + 12, 0x2000);
+        put32(&mut file, section_at + 16, section.len() as u32);
+        put32(&mut file, section_at + 20, 0x200);
+        file[0x200..0x200 + section.len()].copy_from_slice(section);
+        file
+    }
+    fn clr_sized(metadata: &[u8], metadata_size: u32) -> Vec<u8> {
+        let mut section = vec![0u8; 72 + metadata.len()];
+        put32(&mut section, 0, 72);
+        put16(&mut section, 4, 2);
+        put16(&mut section, 6, 5);
+        put32(&mut section, 8, 0x2000 + 72);
+        put32(&mut section, 12, metadata_size);
+        section[72..].copy_from_slice(metadata);
+        section
+    }
+    fn version_root() -> Vec<u8> {
+        let version = b"v4.0.30319\0\0";
+        let mut out = Vec::new();
+        out.extend_from_slice(b"BSJB");
+        push16(&mut out, 1);
+        push16(&mut out, 1);
+        push32(&mut out, 0);
+        push32(&mut out, version.len() as u32);
+        out.extend_from_slice(version);
+        push16(&mut out, 0);
+        push16(&mut out, 0);
+        out
+    }
+    fn cli_image(metadata: &[u8]) -> Vec<u8> {
+        pe(&clr_sized(metadata, metadata.len() as u32), 0x2000, 72, 16)
+    }
+    struct Rm(std::path::PathBuf);
+    impl Drop for Rm {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    fn inspect_bytes(label: &str, bytes: &[u8]) -> String {
+        let root = std::env::temp_dir().join(format!("rllm-dotnet5-{label}-{}-{}", std::process::id(), now()));
+        let _cleanup = Rm(root.clone());
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("sample.bin"), bytes).unwrap();
+        super::super::super::execution::reset();
+        let access = operation::InspectionAccess {
+            list: true,
+            read: true,
+            graph: false,
+            budget: 2 * 1024 * 1024,
+            root_identity: None,
+            cancellation_token: super::super::super::execution::cancellation_token(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(120),
+        };
+        inspect_scoped(&root, &root.join("sample.bin"), "sample.bin", &access).unwrap_or_else(|error| panic!("{label}: {error}"))
+    }
+    fn after_pe(shown: &str) -> &str {
+        let rest = shown.split(PE_TAIL).nth(1).unwrap_or("");
+        rest.split(FOOTER).next().unwrap_or("")
+    }
+
+    #[test]
+    fn pe_without_cli_directory_keeps_inspect_text() {
+        // Fails if a CLI-less PE gains a .NET section, or if the PE observation text is rewritten.
+        let bytes = pe(b"BSJB is not a cli directory by itself", 0, 0, 14);
+        assert_eq!(super::super::super::dotnet_evidence::cli_evidence(&bytes), None);
+        let shown = inspect_bytes("native", &bytes);
+        let pe_text = super::super::pe_observation::analyze(&bytes, true, bytes.len() as u64, &|| false).unwrap();
+        assert_eq!(shown.matches(pe_text.as_str()).count(), 1);
+        assert_eq!(shown.matches(PE_TAIL).count(), 1);
+        assert_eq!(after_pe(&shown), "\n");
+        assert_eq!(shown.matches(".NET metadata and CIL observation\n").count(), 0);
+        assert_eq!(shown.matches("BSJB is not a cli directory by itself").count(), 1);
+        assert_eq!(pe_text.matches(".NET metadata and CIL observation\n").count(), 0);
+    }
+
+    #[test]
+    fn cli_directory_appends_exact_dotnet_lines() {
+        // Fails if inspect drops the CLI text or splices it into the PE observation.
+        let bytes = cli_image(&version_root());
+        let evidence = super::super::super::dotnet_evidence::cli_evidence(&bytes).expect("cli image");
+        let shown = inspect_bytes("cli", &bytes);
+        let pe_text = super::super::pe_observation::analyze(&bytes, true, bytes.len() as u64, &|| false).unwrap();
+        assert_eq!(shown.matches(pe_text.as_str()).count(), 1);
+        assert_eq!(pe_text.matches(".NET metadata and CIL observation\n").count(), 0);
+        assert_eq!(shown.matches(evidence.as_str()).count(), 1);
+        assert_eq!(shown.matches(".NET metadata and CIL observation\n").count(), 1);
+        assert_eq!(shown.matches("Metadata signature BSJB.\n").count(), 1);
+        assert_eq!(shown.matches("Metadata version v4.0.30319.\n").count(), 1);
+        assert_eq!(after_pe(&shown), format!("\n{evidence}\n"));
+    }
+
+    #[test]
+    fn inconsistent_cli_extent_is_refused_by_name_in_inspect() {
+        // Fails if an extent past the section is omitted or refused without the CLR directory name.
+        let bytes = pe(b"short", 0x2000, 72, 16);
+        let evidence = super::super::super::dotnet_evidence::cli_evidence(&bytes).expect("inconsistent extent");
+        let shown = inspect_bytes("extent", &bytes);
+        let refusal = "Refusal: CLR data directory entry 14 size 72 at RVA 0x2000 points outside the mapped file.\n";
+        assert_eq!(evidence.matches(refusal).count(), 1);
+        assert_eq!(shown.matches(refusal).count(), 1);
+        assert_eq!(evidence.matches("Metadata signature BSJB.\n").count(), 0);
+        assert_eq!(shown.matches(evidence.as_str()).count(), 1);
+        assert_eq!(after_pe(&shown), format!("\n{evidence}\n"));
+    }
+
+    #[test]
+    fn truncated_metadata_stream_names_the_unread_header_in_inspect() {
+        // Fails if the cut stream header is completed from BAITSTREAM, or if inspect omits the unread-header refusal.
+        let mut meta = Vec::new();
+        meta.extend_from_slice(b"BSJB");
+        push16(&mut meta, 1);
+        push16(&mut meta, 1);
+        push32(&mut meta, 0);
+        push32(&mut meta, 12);
+        meta.extend_from_slice(b"v4.0.30319\0\0");
+        push16(&mut meta, 0);
+        push16(&mut meta, 2);
+        push32(&mut meta, 0);
+        push32(&mut meta, 0);
+        meta.extend_from_slice(b"#~\0\0");
+        push32(&mut meta, 0);
+        assert_eq!(meta.len(), 48);
+        let mut carried = meta.clone();
+        push32(&mut carried, 0);
+        carried.extend_from_slice(b"BAITSTREAM\0\0");
+        let bytes = pe(&clr_sized(&carried, meta.len() as u32), 0x2000, 72, 16);
+        let evidence = super::super::super::dotnet_evidence::cli_evidence(&bytes).expect("truncated stream");
+        let shown = inspect_bytes("truncated", &bytes);
+        let refusal = "Refusal: metadata stream header truncated. No stream is listed.\n";
+        assert_eq!(evidence.matches(refusal).count(), 1);
+        assert_eq!(shown.matches(refusal).count(), 1);
+        assert_eq!(evidence.matches("BAITSTREAM").count(), 0);
+        assert_eq!(evidence.matches("#~").count(), 0);
+        assert_eq!(shown.matches(evidence.as_str()).count(), 1);
+    }
 }
