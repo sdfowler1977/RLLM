@@ -2369,4 +2369,164 @@ mod checks {
         assert!(!obs.text.contains(ASAR_PAST_END), "{}", obs.text);
         assert!(!obs.text.contains("a.js"), "{}", obs.text);
     }
+
+    fn unpacked_js_archive(count: usize) -> Vec<u8> {
+        let mut files = String::from("{\"files\":{");
+        for index in 0..count {
+            if index > 0 {
+                files.push(',');
+            }
+            files.push_str(&format!(
+                "\"u{index:02}.js\":{{\"offset\":\"{index}\",\"size\":0,\"unpacked\":true}}"
+            ));
+        }
+        files.push_str("}}");
+        asar_bytes(&files, b"")
+    }
+
+    /// Fails if the 65th unpacked member is stored, or if 64 unpacked members name the cap.
+    /// Route: `push_obs_unknown` for members whose bytes are not in the container.
+    /// A computed require keeps a different reason, so the in-bound control rejects that route.
+    #[test]
+    fn module_unknown_cap_on_unpacked_asar_members_names_the_extra_row() {
+        let obs = observe(&unpacked_js_archive(MODULE_UNKNOWN_LIMIT + 1), Kind::Asar, true);
+        assert!(obs.asar_refusal.is_none(), "{}", obs.text);
+        assert_eq!(obs.modules.len(), MODULE_UNKNOWN_LIMIT + 1);
+        assert_eq!(obs.asar_entries.len(), MODULE_UNKNOWN_LIMIT + 1);
+        assert!(obs.graph.is_empty(), "{}", obs.text);
+        assert!(obs.census.is_empty(), "{:?}", obs.census);
+        assert!(obs.maps.is_empty() && obs.map_unknowns.is_empty());
+        assert!(obs.unknowns.iter().all(|item| item.reason == "module bytes are not in the container"));
+        assert_only_cap(&obs, MODULE_UNKNOWN_CAP);
+        assert_eq!(obs.unknowns.len(), MODULE_UNKNOWN_LIMIT);
+        let header_end = obs.asar_header_end.unwrap() as usize;
+        let dropped_name = format!("u{MODULE_UNKNOWN_LIMIT:02}.js");
+        assert_eq!(obs.modules.last().unwrap().name, dropped_name);
+        assert_eq!(obs.unknowns[0].offset, header_end);
+        assert_eq!(obs.unknowns.last().unwrap().offset, header_end + MODULE_UNKNOWN_LIMIT - 1);
+        assert!(obs.unknowns.iter().all(|item| item.offset != header_end + MODULE_UNKNOWN_LIMIT));
+        assert!(obs.text.contains("module bytes are not in the container"), "{}", obs.text);
+        assert!(!obs.text.contains("module bytes are not UTF-8"), "{}", obs.text);
+        assert!(!obs.text.contains("computed require specifier"), "{}", obs.text);
+        assert!(!obs.text.contains(REPORT_CAP), "{}", obs.text.len());
+        assert!(obs.text.contains(&format!("Unknowns: {MODULE_UNKNOWN_LIMIT}.")), "{}", obs.text);
+
+        let kept = observe(&unpacked_js_archive(MODULE_UNKNOWN_LIMIT), Kind::Asar, true);
+        assert!(kept.asar_refusal.is_none(), "{}", kept.text);
+        assert!(kept.caps.is_empty(), "{:?}", kept.caps);
+        assert!(!kept.text.contains(MODULE_UNKNOWN_CAP), "{}", kept.text);
+        assert_eq!(kept.modules.len(), MODULE_UNKNOWN_LIMIT);
+        assert_eq!(kept.unknowns.len(), MODULE_UNKNOWN_LIMIT);
+        assert!(kept.unknowns.iter().all(|item| item.reason == "module bytes are not in the container"));
+        let kept_header = kept.asar_header_end.unwrap() as usize;
+        assert_eq!(kept.unknowns.last().unwrap().offset, kept_header + MODULE_UNKNOWN_LIMIT - 1);
+        assert!(kept.text.contains("module bytes are not in the container"), "{}", kept.text);
+        assert!(!kept.text.contains("computed require specifier"), "{}", kept.text);
+    }
+
+    /// Fails if the 17th dangling sourceMappingURL is stored, or if 16 dangling directives name the cap.
+    /// Route: `push_map_unknown` from `MapNote::Unknown`. A real target would land in `maps`.
+    #[test]
+    fn source_map_cap_on_dangling_directives_names_the_extra_unknown() {
+        let line = "//# sourceMappingURL=\n";
+        let mut source = String::new();
+        for _ in 0..=SOURCE_MAP_LIMIT {
+            source.push_str(line);
+        }
+        let obs = script(&source);
+        let dropped_at = SOURCE_MAP_LIMIT * line.len();
+        assert!(obs.maps.is_empty(), "{:?}", obs.maps);
+        assert!(obs.graph.is_empty(), "{}", obs.text);
+        assert!(obs.unknowns.is_empty(), "{:?}", obs.unknowns);
+        assert!(obs.map_unknowns.iter().all(|item| item.reason == MAP_DANGLING));
+        assert_only_cap(&obs, SOURCE_MAP_CAP);
+        assert_eq!(obs.map_unknowns.len(), SOURCE_MAP_LIMIT);
+        assert_eq!(obs.map_unknowns[0].offset, 0);
+        assert_eq!(obs.map_unknowns.last().unwrap().offset, (SOURCE_MAP_LIMIT - 1) * line.len());
+        assert!(obs.map_unknowns.iter().all(|item| item.offset != dropped_at));
+        assert!(
+            obs.text.contains(&format!("Source maps: 0 references, {SOURCE_MAP_LIMIT} unknowns.")),
+            "{}",
+            obs.text
+        );
+        assert!(!obs.text.contains("source map target exceeds the length bound"), "{}", obs.text);
+        assert!(!obs.text.contains(REPORT_CAP), "{}", obs.text.len());
+
+        let mut kept_source = String::new();
+        for _ in 0..SOURCE_MAP_LIMIT {
+            kept_source.push_str(line);
+        }
+        let kept = script(&kept_source);
+        assert!(kept.caps.is_empty(), "{:?}", kept.caps);
+        assert!(!kept.text.contains(SOURCE_MAP_CAP), "{}", kept.text);
+        assert!(kept.maps.is_empty(), "{:?}", kept.maps);
+        assert_eq!(kept.map_unknowns.len(), SOURCE_MAP_LIMIT);
+        assert!(kept.map_unknowns.iter().all(|item| item.reason == MAP_DANGLING));
+        assert_eq!(kept.map_unknowns.last().unwrap().offset, (SOURCE_MAP_LIMIT - 1) * line.len());
+        assert!(kept.text.contains(MAP_DANGLING), "{}", kept.text);
+    }
+
+    /// Fails if a census literal of length SPECIFIER_LIMIT + 1 is kept, or if length SPECIFIER_LIMIT is refused.
+    /// Route: `push_site` from an `ipcMain.on` literal. An import edge uses a different refusal reason.
+    #[test]
+    fn specifier_length_cap_on_a_census_literal_refuses_one_past_the_bound() {
+        let over = "c".repeat(SPECIFIER_LIMIT + 1);
+        let refused = script(&format!("ipcMain.on(\"{over}\");\n"));
+        assert!(refused.graph.is_empty(), "{}", refused.text);
+        assert!(refused.maps.is_empty(), "{:?}", refused.maps);
+        assert!(refused.map_unknowns.is_empty(), "{:?}", refused.map_unknowns);
+        assert_only_cap(&refused, SPECIFIER_CAP);
+        assert_eq!(refused.unknowns.len(), 1, "{}", refused.text);
+        assert_eq!(refused.unknowns[0].reason, "string census value exceeds the length bound");
+        assert_eq!(refused.unknowns[0].offset, 0);
+        assert!(refused.census.is_empty(), "{:?}", refused.census);
+        assert!(!refused.text.contains(&over), "{}", refused.text.len());
+        assert!(!refused.text.contains("specifier exceeds the length bound"), "{}", refused.text);
+        assert!(!refused.text.contains("source map target exceeds the length bound"), "{}", refused.text);
+        assert!(!refused.text.contains(CENSUS_CAP), "{}", refused.text);
+
+        let kept_value = "d".repeat(SPECIFIER_LIMIT);
+        let kept = script(&format!("ipcMain.on(\"{kept_value}\");\n"));
+        assert!(kept.caps.is_empty(), "{:?}", kept.caps);
+        assert!(!kept.text.contains(SPECIFIER_CAP), "{}", kept.text);
+        assert!(kept.unknowns.is_empty(), "{:?}", kept.unknowns);
+        assert!(kept.graph.is_empty(), "{}", kept.text);
+        assert_eq!(kept.census.len(), 1);
+        assert_eq!(kept.census[0].kind, "ipcMain.on");
+        assert_eq!(kept.census[0].value, kept_value);
+        assert_eq!(kept.census[0].offset, 0);
+    }
+
+    /// Fails if a source-map target of length SPECIFIER_LIMIT + 1 is kept, or if length SPECIFIER_LIMIT is refused.
+    /// Route: `push_map` length arm, which records `push_map_unknown` with the target-length reason.
+    /// One target stays under the source-map count, so that cap must stay unnamed.
+    #[test]
+    fn specifier_length_cap_on_a_source_map_target_refuses_one_past_the_bound() {
+        let over = "e".repeat(SPECIFIER_LIMIT + 1);
+        let refused = script(&format!("//# sourceMappingURL={over}\n"));
+        assert!(refused.graph.is_empty(), "{}", refused.text);
+        assert!(refused.census.is_empty(), "{:?}", refused.census);
+        assert!(refused.unknowns.is_empty(), "{:?}", refused.unknowns);
+        assert_only_cap(&refused, SPECIFIER_CAP);
+        assert!(refused.maps.is_empty(), "{:?}", refused.maps);
+        assert_eq!(refused.map_unknowns.len(), 1);
+        assert_eq!(refused.map_unknowns[0].reason, "source map target exceeds the length bound");
+        assert_eq!(refused.map_unknowns[0].offset, 0);
+        assert!(!refused.text.contains(SOURCE_MAP_CAP), "{}", refused.text);
+        assert!(!refused.text.contains(&over), "{}", refused.text.len());
+        assert!(!refused.text.contains("string census value exceeds the length bound"), "{}", refused.text);
+        assert!(!refused.text.contains("specifier exceeds the length bound"), "{}", refused.text);
+
+        let kept_target = "f".repeat(SPECIFIER_LIMIT);
+        let kept = script(&format!("//# sourceMappingURL={kept_target}\n"));
+        assert!(kept.caps.is_empty(), "{:?}", kept.caps);
+        assert!(!kept.text.contains(SPECIFIER_CAP), "{}", kept.text);
+        assert!(kept.map_unknowns.is_empty(), "{:?}", kept.map_unknowns);
+        assert!(kept.unknowns.is_empty(), "{:?}", kept.unknowns);
+        assert!(kept.census.is_empty(), "{:?}", kept.census);
+        assert_eq!(kept.maps.len(), 1);
+        assert_eq!(kept.maps[0].target, kept_target);
+        assert_eq!(kept.maps[0].resolution, MAP_UNRESOLVED);
+        assert_eq!(kept.maps[0].offset, 0);
+    }
 }
