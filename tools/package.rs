@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -2055,6 +2055,12 @@ const TOOL_PYTHON: &[ToolPython] = &[
 // A larger file count or a larger line count refuses. A smaller count still passes.
 const VERIFICATION_PY_FILE_CEILING: usize = 73;
 const VERIFICATION_PY_LINE_CEILING: usize = 8570;
+// A ceiling refusal names at most this many verification files, largest line
+// count first. The rest of the count stays in the ceiling sentence.
+const VERIFICATION_PY_LARGEST_SHOWN: usize = 8;
+// A planted Python file is refused before its body is allocated past this cap.
+// The largest counted product Python file is under 48 KiB.
+const PYTHON_CENSUS_BYTE_CAP: u64 = 1024 * 1024;
 
 fn extension_of(relative: &str) -> Option<&str> {
     let name = relative.rsplit('/').next().unwrap_or(relative);
@@ -2143,6 +2149,7 @@ struct PythonCensus {
     tools: PyBucket,
     verification: PyBucket,
     elsewhere: PyBucket,
+    verification_largest: Vec<(String, usize)>,
 }
 
 fn empty_bucket() -> PyBucket {
@@ -2172,6 +2179,44 @@ fn tool_python_allowed(relative: &str) -> bool {
     TOOL_PYTHON.iter().any(|item| item.name == name)
 }
 
+fn python_byte_bound_refusal(relative: &str) -> String {
+    refuse(&format!("{relative} exceeds the Python census byte bound {PYTHON_CENSUS_BYTE_CAP}"))
+}
+
+fn read_python_body(root: &Path, relative: &str) -> Result<Vec<u8>, String> {
+    let path = root.join(relative);
+    let meta = fs::metadata(&path).map_err(|_| refuse(&format!("{relative} unreadable")))?;
+    if meta.is_file() && meta.len() > PYTHON_CENSUS_BYTE_CAP {
+        return Err(python_byte_bound_refusal(relative));
+    }
+    let file = fs::File::open(&path).map_err(|_| refuse(&format!("{relative} unreadable")))?;
+    let mut bytes = Vec::new();
+    file.take(PYTHON_CENSUS_BYTE_CAP.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| refuse(&format!("{relative} unreadable")))?;
+    if bytes.len() as u64 > PYTHON_CENSUS_BYTE_CAP {
+        return Err(python_byte_bound_refusal(relative));
+    }
+    Ok(bytes)
+}
+
+fn note_largest(largest: &mut Vec<(String, usize)>, relative: &str, lines: usize) {
+    let mut index = 0;
+    while index < largest.len() {
+        let (path, have) = &largest[index];
+        let before = lines > *have || (lines == *have && cmp_rel(relative, path).is_lt());
+        if before {
+            break;
+        }
+        index += 1;
+    }
+    if index == largest.len() && largest.len() == VERIFICATION_PY_LARGEST_SHOWN {
+        return;
+    }
+    largest.insert(index, (relative.to_string(), lines));
+    largest.truncate(VERIFICATION_PY_LARGEST_SHOWN);
+}
+
 fn tally_python(root: &Path, files: &[String]) -> Result<PythonCensus, String> {
     let mut census = PythonCensus {
         core: empty_bucket(),
@@ -2179,12 +2224,13 @@ fn tally_python(root: &Path, files: &[String]) -> Result<PythonCensus, String> {
         tools: empty_bucket(),
         verification: empty_bucket(),
         elsewhere: empty_bucket(),
+        verification_largest: Vec::new(),
     };
     for relative in files {
         if non_product_root(relative) || extension_of(relative) != Some("py") {
             continue;
         }
-        let bytes = fs::read(root.join(relative)).map_err(|_| refuse(&format!("{relative} unreadable")))?;
+        let bytes = read_python_body(root, relative)?;
         let lines = python_line_count(&bytes);
         let top = relative.split('/').next().unwrap_or(relative);
         let bucket = match top {
@@ -2196,6 +2242,9 @@ fn tally_python(root: &Path, files: &[String]) -> Result<PythonCensus, String> {
         };
         bucket.files += 1;
         bucket.lines += lines;
+        if top == "verification" {
+            note_largest(&mut census.verification_largest, relative, lines);
+        }
         let allowed_tool = top == "tools" && tool_python_allowed(relative);
         if top != "verification" && !allowed_tool {
             bucket.paths.push(relative.clone());
@@ -2245,6 +2294,14 @@ fn reject_python(census: &PythonCensus) -> Result<(), String> {
         messages.push(refuse(&format!(
             "verification/ Python lines {} exceed the recorded ceiling {}",
             census.verification.lines, VERIFICATION_PY_LINE_CEILING
+        )));
+    }
+    if census.verification.files > VERIFICATION_PY_FILE_CEILING || census.verification.lines > VERIFICATION_PY_LINE_CEILING {
+        let names = census.verification_largest.iter().map(|(path, lines)| format!("{path} lines {lines}")).collect::<Vec<_>>().join(", ");
+        messages.push(refuse(&format!(
+            "verification/ Python largest {} of {}: {names}",
+            census.verification_largest.len(),
+            census.verification.files
         )));
     }
     for path in &census.elsewhere.paths {
@@ -3602,6 +3659,14 @@ mod checks {
         fs::write(path, body).unwrap();
     }
 
+    fn newline_body(lines: usize) -> String {
+        let mut body = String::from("pass");
+        for _ in 0..lines {
+            body.push('\n');
+        }
+        body
+    }
+
     fn refusal_lines(err: &str) -> String {
         err.lines().filter(|line| line.starts_with("refusing:")).collect::<Vec<_>>().join("\n")
     }
@@ -3668,23 +3733,73 @@ mod checks {
     fn publish_refuses_verification_python_over_ceiling() {
         let (_dir, root) = fixture();
         assert_eq!(VERIFICATION_PY_FILE_CEILING, 73);
+        assert_eq!(VERIFICATION_PY_LARGEST_SHOWN, 8);
         for index in 0..74 {
-            plant(&root, &format!("verification/debt{index}.py"), "pass\n");
+            let body = if index == 73 { "pass\npass\npass\n" } else { "pass\n" };
+            plant(&root, &format!("verification/debt{index}.py"), body);
         }
-        assert_publish_refuses(&root, "refusing: verification/ Python files 74 exceed the recorded ceiling 73");
+        assert_publish_refuses(
+            &root,
+            "refusing: verification/ Python files 74 exceed the recorded ceiling 73\nrefusing: verification/ Python largest 8 of 74: verification/debt73.py lines 3, verification/debt0.py lines 1, verification/debt1.py lines 1, verification/debt10.py lines 1, verification/debt11.py lines 1, verification/debt12.py lines 1, verification/debt13.py lines 1, verification/debt14.py lines 1",
+        );
     }
 
     #[test]
     fn publish_refuses_verification_python_lines_over_ceiling() {
         let (_dir, root) = fixture();
         assert_eq!(VERIFICATION_PY_LINE_CEILING, 8570);
-        let mut body = String::new();
-        body.push_str("pass");
-        for _ in 0..8571 {
-            body.push('\n');
-        }
+        plant(&root, "verification/a.py", "pass\n");
+        plant(&root, "verification/z.py", &newline_body(8570));
+        assert_eq!(python_line_count(b"pass\n") + python_line_count(newline_body(8570).as_bytes()), 8571);
+        assert_publish_refuses(
+            &root,
+            "refusing: verification/ Python lines 8571 exceed the recorded ceiling 8570\nrefusing: verification/ Python largest 2 of 2: verification/z.py lines 8570, verification/a.py lines 1",
+        );
+    }
+
+    #[test]
+    fn publish_passes_verification_python_lines_at_ceiling() {
+        let (_dir, root) = fixture();
+        assert_eq!(VERIFICATION_PY_LINE_CEILING, 8570);
+        let body = newline_body(VERIFICATION_PY_LINE_CEILING);
         plant(&root, "verification/debt.py", &body);
-        assert_publish_refuses(&root, "refusing: verification/ Python lines 8571 exceed the recorded ceiling 8570");
+        assert_eq!(python_line_count(body.as_bytes()), 8570);
+        let destination = root.join("destination");
+        let report = publish(&root, &destination, false, false).unwrap();
+        assert!(report.contains("signed candidate; acceptance incomplete"), "{report}");
+        assert!(!report.contains("would write:"), "{report}");
+        assert!(!report.contains("refusing:"), "{report}");
+        assert!(root.join("release/NOTES.md").is_file(), "real publish did not write release notes");
+        assert!(root.join("verification/RESULTS.json").is_file());
+        let names = fs::read_dir(&destination).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(names.len(), 3, "{names:?}");
+        assert!(names.iter().any(|name| name.ends_with(".zip")), "{names:?}");
+    }
+
+    #[test]
+    fn publish_python_census_byte_bound_is_two_sided() {
+        assert_eq!(PYTHON_CENSUS_BYTE_CAP, 1_048_576);
+        let sentence = "refusing: verification/over.py exceeds the Python census byte bound 1048576";
+        let (_over_dir, over_root) = fixture();
+        fs::write(over_root.join("verification/over.py"), vec![b'x'; PYTHON_CENSUS_BYTE_CAP as usize + 1]).unwrap();
+        let over_destination = over_root.join("destination");
+        let before = snapshot(&over_root);
+        let err = publish(&over_root, &over_destination, false, false).expect_err("over the byte bound");
+        assert_eq!(snapshot(&over_root), before, "{err}");
+        assert!(over_destination.is_dir(), "{err}");
+        assert_eq!(fs::read_dir(&over_destination).unwrap().count(), 0, "{err}");
+        assert_eq!(err, sentence);
+        assert!(!err.contains("Source differs"), "{err}");
+        let (_at_dir, at_root) = fixture();
+        fs::write(at_root.join("verification/at.py"), vec![b'x'; PYTHON_CENSUS_BYTE_CAP as usize]).unwrap();
+        let at_destination = at_root.join("destination");
+        let report = publish(&at_root, &at_destination, false, true).unwrap();
+        let line = census_line(&report);
+        assert!(line.contains("verification files 1 lines 1 ceiling files 73 lines 8570"), "{line}");
+        assert!(line.contains("core files 0 lines 0"), "{line}");
+        assert!(!report.contains("refusing:"), "{report}");
+        assert_eq!(fs::read_dir(&at_destination).unwrap().count(), 0, "at-bound twin wrote an artifact");
+        assert!(!at_root.join("release").exists(), "at-bound dry-run created release/");
     }
 
     #[test]
