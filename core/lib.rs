@@ -21,6 +21,7 @@ mod mcp_schema;
 mod mcp_identity;
 mod document;
 mod har_evidence;
+#[path="js_evidence.rs"] mod js_evidence;
 use std::{collections::BTreeMap, ffi::CString, os::raw::c_char};
 
 #[derive(Clone, Debug, PartialEq)]
