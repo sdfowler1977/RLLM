@@ -127,7 +127,9 @@ pub(super) fn inspect(p:&Path,source:&file_evidence::Source<'_>,cancelled:&impl 
     if [b"RIFF".as_slice(),b"RIFX",b"RF64",b"\0asm"].iter().any(|magic|data.starts_with(magic)) {
         structure.push('\n');structure.push_str(&super::binary_observation::analyze(&data,complete,after.len()));
     }
-    if matches!(p.extension().and_then(|v|v.to_str()),Some("har")|Some("saz")){
+    // Recorders write HAR and SAZ in either ASCII case. The same parser still decides rows or a named refusal.
+    // Source, page, and stylesheet extensions stay exact, so notes.TXT keeps today's ordinary display.
+    if p.extension().and_then(|v|v.to_str()).is_some_and(|v|v.eq_ignore_ascii_case("har")||v.eq_ignore_ascii_case("saz")){
         if cancelled(){return Err("Inspection cancelled".into());}
         let (root,relative,access)=scope;
         let capture=file_evidence::saved_file_capture(root,relative,access)?;
@@ -1090,6 +1092,70 @@ mod capture_file_checks {
         let unusable = capture_section(&inspect_file(&root, "bad.har"));
         assert!(unusable.get("entries").unwrap().array().unwrap().is_empty(), "{unusable:?}");
         assert_eq!(unusable.get("refusal").unwrap().text().unwrap(), "Refusal: saved capture JSON is unusable.");
+        drop(held);
+    }
+
+    fn published_capture(shown: &str) -> Option<Json> {
+        let marker = "Saved capture file\n";
+        let at = shown.find(marker)?;
+        let line = shown[at + marker.len()..].lines().next().unwrap_or("");
+        Some(parse(line).unwrap_or_else(|error| panic!("saved capture section is not typed JSON: {error}: {line}")))
+    }
+
+    #[test]
+    fn uppercase_capture_extension_reaches_the_same_view_as_lowercase() {
+        // Fails if .HAR / .Har / .SAZ stay off the capture route, or if notes.TXT grows a capture section.
+        let (held, root) = workspace("case");
+        let har = br#"{"log":{"version":"1.2","entries":[{"request":{"method":"GET","url":"https://example.test/item"},"response":{"status":200,"content":{"mimeType":"text/html","size":12}}}]}}"#;
+        fs::write(root.join("traffic.har"), har).unwrap();
+        fs::write(root.join("traffic.HAR"), har).unwrap();
+        fs::write(root.join("traffic.Har"), har).unwrap();
+        let lower_shown = inspect_file(&root, "traffic.har");
+        let upper_shown = inspect_file(&root, "traffic.HAR");
+        let mixed_shown = inspect_file(&root, "traffic.Har");
+        let lower = published_capture(&lower_shown);
+        let upper = published_capture(&upper_shown);
+        let mixed = published_capture(&mixed_shown);
+        assert!(lower.is_some(), "lowercase traffic.har published no capture section");
+        assert_eq!(upper, lower, "traffic.HAR did not reach the same capture view as traffic.har");
+        assert_eq!(mixed, lower, "traffic.Har did not reach the same capture view as traffic.har");
+        let rows = upper.as_ref().unwrap();
+        assert_eq!(rows.get("refusal").unwrap(), &Null);
+        assert_row(rows, 0, "0", "GET", "https://example.test/item", "200", "text/html", "12");
+        let kept = retained(&upper_shown, "traffic.HAR");
+        assert_eq!(kept.get("saved_capture").unwrap(), rows);
+        assert_eq!(kept.get("report").unwrap().text().unwrap(), upper_shown);
+
+        let saz = session_archive();
+        fs::write(root.join("traffic.saz"), &saz).unwrap();
+        fs::write(root.join("traffic.SAZ"), &saz).unwrap();
+        let saz_lower = published_capture(&inspect_file(&root, "traffic.saz"));
+        let saz_upper = published_capture(&inspect_file(&root, "traffic.SAZ"));
+        assert!(saz_lower.is_some(), "lowercase traffic.saz published no capture section");
+        assert_eq!(saz_upper, saz_lower, "traffic.SAZ did not reach the same capture view as traffic.saz");
+        assert_eq!(saz_upper.as_ref().unwrap().get("entries").unwrap().array().unwrap().len(), 2);
+
+        fs::write(root.join("notes.har"), b"hello from a plain file\n").unwrap();
+        fs::write(root.join("notes.HAR"), b"hello from a plain file\n").unwrap();
+        let plain_lower = published_capture(&inspect_file(&root, "notes.har"));
+        let plain_upper = published_capture(&inspect_file(&root, "notes.HAR"));
+        assert_eq!(plain_upper, plain_lower, "notes.HAR did not reach the same refusal as notes.har");
+        assert_eq!(
+            plain_upper.as_ref().unwrap().get("refusal").unwrap().text().unwrap(),
+            "Refusal: file is not a saved capture."
+        );
+
+        fs::write(root.join("notes.txt"), b"hello from a plain file\n").unwrap();
+        fs::write(root.join("notes.TXT"), b"hello from a plain file\n").unwrap();
+        let ordinary = inspect_file(&root, "notes.txt");
+        let ordinary_upper = inspect_file(&root, "notes.TXT");
+        assert!(!ordinary_upper.contains("Saved capture file"), "{ordinary_upper}");
+        assert!(!ordinary_upper.contains("Refusal: file is not a saved capture."), "{ordinary_upper}");
+        assert_eq!(
+            ordinary_upper.replace("notes.TXT", "notes.txt"),
+            ordinary,
+            "notes.TXT left today's ordinary-file display"
+        );
         drop(held);
     }
 }
