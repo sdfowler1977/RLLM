@@ -126,6 +126,18 @@
   "fleet_interlock_remeasured_tickG": "Re-measured after gap5sweep1 touched tools/checks.py at 14:18Z host (it then reverted it): tools/checks.py `names` parsed with ast.literal_eval = 71, tools/harness.rs `const GROUPS` = 71, equal sets AND identical order. Python debt ceilings still exactly at the pins: 73 .py files / 8570 lines in verification/ (tools/package.rs:2056-2057). Five writer lanes alive at 14:35Z: gap5sweep1 (tools/harness.rs + tools/package.rs), gap4js1, gap2stop1 (writing core/rrsi.rs, touched 14:30), gap2conn1 (verification/rrsi_loop.py untouched yet), dotnetcil1.",
   "fleet_lane_kill_hazard": "pgrep -f 'prompt-file /tmp/<x>-prompt.md' matches the wrapper bash -c process; kill -9 on that PID leaves the real grok process alive, and a relaunch that redirects the same log file truncates the surviving lane's output. Verify by ps -eo pid,ppid,args before killing a lane.",
   "fleet_policy": "Owner directive 2026-11-10: MiniMax does BOTH audit and write - at most 5 live MiniMax subagents, at most 5 new per dispatch, and at most ONE Queen writer, used only for the specific items MiniMax reports as blocked-needs-<file> or fails. Grok Build was retired on 2026-11-10 (lane C terminated with 'API error (status 402 Payment Required): Grok Build usage balance exhausted'), but the owner reversed that on 2026-11-12: 'grok build is reset and nolonger 429' and 'i hope your using grok build agents to write like you were told and not the dazzle agent, the dazzle agent is for when grok build fails'. Grok Build is therefore the writer of record on this project again, proven working this window: the GAP1 lane ran 58 model calls / $1.55584408 and the GAP5 lane 89 turns / $2.64276152, both headless (`grok --prompt-file \u2026 --output-format json --always-approve --permission-mode bypassPermissions --no-subagents --cwd /home/shawn/RLLM --model grok-4.7`) as managed background shells, because `mcp__grok__grok_implement` aborts at a 300 s client-side idle timeout while its spawned session keeps running and keeps writing. Transport: relay.py named by /home/shawn/.qwen/loop.md is NOT installed anywhere on this machine, so MiniMax lanes are dispatched as the harness subagents whose model is MiniMax-M3.1-Flash - 'audit' for read-only adjudication, 'general-purpose-repair' for production writes. Queen-model writers are 'repair' and 'ui-specialist'. DEVIATION RECORDED 2026-11-12T02:55Z: the two GAP repair lanes dispatched at 02:52Z and 02:55Z (GAP5 tool-port follow-ups in tools/ + package.sh, GAP1 self_build defects in core/) were dispatched as harness general-purpose subagents, not Grok Build lanes; their output is coordinator-verified against the sanctioned gates before it is credited, and the next GAP dispatch goes back to Grok. SCM SURFACE (superseded 2026-11-12): the 2026-11-11 reading 'fatal: not a git repository' no longer holds \u2014 the tree became a git repository at baseline 727a33d with branch main, so a loop tick now has real SCM state to respect, while there is still no remote, branch or PR/CI thread to babysit. The old reading is why the GITIGNORE-ARTIFACT-NAMING obligation is recorded as config hygiene rather than an active tracking bug.",
+  "g1run4_dispatch": {
+    "driver": "/tmp/g1run4.py",
+    "fix": "rollback left for the product to create (run 3 made it a directory: ./output/self/rollback must be a regular non-symlink file)",
+    "log": "/tmp/g1run4.log",
+    "room": "/tmp/g1run4-room (fresh git archive HEAD 57b063f)",
+    "run3_evidence": "/tmp/g1run3.log \u2014 exec continuation green (successor answered self_echo with {\"canary\":\"successor-build\"}), journal leg red with the rollback-directory refusal"
+  },
+  "g1run4_first_two_attempts_invalid": {
+    "attempt1": "git show inside the git-less room truncated core/lib.rs to empty",
+    "attempt2": "a fresh room has no output/ directory, so \"> output/tools-build.log\" failed and neither build ran (tools_rc=1, headless_rc=1, cp: cannot stat output/headless/RLLM)",
+    "fix": "Leg 0 now mkdir -p output/self output/tools output/headless before building"
+  },
   "g1s2_item3_open_no_highwater": "Truncation to an earlier valid prefix, wholesale replacement, deletion and rollback of a successor journal remain unguarded: a shorter valid prefix keeps its parent links, a process-local count cannot survive CommandExt::exec, and a count stored inside the successor file is replaced with it.",
   "g3arr1_landed_de6cd85": "core/rrsi.rs only. index_disagrees non-array arm changed from 'return false' to 'return !matches!(stored, Null)'; historical_section_checked now matches Null (render), Arr that disagrees (LIBRARY_INDEX_MISMATCH), Arr that agrees (render), _ (new LIBRARY_INDEX_NOT_A_LIST = 'stored library index is not a list; history was kept and no line was dropped'). Two new tests: stored_index_that_is_not_a_list_is_refused_and_history_stays (string/object/number each refused by that exact sentence; file bytes unchanged, 2 lines, both revisions present, historical_section still renders) and stored_index_refuses_an_appended_inserted_or_reordered_list (append, insert-at-0, swap each refused with LIBRARY_INDEX_MISMATCH; library unchanged).",
   "g3arr1_seat_findings_adjudicated": "Seat /tmp/mm-g3arr-1.out (MiniMax-M3, pasted code only). (A) CONFIRMED by my own census: index_disagrees has exactly one caller (historical_section_checked:1376) whose guard passes only Arr, so the non-array arm is unreachable from the product; the new match is what closes the hole and the arm is decorative-but-harmless. (B) only Null renders without comparison; Arr([]) against an empty library agrees and renders, which is correct. (C) seat said UNVERIFIABLE; settled by reading - the only library append is record_settled_library (harness.rs:270-281) called only from finish_refinement (:1225) which sets phase review and parks the run in refinement_pending, while historical_experience is called only for phase propose|compose (:657-662), so a run cannot make its own install-time index stale and raise a false LIBRARY_INDEX_MISMATCH. (D) seat said UNVERIFIABLE; settled by reading - a fresh refine/resume re-installs library_index from the resume receipt at harness.rs:267 (pinned by the test named fresh_refine_installs_the_resume_library_index at :2958), so a corrupt value is replaced rather than permanent. (E) assert_ne!(NOT_A_LIST,MISMATCH) proves only that the constants differ; the Bool variant is not separately executed but shares the _ arm. No pre-existing guarantee weakened.",
@@ -463,6 +475,16 @@
     "witness": "main tree, product binary dated 2026-11-12T10:26:49: HEAD version count 30 / 30 passed / exit 0 (/tmp/pf-head.out); with this file count 36 / 36 passed / exit 0 (/tmp/gap4v-group-main.out)"
   },
   "gap5_census_residuals": "CLOSED at d5c8f9e (lane toolc2): the census takes fs::metadata().len() before allocating (PYTHON_CENSUS_BYTE_CAP 1 MiB, take(cap+1)), a ceiling refusal names the largest eight verification files, and the accept side is proved by a real publish at exactly 8,570 lines. Surviving P2s recorded in toolc2_seat_symlink_p1_refuted.",
+  "gap5_decoy_C2_order_matters": {
+    "C2_decoy_after_real_const": "tools_rc=0, package-tests cases: 43, the real list binds",
+    "conclusion": "parse_groups_list is order-dependent: first match wins; a decoy before the real const binds [\"wrong\"] and the packaging interlock refuses with groups 1; a decoy after it is harmless"
+  },
+  "gap5_decoy_probe_ground_confirmed": {
+    "C1_decoy_before": "package-tests cases: none (test run failed); runner_names_match_packaging_pairs FAILED at tools/package.rs:3224:29 with refusing: Packaging report inventory differs from the runner GROUPS list (groups 1, pairs 71, missing [70 real names], extra [\"wrong\"])",
+    "adjudication": "the mm-gap5-1 seat REJECT ground is confirmed on the bytes; gap5py1 bytes stay uncommitted until the pkgr1 repair (refuse more than one GROUPS declaration) lands and is witnessed",
+    "failure_mode": "loud refusal, not a silent pass \u2014 but the interlock is unfailable if a decoy list coincidentally matches the pair names",
+    "log": "/tmp/decoy.log"
+  },
   "gap5_interlock_mutation_witness": {
     "at": "2026-11-12T20:25Z",
     "clean_census": "tools/checks.py names = 71; tools/harness.rs const GROUPS = 71; the two sets are identical (the seat's '81 in both' was an excerpt artifact)",
@@ -494,6 +516,14 @@
   },
   "gap5_room_witness_equivalence_measured": "Room witness /tmp/g5s1w2.sh (room = `git archive HEAD` + the lane's two files; runner built with the sanctioned `bash tools/build-harness.sh output/tools/harness`, rc=0, zero warning lines). Both instruments over the SAME room tree: native `harness sweep` rc=1 in 115 s, `python3 tools/checks.py` rc=1 in 101 s. Driver equivalence: 71 rows, same names in the same order, **0 exit-code differences**, identical nonzero-group sets. Count equivalence: recounting the sweep's own fresh reports with tools/package.py's executed_count rule over tools/package.rs's 71-pair inventory gives total 126 == the native record's total_executed 126, and the only per-group 'differences' are the 64 groups with no report at all (native stores 0, the recount has nothing to read). The room's other 17 top-level record keys survived (18 keys before and after). The primary tree's verification/RESULTS.json was untouched throughout (sha 0e4983d475ebb711\u2026, mtime 09:26). What the room cannot witness: the delivered-scale totals, because `git archive` carries no output/ (no output/headless/RLLM, no units binary, no reference controllers), so 64 of 71 groups fail fast there.",
   "gap5_seat2_seat3_adjudicated": "Two more seats over the same diff. Seat B (/tmp/mm-g5s1b.out): Q5 VERIFIED/MAJOR - `harness` is absent from build-tools.sh's test loop (`for tool in alignment readback checkpoint signature apk toolchain gate package`) and build-harness.sh compiles no --test binary, so any #[test] in tools/harness.rs cannot execute; its four proposed legs match the ones I briefed. Q6 REFUTED/BLOCKER - the lane's 'Python vs native \u2026 4144 harvested checks, per-group counts differed in 0 places' has no reproducible witness artefact, because tools/checks.py returns only {name, code} and no supplied instrument demonstrably harvested per-group counts. (The seat's own numbers are wrong: it read EXPLICIT_PAIRS as 57 pairs / IDENTITY 24 / HYPHEN 14; measured 35 + 22 + 14 = 71. I keep its conclusion and reject its arithmetic.) My room witness now supplies the missing artefact at room scale, and the primary-tree run will supply it at delivered scale. Seat C (/tmp/mm-g5s1c.out) added: (j)-HIGH the sweep publishes unconditionally while the deleted bare-path publish was gated on `problems.is_empty() && failed == 0 && unparsed.is_empty()`, so a partial run replaces a good record - demonstrated live by my room run rewriting 71/4,215/67-passed into 5 pass/126 checks (connected sha acc7bc6517e9a590 -> 85e487d2c6cb84e6); (a)/(b)-HIGH the 180 s deadline kills only the direct child, so a grandchild holding the pipe write end can block the drain joins forever; (c)-MEDIUM persist_printed_json writes lossy-converted text rather than the group's bytes; (g)-LOW zero_count_disclosure now disappears when there are no zeros; (h)-HIGH the 'native twin harness sweep' role string overstates retirement while all 71 groups are still `python3 verification/<group>.py`; (i)-MEDIUM resolved_path vs Path.resolve() and parse_sweep rejecting values starting with `--`. All folded into the repair brief as F5-F9.",
+  "gap5_seat_verdict_reject_and_pkgr1_dispatch": {
+    "coordinator_confirmation": "read tools/package.rs:1699-1752 \u2014 scan loop returns at first match, no scope check",
+    "ground": "parse_groups_list binds the FIRST const GROUPS-shaped declaration; a nested-module decoy (pub const GROUPS) compiles as ordinary Rust and would bind a non-canonical list, making the interlock unfailable if the decoy matches the pair names",
+    "repair_lane": "pkgr1 (tools/package.rs only), prompt /tmp/pkgr1-prompt.md",
+    "seat": "mm-gap5-1",
+    "verdict": "reject",
+    "witness_leg": "room C decoy probe in /tmp/wdj.log"
+  },
   "gap5_signing_custody_gate": "MEASURED 2026-11-12: GAP5's bar ('a signed candidate published with the native package binary') is externally gated on this host. Evidence: no rllm.p12, *.jks or rllm.password anywhere under /home/shawn, /mnt or /media to depth 6; the newest package.sh stamp dir output/2026-11-12__05-31-35Z stops at RLLM-unsigned.apk and apksigner verify --verbose on each APK there returns 'DOES NOT VERIFY / ERROR: Missing META-INF/MANIFEST.MF'; and the published companion the manifest names (RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk, 6,932,498 bytes, sha256 86b7d74156a11dc6ee6d70866bb480e30b75bac57c3400878c86b9f205921c3d, location 'companion') is not on this filesystem. package.sh also requires CLIENT_VERSION_CODE (an increasing Lab version code), which tooling/env.sh does not supply - it exports only CLIENT_ANDROID, CLIENT_JDK, CLIENT_NDK, CLIENT_RUST, CLIENT_TOOLS. So the retained identity ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5 exists only in the separate protected archive, and no amount of coordinator work can mint it: minting a new keystore would break the signature identity the program is required to reuse.",
   "gap5_unsigned_apk_leg_measured": "Room from 03d4d10 with the retained alignment binary 9ee4338b6e341500: CLIENT_SIGNING_DIR unset, bash package.sh with CLIENT_UNSIGNED=1 CLIENT_VERSION_CODE=1795000001 -> rc=0, 'Alignment payload validation: 25 exact members', artifacts resources.apk 1316639 / package.apk 7538579 / aligned.apk 7538583 / RLLM-unsigned.apk 7538583 bytes (sha256 1ad646a0f40953ef), manifest versionCode=1795000001. The native apk tool on that unsigned artifact: rc=1, 'ValueError: APK signature verification failed: RLLM-unsigned.apk'. So the unsigned build leg is sound and the apk/publication leg is signature-gated by design - GAP5's publish chain cannot close without the retained keystore.",
   "gap5_witness_room_is_minimal": "Room witness measured twice. v1 (/tmp/g5s1w.sh): after `bash tools/build-tools.sh output/tools` there is no output/tools/harness at all, so `harness sweep` died with rc=127 in 0s and produced no reports - the runner is built only by tools/build-harness.sh (which does exist in this checkout, contrary to my older note). v2 (/tmp/g5s1w2.sh) built it with `bash tools/build-harness.sh output/tools/harness` (rc=0, zero warning lines, 4,774,320 bytes) and ran the sweep: rc=1, 115 s, 71 groups, `summary: 5 pass, 66 fail, 64 absent of 71 groups, 126 checks`. That is not a contradiction of the lane's 64 pass / 4144 checks: `git archive` does not carry output/, so a room tree has no output/headless/RLLM, no units binary and no reference controllers, and most groups fail fast. What a room can prove is driver equivalence (same 71 groups, same order, same exit codes) and record-shape behaviour; the 4,144-check total can only be witnessed on a tree that carries output/, i.e. a full copy of the primary tree or the primary tree itself once every lane has landed. Also attributed the 33 build warnings in the tools build: they are in tools/signature.rs (11), tools/toolchain.rs (10) and tools/apk.rs (6) - files the lane never touched - and build-harness.sh emits zero warnings for the lane's tools/harness.rs.",
@@ -502,6 +532,12 @@
     "digest": "efc38efa58254d76f432e8473a79e000c9845fa5e56e661f2f25d80e4818d5bc",
     "seat": "/tmp/q-gap5.md staged, six questions",
     "witness": "in flight: /tmp/gap5w.sh (A=pure HEAD 762e741, B=+package.rs, C=+dropped rrsi_loop from GROUPS to prove the interlock refuses)"
+  },
+  "gap5py1_witness_partial": {
+    "A_pure_HEAD_762e741": "12 warning lines (10 diagnostics, all --> RLLM/tools/toolchain.rs; 17 signature/apk items gone), package-tests 42, units 855/855+57 zero warnings",
+    "B_plus_package_rs": "package-tests 43, warning_lines=12 (the change adds no warnings)",
+    "C": "dropping rrsi_loop from const GROUPS must make publish refuse - leg still running",
+    "seat": "/tmp/mm-gap5-1.out dispatched with the A/B numbers in the packet"
   },
   "gap5sweep1_native_twin_in_flight": "In-flight diff at 19:25Z host: tools/harness.rs +443/-29 adding the native twin of the no-flag sweep (sweep_usage :940, parse_sweep :953, sweep_arguments :1000, sweep_run :1040, persist_printed_json :1094, publish_sweep :1112, run_sweep :1213, replace_connected :1292) plus 9 lines in tools/package.rs. publish_sweep replaces only the connected object and refuses to write unless every GROUPS entry has a row; comparators and selected_rust_* stay. Interlock measured green in the dirty tree: checks.py names 71 == harness GROUPS 71, order-identical. No new #[test] in the diff yet. Planned coordinator retirement witness: run BOTH instruments on one committed tree and diff the connected object byte-for-byte before tools/package.py retirement is even discussed.",
   "gap5sweep1_seat_findings_adjudicated": "Report read in full (/tmp/gap5sweep1-report.md, 19 lines), whole self-diff read by me (/tmp/g5s1-diff.txt, 609 lines), seat audit over the diff + tools/checks.py + tools/package.py + tools/build-tools.sh inline (/tmp/mm-g5s1.out, Q1-Q4 in; Q5-Q7 cut by the token cap and re-seated as two more seats). Adjudicated with my own measurements: F1 BLOCKER real counting bug - tools/harness.rs:922-923 is `if count == 0 { Err(\"executed count is not a positive integer\") }`, and take_json_int parses a leading '-', so {\"passed\": -4} is ACCEPTED and subtracts from total_executed; tools/package.py's executed_count asserts count > 0, so the two instruments disagree in the direction that quietly shrinks the delivered total. F2 MAJOR disclosure regression - the previous native writer emitted {name, missing[...], recorded_as: 0} (all four unavailable entries in the delivered record at 9fda37b still have that form); the twin emits {name, code} (tools/harness.rs:1140-1147), which cannot distinguish a missing dev input from a failed assertion from a 180 s timeout. The sweep already holds the Err text and the log tail, so a bounded reason string is cheap. F3 MAJOR sanctioned-route break that the lane under-stated - it only admitted tools/build-harness.sh; measured: the project skill .qwen/skills/auto-skill-rllm-harness-verify-and-extend/SKILL.md names the BARE run (`output/harness > output/checks-sweep.log`, line 24) as the first-choice sweep and says the record is rewritten by it (line 35), and the diff deletes the bare-path publish_record call, so the documented route silently stops writing the record. F4 MAJOR unreachable proofs - tools/harness.rs has 0 #[test] before and after +458 lines, and tools/build-tools.sh compiles *-tests only for alignment/readback/checkpoint/signature/apk/toolchain/gate/package (no `harness` row), while tools/build-harness.sh builds no test binary, so a test written there today can never run.",
@@ -733,6 +769,28 @@
     "verification_census": "73 files / 8570 lines, at the ceiling pinned in tools/package.rs, zero slack while verification/rrsi_loop.py is being edited"
   },
   "isolated_application_cases_55_to_57": "REPIN: checks.py prints 'isolated application cases: 57' from 451c969 (was 55; wzfix1 added two tests to core/application.rs, which is the isolated application binary). Unit line now 789/789 + 57, exit 0, zero warnings at 451c969. Chain: 763 (c396323) -> 764 (968b35c) -> 779 (925fed7) -> 784 (e19bd58) -> 787 (9a8573d) -> 789 (451c969); tools unchanged by d5c8f9e (package 41).",
+  "jnleg1_adjudication_reject": {
+    "decision": "rejected \u2014 verification/self_rebuild.py restored to HEAD bytes; lane bytes kept at /tmp/snap-self_rebuild.py (sha256 570ece93ab5bb5198b0069833f750da98e0499a5080fd0befb5689761f7836e9)",
+    "decisive_facts": "the five new legs duplicate native coverage that reaches the same handoff() entry the JSONL verb dispatches to: assert_handoff_refuses core/self_build.rs:4650 -> handoff_at :3952 -> handoff() (both review_confirmed modes), handoff_refuses_a_truncated_successor_chain :4777 (subprocess probe), empty witness at :4065 and :4084 (successor_rows 0)",
+    "seat": "/tmp/mm-jnleg1.out (truncated by the token cap before the VERDICT line; Q1-Q7 answered, Q6 boundary = reject)",
+    "why": "R-rules: no Python where it can be avoided; the change was line-neutral (135/135, 329 lines, 73/8570) and its legs do drive the product (my neuter reddened exactly one check), but it buys no new coverage and rewrites 135 lines of a delivered verification file to pay for it",
+    "witness_kept": "/tmp/wsr2.log \u2014 14 checks PASS vs HEAD control 9; census unchanged"
+  },
+  "jnleg1_witness_green_2026_11_13": {
+    "census": "py_files=73 py_lines=8570 self_rebuild_lines=329 diffstat 135/135",
+    "coordinator_neuter": "core/self_build.rs successor_chain_break truncate arm -> None; product rebuilt; FAIL (exit 1, 1s, 14 checks) failed [successor journal was truncated below the recorded chain]; restored sha 2f58da009458e9919c522c949b5a44ebb1017a08b2d84e95fd5bd3e90be0b3c2",
+    "done_marker": "WSR2-DONE",
+    "log": "/tmp/wsr2.log",
+    "note": "first witness take /tmp/wsr.log was invalid: the room lacked output/tools/gate, so the group read UNAVAILABLE, not green",
+    "room_head_control": {
+      "group": "count 9 passed 9 failed []"
+    },
+    "room_lane_file": {
+      "group": "self_rebuild PASS (exit 0, 1s, 14 checks)",
+      "json": "count 14 passed 14 failed []"
+    },
+    "seat": "/tmp/mm-jnleg1.out (dispatched, packet /tmp/q-jnleg1.md)"
+  },
   "js3_commit_room_verified_2026_11_12T1945": {
     "at": "2026-11-12T19:45Z",
     "exit": 0,
@@ -759,6 +817,39 @@
   },
   "js_caps_pinned_and_committed_6474c41": "core/js_evidence.rs +322/-0, all hunks inside 'mod checks' (:1751). Witness room = git archive 08c39ea + that file: build rc=0 warnings=0, 'Rust cases passed: 829/829; isolated application cases: 57' = 816 + 13, #[test] 14 -> 27, file digest 9ac8e6e536404706 (matches the lane's claimed digest). MiniMax seat verdict accept-with-notes; I resolved its two open items: (1) the report cap appends to the cap list render clones at :1570 and pushes into that local Vec at :1719-:1724, so Observation.caps never carries 'javascript report cap' - text-only disclosure, recorded not changed; (2) every 'second copy' is live, not dead: push_obs_unknown check :489 called at :410/:414/:418, push_map_unknown :1436 called at :742/:1425, push_site :1410 called at :932/:974, push_map :1423 called at :743 - so the committed tests pin one disclosure route per cap and leave the others unpinned. Repair lane jscov1 dispatched against core/js_evidence.rs for exactly those routes.",
   "js_second_copy_caps_jscov1_adjudicated": "Lane jscov1 (core/js_evidence.rs, +160 test-only, #[test] 27 -> 31, digest 9eafb240727c1038) pins the four secondary cap copies that had no test: push_obs_unknown :489 (via :410), push_map_unknown :1436 (via :742), push_site :1410 (via :932), push_map :1423 (then :1425), each with an in-bound control and a reported one-line neuter. Seat verdict accept-with-notes requiring a push_edge (:1384) test; REFUTED by the coordinator on the bytes: push_edge has two cap branches and both were already pinned before the lane - specifier_length_cap_refuses_one_past_the_bound (:2193, import of a 513-char literal -> empty graph, one unknown 'specifier exceeds the length bound', cap named, 512-char control kept) for :1388-1392, and module_edge_cap_is_named_in_the_refusal (:1860, MODULE_EDGE_LIMIT+1 imports -> graph capped, 'javascript module-edge cap' named, dropped edge absent) for :1394-1396. Witness bar: room of git archive a2912f8 + that file must print 855/855 + 57 with zero warnings (851 clean-HEAD anchor + 4); lane claimed 833/833 which is the 829 anchor at its own launch HEAD + 4, so it is not a dirty-tree number.",
+  "lane_closed_deadw2_toolchain": {
+    "claim": "degenerate type_error arms replaced: JSON true/false pin sizes load as 1/0 (Python parity), boolean component still refused; deadw1 test boolean_pin_field_is_refused changed; new test boolean_true_pin_size_is_one",
+    "claimed_rows": {
+      "apk": 6,
+      "gate": 18,
+      "harness": 23,
+      "package": 42,
+      "signature": 5,
+      "toolchain": 10
+    },
+    "file": "tools/toolchain.rs",
+    "pid": 2322527,
+    "report": "/tmp/deadw2-report.md",
+    "sha256": "c5dab1d8f8aa91b7400bf5c2078d8fd31ceda0c8ab9112854f5795a951b7c701",
+    "witness": "pending /tmp/wdj.log"
+  },
+  "lane_closed_jnleg1_self_rebuild": {
+    "census_claimed": "73 files / 8570 lines",
+    "checks": "9 -> 14",
+    "claimed_group": "self_rebuild PASS (exit 0, 1s, 14 checks)",
+    "diffstat": "135 insertions 135 deletions",
+    "file": "verification/self_rebuild.py",
+    "four_neuter_legs": [
+      "truncated",
+      "replaced",
+      "rolled back",
+      "missing"
+    ],
+    "lines": 329,
+    "report": "/tmp/jnleg1-report.md",
+    "sha256": "570ece93ab5bb5198b0069833f750da98e0499a5080fd0befb5689761f7836e9",
+    "witness": "pending /tmp/wsr.log"
+  },
   "lane_witness_rooms_committed_head": {
     "dotnet6_room": "/tmp/dn6w = git archive dbfa7db + core/dotnet_evidence.rs + core/investigation.rs: 739/739 plus 55 (+10 cases)",
     "gap2e_room": "/tmp/g2w = git archive dbfa7db + core/improvement.rs + core/harness.rs + verification/rrsi_loop.py: 731/731 plus 55 (+2 cases)",
@@ -811,6 +902,33 @@
     "second_instance_of_leg_swallow": "rrsi_loop.py:77/:405/:440 use the same 'if name not in evaluated' pattern as self_rebuild.py:162/:276 (census: only these two files, 5 sites)",
     "status": "audited, commit held",
     "why_held": "gap2e is editing verification/rrsi_loop.py in the working tree; committing now could capture a half-finished edit"
+  },
+  "loop_lane_seats_and_repair_2026_11_13": {
+    "coordinator_adjudication": "On the bytes, the cost a row carries is a text length: core/harness.rs:112-113 sets cost_before = incumbent_text(run).len() and cost_after = hypothesis.len(), and incumbent_text (:66-70) is run-global (first_refinement.instructions else the agent's instructions). So a run-global incumbent is defensible, but it is not what the seats could establish from the diff, and no test pins the cross-component case. Flagged as unresolved rather than accepted.",
+    "lane": "gap2rrsi3 (core/rrsi.rs 61c2d20965ad2347, core/harness.rs 4efb155513995505, plus uncommitted core/improvement.rs), report /tmp/gap2rrsi3-report.md",
+    "lane_report_inconsistency": "The lane report says core/improvement.rs was not edited while its diff changes improvement::acceptance's signature to take beta0/beta1 (:143-235). Recorded as a finding.",
+    "loop_files": "remain UNCOMMITTED until gap2rrsi4 lands, is witnessed and audited.",
+    "repair_lane": "gap2rrsi4 dispatched (core/rrsi.rs, core/harness.rs, core/improvement.rs, verification/rrsi_loop.py line-neutral): pin the incumbent-cost semantics with a cross-component test, add the asymmetry regression test including a round-0 control row, and re-derive the three rrsi_loop expectations from the committed acceptance arms.",
+    "seat1_rrsi_improvement": "REJECT. Confirms the three control-row filters (core/rrsi.rs:738-748, :774-793 before both budget branches, :817-830), the round-identity fix (:190 passes index; resume passes ledger_round), round-0 validation for control rows only (core/rrsi.rs:202-216), and that no legacy row is misread as control. Rejects on: incumbent_cost (core/rrsi.rs:907-919) is not component-scoped and its semantics are unestablished; and the three rrsi_loop.py expectation changes need an independent derivation, not an edit to match Rust output.",
+    "seat2_harness": "accept-with-notes (truncated at the token cap before its Q10 answer). Same required action: a regression test pinning that library_index and render_historical RETAIN the control row while the four trial consumers exclude it."
+  },
+  "loop_lane_witness_rooms_H_L_2026_11_13": {
+    "claim": "the loop lane core bytes move units +18 with zero warnings but turn the delivered Python group verification/rrsi_loop.py red; gap2rrsi4 owns the line-neutral pin re-derivation",
+    "done_marker": "LOOPW-DONE",
+    "log": "/tmp/loopw.log",
+    "room_H_pure_HEAD": {
+      "product_warning_lines": 47,
+      "rrsi_loop_rc": 0,
+      "units": "Rust cases passed: 855/855; isolated application cases: 57",
+      "units_warning_lines": 0
+    },
+    "room_L_HEAD_plus_loop_core_files": {
+      "product_warning_lines": 47,
+      "rrsi_loop": "FAIL (exit 1, 2s, 15 checks)",
+      "rrsi_loop_rc": 1,
+      "units": "Rust cases passed: 873/873; isolated application cases: 57",
+      "units_warning_lines": 0
+    }
   },
   "loop_witness_measured_on_rejected_bytes": "/tmp/g2stop2w.log measured the loop-lane bytes the seat REJECTED (core/rrsi.rs 09bf7137f1116e8e, core/harness.rs f5b7c2fcf7685568, core/improvement.rs 0493d1b357766364; #[test] rrsi 42 -> 45, harness 75 -> 83, improvement 9 -> 9). Room of pure HEAD ddddc19 plus those files: units build rc=0, zero warnings, `Rust cases passed: 840/840; isolated application cases: 57` = 829 + 11. This count belongs to the rejected version; the repair lane gap2rrsi3 must be re-witnessed after it writes, and the loop files stay uncommitted until the seat's reject ground is closed.",
   "mark1_landed_59d13d6": "Landed. Combined room witness with gap4route1: git archive HEAD core + exactly the six lane files, room-local build-units.sh, units rc=0 digest da492eb419a3b448 warnings=0, 'Rust cases passed: 792/792; isolated application cases: 57', sweep rc=0, failures 0. Unit line: 789 -> 790 (the soak test) -> 792 (the two capture-file tests).",
@@ -1376,6 +1494,10 @@
     "acceptance_split": "tools/signature.rs and tools/apk.rs are accepted with notes; tools/toolchain.rs waits for deadw2.",
     "deadw1": "reject on two grounds. Ground 1 (tools/toolchain.rs:1747 type_error, byte-identical arms) is confirmed by the coordinator's own read and is being repaired by lane deadw2. Ground 2 (zip tail breaks large-archive EOCD arithmetic) is REFUTED on the bytes: Archive::open (:492-495) does fs::read(path) then Self::parse(data), so index + 22 + comment == data.len() runs against the whole archive; zip_tail feeds only looks_like_zip, and looks_like_zip already searched only the last 22+65535 bytes at HEAD (let max_back = data.len().min(22 + 65535) at :1212). Q3/Q4/Q5 accept-with-notes.",
     "record1": "accept-with-notes. Required before delivery: regenerate verification/RESULTS.json from a tree containing the change so connected.checks carries all 71 rows (the committed record still has 65). Notes: no test compares the native checks document with the Python-produced record; the code: null divergence is matched only on the native side, not pinned against the Python artifact."
+  },
+  "seats_deadw2_relaunch": {
+    "first_attempt": "/tmp/mm-deadw2.out 0 bytes, empty stderr, process gone",
+    "relaunch": "/tmp/mm-deadw2b.out"
   },
   "seats_open_record1_deadw1": {
     "packets": "/tmp/q-record1.md (8 numbered questions), /tmp/q-deadw1.md (5 numbered questions)",
