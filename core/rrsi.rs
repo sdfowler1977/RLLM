@@ -1331,6 +1331,8 @@ pub(crate) fn render_historical(records: &[Json], task: &str) -> String {
 }
 pub(crate) const LIBRARY_INDEX_MISMATCH: &str =
     "stored library index does not match the library on disk; history was kept and no line was dropped";
+pub(crate) const LIBRARY_INDEX_NOT_A_LIST: &str =
+    "stored library index is not a list; history was kept and no line was dropped";
 
 fn index_row_agrees(stored: &Json, disk: &Json) -> bool {
     text(stored, "key") == text(disk, "key")
@@ -1338,11 +1340,15 @@ fn index_row_agrees(stored: &Json, disk: &Json) -> bool {
         && text(stored, "run_digest") == text(disk, "run_digest")
 }
 
-// A missing index is the first round, before resume stored one. Any other
-// value is the history this run was built on and must be the loaded sequence.
+// Null is the first round, before resume stored an index, and is not a
+// disagreement. An array disagrees when its length differs or a key,
+// revision, or run_digest is not the loaded row at that position. Any other
+// shape cannot be compared and is a disagreement, so it cannot pass as
+// agreement. historical_section_checked reports that shape with
+// LIBRARY_INDEX_NOT_A_LIST. An array disagreement stays LIBRARY_INDEX_MISMATCH.
 fn index_disagrees(stored: &Json, records: &[Json]) -> bool {
     let Arr(rows) = stored else {
-        return false;
+        return !matches!(stored, Null);
     };
     let fresh = library_index(records);
     rows.len() != fresh.len()
@@ -1357,14 +1363,19 @@ pub(crate) fn historical_section(root: &str, task: &str) -> Result<String> {
 }
 
 /// The propose prompt calls this with the run's stored `library_index`.
-/// `load_experience` is the only loader and the only line cap. A stored row
-/// whose key, revision, or run_digest is not the loaded row at that position,
-/// or a library that gained or lost a row, returns `LIBRARY_INDEX_MISMATCH`.
+/// `load_experience` is the only loader and the only line cap. `Null` means
+/// no stored index and renders the library. An array whose key, revision, or
+/// run_digest is not the loaded row at that position, or a library that
+/// gained or lost a row, returns `LIBRARY_INDEX_MISMATCH`. A stored value
+/// that is present and not an array returns `LIBRARY_INDEX_NOT_A_LIST`.
 /// This reads the library and does not write it.
 pub(crate) fn historical_section_checked(root: &str, task: &str, stored: &Json) -> Result<String> {
     let records = load_experience(root).map_err(library_error)?;
-    if index_disagrees(stored, &records) {
-        return Err(LIBRARY_INDEX_MISMATCH.into());
+    match stored {
+        Null => {}
+        Arr(_) if index_disagrees(stored, &records) => return Err(LIBRARY_INDEX_MISMATCH.into()),
+        Arr(_) => {}
+        _ => return Err(LIBRARY_INDEX_NOT_A_LIST.into()),
     }
     Ok(render_historical(&records, task))
 }
@@ -2229,6 +2240,92 @@ mod checks {
         }
         assert_eq!(fs::read(&path).unwrap(), parked);
         assert_eq!(text(&load_experience(root).unwrap()[1], "harness"), "replaced harness");
+    }
+
+    #[test]
+    fn stored_index_that_is_not_a_list_is_refused_and_history_stays() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        append_experience(root, "task t", "adopted harness", "", RUN).unwrap();
+        append_experience(root, "task u", "other harness", "", OTHER).unwrap();
+        let loaded = load_experience(root).unwrap();
+        let path = scratch.0.join("experience.jsonl");
+        let before = fs::read(&path).unwrap();
+        assert_eq!(
+            LIBRARY_INDEX_NOT_A_LIST,
+            "stored library index is not a list; history was kept and no line was dropped"
+        );
+        assert_ne!(LIBRARY_INDEX_NOT_A_LIST, LIBRARY_INDEX_MISMATCH);
+        let history = historical_section(root, "task t").unwrap();
+        let first_revision = text(&loaded[0], "revision");
+        let second_revision = text(&loaded[1], "revision");
+        assert!(history.contains(&first_revision), "{history}");
+        assert!(history.contains("historical entry"), "{history}");
+        assert!(!history.contains(LIBRARY_INDEX_NOT_A_LIST), "{history}");
+        // Null is the historical_section delegate: no stored index, so the
+        // same history renders. A present string, object, or number cannot
+        // be compared. The route returns LIBRARY_INDEX_NOT_A_LIST on the
+        // Err path that LIBRARY_INDEX_MISMATCH already uses.
+        assert_eq!(
+            historical_section_checked(root, "task t", &Null).unwrap(),
+            history
+        );
+        let shapes = [
+            ("string", s("not-a-list")),
+            ("object", obj(vec![("key", s("x")), ("revision", s("1"))])),
+            ("number", n(4)),
+        ];
+        for (name, stored) in shapes {
+            match historical_section_checked(root, "task t", &stored) {
+                Err(error) => assert_eq!(error, LIBRARY_INDEX_NOT_A_LIST, "{name}: {error}"),
+                Ok(section) => panic!(
+                    "expected the refusal sentence {LIBRARY_INDEX_NOT_A_LIST:?}, got the rendered history: {section}"
+                ),
+            }
+            assert_eq!(fs::read(&path).unwrap(), before, "{name}");
+            let kept = fs::read_to_string(&path).unwrap();
+            assert_eq!(kept.lines().count(), loaded.len(), "{name}");
+            assert!(kept.contains(&first_revision), "{name}: {kept}");
+            assert!(kept.contains(&second_revision), "{name}: {kept}");
+            assert_eq!(historical_section(root, "task t").unwrap(), history, "{name}");
+        }
+    }
+
+    #[test]
+    fn stored_index_refuses_an_appended_inserted_or_reordered_list() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        append_experience(root, "task t", "adopted harness", "", RUN).unwrap();
+        append_experience(root, "task u", "other harness", "", OTHER).unwrap();
+        let loaded = load_experience(root).unwrap();
+        let rows = library_index(&loaded);
+        assert!(rows.len() >= 2, "{}", rows.len());
+        let path = scratch.0.join("experience.jsonl");
+        let before = fs::read(&path).unwrap();
+        let agreed = historical_section_checked(root, "task t", &Arr(rows.clone())).unwrap();
+        assert!(agreed.contains(&text(&loaded[0], "revision")), "{agreed}");
+        assert!(!agreed.contains(LIBRARY_INDEX_MISMATCH), "{agreed}");
+        let mut appended = rows.clone();
+        appended.push(rows[0].clone());
+        let mut inserted = rows.clone();
+        inserted.insert(0, rows[1].clone());
+        let mut reordered = rows.clone();
+        reordered.swap(0, 1);
+        for (name, stored_rows) in [
+            ("append", appended),
+            ("insert-at-0", inserted),
+            ("reorder", reordered),
+        ] {
+            match historical_section_checked(root, "task t", &Arr(stored_rows)) {
+                Err(error) => assert_eq!(error, LIBRARY_INDEX_MISMATCH, "{name}"),
+                Ok(section) => panic!("{name} was accepted: {section}"),
+            }
+        }
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let kept = load_experience(root).unwrap();
+        assert_eq!(text(&kept[0], "revision"), text(&loaded[0], "revision"));
+        assert_eq!(text(&kept[1], "harness"), "other harness");
+        assert_eq!(kept.len(), loaded.len());
     }
 
     #[test]
