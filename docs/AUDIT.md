@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T10:1Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T11:4Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -7,7 +7,7 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **560/560 cases plus 55 isolated application cases, exit 0**, measured with the pinned
+  report bytes): **576/576 cases plus 55 isolated application cases, exit 0**, measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the earlier 517 tally was additionally reproduced on the
   drifted `rustc 1.95.0` build, `output/units` vs `output/units-pinned`, log `output/units-pinned.log`). A bare
   `rustc --test core/console.rs` from the
@@ -34,7 +34,7 @@ their original counts and wording.
   `services` 69 → 72, against `apk_alignment` 11 → 0 and `turn_background` 28 → 0 from the off-host signed
   APK, and the group total moved 68 → 69 on `permission_modes` alone.
   **The record's Rust-case leg is stale and is a measured drift, not a pass:** `full_rust_suite` pins
-  **513/513 cases + 55 isolated** with `binary_sha256 b621eccf4208…`, while the tree measures 560/560 + 55
+  **513/513 cases + 55 isolated** with `binary_sha256 b621eccf4208…`, while the tree measures 576/576 + 55
   today. Only `tools/package.py:52` writes that leg, and a packaging run is blocked behind the signed-APK
   publication inputs (`apk['build_inputs']` digests are asserted per path, measured 130 match / 31 drift /
   1 absent), so refreshing it is the owner-gated `PUB-INPUT-DRIFT` leg, not a coordinator action. The group
@@ -896,6 +896,42 @@ refinement settles (`record_settled_library` in `finish_refinement`) and read by
 propose/compose prompt (`historical_experience` beside the existing `lesson_data` injection). That
 write/read pair is the consumer the gap report asks for; its verification and the `556 → 560` gate
 delta are recorded on the ledger entry.
+
+**Three gap legs land, and one connected group catches a leak the unit gate could not — 2026-11-12T11:4Z.**
+`GAP1` (commit `dbddae2`): the self-build revision row no longer names the wrong process. The spawn leg appends
+the revision **after** `child.spawn()`, so `successor.pid` is the child's pid, `successor.mode` says whose pid it
+is (`none|exec|spawn`), and the row carries `argv`, the environment **names** handed over, and `job` / `instruction`
+verbatim, with 256-byte and 16,384-byte caps refused before the edit. Witnessed through the product, not the unit
+test: one model-proposed, owner-approved `reload=spawn` job in a clean room recorded revision
+`450b1bef5447…` with `successor pid 2175150`, and `/proc/2175150/stat` — read while the product was alive —
+reported state `Z`, parent `2171194` (the product's own pid), command `(RLLM)`. The receipt and the row use the
+same value, so they cannot disagree; the independent journal reader recomputed the digest
+(`digest_ok true, parent_ok true`). What remains open is stated plainly: nothing in `core` reads
+`RLLM_SELF_JOB` / `RLLM_SELF_INSTRUCTION`, so the successor **carries** the job identity without resuming the job,
+and the spawn arm neither waits on nor reaps its child.
+`GAP4` (commit `3e59893`): `reconstruct` gained `mode=implement`, which renders a cited behaviour document into a
+clean-room artifact — provenance line with the document digest and citation set, one unit line per **cited** claim,
+one `refused` marker per unknown item — and a deterministic verify leg reporting `matched` / `missing` /
+`conflicting` per claim. Digest mismatch, a citation-less claim, an out-of-workspace output, a fresh artifact that
+does not verify, and 17+ contiguous subject bytes are all refused before the file exists. The published operation
+reference (commit `20d4780`) had to be corrected because it still promised reconstruct "does not … generate an
+implementation".
+`GAP2` (commit `b931163`): acceptance now consults an annealed edit budget derived only from recorded ledger state
+(published in the prompt, stored on the row), a noise floor equal to the largest base-to-base spread recorded for
+the same task and verifier — a gain *equal* to the floor is not progress — and cost-aware acceptance that refuses an
+equal score whose cost rose and keeps the cheaper one. With no budget, floor or known cost recorded, the accept bit
+and notes are byte-for-byte today's behaviour.
+**The methodological finding of this window, recorded because it nearly passed.** The lane's own only-mode group run
+and my first re-run of eight groups both drove a product binary built **before** the change, so their eight PASSes
+were a no-regression witness against stale bytes. Only after `bash headless.sh` rebuilt the product did
+`hosted_phases` go red: `AssertionError: evaluation does not retain the task, answer or verifier in the candidate`
+(`verification/hosted_phases.py:85`), with `COUNT UNPARSED` because the group died mid-run. The cause was in the new
+code: `record_base` stored the **raw task string** in `run.base_evaluations`, and that run state is held in the
+refinement candidate — a leakage invariant, not a style rule. Repaired in `2b80ee8` by keying those rows with
+`task_key` (a digest) plus the existing verifier digest, keeping the floor's spread semantics. Re-measured on
+rebuilt bytes: `hosted_phases PASS (exit 0, 1s, 118 checks)` and eight groups 8 pass / 0 fail. **Rule taken from
+this:** an only-mode group run against a binary built before the change is a no-regression witness only; a change
+to product state shape must be re-run after `bash headless.sh`.
 
 ## Historical baseline audit (original text)
 
