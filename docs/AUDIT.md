@@ -2192,6 +2192,104 @@ verification census is still exactly 73 files / 8570 lines — at the ceiling pi
 PID left the lane running, and relaunching into the same log path truncated the survivor's output.
 Liveness must be read from `ps -eo pid,ppid,etimes,args`, not from a wrapper match.
 
+## The sweep twin is repaired and committed, the CIL decoder is checked against the standard, and two dead arms in the loop are measured — 2026-11-12T15:05Z–15:30Z (host clock; `b4b6ee9` → `ae703cf`)
+
+### The native runner became an instrument that can be witnessed (`6f71bc7`)
+
+The decisive defect was in the build, not the runner: `tools/build-tools.sh` had no `harness` row,
+so the runner's own `#[test]` rows could never execute. Measured in rooms built from
+`git archive HEAD`, one tool chain per room:
+
+| room | `tool tests:` rows | `harness` row | `^warning:` lines |
+|---|---|---|---|
+| HEAD bytes | 8 (alignment 2, readback 24, checkpoint 5, signature 5, apk 6, toolchain 7, gate 18, package 42) | absent | 33 |
+| HEAD + the repair | the same 8 at the same counts | `output/tools/harness-tests cases: 18` | 33 |
+
+The repair added no warning and no count drift, and the 18 cases pass. The green is discriminating:
+mutating the executed-count guard from `if count <= 0` to `if count == 0` made
+`checks::executed_count_rejects_a_negative_count` fail at `tools/harness.rs:1729`
+(`assertion 'left == right' failed: negative count`), and the file was restored byte-identical
+(sha256 `1bd3db34db248248c9deb731e6ac0968158cfcb3fc492b7ceba3d88a6e972dd1`). The name-to-report-file
+mapping is now pinned by `group_report_file_matches_the_publisher_for_every_group`
+(`tools/harness.rs:1780`), which parses `EXPLICIT_PAIRS`, `IDENTITY_PAIRS` and `HYPHEN_PAIRS` out of
+`tools/package.rs` and asserts 71 == 71 with a per-group file equality; dropping `apk_alignment`
+from the identity arm makes it fail with `report file diverges for apk_alignment`.
+`verification/RESULTS.json` was untouched throughout (`0e4983d475ebb7113727052486e362d9e23293b0a67862a395e30d633dce0e45`).
+
+One audit finding survived adjudication and is being repaired: `drain_bounded` stops polling at its
+deadline, but `out_handle.join()` / `err_handle.join()` (`tools/harness.rs:1154-1161`) wait for EOF,
+so a grandchild that left the child's process group and holds the pipe can hang the sweep forever —
+`kill(-pid, SIGKILL)` cannot reach it. Four other findings were refuted: the direct-`publish_sweep`
+complaint names no product route (the only non-test caller is `commit_sweep` at `:1319`, reached from
+`run_sweep` at `:1413`), the unavailable row's `missing` field *is* its reason, the mapping parser
+cannot manufacture a green (a stray quoted string breaks the 71 total or the even-pair assert), and
+the bare run writing `output/checks/harness-ledger.json` is consistent with docs scoped to
+`verification/RESULTS.json`.
+
+### The CIL decoder held against the standard in 190 of 191 paired rows
+
+`core/dotnet_evidence.rs` gained a CIL method-body decoder. Witnessed in a room of HEAD bytes plus
+that file alone: build exit 0 with **zero** `^warning:` lines, `Rust cases passed: 827/827; isolated
+application cases: 57`, units digest `b7cc57b9e0aaa570d7da762767ae131cc1537cef4144b86a9f3843f15fe97c01`.
+The count is an identity, not a claim: 816 (pure-HEAD units, measured this window) + 11 (that file's
+`#[test]` rows went 21 -> 32) = 827.
+
+Because opcode tables are facts about an external specification, they were checked against the
+standard rather than against a model's memory: ECMA-335 6th edition and the CLR's `corhdr.h` were
+fetched and the tables diffed. The fat-header decode matches ECMA II.25.4.3 exactly
+(`header_bytes = (flags >> 12) * 4` bounded 12..=64, `MaxStack` at bytes 2-3, `CodeSize` at 4-7,
+`LocalVarSigTok` at 8-11, `InitLocals` bit 4, `MoreSects` bit 3); the accepted exception-section
+kinds `0x01/0x41/0x81/0xC1` are exactly `CorILMethod_Sect_EHTable | FatFormat | MoreSects` under
+`KindMask 0x3F`; small and fat clause widths are 12 and 24 bytes; and chained sections are
+contiguous — so `cursor += data_size` is right and the audit seat's "next-section pointer" claim is
+wrong. One row is wrong: **`FE 0x19` is `no. <unsigned int8>`** (the standard prints
+`FE 19 <unsigned int8>` / `no. { typecheck | rangecheck | nullcheck }`), but the table marks slot
+`0x19` `unused` with a zero-length operand, so a real method containing `no.` desynchronises every
+instruction after it. A repair lane is dispatched for that row plus tests.
+
+Two of my own brief premises were wrong and the lane followed the standard instead of me: the
+exception-section kinds are small `0x01` / fat `0x41` with more-sections bit `0x80` (not
+`0x00`/`0x40`/`0x41`), and `volatile.` is `0xFE13` (not inside a `0x00 ce .. 0x20 vol` range).
+`0xDC` is printed by ECMA with both `endfault` and `endfinally` — Part I 8.9.3 calls them aliases —
+so the lane's `endfinally` is incomplete, not wrong.
+
+### Two arms of the refinement loop had no delivered check, and one of them cannot fire
+
+`verification/rrsi_loop.py` (`ae703cf`, line-neutral at 518 lines) now pins two arms through the
+product JSON-lines route: the stalled-ledger refusal (exact sentence `refused because component skills
+was already tried while progress stayed inside the noise band for 3 rounds`, with a `config` control
+that reaches `probe` and stays unrecorded) and shape novelty/duplicate (the same
+`component`/`hypothesis`/`diff_digest` triple, `accept_reason` `structural novelty` then
+`duplicate shape`, and `beta0 == 0` / `beta1 == 64` asserted on both receipts). Witnessed against
+**one** pure-HEAD product binary: HEAD group bytes executed 13 / passed 13, lane bytes executed 15 /
+passed 15, no lost rows; `verification/` stays exactly 73 files / 8570 lines. The writer's neuter
+legs are one-check-each: `progress_stalled -> false` fails only the stall check, `shape_recorded ->
+false` fails only the shape check.
+
+The cost arm was not added, because the writer proved and I re-measured that it is unreachable:
+`incumbent_cost` returns `None` unless the accepted row already has `cost_known: true`
+(`if get(record, "cost_known") != &Bool(true) { return None; }`), and `improvement.rs` sets that flag
+only when it was handed two costs — which on the live route requires `incumbent_cost` to have already
+succeeded (`let costs=crate::rrsi::incumbent_cost(&records,&digest).map(|before|(before,new_len));`).
+Nothing writes the first `cost_known: true` outside the test fixture at `core/harness.rs:1950`, so in
+a real run the flag stays false and `"cost bound"`, `"cost rose"` and `"lower cost"` never execute.
+A driven run shows it: a candidate that gained one pass and grew 49 -> 130 bytes was accepted with
+`cost not recorded`, `cost_known: false` (run digest `4a3cd2347821e076452e487e8397621c28731fd49516c161bd4c6e77a25f5f72`).
+
+Separately, the STOP control row is still counted as a trial by three consumers. It carries
+`verdict: "rejected"` (it comes from `refusal_row`), and only `component_counts` skips it —
+`budget_for` adds it to `spent`, `falsified` returns it as a falsified hypothesis to the prompt, and
+`prior_rejection` will refuse a later `STOP` hypothesis as already rejected. `library_index` and
+`render_historical` deliberately keep it: the library append path uses the same `index_of` mapping,
+so filtering one side would desync `index_disagrees`.
+
+### Two measurements that correct my own records
+
+The unit line is now anchored at **816/816 + 57** for pure HEAD (the previously carried 806 was two
+commits stale), and every lane count in this window is an identity against it. The headless
+*application* build at HEAD is not warning-clean: the pure-HEAD room printed 46 `^warning:` lines,
+while the unit and tools builds print zero. That is pre-existing, caused by no lane, and still open.
+
 ## Historical baseline audit (original text)
 
 # Release audit
