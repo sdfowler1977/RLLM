@@ -48,6 +48,13 @@ const LEAKAGE: &[&str] = &["clean", "task_text", "answer_text", "inert"];
 const ROW_EXTRA: &[&str] = &["cost_change", "accepted", "leakage"];
 /// Rounds of a component with no strictly positive score gain before it is pruned.
 pub(crate) const PRUNE_WINDOW: usize = 3;
+/// Scored rounds whose best gain must stay inside δ before a slot is held
+/// for a component that has not been tried.
+/// Three matches the evidence `PRUNE_WINDOW` already requires before a
+/// component is pruned. Here the gain is the best score change of the round
+/// across every component. A run with fewer scored rounds than this has not
+/// shown a stall.
+pub(crate) const STALL_WINDOW: usize = 3;
 const EDIT_KEYS: &[&str] = &[
     "component",
     "hypothesis",
@@ -61,8 +68,8 @@ const EDIT_KEYS: &[&str] = &[
     "run_digest",
 ];
 const POLICY_KEYS: &[&str] = &["edit_budget", "noise_floor", "cost_known", "decision"];
-// Optional fields for a candidate pool, its worktree commit, and the split scores.
-// An older row omits them and still seals.
+// Optional fields for a candidate pool, its worktree commit, the split scores,
+// and the cost bound recorded with the decision. An older row omits them and still seals.
 const SPLIT_KEYS: &[&str] = &[
     "pool_status",
     "branch",
@@ -81,6 +88,9 @@ const SPLIT_KEYS: &[&str] = &[
     "harness_digest",
     "evolve_shape",
     "ood_shape",
+    "beta0",
+    "beta1",
+    "accept_reason",
 ];
 // Three candidates are a pool, and three refusals still leave one edit of the
 // annealed cap of four. The slots are judged in order. There is no thread schedule
@@ -327,6 +337,15 @@ fn validate_policy(value: &Json) -> Result<()> {
             return Err("decision must be bounded text".into());
         }
     }
+    for key in ["beta0", "beta1"] {
+        if get(value, key) != &Null {
+            let number = number_field(value, key)?;
+            if number > 1_000_000 {
+                return Err(format!("{key} is outside the record cap"));
+            }
+        }
+    }
+    bounded_row_text(value, "accept_reason", 80)?;
     Ok(())
 }
 fn validate_edit(value: &Json, expected_run: &str) -> Result<()> {
@@ -833,6 +852,77 @@ pub(crate) fn untried_components(records: &[Json], run_digest: &str) -> Vec<&'st
         .filter(|name| tried.iter().all(|(tried_name, _)| tried_name != name))
         .collect()
 }
+fn round_best_gains(records: &[Json], run_digest: &str) -> Vec<i64> {
+    let mut rounds = Vec::new();
+    for record in records {
+        if text(record, "run_digest") != run_digest {
+            continue;
+        }
+        let (Ok(round), Some(gain)) = (number_field(record, "round"), edit_gain(record)) else {
+            continue;
+        };
+        if let Some(existing) = rounds.iter_mut().find(|(id, _)| *id == round) {
+            if gain > existing.1 {
+                existing.1 = gain;
+            }
+        } else {
+            rounds.push((round, gain));
+        }
+    }
+    rounds.sort_by_key(|(round, _)| *round);
+    rounds.into_iter().map(|(_, gain)| gain).collect()
+}
+fn gain_inside_band(gain: i64, delta: u64) -> bool {
+    if gain <= 0 {
+        return true;
+    }
+    match u64::try_from(gain) {
+        Ok(gain) => gain <= delta,
+        Err(_) => false,
+    }
+}
+/// δ = 0 means no noise band is in force. `improvement::noise_floor` returns
+/// 0 when fewer than two base scores exist, and also when those scores tie.
+/// A zero argument leaves the run unstalled, so an unestimated floor does
+/// not reserve a slot on every flat ledger.
+pub(crate) fn progress_stalled(records: &[Json], run_digest: &str, delta: u64) -> bool {
+    if delta == 0 {
+        return false;
+    }
+    let gains = round_best_gains(records, run_digest);
+    if gains.len() < STALL_WINDOW {
+        return false;
+    }
+    gains[gains.len() - STALL_WINDOW..].iter().all(|gain| gain_inside_band(*gain, delta))
+}
+pub(crate) fn stall_refusal(component: &str) -> String {
+    format!(
+        "refused because component {component} was already tried while progress stayed inside the noise band for {STALL_WINDOW} rounds"
+    )
+}
+pub(crate) fn reserved_slot_refusal(
+    records: &[Json],
+    run_digest: &str,
+    component: &str,
+    delta: u64,
+) -> Option<String> {
+    if !progress_stalled(records, run_digest, delta) || untried_components(records, run_digest).is_empty() {
+        return None;
+    }
+    let tried = component_counts(records, run_digest);
+    tried.iter().any(|(name, _)| name == component).then(|| stall_refusal(component))
+}
+fn recorded_noise_floor(records: &[Json], run_digest: &str) -> u64 {
+    records.iter().rev().find_map(|record| {
+        if text(record, "run_digest") != run_digest {
+            return None;
+        }
+        match get(record, "noise_floor") {
+            Num(value) => value.parse().ok(),
+            _ => None,
+        }
+    }).unwrap_or(0)
+}
 fn clip(value: &str, limit: usize) -> String {
     let mut end = value.len().min(limit);
     while !value.is_char_boundary(end) {
@@ -902,6 +992,16 @@ pub(crate) fn prompt_document(document: &str, run_digest: &str) -> Result<String
         lines.push(format!(
             "Live components: {}",
             if live.is_empty() { "none".to_string() } else { live }
+        ));
+    }
+    if progress_stalled(&records, run_digest, recorded_noise_floor(&records, run_digest)) {
+        lines.push(format!(
+            "Progress stalled inside the noise band for {STALL_WINDOW} rounds."
+        ));
+        let reserved = untried_components(&records, run_digest).join(", ");
+        lines.push(format!(
+            "Reserved slots for components not yet tried: {}",
+            if reserved.is_empty() { "none".to_string() } else { reserved }
         ));
     }
     let mut section = format!("\nEDIT HISTORY\n{}", lines.join("\n"));
@@ -2513,6 +2613,141 @@ mod checks {
         );
         assert!(!section.contains("Pruned"));
         assert!(!section.contains("Live components"));
+    }
+
+    fn window(component: &str, before: u64, after: u64) -> Vec<Json> {
+        (1..=STALL_WINDOW as u64)
+            .map(|round| flat(component, &format!("{component} {round}"), round, before, after))
+            .collect()
+    }
+
+    #[test]
+    fn stalled_run_refuses_a_tried_component_and_admits_it_when_the_run_is_not_stalled() {
+        let stalled = window("prompt", 4, 5);
+        let delta = 1u64;
+        assert_eq!(
+            reserved_slot_refusal(&stalled, RUN, "prompt", delta),
+            Some(stall_refusal("prompt")),
+            "a stalled ledger with an untried component refuses a tried component"
+        );
+        assert!(progress_stalled(&stalled, RUN, delta));
+        assert!(untried_components(&stalled, RUN).contains(&"tools"));
+        assert_eq!(
+            stall_refusal("prompt"),
+            format!("refused because component prompt was already tried while progress stayed inside the noise band for {STALL_WINDOW} rounds")
+        );
+        let moving = &stalled[..STALL_WINDOW - 1];
+        assert!(!progress_stalled(moving, RUN, delta));
+        assert_eq!(reserved_slot_refusal(moving, RUN, "prompt", delta), None);
+        assert_eq!(reserved_slot_refusal(&stalled, RUN, "tools", delta), None);
+        let mut other = stalled.clone();
+        other.push(
+            edit("prompt", "other run", &diff_digest("a", "other"), 0, 50, 1, 1, "accepted", 1, OTHER).unwrap(),
+        );
+        assert_eq!(
+            reserved_slot_refusal(&other, RUN, "prompt", delta),
+            Some(stall_refusal("prompt"))
+        );
+    }
+
+    #[test]
+    fn gain_equal_to_delta_is_inside_the_band_and_one_above_clears_the_stall() {
+        let delta = 2u64;
+        let inside = window("prompt", 5, 5 + delta);
+        assert!(
+            progress_stalled(&inside, RUN, delta),
+            "gain equal to delta stays inside the band"
+        );
+        let mut cleared = inside.clone();
+        cleared.pop();
+        cleared.push(flat("prompt", "above", STALL_WINDOW as u64, 5, 5 + delta + 1));
+        assert!(
+            !progress_stalled(&cleared, RUN, delta),
+            "a gain strictly above delta clears the stall"
+        );
+        assert_eq!(reserved_slot_refusal(&cleared, RUN, "prompt", delta), None);
+        let mut best = inside.clone();
+        best.push(flat("skills", "best of the round", STALL_WINDOW as u64, 5, 5 + delta + 1));
+        assert!(
+            !progress_stalled(&best, RUN, delta),
+            "the best gain of the round clears the stall"
+        );
+        let mut older = vec![flat("prompt", "old gain", 1, 0, 40)];
+        for round in 2..=STALL_WINDOW as u64 + 1 {
+            older.push(flat("prompt", &format!("later {round}"), round, 4, 4));
+        }
+        assert!(progress_stalled(&older, RUN, delta), "only the last window is tested");
+        assert!(!progress_stalled(&inside[..STALL_WINDOW - 1], RUN, delta));
+        let flat_band = window("prompt", 4, 4);
+        assert!(!progress_stalled(&flat_band, RUN, 0), "a zero floor is not a stall");
+        assert_eq!(reserved_slot_refusal(&flat_band, RUN, "prompt", 0), None);
+        let dropped = window("prompt", 8, 6);
+        assert!(progress_stalled(&dropped, RUN, delta), "a loss stays inside the band");
+        let mut unscored_rows = inside[..STALL_WINDOW - 1].to_vec();
+        unscored_rows.push(obj(vec![
+            ("component", s("prompt")),
+            ("hypothesis", s("no score")),
+            ("round", n(STALL_WINDOW as u64)),
+            ("run_digest", s(RUN)),
+            ("verdict", s("rejected")),
+        ]));
+        assert!(
+            !progress_stalled(&unscored_rows, RUN, delta),
+            "a round with no score is not a scored round"
+        );
+    }
+
+    #[test]
+    fn every_tried_component_leaves_nothing_to_reserve() {
+        let mut records = Vec::new();
+        for (index, name) in COMPONENTS.iter().enumerate() {
+            let round = (index as u64 % STALL_WINDOW as u64) + 1;
+            records.push(flat(name, &format!("tried {name}"), round, 3, 3));
+        }
+        let delta = 1u64;
+        assert!(progress_stalled(&records, RUN, delta));
+        assert!(untried_components(&records, RUN).is_empty());
+        assert_eq!(reserved_slot_refusal(&records, RUN, "prompt", delta), None);
+        assert_eq!(reserved_slot_refusal(&records, RUN, "subagents", delta), None);
+    }
+
+    #[test]
+    fn stalled_prompt_names_the_reserved_slots_and_a_quiet_ledger_stays_unchanged() {
+        let mut quiet = String::new();
+        let mut stalled = String::new();
+        let mut cleared = String::new();
+        for round in 1..=STALL_WINDOW as u64 {
+            let row = flat("prompt", &format!("flat {round}"), round, 4, 5);
+            quiet = text(&append_document(&quiet, &row, RUN).unwrap(), "document");
+            let mut marked = row.clone();
+            put(&mut marked, "noise_floor", n(1));
+            stalled = text(&append_document(&stalled, &marked, RUN).unwrap(), "document");
+            let score = if round == STALL_WINDOW as u64 { 6 } else { 4 };
+            let mut moved = flat("prompt", &format!("flat {round}"), round, 4, score);
+            put(&mut moved, "noise_floor", n(1));
+            cleared = text(&append_document(&cleared, &moved, RUN).unwrap(), "document");
+        }
+        let quiet_section = prompt_document(&quiet, RUN).unwrap();
+        let stalled_section = prompt_document(&stalled, RUN).unwrap();
+        let cleared_section = prompt_document(&cleared, RUN).unwrap();
+        assert!(!quiet_section.contains("Progress stalled"), "{quiet_section}");
+        assert!(!quiet_section.contains("Reserved slots"), "{quiet_section}");
+        assert!(stalled_section.starts_with(&quiet_section), "{stalled_section}");
+        assert!(
+            stalled_section.contains(&format!(
+                "Progress stalled inside the noise band for {STALL_WINDOW} rounds."
+            )),
+            "{stalled_section}"
+        );
+        let reserved = untried_components(&records_of(&stalled).unwrap(), RUN).join(", ");
+        assert!(
+            stalled_section.contains(&format!("Reserved slots for components not yet tried: {reserved}")),
+            "{stalled_section}"
+        );
+        assert!(stalled_section.contains("tools"), "{stalled_section}");
+        assert!(!reserved.split(", ").any(|name| name == "prompt"));
+        assert!(stalled_section.len() <= PROMPT_MAX);
+        assert_eq!(cleared_section, quiet_section);
     }
 
     #[test]

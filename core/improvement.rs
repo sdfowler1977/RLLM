@@ -126,11 +126,59 @@ pub(super) fn check_gain(baseline: &Json, candidate: &Json) -> bool {
         && number(candidate,"passed")>number(baseline,"passed")
 }
 
+/// One passed check may pay for this many extra bytes of instruction text, and no more.
+/// Cost is the UTF-8 length of that text. beta0 is 0, so a score that did not rise cannot
+/// pay for any cost increase. That is the existing "cost rose" arm written as a bound.
+pub(super) const COST_BETA0: i64 = 0;
+pub(super) const COST_BETA1: i64 = 64;
+
+/// The shape already stored on a ledger row: component, hypothesis, and diff digest.
+#[derive(Clone, Copy)]
+pub(super) struct CandidateShape<'a> {
+    pub component: &'a str,
+    pub hypothesis: &'a str,
+    pub diff_digest: &'a str,
+}
+
+fn cost_limit(gain: i64) -> i64 {
+    COST_BETA0.saturating_add(COST_BETA1.saturating_mul(gain))
+}
+
+fn signed_cost_delta(before: u64, after: u64) -> Option<i64> {
+    let before = i64::try_from(before).ok()?;
+    let after = i64::try_from(after).ok()?;
+    after.checked_sub(before)
+}
+
+fn named_shape(shape: &CandidateShape) -> bool {
+    !shape.component.is_empty() && !shape.hypothesis.is_empty() && shape.diff_digest.len() == 64
+}
+
+fn shape_recorded(records: &[Json], shape: &CandidateShape) -> bool {
+    records.iter().any(|row| {
+        text(row, "component") == shape.component
+            && text(row, "hypothesis") == shape.hypothesis
+            && text(row, "diff_digest") == shape.diff_digest
+    })
+}
+
 /// `floor` is the largest base-to-base spread already recorded for this task and verifier.
 /// A floor of 0 is one observation: the legacy comparison is unchanged.
 /// Equal scores are not a gain. A lower recorded cost can still admit them, and a higher
-/// recorded cost refuses a score that did not rise. Missing cost leaves the legacy bit.
-pub(super) fn acceptance(baseline: &Json, candidate: &Json, floor: u64, cost_before: Option<u64>, cost_after: Option<u64>) -> Json {
+/// recorded cost refuses a score that did not rise. Those two arms are the bound
+/// cost change <= beta0 + beta1 * score gain when the gain is not positive.
+/// A positive gain whose cost increase exceeds that bound is refused as "cost bound".
+/// Missing cost leaves the legacy bit. Inside a measured band (floor > 0) a flat score
+/// that is not a cost saving is admitted only when its shape is absent from `seen`.
+pub(super) fn acceptance(
+    baseline: &Json,
+    candidate: &Json,
+    floor: u64,
+    cost_before: Option<u64>,
+    cost_after: Option<u64>,
+    shape: Option<CandidateShape>,
+    seen: &[Json],
+) -> Json {
     let legacy = check_gain(baseline, candidate);
     let before = number(baseline, "passed") as i64;
     let after = number(candidate, "passed") as i64;
@@ -144,12 +192,36 @@ pub(super) fn acceptance(baseline: &Json, candidate: &Json, floor: u64, cost_bef
     let mut cost_known = false;
     if let (Some(cost_before), Some(cost_after)) = (cost_before, cost_after) {
         cost_known = true;
+        let over = match signed_cost_delta(cost_before, cost_after) {
+            Some(delta) => delta > cost_limit(gain),
+            None => true,
+        };
         if after == before && cost_after < cost_before && preserves_checks(baseline, candidate) {
             admit = true;
             reason = "lower cost";
         } else if cost_after > cost_before && after <= before {
             admit = false;
             reason = "cost rose";
+        } else if admit && reason == "score" && over {
+            admit = false;
+            reason = "cost bound";
+        }
+    }
+    // A positive gain that does not clear the floor stays a floor refusal.
+    // Novelty admits only a flat, check-preserving score inside that band.
+    let flat = gain == 0 && preserves_checks(baseline, candidate);
+    let in_band = floor > 0 && gain <= floor as i64;
+    if in_band && flat && reason == "score" {
+        if let Some(shape) = shape {
+            if named_shape(&shape) {
+                if shape_recorded(seen, &shape) {
+                    admit = false;
+                    reason = "duplicate shape";
+                } else {
+                    admit = true;
+                    reason = "structural novelty";
+                }
+            }
         }
     }
     obj(vec![
@@ -159,6 +231,8 @@ pub(super) fn acceptance(baseline: &Json, candidate: &Json, floor: u64, cost_bef
         ("gain", s(&gain.to_string())),
         ("noise_floor", Num(floor.to_string())),
         ("cost_known", Bool(cost_known)),
+        ("beta0", Num(COST_BETA0.to_string())),
+        ("beta1", Num(COST_BETA1.to_string())),
     ])
 }
 
@@ -743,7 +817,7 @@ mod checks {
         };
         let before = score("1");
         let after = score("2");
-        let decision = acceptance(&before, &after, 0, None, None);
+        let decision = acceptance(&before, &after, 0, None, None, None, &[]);
         assert_eq!(boolean(&decision, "admit"), check_gain(&before, &after));
         assert_eq!(boolean(&decision, "admit"), true);
         assert_eq!(boolean(&decision, "legacy"), true);
@@ -751,7 +825,7 @@ mod checks {
         assert_eq!(text(&decision, "gain"), "1");
         assert_eq!(get(&decision, "noise_floor"), &Num("0".into()));
         assert_eq!(boolean(&decision, "cost_known"), false);
-        let equal = acceptance(&before, &before, 0, None, None);
+        let equal = acceptance(&before, &before, 0, None, None, None, &[]);
         assert_eq!(boolean(&equal, "admit"), false);
         assert_eq!(boolean(&equal, "admit"), check_gain(&before, &before));
         assert_eq!(boolean(&equal, "legacy"), boolean(&equal, "admit"));
@@ -830,5 +904,179 @@ mod checks {
             refinement_rounds(&s("4"), &checks).unwrap_err(),
             "Select one, two, or three refinement rounds"
         );
+    }
+
+    fn paired(passed: &str) -> Json {
+        obj(vec![
+            ("passed", Num(passed.into())),
+            ("total", Num("4".into())),
+            ("route", s("same")),
+            ("context", s("same")),
+        ])
+    }
+
+    #[test]
+    fn cost_bound_refuses_a_rise_the_score_gain_does_not_pay_for() {
+        assert_eq!(COST_BETA0, 0);
+        assert_eq!(COST_BETA1, 64);
+        let before = paired("1");
+        let after = paired("2");
+        let gain = 1i64;
+        let limit = COST_BETA0 + COST_BETA1 * gain;
+        assert_eq!(limit, 64);
+        let over = acceptance(&before, &after, 0, Some(1000), Some(1000 + limit as u64 + 1), None, &[]);
+        assert!(!boolean(&over, "admit"));
+        assert_eq!(text(&over, "reason"), "cost bound");
+        assert_eq!(get(&over, "beta0"), &Num("0".into()));
+        assert_eq!(get(&over, "beta1"), &Num("64".into()));
+        assert_eq!(text(&over, "gain"), "1");
+        let inside = acceptance(&before, &after, 0, Some(1000), Some(1000 + limit as u64), None, &[]);
+        assert!(boolean(&inside, "admit"));
+        assert_eq!(text(&inside, "reason"), "score");
+        assert_eq!(get(&inside, "beta0"), &Num("0".into()));
+        assert_eq!(get(&inside, "beta1"), &Num("64".into()));
+        let tied = paired("2");
+        let saved = acceptance(&tied, &tied, 0, Some(50), Some(40), None, &[]);
+        assert_eq!(text(&saved, "reason"), "lower cost");
+        assert!(boolean(&saved, "admit"));
+        assert!(40 - 50 <= COST_BETA0 + COST_BETA1 * 0);
+        let costly = acceptance(&tied, &tied, 0, Some(40), Some(50), None, &[]);
+        assert_eq!(text(&costly, "reason"), "cost rose");
+        assert!(!boolean(&costly, "admit"));
+        assert!(50 - 40 > COST_BETA0 + COST_BETA1 * 0);
+    }
+
+    #[test]
+    fn noise_band_admits_a_new_shape_and_refuses_the_duplicate() {
+        let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let other = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        let score = paired("2");
+        let shape = CandidateShape {
+            component: "skills",
+            hypothesis: "try a cache",
+            diff_digest: digest,
+        };
+        let first = acceptance(&score, &score, 3, None, None, Some(shape), &[]);
+        assert!(boolean(&first, "admit"));
+        assert_eq!(text(&first, "reason"), "structural novelty");
+        assert_eq!(text(&first, "gain"), "0");
+        let seen = obj(vec![
+            ("component", s("skills")),
+            ("hypothesis", s("try a cache")),
+            ("diff_digest", s(digest)),
+        ]);
+        let second = acceptance(&score, &score, 3, None, None, Some(shape), &[seen]);
+        assert!(!boolean(&second, "admit"));
+        assert_eq!(text(&second, "reason"), "duplicate shape");
+        let novel = CandidateShape {
+            component: "skills",
+            hypothesis: "try an index",
+            diff_digest: other,
+        };
+        let third = acceptance(&score, &score, 3, None, None, Some(novel), &[obj(vec![
+            ("component", s("skills")),
+            ("hypothesis", s("try a cache")),
+            ("diff_digest", s(digest)),
+        ])]);
+        assert!(boolean(&third, "admit"));
+        assert_eq!(text(&third, "reason"), "structural novelty");
+        let unmeasured = acceptance(&score, &score, 0, None, None, Some(novel), &[]);
+        assert!(!boolean(&unmeasured, "admit"));
+        assert_eq!(text(&unmeasured, "reason"), "score");
+        let noisy = acceptance(&paired("1"), &paired("2"), 3, None, None, Some(novel), &[]);
+        assert!(!boolean(&noisy, "admit"));
+        assert_eq!(text(&noisy, "reason"), "floor");
+    }
+
+    #[test]
+    fn old_ledger_row_without_beta_fields_still_seals() {
+        let run = "abababababababababababababababababababababababababababababababab";
+        let legacy = crate::rrsi::edit(
+            "skills",
+            "cache the listing",
+            &crate::rrsi::diff_digest("old", "new"),
+            1,
+            1,
+            4,
+            4,
+            "rejected",
+            2,
+            run,
+        )
+        .unwrap();
+        assert_eq!(get(&legacy, "beta0"), &Null);
+        assert_eq!(get(&legacy, "beta1"), &Null);
+        assert_eq!(get(&legacy, "accept_reason"), &Null);
+        let saved = crate::rrsi::append_document("", &legacy, run).unwrap();
+        let records = crate::rrsi::records_of(&text(&saved, "document")).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(crate::rrsi::prior_rejection(&records, run, "skills", "cache the listing"), Some(2));
+        assert!(crate::rrsi::incumbent_cost(&records, run).is_none());
+        assert!(crate::rrsi::pruned_components(&records, run).is_empty());
+        let mut flat = String::new();
+        for round in 1..=crate::rrsi::PRUNE_WINDOW as u64 {
+            let row = crate::rrsi::edit(
+                "skills",
+                &format!("flat {round}"),
+                &crate::rrsi::diff_digest("a", "b"),
+                2,
+                2,
+                4,
+                4,
+                "rejected",
+                round,
+                run,
+            )
+            .unwrap();
+            assert_eq!(get(&row, "accept_reason"), &Null);
+            flat = text(&crate::rrsi::append_document(&flat, &row, run).unwrap(), "document");
+        }
+        let flat_records = crate::rrsi::records_of(&flat).unwrap();
+        assert_eq!(crate::rrsi::pruned_components(&flat_records, run), vec!["skills".to_string()]);
+        assert_eq!(crate::rrsi::prior_rejection(&flat_records, run, "skills", "flat 1"), Some(1));
+        assert!(crate::rrsi::incumbent_cost(&flat_records, run).is_none());
+        let mut known = crate::rrsi::edit(
+            "prompt",
+            "kept",
+            &crate::rrsi::diff_digest("a", "b"),
+            1,
+            2,
+            4,
+            11,
+            "accepted",
+            1,
+            run,
+        )
+        .unwrap();
+        put(&mut known, "cost_known", Bool(true));
+        let measured = text(&crate::rrsi::append_document("", &known, run).unwrap(), "document");
+        let measured_records = crate::rrsi::records_of(&measured).unwrap();
+        assert_eq!(crate::rrsi::incumbent_cost(&measured_records, run), Some(11));
+        assert_eq!(get(&measured_records[0], "beta0"), &Null);
+        let mut annotated = known.clone();
+        put(&mut annotated, "round", Num("2".into()));
+        put(&mut annotated, "beta0", Num(COST_BETA0.to_string()));
+        put(&mut annotated, "beta1", Num(COST_BETA1.to_string()));
+        put(&mut annotated, "accept_reason", s("cost bound"));
+        let both = text(&crate::rrsi::append_document(&measured, &annotated, run).unwrap(), "document");
+        let both_records = crate::rrsi::records_of(&both).unwrap();
+        assert_eq!(get(&both_records[0], "beta0"), &Null);
+        assert_eq!(get(&both_records[0], "accept_reason"), &Null);
+        assert_eq!(get(&both_records[1], "beta0"), &Num("0".into()));
+        assert_eq!(get(&both_records[1], "beta1"), &Num("64".into()));
+        assert_eq!(text(&both_records[1], "accept_reason"), "cost bound");
+        assert_eq!(crate::rrsi::incumbent_cost(&both_records, run), Some(11));
+        assert_eq!(crate::rrsi::prior_rejection(&both_records, run, "prompt", "kept"), None);
+        put(&mut annotated, "accept_reason", s("structural novelty"));
+        put(&mut annotated, "round", Num("3".into()));
+        let novelty = text(&crate::rrsi::append_document(&both, &annotated, run).unwrap(), "document");
+        assert_eq!(text(&crate::rrsi::records_of(&novelty).unwrap()[2], "accept_reason"), "structural novelty");
+        put(&mut annotated, "accept_reason", s("duplicate shape"));
+        put(&mut annotated, "round", Num("4".into()));
+        let duplicate = text(&crate::rrsi::append_document(&novelty, &annotated, run).unwrap(), "document");
+        let duplicate_records = crate::rrsi::records_of(&duplicate).unwrap();
+        assert_eq!(text(&duplicate_records[3], "accept_reason"), "duplicate shape");
+        assert_eq!(crate::rrsi::incumbent_cost(&duplicate_records, run), Some(11));
+        assert!(crate::rrsi::pruned_components(&duplicate_records, run).is_empty());
     }
 }

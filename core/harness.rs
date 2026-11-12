@@ -161,6 +161,10 @@ fn critic_against(run:&mut Json,records:&[Json],incumbent:&str,reply:&str)->Resu
   let decision=crate::rrsi::prune_refusal(&component);
   return Ok(Critic{component,claim,diff,leakage:String::new(),decision,refused:true});
  }
+ let floor=improvement::noise_floor(run,&improvement::task_key(&text(run,"task")),&improvement::verifier_key(get(run,"response_checks")));
+ if let Some(decision)=crate::rrsi::reserved_slot_refusal(records,&run_digest,&component,floor){
+  return Ok(Critic{component,claim,diff,leakage:String::new(),decision,refused:true});
+ }
  let stored_incumbent=text(get(run,"incumbent_digests"),&component);
  let incumbent_digest=if stored_incumbent.len()==64{stored_incumbent}else if component=="prompt"||component=="system prompt"{component_digest(incumbent)}else{component_digest("")};
  let same_diff=crate::rrsi::incumbent_diff(records,&run_digest,&component).as_deref()==Some(diff.as_str());
@@ -189,6 +193,7 @@ fn record_round_edit(run:&mut Json,retain_probe:bool,composed:&str,candidate:&st
  if retain_probe{
   let mut discarded=policy.clone();
   put(&mut discarded,"decision",s("rejected revision"));
+  put(&mut discarded,"accept_reason",s("rejected revision"));
   put(&mut discarded,"cost_known",Bool(false));
   put(&mut discarded,"cost_before",Null);
   put(&mut discarded,"cost_after",Null);
@@ -863,7 +868,7 @@ fn evaluate_pool(st:&Json,run:&mut Json,candidates:&[String],probes:&[String])->
   if get(&score,"context")==&Null{put(&mut score,"context",get(&reference,"context").clone());}
   if get(&reference,"route")!=&Null&&get(&score,"route")==&Null{put(&mut score,"route",get(&reference,"route").clone());}
   let policy=acceptance_policy(run,&reference,&score,reply,round);
-  let scored=improvement::acceptance(&reference,&score,number(&policy,"noise_floor") as u64,if get(&policy,"cost_before")==&Null{None}else{Some(number(&policy,"cost_before") as u64)},if get(&policy,"cost_after")==&Null{None}else{Some(number(&policy,"cost_after") as u64)});
+  let scored=judged_acceptance(run,&reference,&score,reply,&incumbent,number(&policy,"noise_floor") as u64,if get(&policy,"cost_before")==&Null{None}else{Some(number(&policy,"cost_before") as u64)},if get(&policy,"cost_after")==&Null{None}else{Some(number(&policy,"cost_after") as u64)},&records);
   let forced=text(&policy,"verdict");
   let admissible=forced!="rejected"&&(forced=="accepted"||boolean(&scored,"admit"));
   let decision=if text(&policy,"decision").starts_with("refused")||text(&policy,"decision").contains("unconfirmed")||text(&policy,"decision").contains("held-out")||text(&policy,"decision").contains("ood score"){
@@ -931,6 +936,12 @@ fn evaluate_pool(st:&Json,run:&mut Json,candidates:&[String],probes:&[String])->
  put(run,"round_note",s(&note));
  Ok(())
 }
+fn judged_acceptance(run:&Json,reference:&Json,selected:&Json,reply:&str,prior:&str,floor:u64,cost_before:Option<u64>,cost_after:Option<u64>,records:&[Json])->Json{
+ let (component,claim,body)=declared_edit(reply);
+ let hypothesis=improvement::stored_hypothesis(&claim,run);
+ let diff=crate::rrsi::diff_digest(prior,edit_body(reply,&claim,&body));
+ improvement::acceptance(reference,selected,floor,cost_before,cost_after,Some(improvement::CandidateShape{component:&component,hypothesis:&hypothesis,diff_digest:&diff}),records)
+}
 fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:&str,round:u64)->Json{
  let digest=refinement_digest(run);
  let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
@@ -938,7 +949,8 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
  let floor=improvement::noise_floor(run,&improvement::task_key(&text(run,"task")),&improvement::verifier_key(get(run,"response_checks")));
  let new_len=selected_text.len() as u64;
  let costs=crate::rrsi::incumbent_cost(&records,&digest).map(|before|(before,new_len));
- let decision=improvement::acceptance(reference,selected,floor,costs.map(|pair|pair.0),costs.map(|pair|pair.1));
+ let prior=incumbent_text(run);
+ let decision=judged_acceptance(run,reference,selected,selected_text,&prior,floor,costs.map(|pair|pair.0),costs.map(|pair|pair.1),&records);
  let reason=text(&decision,"reason");
  let gain=text(&decision,"gain");
  let cost_known=boolean(&decision,"cost_known");
@@ -952,12 +964,20 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
   (Some("rejected"),crate::rrsi::rejection_refusal(&component,round))
  }else if pruned{
   (Some("rejected"),crate::rrsi::prune_refusal(&component))
+ }else if let Some(refusal)=crate::rrsi::reserved_slot_refusal(&records,&digest,&component,floor){
+  (Some("rejected"),refusal)
  }else if reason=="floor"{
   (Some("rejected"),format!("refused because the gain {gain} does not exceed the noise floor {floor}"))
  }else if reason=="cost rose"{
   (Some("rejected"),"refused because the cost rose while the score did not".into())
+ }else if reason=="cost bound"{
+  (Some("rejected"),format!("refused because the cost bound was exceeded for the gain {gain}"))
  }else if reason=="lower cost"{
   (Some("accepted"),"accepted because the equal score costs less".into())
+ }else if reason=="structural novelty"{
+  (Some("accepted"),"accepted because of structural novelty".into())
+ }else if reason=="duplicate shape"{
+  (Some("rejected"),"refused because the duplicate shape was already recorded".into())
  }else if !cost_known{
   (None,"cost not recorded".into())
  }else{
@@ -982,6 +1002,9 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
   ("noise_floor",Num(floor.to_string())),
   ("cost_known",Bool(cost_known)),
   ("decision",s(&decision_text)),
+  ("beta0",get(&decision,"beta0").clone()),
+  ("beta1",get(&decision,"beta1").clone()),
+  ("accept_reason",s(&reason)),
  ]);
  if split!=Null{
   put(&mut policy,"held_out_known",Bool(boolean(run,"held_out_known")));
@@ -1872,7 +1895,7 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   let dropped=marked(2,0b110,"same-route");
   let other=marked(2,0b11,"other-route");
   for (before,after) in [(&equal,&equal),(&equal,&up),(&up,&dropped),(&equal,&other),(&Null,&up)]{
-   let decision=improvement::acceptance(before,after,0,None,None);
+   let decision=improvement::acceptance(before,after,0,None,None,None,&[]);
    assert_eq!(boolean(&decision,"admit"),improvement::check_gain(before,after));
    assert_eq!(boolean(&decision,"legacy"),boolean(&decision,"admit"));
    assert_eq!(boolean(&decision,"cost_known"),false);
