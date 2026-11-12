@@ -141,10 +141,10 @@ fn shift_rows(state: &mut [u8; 16]) {
     }
 }
 
-fn multiply_128(mut left: u128, right: u128) -> u128 {
+fn multiply_128(left: u128, right: u128) -> u128 {
     let mut accumulator = 0u128;
     let mut value = left;
-    let mut multiplier = right;
+    let multiplier = right;
     for bit in 0..128 {
         if (multiplier >> (127 - bit)) & 1 == 1 {
             accumulator ^= value;

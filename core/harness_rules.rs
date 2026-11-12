@@ -5,7 +5,7 @@ const MAX_TEXT:usize=8192;
 fn policy(st:&Json)->Json{get(st,"harness_policy").clone()}
 fn rows(st:&Json,key:&str)->Vec<Json>{array(&policy(st),key)}
 fn enabled(r:&Json)->bool{get(r,"enabled")!=&Bool(false)&&get(r,"archived")!=&Bool(true)}
-fn id()->Result<String>{static SERIAL:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);let n=SERIAL.fetch_update(std::sync::atomic::Ordering::Relaxed,std::sync::atomic::Ordering::Relaxed,|x|x.checked_add(1)).map_err(|_|"Harness identity counter exhausted")?;Ok(format!("{}-{n}",now()))}
+fn id()->Result<String>{static SERIAL:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);let n=SERIAL.try_update(std::sync::atomic::Ordering::Relaxed,std::sync::atomic::Ordering::Relaxed,|x|x.checked_add(1)).map_err(|_|"Harness identity counter exhausted")?;Ok(format!("{}-{n}",now()))}
 fn choice(key:&str,label:&str,value:&str,options:&[(&str,&str)])->Json{interaction::choice(key,label,value,options)}
 fn active(st:&Json)->Json{if get(st,"task_run")==&Null{harness::active_agent(st)}else{get(get(st,"task_run"),"agent").clone()}}
 fn role(st:&Json)->String{

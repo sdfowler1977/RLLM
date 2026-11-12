@@ -21,9 +21,6 @@ impl fmt::Display for Origin{fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Resul
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub struct Url{scheme:Scheme,host:Host,port:u16,path:String,query:Option<String>,fragment:Option<String>}
 impl Url{
-    pub fn scheme(&self)->Scheme{self.scheme}
-    pub fn host(&self)->&Host{&self.host}
-    pub fn port(&self)->u16{self.port}
     pub fn path(&self)->&str{&self.path}
     pub fn query(&self)->Option<&str>{self.query.as_deref()}
     pub fn fragment(&self)->Option<&str>{self.fragment.as_deref()}

@@ -2,7 +2,7 @@
 use super::*;
 const RECORDS:u64=2048;
 const RELOCATIONS:u64=128;
-#[derive(Default)]pub(super) struct Context{pub data:Vec<(u64,u64)>,pub report:String,pub classifications:Vec<super::super::control_flow::Classification>,pub classifications_complete:bool,pub relocations:Vec<super::super::control_flow::Relocation>,pub relocations_complete:bool,pub symbols:Vec<super::super::control_flow::CodeSymbol>}
+#[derive(Default)]pub(super) struct Context{pub data:Vec<(u64,u64)>,pub report:String,pub classifications:Vec<super::super::control_flow::Classification>,pub classifications_complete:bool,pub relocations:Vec<super::super::control_flow::Relocation>,pub relocations_complete:bool}
 fn mapping_name(name:&str)->Option<bool>{if name=="$x"||name.starts_with("$x."){Some(true)}else if name=="$d"||name.starts_with("$d."){Some(false)}else{None}}
 fn relocation_name(kind:u32)->&'static str{match kind{0=>"NONE",257=>"ABS64",258=>"ABS32",259=>"ABS16",260=>"PREL64",261=>"PREL32",262=>"PREL16",273=>"LD_PREL_LO19",274=>"ADR_PREL_LO21",275=>"ADR_PREL_PG_HI21",276=>"ADR_PREL_PG_HI21_NC",277=>"ADD_ABS_LO12_NC",278=>"LDST8_ABS_LO12_NC",279=>"TSTBR14",280=>"CONDBR19",282=>"JUMP26",283=>"CALL26",284=>"LDST16_ABS_LO12_NC",285=>"LDST32_ABS_LO12_NC",286=>"LDST64_ABS_LO12_NC",299=>"LDST128_ABS_LO12_NC",1024=>"COPY",1025=>"GLOB_DAT",1026=>"JUMP_SLOT",1027=>"RELATIVE",1032=>"IRELATIVE",_=>"uninterpreted relocation code"}}
 fn symbol(reader:&Reader<'_>,header:&Header,table:Section,index:u64)->Option<(String,u8,u16,u64)>{
@@ -77,8 +77,8 @@ pub(super) fn inspect(reader:&Reader<'_>,header:&Header,kind:u16,sh_valid:bool,r
  }
  let _=writeln!(out,"Observed {relocations} relocation records; unavailable/bounded tables{incomplete}. Report rows may be omitted under the12KiB bound. Unobserved/stripped sections do not establish absence. Dynamic relocation streams, implicit addend extraction, linker relaxation, symbol interposition, IFUNC/TLS, runtime fixups and dependency resolution remain unresolved. All graph/IR facts describe stored encodings before any relocation.");
  if cancelled(){return Err("Inspection cancelled during ELF code symbols".into());}
- let symbols=publish_code_symbols(reader.bytes,&mut out);
- Ok(Context{data,report:out,classifications,classifications_complete:complete,relocations:facts,relocations_complete:!incomplete,symbols})
+ publish_code_symbols(reader.bytes,&mut out);
+ Ok(Context{data,report:out,classifications,classifications_complete:complete,relocations:facts,relocations_complete:!incomplete})
 }
 #[cfg(test)]mod tests{
  use super::*;

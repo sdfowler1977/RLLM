@@ -335,7 +335,7 @@ pub(super) fn bind_web(owner:&mut Json)->Result<()>{
  }
  if selected&&owners.iter().filter(|entry|entry.program).count()>=4{return Err("Four page program owners are already pending".into());}
  if !selected&&owners.iter().filter(|entry|!entry.program).count()>=64{return Err("64 web read/search owners are already pending; finish or cancel one before another request".into());}
- let token=WEB_SERIAL.fetch_update(Ordering::SeqCst,Ordering::SeqCst,|v|v.checked_add(1)).map_err(|_|"Page program token space exhausted")?;
+ let token=WEB_SERIAL.try_update(Ordering::SeqCst,Ordering::SeqCst,|v|v.checked_add(1)).map_err(|_|"Page program token space exhausted")?;
  let deadline=Instant::now().checked_add(Duration::from_secs(120)).ok_or("Page program deadline overflow")?;let stamp=clock_ms().checked_add(120000).ok_or("Page program clock exhausted")?;
  put(owner,"program_token",Num(token.to_string()));put(owner,"program_deadline_ms",Num(stamp.to_string()));
  let full=owner_digest(owner,false)?;let stable=owner_digest(owner,true)?;let ticket=text(owner,"ticket");owners.push(WebOwner{token,full,stable,ticket,program:selected,cancelled:Arc::new(AtomicBool::new(false)),deadline});Ok(())

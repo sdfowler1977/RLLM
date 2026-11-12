@@ -74,7 +74,7 @@ pub(super) fn candidate(st:&Json,lifetime:&str)->Result<Json>{
  if root(st).is_empty(){return Err("Open the current workspace before saving an approval rule".into());}
  let p=get(st,"pending");if harness_rules::review_required(st,p){return Err("A higher harness rule requires review once; no session/always grant saved".into());}validate_tool(p)?;if boolean(st,"agent_pending"){harness::allowed_tool(st,p)?;}
  let tool=text(p,"tool");let args=get(p,"args");let sc=scope(&tool,args,&selected(st,p))?;
- let serial=SERIAL.fetch_update(std::sync::atomic::Ordering::Relaxed,std::sync::atomic::Ordering::Relaxed,|n|n.checked_add(1)).map_err(|_|"Approval identity counter exhausted; approve once")?;
+ let serial=SERIAL.try_update(std::sync::atomic::Ordering::Relaxed,std::sync::atomic::Ordering::Relaxed,|n|n.checked_add(1)).map_err(|_|"Approval identity counter exhausted; approve once")?;
  let rule=obj(vec![("schema",Num("1".into())),("id",s(&format!("{}-{serial}",now()))),("lifetime",s(lifetime)),("tool",s(&tool)),("label",s(&description(&tool,&sc))),("binding",binding(st)),("scope",sc),("sample",args.clone())]);
  if !valid(&rule){return Err("Approval rule exceeds the 16 KiB identity/argument limit; approve once instead".into());}
  let mut all=records(st);all.push(rule.clone());rows_fit(&all)?;

@@ -664,14 +664,18 @@ impl Transfer {
             let body=obj(fields).string();super::provider::reply("content",&body)?;return Ok(body);
         }
         let mut complete = self.terminal.take().ok_or("Connection ended before the model completed its reply")?;
-        let (protocol,key)=if self.messages{("messages","stop_reason")}else if self.chat{("chat","finish_reason")}else{("local","done_reason")};
-        let reason=if protocol=="chat"{complete.get("choices").ok().and_then(|v|v.array().ok()).and_then(|v|v.first()).and_then(|v|v.get(key).ok()).and_then(|v|v.text().ok()).unwrap_or("")}else{complete.get(key).ok().and_then(|v|v.text().ok()).unwrap_or("")};
+        let protocol=if self.messages{"messages"}else if self.chat{"chat"}else{"local"};
+        // A refused completion never returns this terminal, so the provider stop reason has to ride on the error.
+        let reason=if protocol=="chat"{complete.get("choices").ok().and_then(|v|v.array().ok()).and_then(|v|v.first()).and_then(|v|v.get("finish_reason").ok()).and_then(|v|v.text().ok()).unwrap_or("").to_string()}else{complete.get(if protocol=="messages"{"stop_reason"}else{"done_reason"}).ok().and_then(|v|v.text().ok()).unwrap_or("").to_string()};
         if protocol=="local" {if let Obj(fields) = &mut complete {
             let mut message=obj(vec![("role",s("assistant")),("content",s(&self.text))]);
             if let Some(call)=&self.native_call{if let Obj(fields)=&mut message{fields.insert("tool_calls".into(),Arr(vec![call.clone()]));}}
             fields.insert("message".into(),message);
         }}
-        super::provider::reply(protocol,&complete.string())?;
+        if let Err(error)=super::provider::reply(protocol,&complete.string()){
+            if reason.is_empty(){return Err(error);}
+            return Err(format!("{error}: {reason}"));
+        }
         Ok(complete.string())
     }
 }
@@ -1037,6 +1041,18 @@ mod checks {
         for body in [event_body().replace("data: [DONE]\n\n",""),event_body().trim_end().to_string(),"data: [DONE]\n\n".into()] {let mut t=chat_transfer();let result=t.feed(&wire(&body,false));assert!(result.is_err()||t.finish().is_err());}
         let mut t=chat_transfer();assert!(t.feed(&wire("data: {\"error\":{\"message\":\"denied\"}}\n\n",true)).is_err());
         let mut t=chat_transfer();assert!(t.feed(&wire(&(event_body()+"data: {}\n\n"),true)).is_err());
+    }
+    #[test] fn empty_completion_names_the_provider_stop_reason(){
+        let body="{\"message\":{\"content\":\"   \"},\"done\":true,\"done_reason\":\"unload\"}\n";
+        let mut t=Transfer::default();t.feed(&wire(body,false)).unwrap();
+        let err=t.finish().unwrap_err();
+        assert!(err.contains("Server returned no text response"),"{err}");
+        assert!(err.contains("unload"),"{err}");
+        let body="data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\ndata: [DONE]\n\n";
+        let mut t=chat_transfer();t.feed(&wire(body,false)).unwrap();
+        let err=t.finish().unwrap_err();
+        assert!(err.contains("Server returned no text response"),"{err}");
+        assert!(err.contains("content_filter"),"{err}");
     }
     #[test] fn sse_ignores_other_choices_and_does_not_commit_tool_only_output(){
         let body="data: {\"choices\":[{\"index\":1,\"delta\":{\"content\":\"other\"},\"finish_reason\":\"stop\"},{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
