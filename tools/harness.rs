@@ -1,10 +1,11 @@
 // Connected-check runner.
 // `harness sweep` is native orchestration and record writing over the Python
 // group scripts. It runs a group only when that group's development inputs are
-// present, reads each group's JSON, and writes the connected object in
-// verification/RESULTS.json. A missing development input is unavailable and is
-// not charged as a product failure. A product failure leaves that record
-// untouched. The bare run and `harness <group>` do not write the record.
+// present, reads each group's JSON, and writes the connected object plus one
+// checks row per group in verification/RESULTS.json. A missing development
+// input is unavailable and is not charged as a product failure. A product
+// failure leaves that record untouched. The bare run and `harness <group>`
+// do not write the record.
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::os::unix::io::AsRawFd;
@@ -1233,6 +1234,25 @@ struct SweepRow {
     checks: Option<usize>,
     missing: Vec<String>,
     reason: String,
+    // Object text the runner read after a spawn. None when the group was not
+    // spawned or the bytes were not a JSON object. Never a reason to publish.
+    report: Option<String>,
+}
+
+// The first JSON object in `bytes`, exactly as the group wrote it. Leading
+// whitespace is skipped; check names inside the object are not rewritten.
+fn report_object_text(bytes: &[u8]) -> Option<String> {
+    let owned = String::from_utf8_lossy(bytes);
+    let text = owned.as_ref();
+    let raw = text.as_bytes();
+    let mut start = 0;
+    while start < raw.len() && matches!(raw[start], b' ' | b'\n' | b'\r' | b'\t') {
+        start += 1;
+    }
+    let mut scan = Scan { text: raw, i: start };
+    let begin = scan.i;
+    scan.skip_object()?;
+    Some(text[begin..scan.i].to_string())
 }
 
 fn row_failed(row: &SweepRow) -> bool {
@@ -1258,6 +1278,165 @@ fn reason_for(code: i32, count_error: Option<&str>, report: &Path, log: &Path, s
 fn unavailable_line(name: &str, missing: &[Input]) -> String {
     let list = missing.iter().map(|input| format!("{} {}", input.kind, input.detail)).collect::<Vec<_>>().join("; ");
     format!("{name} UNAVAILABLE (not executed, missing: {list})")
+}
+
+// Shape is the runner's own fact: spawned or not, the exit code, and whether
+// the report bytes parsed as a positive executed count. A field the group
+// wrote cannot choose it. A stale report left by a group that was not spawned,
+// and a passing-looking report left by a non-zero exit, stay out of `checks`.
+fn checks_shape(row: &SweepRow) -> &'static str {
+    let spawned = row.code.is_some();
+    if !spawned {
+        return "unavailable";
+    }
+    let succeeded = row.code == Some(0);
+    let report_counts = row.report.as_deref().is_some_and(|text| executed_count_of(text).is_ok());
+    if succeeded && report_counts {
+        return "executed";
+    }
+    "failed"
+}
+
+fn unavailable_reason(name: &str, missing: &[String]) -> String {
+    if missing.len() == 1 {
+        format!("{name} was not executed because a development input is missing: {}.", missing[0])
+    } else if missing.is_empty() {
+        format!("{name} was not executed because a development input is missing.")
+    } else {
+        format!("{name} was not executed because development inputs are missing: {}.", missing.join("; "))
+    }
+}
+
+fn json_string_array(items: &[String]) -> String {
+    items.iter().map(|item| format!("\"{}\"", json_escape(item))).collect::<Vec<_>>().join(", ")
+}
+
+fn unavailable_checks(row: &SweepRow) -> String {
+    let reason = if row.reason.is_empty() { unavailable_reason(row.name, &row.missing) } else { row.reason.clone() };
+    format!(
+        "{{\n      \"name\": \"{}\",\n      \"code\": null,\n      \"missing\": [{}],\n      \"recorded_as\": 0,\n      \"reason\": \"{}\"\n    }}",
+        json_escape(row.name),
+        json_string_array(&row.missing),
+        json_escape(&reason)
+    )
+}
+
+fn failed_checks(row: &SweepRow) -> String {
+    let code = row.code.unwrap_or(-1);
+    let reason = if !row.reason.is_empty() {
+        row.reason.clone()
+    } else if row.report.is_none() {
+        format!("The group report could not be read after exit {code}.")
+    } else {
+        format!("The group failed with exit {code}.")
+    };
+    format!(
+        "{{\n      \"name\": \"{}\",\n      \"code\": {code},\n      \"reason\": \"{}\",\n      \"recorded_as\": 0\n    }}",
+        json_escape(row.name),
+        json_escape(&reason)
+    )
+}
+
+fn checks_member(row: &SweepRow) -> String {
+    match checks_shape(row) {
+        "unavailable" => unavailable_checks(row),
+        "executed" => row.report.clone().unwrap_or_else(|| failed_checks(row)),
+        _ => failed_checks(row),
+    }
+}
+
+fn checks_document(rows: &[SweepRow]) -> Result<String, String> {
+    let mut body = String::from("{\n");
+    for (index, name) in GROUPS.iter().enumerate() {
+        let row = rows.iter().find(|row| row.name == *name).ok_or_else(|| format!("group {name} has no row"))?;
+        if index > 0 {
+            body.push_str(",\n");
+        }
+        body.push_str("    \"");
+        body.push_str(name);
+        body.push_str("\": ");
+        body.push_str(&checks_member(row));
+    }
+    body.push_str("\n  }");
+    let count = object_key_count(&body).ok_or("checks object is not readable")?;
+    if count != GROUPS.len() {
+        return Err(format!("checks object has {count} groups"));
+    }
+    Ok(body)
+}
+
+fn object_key_count(object: &str) -> Option<usize> {
+    let mut scan = Scan { text: object.as_bytes(), i: 0 };
+    if !scan.eat(b'{') {
+        return None;
+    }
+    let mut count = 0;
+    loop {
+        scan.skip_ws();
+        if scan.eat(b'}') {
+            return Some(count);
+        }
+        scan.skip_string()?;
+        count += 1;
+        scan.skip_ws();
+        if !scan.eat(b':') {
+            return None;
+        }
+        scan.skip_value()?;
+        scan.skip_ws();
+        if scan.eat(b',') {
+            continue;
+        }
+        if scan.eat(b'}') {
+            return Some(count);
+        }
+        return None;
+    }
+}
+
+// The first `"key": { ... }` object. A later object with the same key, inside
+// a group report, is not the top-level value.
+fn find_object_value(text: &str, key: &str) -> Option<(usize, usize)> {
+    let needle = format!("\"{key}\"");
+    let bytes = text.as_bytes();
+    let mut search = 0;
+    while let Some(rel) = text[search..].find(&needle) {
+        let at = search + rel;
+        let after = at + needle.len();
+        let mut scan = Scan { text: bytes, i: after };
+        scan.skip_ws();
+        if !scan.eat(b':') {
+            search = after;
+            continue;
+        }
+        scan.skip_ws();
+        if scan.peek() != Some(b'{') {
+            search = after;
+            continue;
+        }
+        let begin = scan.i;
+        scan.skip_object()?;
+        return Some((begin, scan.i));
+    }
+    None
+}
+
+fn replace_json_object(text: &str, key: &str, replacement: &str) -> Option<String> {
+    let (begin, end) = find_object_value(text, key)?;
+    let mut updated = String::with_capacity(text.len() + replacement.len());
+    updated.push_str(&text[..begin]);
+    updated.push_str(replacement);
+    updated.push_str(&text[end..]);
+    Some(updated)
+}
+
+fn insert_after_object(text: &str, key: &str, inserted: &str) -> Option<String> {
+    let (_, end) = find_object_value(text, key)?;
+    let mut updated = String::with_capacity(text.len() + inserted.len());
+    updated.push_str(&text[..end]);
+    updated.push_str(inserted);
+    updated.push_str(&text[end..]);
+    Some(updated)
 }
 
 fn unavailable_object(row: &SweepRow) -> String {
@@ -1333,8 +1512,16 @@ fn publish_sweep(root: &Path, rows: &[SweepRow]) -> Result<(), String> {
         "{{\n    \"counts\": {{\n{counts}\n    }},\n    \"total_executed\": {total},\n    \"groups_passed\": {passed},\n    \"groups\": {},\n    \"unavailable\": {unavailable_field}{disclosure}\n  }}",
         GROUPS.len()
     );
-    let Some(updated) = replace_connected(&original, &body) else {
+    let Some(mut updated) = replace_connected(&original, &body) else {
         return Err("connected object was not found".into());
+    };
+    let checks = checks_document(rows)?;
+    updated = match replace_json_object(&updated, "checks", &checks) {
+        Some(text) => text,
+        None => {
+            let member = format!(",\n  \"checks\": {checks}");
+            insert_after_object(&updated, "connected", &member).ok_or("checks object was not written")?
+        }
     };
     if !updated.contains("\"published_comparator\"") || !updated.contains("\"flow_comparator\"") || !updated.contains("\"authentication_comparator\"") {
         return Err("a comparator field would have been dropped".into());
@@ -1387,12 +1574,15 @@ fn sweep_one(root: &Path, name: &'static str, opts: &SweepOpts, seconds: u64) ->
     if !missing.is_empty() {
         println!("{}", unavailable_line(name, &missing));
         let _ = std::io::Write::flush(&mut std::io::stdout());
+        let details: Vec<String> = missing.iter().map(|input| input.detail.clone()).collect();
+        let reason = unavailable_reason(name, &details);
         return SweepRow {
             name,
             code: None,
             checks: Some(0),
-            missing: missing.iter().map(|input| input.detail.clone()).collect(),
-            reason: String::new(),
+            missing: details,
+            reason,
+            report: None,
         };
     }
     let arguments = sweep_arguments(name, root, opts);
@@ -1401,16 +1591,30 @@ fn sweep_one(root: &Path, name: &'static str, opts: &SweepOpts, seconds: u64) ->
     let log = output.join(format!("{name}.log"));
     let started_at = SystemTime::now();
     let (code, stdout, elapsed) = sweep_run(root, name, &arguments, seconds);
-    let counted = if name == "response_fields" || name == "chunk_fields" {
+    let printed = name == "response_fields" || name == "chunk_fields";
+    let fresh = file_is_fresh(&report, started_at);
+    let counted = if printed {
         if code == 0 {
             persist_printed_json(root, name, &stdout)
         } else {
             Err("group did not exit 0, so its printed json was not stored".into())
         }
-    } else if file_is_fresh(&report, started_at) {
+    } else if fresh {
         executed_count_of(&read(&report)).map(|counted| counted.count).map_err(|err| err.to_string())
     } else {
         Err(format!("no fresh {}", group_report_file(name)))
+    };
+    // Same bytes the count was taken from. A non-zero exit still keeps them so
+    // the checks row can say the group failed instead of copying the report.
+    let report_text = if printed {
+        if code == 0 { report_object_text(&stdout) } else { None }
+    } else if fresh {
+        match std::fs::read(&report) {
+            Ok(bytes) => report_object_text(&bytes),
+            Err(_) => None,
+        }
+    } else {
+        None
     };
     let checks = match &counted {
         Ok(count) => Some(*count),
@@ -1439,7 +1643,7 @@ fn sweep_one(root: &Path, name: &'static str, opts: &SweepOpts, seconds: u64) ->
             eprintln!("  {name}: {tail}");
         }
     }
-    SweepRow { name, code: Some(code), checks, missing: Vec::new(), reason }
+    SweepRow { name, code: Some(code), checks, missing: Vec::new(), reason, report: report_text }
 }
 
 fn run_sweep(args: &[String]) -> Result<i32, String> {
@@ -1691,13 +1895,74 @@ mod checks {
     }
 
     fn pass_rows() -> Vec<SweepRow> {
+        let report = r#"{"passed":["a","b","c"]}"#.to_string();
         GROUPS.iter().map(|name| SweepRow {
             name,
             code: Some(0),
             checks: Some(3),
             missing: Vec::new(),
             reason: String::new(),
+            report: Some(report.clone()),
         }).collect()
+    }
+
+    fn json_object_after<'a>(text: &'a str, key: &str) -> &'a str {
+        let (begin, end) = find_object_value(text, key).unwrap_or_else(|| panic!("no object for {key}"));
+        &text[begin..end]
+    }
+
+    fn json_field<'a>(object: &'a str, key: &str) -> &'a str {
+        let mut scan = Scan { text: object.as_bytes(), i: 0 };
+        assert!(scan.eat(b'{'), "field scan start");
+        loop {
+            scan.skip_ws();
+            if scan.eat(b'}') {
+                break;
+            }
+            let found = scan.key().unwrap_or_else(|| panic!("key"));
+            scan.skip_ws();
+            assert!(scan.eat(b':'), "colon");
+            scan.skip_ws();
+            let start = scan.i;
+            scan.skip_value().unwrap_or_else(|| panic!("value"));
+            if found == key {
+                return &object[start..scan.i];
+            }
+            scan.skip_ws();
+            if scan.eat(b',') {
+                continue;
+            }
+            if scan.eat(b'}') {
+                break;
+            }
+            panic!("field scan");
+        }
+        panic!("missing field {key}");
+    }
+
+    fn object_keys(object: &str) -> Vec<String> {
+        let mut scan = Scan { text: object.as_bytes(), i: 0 };
+        assert!(scan.eat(b'{'), "keys start");
+        let mut keys = Vec::new();
+        loop {
+            scan.skip_ws();
+            if scan.eat(b'}') {
+                break;
+            }
+            keys.push(scan.key().unwrap_or_else(|| panic!("key")));
+            scan.skip_ws();
+            assert!(scan.eat(b':'), "colon");
+            scan.skip_value().unwrap_or_else(|| panic!("value"));
+            scan.skip_ws();
+            if scan.eat(b',') {
+                continue;
+            }
+            if scan.eat(b'}') {
+                break;
+            }
+            panic!("keys scan");
+        }
+        keys
     }
 
     fn delivered_record() -> String {
@@ -1905,6 +2170,121 @@ mod checks {
         publish_sweep(root, &pass_rows()).unwrap_or_else(|err| panic!("{err}"));
         let text = std::fs::read_to_string(&record).unwrap();
         assert!(text.contains("\"zero_count_disclosure\": \"No group was recorded as 0.\""), "no group was recorded as 0");
+    }
+
+    #[test]
+    fn publish_sweep_checks_names_every_group_and_keeps_the_executed_report() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let record = plant_record(root);
+        let report = "{\n  \"scope\": \"kept\",\n  \"passed\": [\n    \"chat declaration\",\n    \"chat review\"\n  ]\n}";
+        let mut rows = pass_rows();
+        let slot = rows.iter_mut().find(|row| row.name == "provider_process").unwrap();
+        slot.checks = Some(2);
+        slot.report = Some(report.to_string());
+        publish_sweep(root, &rows).unwrap_or_else(|err| panic!("{err}"));
+        let text = std::fs::read_to_string(&record).unwrap();
+        let checks = json_object_after(&text, "checks");
+        let keys = object_keys(checks);
+        assert_eq!(keys.len(), 71, "checks rows");
+        assert_eq!(keys, GROUPS.iter().copied().map(str::to_string).collect::<Vec<_>>(), "checks group order");
+        let provider = json_field(checks, "provider_process");
+        assert_eq!(provider, report, "executed report was reformatted");
+        assert_eq!(object_keys(provider), vec!["scope".to_string(), "passed".to_string()], "executed checks keys");
+        let (groups, total) = counts_in(&text).expect("counts");
+        assert_eq!(groups, 71, "counts groups");
+        assert_eq!(total, 70 * 3 + 2, "executed report did not change the other counts");
+    }
+
+    #[test]
+    fn publish_sweep_records_unavailable_group_as_unavailable_not_executed() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let record = plant_record(root);
+        let mut rows = pass_rows();
+        let slot = rows.iter_mut().find(|row| row.name == "binary_flow").unwrap();
+        slot.code = None;
+        slot.checks = Some(0);
+        slot.missing = vec!["--previous-flow-controller reference at output/pre-branch-controller".into()];
+        slot.reason = String::new();
+        slot.report = Some(r#"{"passed":["stale executed name"]}"#.to_string());
+        publish_sweep(root, &rows).unwrap_or_else(|err| panic!("{err}"));
+        let text = std::fs::read_to_string(&record).unwrap();
+        let value = json_field(json_object_after(&text, "checks"), "binary_flow");
+        assert!(executed_count_of(value).is_err(), "unavailable group was treated as an executed report");
+        assert_eq!(
+            object_keys(value),
+            vec!["name".to_string(), "code".to_string(), "missing".to_string(), "recorded_as".to_string(), "reason".to_string()],
+            "unavailable checks keys"
+        );
+        assert_eq!(json_field(value, "code").trim(), "null", "unavailable code");
+        assert_eq!(json_field(value, "recorded_as").trim(), "0", "unavailable recorded_as");
+        assert!(json_field(value, "missing").contains("--previous-flow-controller reference at output/pre-branch-controller"), "missing list");
+        assert!(
+            json_field(value, "reason").contains("was not executed because a development input is missing: --previous-flow-controller reference at output/pre-branch-controller."),
+            "unavailable reason"
+        );
+        assert!(!value.contains("stale executed name"), "unavailable group copied a report it did not run");
+        assert!(text.contains("\"binary_flow\": 0"), "counts record 0");
+        assert!(text.contains("\"code\": null"), "connected unavailable code");
+        assert!(text.contains("\"recorded_as\": 0"), "connected recorded_as");
+    }
+
+    #[test]
+    fn publish_sweep_records_failed_group_as_failed_not_executed() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let record = plant_record(root);
+        let mut rows = pass_rows();
+        let report = PathBuf::from("output/checks/history.json");
+        let log = PathBuf::from("output/checks/history.log");
+        let reason = reason_for(1, None, &report, &log, SECONDS);
+        let slot = rows.iter_mut().find(|row| row.name == "history").unwrap();
+        slot.code = Some(1);
+        slot.checks = Some(1);
+        slot.reason = reason.clone();
+        slot.report = Some(r#"{"passed":["lied about passing"]}"#.to_string());
+        publish_sweep(root, &rows).unwrap_or_else(|err| panic!("{err}"));
+        let text = std::fs::read_to_string(&record).unwrap();
+        let value = json_field(json_object_after(&text, "checks"), "history");
+        assert!(executed_count_of(value).is_err(), "failed group was treated as an executed report");
+        assert_eq!(
+            object_keys(value),
+            vec!["name".to_string(), "code".to_string(), "reason".to_string(), "recorded_as".to_string()],
+            "failed checks keys"
+        );
+        assert_eq!(json_field(value, "code").trim(), "1", "failed code is the exit code");
+        assert_eq!(json_field(value, "recorded_as").trim(), "0", "failed recorded_as");
+        assert!(json_field(value, "reason").contains(&reason), "failed reason");
+        assert!(!value.contains("lied about passing"), "failed group copied a report that looks like a pass");
+        assert!(text.contains("\"history\": 0"), "failing group recorded as 0");
+    }
+
+    #[test]
+    fn publish_sweep_records_an_unreadable_report_as_failed() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let record = plant_record(root);
+        let mut rows = pass_rows();
+        let report = PathBuf::from("output/checks/history.json");
+        let log = PathBuf::from("output/checks/history.log");
+        let reason = reason_for(0, Some("no fresh history.json"), &report, &log, SECONDS);
+        let slot = rows.iter_mut().find(|row| row.name == "history").unwrap();
+        slot.code = Some(0);
+        slot.checks = None;
+        slot.reason = reason.clone();
+        slot.report = None;
+        publish_sweep(root, &rows).unwrap_or_else(|err| panic!("{err}"));
+        let text = std::fs::read_to_string(&record).unwrap();
+        let value = json_field(json_object_after(&text, "checks"), "history");
+        assert!(executed_count_of(value).is_err(), "unreadable report was treated as an executed report");
+        assert_eq!(
+            object_keys(value),
+            vec!["name".to_string(), "code".to_string(), "reason".to_string(), "recorded_as".to_string()],
+            "unreadable checks keys"
+        );
+        assert!(json_field(value, "reason").contains("no fresh history.json"), "unreadable reason");
+        assert_eq!(json_field(value, "recorded_as").trim(), "0", "unreadable recorded_as");
     }
 
     #[test]
