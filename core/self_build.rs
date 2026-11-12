@@ -970,6 +970,17 @@ fn run_log(pid: u64, argv: &[String], binary_digest: &str, source_digest: &str) 
         ),
     ])
 }
+/// The successor file beside `journal`. No journal, and a missing companion, are
+/// the empty witness. This does not consult the in-process table.
+fn successor_witness(root: &Path, value: &Json) -> Result<(u64, String)> {
+    let journal_rel = text(value, "journal");
+    if journal_rel.is_empty() {
+        return Ok((0, String::new()));
+    }
+    let rows = durable_successor_rows(&locate(root, &journal_rel, false)?)?;
+    let tip = rows.last().map(|row| text(row, "revision")).unwrap_or_default();
+    Ok((rows.len() as u64, tip))
+}
 
 pub(crate) fn handoff(value: &Json) -> Result<Json> {
     only(
@@ -998,10 +1009,16 @@ pub(crate) fn handoff(value: &Json) -> Result<Json> {
     }
     digest_text(&text(value, "parent"))?;
     digest_text(&text(value, "revision"))?;
+    // The chain is the file beside `journal`. Refuse that file's sentence before exec.
+    // `successors` is the live table and does not supply the tip.
+    let (successor_rows, successor_tip) = successor_witness(&root, value)?;
     let mut argv = vec![binary.to_string_lossy().into_owned()];
     argv.extend(strings(value, "args")?);
     let pid = u64::from(std::process::id());
-    let log = run_log(pid, &argv, &binary_digest, &source_digest);
+    let mut log = run_log(pid, &argv, &binary_digest, &source_digest);
+    put(&mut log, "successor_rows", n(successor_rows));
+    put(&mut log, "successor_tip", s(&successor_tip));
+    put(&mut log, "successors", Arr(successor_states()));
     if !flag(value, "review_confirmed") {
         return Ok(log);
     }
@@ -1614,7 +1631,10 @@ fn run_with(
             Some(successor_journal_path(&locate(root, &journal_rel, true)?))
         };
         let child = child.spawn().map_err(|error| format!("successor spawn failed: {error}"))?;
-        let pid = track_with(child, &job, job_source, "spawn", witnessed.clone());
+        let pid = match &witnessed {
+            None => track(child, &job, job_source, "spawn"),
+            Some(path) => track_with(child, &job, job_source, "spawn", Some(path.clone())),
+        };
         // Spawn succeeded, so the pid is real. The row lands before the revision handoff.
         if let Some(path) = &witnessed {
             append_spawn_row(path, pid, &job, &source_digest, &reload)?;
@@ -3640,5 +3660,222 @@ mv "$tmp" "$1.done"
             durable_successor_rows(&journal).unwrap_err(),
             "successor journal parent does not match the previous row"
         );
+    }
+
+    fn two_successor_rows(name: &str) -> (Scratch, PathBuf) {
+        let scratch = Scratch::new(name);
+        let journal = scratch.path().join("self/journal.jsonl");
+        let witness = successor_journal_path(&journal);
+        append_spawn_row(&witness, 11, "job-a", &sha256(b"source-a"), "spawn").unwrap();
+        append_reap_row(&witness, 11, "job-a", Some(0), None).unwrap();
+        (scratch, journal)
+    }
+    fn handoff_at(root: &Path, confirmed: bool) -> Result<Json> {
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        write(&root.join("bin"), b"successor-image");
+        handoff(&obj(vec![
+            ("root", s(root.to_str().unwrap())),
+            ("binary", s(root.join("bin").to_str().unwrap())),
+            ("journal", s("self/journal.jsonl")),
+            ("review_confirmed", Bool(confirmed)),
+        ]))
+    }
+    fn viewed_state(seen: &Json, pid: u64) -> Json {
+        let want = n(pid);
+        get(seen, "successors")
+            .array()
+            .unwrap()
+            .iter()
+            .find(|row| get(row, "pid") == &want)
+            .unwrap_or_else(|| panic!("handoff omitted successor {pid}"))
+            .clone()
+    }
+
+    #[test]
+    fn handoff_reports_the_tip_of_a_valid_two_row_successor_chain() {
+        let _isolate = isolate();
+        let (scratch, journal) = two_successor_rows("handoff-tip");
+        successors().clear();
+        let file = durable_successor_rows(&journal).unwrap();
+        assert_eq!(file.len(), 2);
+        addressed(&file[0]);
+        addressed(&file[1]);
+        assert_eq!(text(&file[0], "event"), "spawn");
+        assert_eq!(text(&file[1], "event"), "reap");
+        assert_eq!(text(&file[1], "parent"), text(&file[0], "revision"));
+        let seen = handoff_at(scratch.path(), false).unwrap();
+        assert_eq!(get(&seen, "successor_rows"), &n(2));
+        assert_eq!(text(&seen, "successor_tip"), text(&file[1], "revision"));
+        assert_ne!(text(&seen, "successor_tip"), text(&file[0], "revision"));
+        assert_eq!(text(&seen, "binary_digest"), sha256(b"successor-image"));
+        assert_eq!(get(&seen, "executed"), &Bool(false));
+        assert!(get(&seen, "successors").array().unwrap().is_empty());
+        let Obj(fields) = &seen else { panic!("handoff result is not an object") };
+        let keys: Vec<_> = fields.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "argv",
+                "binary_digest",
+                "executed",
+                "log",
+                "pid",
+                "source_digest",
+                "successor_rows",
+                "successor_tip",
+                "successors",
+            ]
+        );
+    }
+
+    #[test]
+    fn handoff_refuses_a_successor_row_whose_revision_is_not_the_body_digest() {
+        let _isolate = isolate();
+        let (scratch, journal) = two_successor_rows("handoff-digest");
+        let mut lines = successor_lines(&journal);
+        assert_eq!(lines.len(), 2);
+        let before = parse(&lines[1]).unwrap();
+        assert_eq!(text(&before, "event"), "reap");
+        let revision = text(&before, "revision");
+        let marker = "\"job\":\"job-a\"";
+        let at = lines[1].find(marker).expect("reap payload job");
+        let mut bytes = lines[1].clone().into_bytes();
+        let index = at + marker.len() - 2;
+        assert_eq!(bytes[index], b'a');
+        bytes[index] = b'b';
+        lines[1] = String::from_utf8(bytes).unwrap();
+        let after = parse(&lines[1]).unwrap();
+        assert_eq!(text(&after, "revision"), revision);
+        assert_ne!(revision, sha256(without_revision(&after).unwrap().string().as_bytes()));
+        store_successor_lines(&journal, &lines);
+        let root = scratch.path();
+        assert_eq!(
+            handoff_at(root, false).unwrap_err(),
+            "successor journal row is not content-addressed"
+        );
+        assert_eq!(
+            handoff_at(root, true).unwrap_err(),
+            "successor journal row is not content-addressed"
+        );
+    }
+
+    #[test]
+    fn handoff_refuses_a_successor_parent_that_misses_the_previous_row() {
+        let _isolate = isolate();
+        let (scratch, journal) = two_successor_rows("handoff-parent");
+        let mut lines = successor_lines(&journal);
+        let previous = text(&parse(&lines[0]).unwrap(), "revision");
+        let mut row = parse(&lines[1]).unwrap();
+        assert_eq!(text(&row, "event"), "reap");
+        assert_eq!(text(&row, "parent"), previous);
+        let wrong = sha256(b"wrong-parent");
+        assert_ne!(wrong, previous);
+        put(&mut row, "parent", s(&wrong));
+        let revision = sha256(without_revision(&row).unwrap().string().as_bytes());
+        put(&mut row, "revision", s(&revision));
+        assert_eq!(text(&row, "revision"), sha256(without_revision(&row).unwrap().string().as_bytes()));
+        lines[1] = row.string();
+        store_successor_lines(&journal, &lines);
+        assert_eq!(
+            handoff_at(scratch.path(), false).unwrap_err(),
+            "successor journal parent does not match the previous row"
+        );
+    }
+
+    #[test]
+    fn handoff_reads_a_missing_successor_journal_as_an_empty_witness() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("handoff-missing");
+        let root = scratch.path();
+        let companion = successor_journal_path(&root.join("self/journal.jsonl"));
+        assert!(!companion.exists());
+        let seen = handoff_at(root, false).unwrap();
+        assert_eq!(get(&seen, "successor_rows"), &n(0));
+        assert_eq!(text(&seen, "successor_tip"), "");
+        assert!(get(&seen, "successors").array().unwrap().is_empty());
+        assert_eq!(get(&seen, "executed"), &Bool(false));
+        assert!(!companion.exists(), "reading a missing successor journal created a file");
+    }
+
+    #[test]
+    fn handoff_successor_view_separates_a_running_spawn_from_a_reaped_exit() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("handoff-state");
+        let root = scratch.path();
+        let hold = root.join("hold");
+        let pid = track(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg("while [ ! -f \"$1\" ]; do sleep 0.05; done; exit 4")
+                .arg("sh")
+                .arg(&hold)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            "held-job",
+            "caller",
+            "spawn",
+        );
+        let seen = handoff_at(root, false).unwrap();
+        let running = viewed_state(&seen, pid);
+        assert_eq!(get(&running, "running"), &Bool(true));
+        assert_eq!(get(&running, "exit"), &Null);
+        assert_eq!(text(&running, "job"), "held-job");
+        assert_eq!(text(&running, "job_source"), "caller");
+        assert_eq!(get(&seen, "successor_rows"), &n(0));
+        write(&hold, b"go");
+        wait_dead(pid);
+        assert_eq!(reap().unwrap(), 1);
+        let seen = handoff_at(root, false).unwrap();
+        let finished = viewed_state(&seen, pid);
+        assert_eq!(get(&finished, "running"), &Bool(false));
+        assert_eq!(get(&finished, "exit"), &n(4));
+        assert_eq!(text(&finished, "job"), "held-job");
+        assert_eq!(text(&finished, "job_source"), "caller");
+        assert_eq!(get(&seen, "successor_rows"), &n(0));
+    }
+
+    fn handoff_exec_reaches_the_successor() {
+        let root = PathBuf::from(std::env::var("RLLM_EXEC_ROOT").unwrap());
+        let proof = std::env::var("RLLM_EXEC_PROOF").unwrap();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        let script = format!("#!/bin/sh\nprintf '%s\\n' \"$1\" > '{proof}'\n");
+        executable(&root.join("bin"), script.as_bytes());
+        let journal = root.join("self/journal.jsonl");
+        let witness = successor_journal_path(&journal);
+        append_spawn_row(&witness, 11, "job-a", &sha256(b"source-a"), "spawn").unwrap();
+        append_reap_row(&witness, 11, "job-a", Some(0), None).unwrap();
+        let result = handoff(&obj(vec![
+            ("root", s(root.to_str().unwrap())),
+            ("binary", s(root.join("bin").to_str().unwrap())),
+            ("args", Arr(vec![s("continue")])),
+            ("journal", s("self/journal.jsonl")),
+            ("review_confirmed", Bool(true)),
+        ]));
+        panic!("handoff exec returned {result:?}");
+    }
+
+    #[test]
+    fn handoff_review_confirmed_execs_the_binary_after_a_valid_chain() {
+        let _isolate = isolate();
+        if std::env::var("RLLM_SELF_BUILD_PROBE").ok().as_deref() == Some("handoff-exec") {
+            handoff_exec_reaches_the_successor();
+            return;
+        }
+        let scratch = Scratch::new("handoff-exec");
+        let proof = scratch.path().join("proof");
+        let output = test_child(
+            &[
+                ("RLLM_SELF_BUILD_PROBE", "handoff-exec"),
+                ("RLLM_EXEC_ROOT", scratch.path().to_str().unwrap()),
+                ("RLLM_EXEC_PROOF", proof.to_str().unwrap()),
+            ],
+            "self_build::checks::handoff_review_confirmed_execs_the_binary_after_a_valid_chain",
+        );
+        let body = fs::read_to_string(&proof).unwrap_or_else(|error| panic!("{error}\n{}", child_text(&output)));
+        assert_eq!(body, "continue\n", "{}", child_text(&output));
+        assert!(output.status.success(), "{}", child_text(&output));
     }
 }
