@@ -616,7 +616,20 @@ set, so `tools/apk.py:10`'s `'Build input inventory changed after compilation'` 
 real bytes; two recorded per-file digests now mismatch (`core/execution.rs`, `core/self_build.rs`)
 because the `GAP1` lane edited `core/` after that leg — the drift check working as designed. No
 signed APK exists anywhere under `output/` or `release/` on this host, so the positive signature
-path and the full `apk.py` inspection remain unrunnable here; and
+path and the full `apk.py` inspection remain unrunnable here.
+The port also moved the aligner from an imported source file to a **built artifact**, which is a new
+way for a connected group to fail for a reason that is not the product: `verification/apk_alignment.py`
+now shells `output/tools/alignment`, so a sweep on a tree where `tools/build-tools.sh` has not run
+would have charged that group as a FAIL. Measured 2026-11-12T06:58Z with a private coordinator build
+(`bash tools/build-harness.sh output/harness-verify`, leaving the shared `output/harness` and the
+delivered record untouched): with the tool present the group printed
+`apk_alignment PASS (exit 0, 6s, 11 checks)` against the 05:31Z leg's `package.apk`; with
+`output/tools/alignment` moved aside it printed
+`apk_alignment UNAVAILABLE (not executed, missing: path output/tools/alignment (built by
+tools/build-tools.sh))`, so a missing build artifact is now classified as an unavailable development
+input rather than a product red. `tools/checks.py` has no unavailable concept at all — every group
+exit code must be zero — so the sanctioned `python3 tools/checks.py` sweep still requires the tools
+to be built first, which docs/BUILD.md now states; and
 **the aligner is proven equivalent on real bytes** — measured 2026-11-12T01:20Z against the
 2026-11-11 packaging leg (`output/2026-11-11__14-59-03Z/package.apk`, 6,944,777 bytes), the native
 `output/tools/alignment` printed `Alignment payload validation: 25 exact members; attempt 1` and

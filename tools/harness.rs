@@ -131,6 +131,26 @@ fn required_inputs(root: &Path, source: &str) -> Vec<Input> {
             present: root.join(default).exists(),
         });
     }
+    // A group can also shell a native tool that tools/build-tools.sh compiles.
+    // That is a build artifact rather than a source file, so a missing one is an
+    // unavailable development input, not a product failure.
+    for tool in [
+        "alignment",
+        "readback",
+        "checkpoint",
+        "signature",
+        "apk",
+        "toolchain",
+    ] {
+        let reference = format!("output/tools/{tool}");
+        if source.contains(&reference) {
+            inputs.push(Input {
+                kind: "path",
+                detail: format!("{reference} (built by tools/build-tools.sh)"),
+                present: root.join(&reference).exists(),
+            });
+        }
+    }
     if source.contains("RLLM_CHECK_APK") || source.contains("release/RLLM.apk") {
         if seen.insert("apk".into()) {
             let configured = std::env::var("RLLM_CHECK_APK").unwrap_or_default();
