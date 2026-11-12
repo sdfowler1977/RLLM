@@ -81,6 +81,32 @@
   },
   "dotnet_seat_p1s_three_refuted": "Seat A claimed the omission notice escapes the 16 KiB cap (false: charge_observation pre-charges OBSERVATION_NOTICE.len() on every accepted line and a test pins text.len() <= OBSERVATION_BYTE_CAP); that section probing is unbudgeted (false: sections_of takes the same Budget and names 'More sections were not read.'); Seat B claimed the two 'dotnet observation byte cap' matchers double-count (false: the patterns differ by the trailing newline). Accepted residuals: double charge of the fat-header prefix, row-stride-only charging of method-header mapping (bounded by METHOD_ROW_CAP 4096), a declared size over the cap that is not fully present parsed as the prefix with no notice, and no cancellation poll in the 64-iteration table loop or the 4-heap loop.",
   "dotnetcil1_dispatched": "Fifth writer lane dispatched 2026-11-12T14:35Z host (brief /tmp/dotnetcil1-prompt.md, model grok-4.7): decode CIL method bodies in core/dotnet_evidence.rs only. Scope handed it: tiny/fat body headers with MoreSects/InitLocals flags, instruction walk with per-opcode operand widths (single-byte 0x00..0xFE, 0xFE family, inlineSwitch with counted targets, metadata tokens, branch target offsets), small/fat exception sections with catch/filter/finally/fault clauses, named caps for instructions-per-method / bodies-per-assembly / clauses / switch targets, reuse of the existing PARSE_WORK_CAP Halt machinery so a hostile file cannot burn unbounded work. Forbids core/lib.rs (another lane owns it), so no new module is allowed. Audit watch-item recorded up front: it must change the pinned \"not read\" sentences (:1441, :1189, :1936) and I will check the new wording is stronger and that a leg still proves the genuinely-unread case.",
+  "dotnetcil1_witnessed_and_adjudicated": {
+    "coordinator_verification_against_ecma335": {
+      "defect": "FE 0x19 is ECMA 'no. <unsigned int8>' (the standard prints 'FE 19 <unsigned int8>' / 'no. { typecheck | rangecheck | nullcheck }'), but opcode_fe marks slot 0x19 as unused with a zero-length operand, so a real IL stream containing no. desyncs the rest of the method walk",
+      "held": [
+        "fat header: header_bytes = (u16 flags >> 12) * 4 bounded 12..=64; MaxStack at bytes 2-3; CodeSize at 4-7; LocalVarSigTok at 8-11; InitLocals bit 4 (0x10); MoreSects bit 3 (0x08) - matches ECMA II.25.4.3 and corhdr.h",
+        "EH section kinds: accepted set 0x01/0x41/0x81/0xC1 == corhdr.h CorILMethod_Sect_EHTable 1 | FatFormat 0x40 | MoreSects 0x80 with KindMask 0x3F; small section header 4 bytes; small clause 12 bytes; fat clause 24 bytes",
+        "sections are contiguous (no next-section pointer), so cursor += data_size is correct",
+        "FE table anchors: arglist FE00, ceq FE01, clt FE04, localloc FE0F, unaligned. FE12, volatile. FE13, tail. FE14, initblk FE18, rethrow FE1A, sizeof FE1C, readonly. FE1E - the lane's volatile. = 0xFE13 is right and my brief's numbers were wrong"
+      ],
+      "not_a_defect": "0xDC is printed by ECMA with both names (endfault and endfinally; Part I 8.9.3 calls them aliases), so the lane's 'endfinally' is not wrong - only incomplete",
+      "paired_rows": "190 opcode rows paired from the standard against the lane's tables",
+      "source": "ECMA-335 6th ed PDF downloaded and pdftotext'd to /tmp/ecma335.txt; corhdr.h (dotnet/runtime main) fetched for the method-header and EH-section layouts"
+    },
+    "date": "2026-11-12",
+    "lane": "dotnetcil1 (grok), CIL method-body decoder in core/dotnet_evidence.rs, report inline in the lane log",
+    "queued": "/tmp/dotnetcil2-prompt.md - fix FE 0x19 to decode no. with a one-byte operand, add the alias naming for 0xDC, tests plus a neuter leg; dispatch when a writer seat frees; core/dotnet_evidence.rs is NOT committed until it lands",
+    "room_witness": {
+      "build": "tools/build-units.sh exit 0, warnings=0",
+      "counts": "Rust cases passed: 827/827; isolated application cases: 57 (/tmp/dncil-count.txt)",
+      "identity": "816 (pure HEAD units, measured after the JS commit) + 11 (that file's #[test] rows 21 -> 32) = 827, matching the measured room count; the lane's own 838 was the dirty tree with other lanes' cases included",
+      "room": "git archive HEAD (0da235f) + core/dotnet_evidence.rs only, sha256 4921f54f27b150566f322a907a6130fd8db05aa3bbb8b93df3d303b26dc006dd",
+      "units_digest": "b7cc57b9e0aaa570d7da762767ae131cc1537cef4144b86a9f3843f15fe97c01"
+    },
+    "seat": "MiniMax-M3 over the inline diff (/tmp/mm-dncil-1-msg.json, /tmp/mm-dncil-1.out): C1 FAILED and C5 PARTLY refuted above (the seat's own text admits bytes 4-7 are the fat CodeSize, and ECMA/corhdr show no next-section pointer); C2/C6 accepted as wording nuances; C3 agrees the lane's anchors are right; the seat found the FE19-class gap only indirectly",
+    "status": "witnessed; one real defect found by the coordinator, repair queued"
+  },
   "empty_reply_end_to_end_leg_open": "OPEN: no test carries the suffixed refusal end to end from Transfer::finish through the network_result callback into recover_web_answer; the new tests call the arm directly. Fix belongs in an EXISTING verification group (adding a group would breach the 73-file verification Python ceiling).",
   "empty_reply_suffix_breaks_exact_consumer_open": "CLOSED at 451c969 (lane wzfix1, core/application.rs only): recover_web_answer now continues when the error is EMPTY_REPLY or EMPTY_REPLY followed by ': ', with a comment 'A suffixed refusal still means the same thing.' Tests: suffixed_empty_reply_uses_web_answer_recovery_arm (asserts the suffixed call equals the plain one and equals Err('Search evidence is still in this conversation. The model returned an empty answer after one recovery attempt.')) and unrelated_model_error_skips_web_answer_recovery. Red-at-base with the match reverted: left Ok(None) / right that Err. My room witness: 789/789 + 57, exit 0, zero warnings.",
   "fleet_interlock_remeasured_tickG": "Re-measured after gap5sweep1 touched tools/checks.py at 14:18Z host (it then reverted it): tools/checks.py `names` parsed with ast.literal_eval = 71, tools/harness.rs `const GROUPS` = 71, equal sets AND identical order. Python debt ceilings still exactly at the pins: 73 .py files / 8570 lines in verification/ (tools/package.rs:2056-2057). Five writer lanes alive at 14:35Z: gap5sweep1 (tools/harness.rs + tools/package.rs), gap4js1, gap2stop1 (writing core/rrsi.rs, touched 14:30), gap2conn1 (verification/rrsi_loop.py untouched yet), dotnetcil1.",
