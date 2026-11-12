@@ -14,3 +14,5 @@ build-env.sh
 tooling/
 .qwen/tmp/
 .playwright-mcp/
+__pycache__/
+toolchain/
