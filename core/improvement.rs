@@ -539,6 +539,153 @@ pub(super) fn leakage_critic(candidate: &str, component: &str, tasks: &[String],
     obj(vec![("leakage", s("clean")), ("reason", s(""))])
 }
 
+const SPLIT_CASE_MAX: usize = 8;
+
+pub(super) struct SplitCase {
+    pub task: String,
+    pub checks: Json,
+    pub reply: String,
+}
+
+fn leg_score(st: &Json, cases: &[SplitCase]) -> Result<Json> {
+    if cases.is_empty() || cases.len() > SPLIT_CASE_MAX {
+        return Err("a scored leg needs one to eight tasks".into());
+    }
+    let mut passed = 0usize;
+    let mut shape = String::new();
+    let mut task_keys = Vec::new();
+    let mut verifiers = Vec::new();
+    for case in cases {
+        if case.task.is_empty() || case.task.contains('\0') || case.task.len() > 16384 {
+            return Err("split task must be non-empty text within 16 KiB".into());
+        }
+        let score = evaluate(st, &case.checks, &case.reply);
+        if score == Null {
+            return Err("split checks could not be scored".into());
+        }
+        passed += number(&score, "passed");
+        let kind = text(&score, "kind");
+        if shape.is_empty() {
+            shape = kind;
+        } else if !shape.split(',').any(|part| part == kind) {
+            shape.push(',');
+            shape.push_str(&kind);
+        }
+        task_keys.push(task_key(&case.task));
+        verifiers.push(verifier_key(&case.checks));
+    }
+    if passed > 1024 {
+        return Err("split score exceeds the record cap".into());
+    }
+    let task_identity = if task_keys.len() == 1 {
+        task_keys.remove(0)
+    } else {
+        harness_rules::digest(&s(&task_keys.join("\n")))
+    };
+    let verifier = if verifiers.len() == 1 {
+        verifiers.remove(0)
+    } else {
+        harness_rules::digest(&s(&verifiers.join("\n")))
+    };
+    if verifier.is_empty() {
+        return Err("split leg is missing its verifier digest".into());
+    }
+    Ok(obj(vec![
+        ("passed", Num(passed.to_string())),
+        ("task_key", s(&task_identity)),
+        ("verifier", s(&verifier)),
+        ("shape", s(&shape)),
+    ]))
+}
+
+/// Score one harness on the evolve leg and, when supplied, the held-out and OOD legs.
+/// The harness text is the same value for every leg. Task identity is stored as a digest.
+pub(super) fn score_split(
+    st: &Json,
+    harness: &str,
+    evolve: &[SplitCase],
+    held_out: Option<&[SplitCase]>,
+    ood: Option<&[SplitCase]>,
+) -> Result<Json> {
+    if harness.is_empty() || harness.contains('\0') || harness.len() > 32768 {
+        return Err("harness must be non-empty text within 32 KiB".into());
+    }
+    let evolve_score = leg_score(st, evolve)?;
+    let mut out = obj(vec![
+        ("harness_digest", s(&harness_rules::digest(&s(harness)))),
+        ("held_out_known", Bool(held_out.is_some())),
+        ("ood_known", Bool(ood.is_some())),
+        ("evolve_passed", get(&evolve_score, "passed").clone()),
+        ("evolve_task_key", get(&evolve_score, "task_key").clone()),
+        ("evolve_verifier", get(&evolve_score, "verifier").clone()),
+        ("evolve_shape", get(&evolve_score, "shape").clone()),
+    ]);
+    if let Some(cases) = held_out {
+        let score = leg_score(st, cases)?;
+        put(&mut out, "held_out_passed", get(&score, "passed").clone());
+        put(&mut out, "held_out_task_key", get(&score, "task_key").clone());
+        put(&mut out, "held_out_verifier", get(&score, "verifier").clone());
+    }
+    if let Some(cases) = ood {
+        let score = leg_score(st, cases)?;
+        put(&mut out, "ood_passed", get(&score, "passed").clone());
+        put(&mut out, "ood_task_key", get(&score, "task_key").clone());
+        put(&mut out, "ood_verifier", get(&score, "verifier").clone());
+        put(&mut out, "ood_shape", get(&score, "shape").clone());
+    }
+    Ok(out)
+}
+
+/// A missing held-out leg is unknown. An evolve gain without that leg is not reported as a gain.
+/// A held-out score that moves the other way is named in the note.
+pub(super) fn split_judgement(
+    evolve_before: u64,
+    evolve_after: u64,
+    held_out: Option<(u64, u64)>,
+    ood: Option<(u64, u64)>,
+) -> Json {
+    let mut notes = Vec::new();
+    let mut reported = evolve_after > evolve_before;
+    if evolve_after > evolve_before {
+        match held_out {
+            None => {
+                reported = false;
+                notes.push("gain unconfirmed because the held-out leg is unknown".to_string());
+            }
+            Some((before, after)) if after < before => {
+                reported = false;
+                notes.push(format!(
+                    "held-out score moved from {before} to {after} while the evolve score moved from {evolve_before} to {evolve_after}"
+                ));
+            }
+            Some((before, after)) => notes.push(format!(
+                "evolve score moved from {evolve_before} to {evolve_after} and held-out score moved from {before} to {after}"
+            )),
+        }
+        if let Some((before, after)) = ood {
+            if after < before {
+                reported = false;
+                notes.push(format!("ood score moved from {before} to {after}"));
+            }
+        }
+    }
+    let note = notes.join("; ");
+    if note.len() > 240 {
+        return obj(vec![
+            ("held_out_known", Bool(held_out.is_some())),
+            ("ood_known", Bool(ood.is_some())),
+            ("reported_gain", Bool(false)),
+            ("note", s("gain unconfirmed because the split note exceeded its cap")),
+        ]);
+    }
+    obj(vec![
+        ("held_out_known", Bool(held_out.is_some())),
+        ("ood_known", Bool(ood.is_some())),
+        ("reported_gain", Bool(reported)),
+        ("note", s(&note)),
+    ])
+}
+
 #[cfg(test)]
 mod checks {
     use super::*;
@@ -609,5 +756,57 @@ mod checks {
         assert_eq!(boolean(&equal, "legacy"), boolean(&equal, "admit"));
         assert_eq!(text(&equal, "reason"), "score");
         assert_eq!(boolean(&equal, "cost_known"), false);
+    }
+
+    #[test]
+    fn unchanged_harness_records_held_out_and_ood_separately() {
+        let st = obj(vec![]);
+        let harness = "HARNESS-UNCHANGED";
+        let evolve_task = "EVOLVE_TASK_BODY_not_stored";
+        let held_task = "HELD_TASK_BODY_not_stored";
+        let ood_task = "OOD_TASK_BODY_not_stored";
+        let evolve = [SplitCase {
+            task: evolve_task.into(),
+            checks: Arr(vec![s("evolve-token")]),
+            reply: "evolve-token is present".into(),
+        }];
+        let ood = [SplitCase {
+            task: ood_task.into(),
+            checks: obj(vec![("method", s("equals")), ("expected", s("exact-ood-reply"))]),
+            reply: "exact-ood-reply".into(),
+        }];
+        let missing = score_split(&st, harness, &evolve, None, Some(&ood)).unwrap();
+        assert_eq!(boolean(&missing, "held_out_known"), false);
+        assert_eq!(get(&missing, "held_out_passed"), &Null);
+        assert_eq!(boolean(&missing, "ood_known"), true);
+        assert_eq!(number(&missing, "evolve_passed"), 1);
+        assert_eq!(number(&missing, "ood_passed"), 1);
+        assert_ne!(text(&missing, "evolve_shape"), text(&missing, "ood_shape"));
+        assert_eq!(text(&missing, "harness_digest"), harness_rules::digest(&s(harness)));
+        assert_eq!(text(&missing, "evolve_task_key"), task_key(evolve_task));
+        assert_eq!(text(&missing, "ood_task_key"), task_key(ood_task));
+        let body = missing.string();
+        assert!(!body.contains(evolve_task) && !body.contains(ood_task) && !body.contains("exact-ood-reply"), "{body}");
+        let held = [SplitCase {
+            task: held_task.into(),
+            checks: Arr(vec![s("held-token")]),
+            reply: "no held token here".into(),
+        }];
+        let with_held = score_split(&st, harness, &evolve, Some(&held), Some(&ood)).unwrap();
+        assert_eq!(text(&with_held, "harness_digest"), text(&missing, "harness_digest"));
+        assert_eq!(boolean(&with_held, "held_out_known"), true);
+        assert_eq!(number(&with_held, "held_out_passed"), 0);
+        assert_eq!(text(&with_held, "held_out_task_key"), task_key(held_task));
+        assert!(!with_held.string().contains(held_task));
+        let absent = split_judgement(0, 2, None, None);
+        assert_eq!(boolean(&absent, "reported_gain"), false);
+        assert_eq!(boolean(&absent, "held_out_known"), false);
+        assert!(text(&absent, "note").contains("gain unconfirmed"));
+        assert!(text(&absent, "note").contains("held-out leg is unknown"));
+        let opposite = split_judgement(0, 2, Some((5, 1)), Some((4, 0)));
+        assert_eq!(boolean(&opposite, "reported_gain"), false);
+        assert!(text(&opposite, "note").contains("held-out score moved from 5 to 1"), "{}", text(&opposite, "note"));
+        assert!(text(&opposite, "note").contains("evolve score moved from 0 to 2"), "{}", text(&opposite, "note"));
+        assert!(text(&opposite, "note").contains("ood score moved from 4 to 0"), "{}", text(&opposite, "note"));
     }
 }

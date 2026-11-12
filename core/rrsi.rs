@@ -61,6 +61,35 @@ const EDIT_KEYS: &[&str] = &[
     "run_digest",
 ];
 const POLICY_KEYS: &[&str] = &["edit_budget", "noise_floor", "cost_known", "decision"];
+// Optional fields for a candidate pool, its worktree commit, and the split scores.
+// An older row omits them and still seals.
+const SPLIT_KEYS: &[&str] = &[
+    "pool_status",
+    "branch",
+    "commit",
+    "held_out_known",
+    "ood_known",
+    "evolve_passed",
+    "held_out_passed",
+    "ood_passed",
+    "evolve_task_key",
+    "held_out_task_key",
+    "ood_task_key",
+    "evolve_verifier",
+    "held_out_verifier",
+    "ood_verifier",
+    "harness_digest",
+    "evolve_shape",
+    "ood_shape",
+];
+// Three candidates are a pool, and three refusals still leave one edit of the
+// annealed cap of four. The slots are judged in order. There is no thread schedule
+// in the ledger. One worktree per slot: a fourth live worktree is refused.
+pub(crate) const CANDIDATE_MAX: usize = 3;
+pub(crate) const WORKTREE_MAX: usize = 3;
+pub(crate) const EVOLVE_BRANCH: &str = "rllm-evolve";
+const GIT_WALL_SECS: u64 = 15;
+const GIT_OUTPUT_MAX: usize = 64 * 1024;
 // The product has no fixed round horizon, so each round already in the ledger
 // spends one step of the cap. Early rounds may attempt more edits than later ones.
 const BUDGET_MAX: u64 = 4;
@@ -147,8 +176,11 @@ fn validate_fields(value: &Json, expected_run: &str) -> Result<()> {
         return Err("leakage must be clean, task_text, answer_text or inert".into());
     }
     let refused = matches!(leakage.as_str(), "task_text" | "answer_text" | "inert");
+    let decision_text = text(value, "decision");
     let unscored = refused
-        || (score_missing(value) && text(value, "decision").starts_with("refused because component "));
+        || (score_missing(value)
+            && (decision_text.starts_with("refused because component ")
+                || decision_text.starts_with("workspace is not")));
     if refused && !score_missing(value) {
         return Err("a leakage refusal must not record a score".into());
     }
@@ -182,12 +214,88 @@ fn validate_fields(value: &Json, expected_run: &str) -> Result<()> {
     if !hex_digest(&run_digest) || run_digest != expected_run {
         return Err("run_digest does not match the run being recorded".into());
     }
-    validate_policy(value)
+    validate_policy(value)?;
+    validate_split(value)
+}
+fn commit_hex(value: &str) -> bool {
+    (value.len() == 40 || value.len() == 64)
+        && value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+fn bounded_row_text(value: &Json, key: &str, max: usize) -> Result<()> {
+    if get(value, key) == &Null {
+        return Ok(());
+    }
+    let text = text(value, key);
+    if text.is_empty() || text.len() > max || text.contains('\0') {
+        return Err(format!("{key} must be bounded text"));
+    }
+    Ok(())
+}
+fn known_leg(value: &Json, known_key: &str, passed_key: &str, task_key: &str, verifier_key: &str) -> Result<()> {
+    if get(value, known_key) == &Null {
+        for key in [passed_key, task_key, verifier_key] {
+            if get(value, key) != &Null {
+                return Err(format!("{key} requires {known_key}"));
+            }
+        }
+        return Ok(());
+    }
+    let known = match get(value, known_key) {
+        Bool(bit) => *bit,
+        _ => return Err(format!("{known_key} must be a boolean")),
+    };
+    if !known {
+        for key in [passed_key, task_key, verifier_key] {
+            if get(value, key) != &Null {
+                return Err(format!("{known_key} false cannot carry a score"));
+            }
+        }
+        return Ok(());
+    }
+    let passed = number_field(value, passed_key)?;
+    if passed > 1024 {
+        return Err(format!("{passed_key} is outside the record cap"));
+    }
+    if !hex_digest(&text(value, task_key)) || !hex_digest(&text(value, verifier_key)) {
+        return Err(format!("{task_key} and {verifier_key} must be 64 lowercase hexadecimal characters"));
+    }
+    Ok(())
+}
+fn validate_split(value: &Json) -> Result<()> {
+    if get(value, "pool_status") != &Null {
+        let status = text(value, "pool_status");
+        let refused = status.strip_prefix("refused:").is_some_and(|cause| !cause.is_empty());
+        if (status != "admissible" && !refused) || status.len() > 200 || status.contains('\0') {
+            return Err("pool_status must be admissible or refused with a cause".into());
+        }
+    }
+    if get(value, "branch") != &Null && text(value, "branch") != EVOLVE_BRANCH {
+        return Err("branch must be the evolve branch".into());
+    }
+    if get(value, "commit") != &Null && !commit_hex(&text(value, "commit")) {
+        return Err("commit must be a lowercase hexadecimal digest".into());
+    }
+    known_leg(value, "held_out_known", "held_out_passed", "held_out_task_key", "held_out_verifier")?;
+    known_leg(value, "ood_known", "ood_passed", "ood_task_key", "ood_verifier")?;
+    if get(value, "evolve_passed") != &Null {
+        let passed = number_field(value, "evolve_passed")?;
+        if passed > 1024 {
+            return Err("evolve_passed is outside the record cap".into());
+        }
+    }
+    for key in ["evolve_task_key", "evolve_verifier", "harness_digest"] {
+        if get(value, key) != &Null && !hex_digest(&text(value, key)) {
+            return Err(format!("{key} must be 64 lowercase hexadecimal characters"));
+        }
+    }
+    bounded_row_text(value, "evolve_shape", 80)?;
+    bounded_row_text(value, "ood_shape", 80)
 }
 fn edit_keys(sealed: bool) -> Vec<&'static str> {
     let mut keys = EDIT_KEYS.to_vec();
     keys.extend_from_slice(POLICY_KEYS);
     keys.extend_from_slice(ROW_EXTRA);
+    keys.extend_from_slice(SPLIT_KEYS);
     if sealed {
         keys.extend_from_slice(&["schema", "previous", "revision"]);
     }
@@ -1221,6 +1329,352 @@ pub(crate) fn historical_section(root: &str, task: &str) -> Result<String> {
     Ok(render_historical(&records, task))
 }
 
+pub(crate) fn pool_status(admissible: bool, cause: &str) -> String {
+    if admissible {
+        return "admissible".to_string();
+    }
+    let mut cause = cause.replace(['\n', '\r'], " ");
+    const PREFIX: &str = "refused:";
+    let room = 200usize.saturating_sub(PREFIX.len());
+    if cause.len() > room {
+        cause.truncate(room);
+        while !cause.is_char_boundary(cause.len()) {
+            cause.pop();
+        }
+    }
+    if cause.is_empty() {
+        cause = "unspecified".to_string();
+    }
+    format!("{PREFIX}{cause}")
+}
+
+/// Copy the optional pool and split fields onto a row that already validates.
+pub(crate) fn attach(mut edit: Json, extra: &Json) -> Result<Json> {
+    for key in SPLIT_KEYS {
+        if get(extra, key) != &Null {
+            put(&mut edit, key, get(extra, key).clone());
+        }
+    }
+    validate_edit(&edit, &text(&edit, "run_digest"))?;
+    Ok(edit)
+}
+
+fn library_error(error: String) -> String {
+    if error.contains("unchanged") || error.contains("kept") {
+        error
+    } else {
+        format!("{error}; existing history was left unchanged")
+    }
+}
+
+/// Load the sealed ledger and library into a new process. This reads both files
+/// and does not rewrite them. The budget is `budget_for` on the recorded rounds.
+pub(crate) fn resume_run(root: &str, ledger_name: &str, task: &str) -> Result<Json> {
+    if task.is_empty() || task.contains('\0') || task.len() > LIBRARY_TASK_MAX {
+        return Err("resume task must be non-empty text within the library cap".into());
+    }
+    let library = load_experience(root).map_err(library_error)?;
+    let document = load_file(root, ledger_name).map_err(library_error)?;
+    let records = records_of(&document).map_err(library_error)?;
+    if records.is_empty() {
+        return Err("resume needs the sealed ledger; existing history was left unchanged".into());
+    }
+    let run_digest = text(&records[0], "run_digest");
+    if records.iter().any(|row| text(row, "run_digest") != run_digest) {
+        return Err("resume ledger mixes runs; existing history was left unchanged".into());
+    }
+    let mut round = 0u64;
+    for record in &records {
+        if let Ok(value) = number_field(record, "round") {
+            round = round.max(value);
+        }
+    }
+    let next = round.saturating_add(1).min(1024);
+    let (budget, remaining) = budget_for(&records, &run_digest, next);
+    let history = prompt_document(&document, &run_digest).map_err(library_error)?;
+    let prompt = format!("{history}{}{}", budget_line(&records, &run_digest, next), render_historical(&library, task));
+    let adopted = library.iter().rev().find(|record| text(record, "run_digest") == run_digest);
+    let harness = adopted.map(|record| text(record, "harness")).unwrap_or_default();
+    let harness_digest = adopted.map(|record| text(record, "harness_digest")).unwrap_or_default();
+    let pruned = pruned_components(&records, &run_digest);
+    let rejected = falsified(&records, &run_digest);
+    Ok(obj(vec![
+        ("run_digest", s(&run_digest)),
+        ("round", n(round)),
+        ("next_round", n(next)),
+        ("edit_budget", n(budget)),
+        ("edits_remaining", n(remaining)),
+        ("adopted_harness", s(&harness)),
+        ("harness_digest", s(&harness_digest)),
+        ("prompt", s(&prompt)),
+        ("pruned", Arr(pruned.into_iter().map(|name| s(&name)).collect())),
+        ("rejected", n(rejected.len() as u64)),
+        ("edit_ledger", s(&document)),
+    ]))
+}
+
+pub(crate) struct GitRoot {
+    workspace: PathBuf,
+    git_dir: PathBuf,
+    head: String,
+}
+
+fn git_not_cancelled() -> bool {
+    false
+}
+
+fn path_text(path: &Path) -> Result<String> {
+    let text = path.to_str().ok_or("path is not UTF-8")?;
+    if text.is_empty() || text.len() > PATH_MAX || text.contains('\0') {
+        return Err("path is outside the path cap".into());
+    }
+    Ok(text.to_string())
+}
+
+fn git_run(git_dir: &Path, work_tree: &Path, args: &[&str]) -> Result<super::execution::BoundedOutput> {
+    let hooks = git_dir.join("rllm-empty-hooks");
+    fs::create_dir_all(&hooks).map_err(|error| error.to_string())?;
+    let mut full = vec![
+        "--git-dir".to_string(),
+        path_text(git_dir)?,
+        "--work-tree".to_string(),
+        path_text(work_tree)?,
+        "-c".into(),
+        "safe.directory=*".into(),
+        "-c".into(),
+        "user.name=RLLM".into(),
+        "-c".into(),
+        "user.email=rllm@localhost".into(),
+        "-c".into(),
+        "commit.gpgsign=false".into(),
+        "-c".into(),
+        format!("core.hooksPath={}", path_text(&hooks)?),
+    ];
+    full.extend(args.iter().copied().map(str::to_string));
+    let output = super::execution::bounded_process(
+        "git",
+        &full,
+        work_tree,
+        std::time::Duration::from_secs(GIT_WALL_SECS),
+        &git_not_cancelled,
+    )?;
+    if output.stdout.len() > GIT_OUTPUT_MAX || output.stderr.len() > GIT_OUTPUT_MAX {
+        return Err("git output exceeded its bound".into());
+    }
+    Ok(output)
+}
+
+fn git_detail(args: &[&str], output: &super::execution::BoundedOutput) -> String {
+    let mut detail = output.stderr.trim().to_string();
+    if detail.is_empty() {
+        detail = output.stdout.trim().to_string();
+    }
+    if detail.len() > 240 {
+        detail.truncate(240);
+    }
+    format!("git {} exited {:?}: {detail}", args.first().unwrap_or(&"git"), output.code)
+}
+
+fn git_ok(git_dir: &Path, work_tree: &Path, args: &[&str]) -> Result<super::execution::BoundedOutput> {
+    let output = git_run(git_dir, work_tree, args)?;
+    if output.code != Some(0) {
+        return Err(git_detail(args, &output));
+    }
+    Ok(output)
+}
+
+fn ignore_worktrees(git_dir: &Path) -> Result<()> {
+    let info = git_dir.join("info");
+    fs::create_dir_all(&info).map_err(|error| error.to_string())?;
+    let exclude = info.join("exclude");
+    let mut body = if exclude.exists() {
+        fs::read_to_string(&exclude).map_err(|error| error.to_string())?
+    } else {
+        String::new()
+    };
+    if body.lines().any(|line| line == ".rllm-worktrees/") {
+        return Ok(());
+    }
+    if !body.is_empty() && !body.ends_with('\n') {
+        body.push('\n');
+    }
+    body.push_str(".rllm-worktrees/\n");
+    fs::write(&exclude, body).map_err(|error| error.to_string())
+}
+
+pub(crate) fn require_worktree_root(workspace: &Path) -> Result<GitRoot> {
+    let meta = match fs::symlink_metadata(workspace) {
+        Ok(meta) if !meta.file_type().is_symlink() && meta.is_dir() => meta,
+        _ => return Err("workspace is not the root of a git work tree".into()),
+    };
+    let _ = meta;
+    let git_dir = workspace.join(".git");
+    match fs::symlink_metadata(&git_dir) {
+        Ok(meta) if !meta.file_type().is_symlink() && meta.is_dir() => {}
+        _ => return Err("workspace is not the root of a git work tree".into()),
+    }
+    let inside = git_ok(&git_dir, workspace, &["rev-parse", "--is-inside-work-tree"])?;
+    if inside.stdout.trim() != "true" {
+        return Err("workspace is not the root of a git work tree".into());
+    }
+    let top = git_ok(&git_dir, workspace, &["rev-parse", "--show-toplevel"])?;
+    let wanted = fs::canonicalize(workspace).map_err(|error| error.to_string())?;
+    let got = fs::canonicalize(Path::new(top.stdout.trim())).map_err(|error| error.to_string())?;
+    if wanted != got {
+        return Err("workspace is not the root of a git work tree".into());
+    }
+    let head = git_ok(&git_dir, &wanted, &["rev-parse", "HEAD"])?;
+    let head = head.stdout.trim().to_string();
+    if !commit_hex(&head) {
+        return Err("workspace HEAD is not a commit".into());
+    }
+    let git_dir = wanted.join(".git");
+    ignore_worktrees(&git_dir)?;
+    Ok(GitRoot { workspace: wanted, git_dir, head })
+}
+
+fn slot_path(workspace: &Path, slot: usize) -> PathBuf {
+    workspace.join(".rllm-worktrees").join(format!("c{slot}"))
+}
+
+fn linked_git_dir(worktree: &Path) -> Result<PathBuf> {
+    let dot = worktree.join(".git");
+    let meta = fs::symlink_metadata(&dot).map_err(|error| error.to_string())?;
+    if meta.file_type().is_symlink() {
+        return Err("worktree gitdir is a symlink".into());
+    }
+    if meta.is_file() {
+        let body = fs::read_to_string(&dot).map_err(|error| error.to_string())?;
+        let line = body.lines().next().unwrap_or("");
+        let rest = line.strip_prefix("gitdir: ").ok_or("worktree gitdir is missing")?;
+        return Ok(PathBuf::from(rest.trim()));
+    }
+    if meta.is_dir() {
+        return Ok(dot);
+    }
+    Err("worktree gitdir is not a file".into())
+}
+
+fn rllm_worktree_count(root: &GitRoot) -> Result<usize> {
+    let output = git_ok(&root.git_dir, &root.workspace, &["worktree", "list", "--porcelain"])?;
+    let mut count = 0usize;
+    for line in output.stdout.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if path.contains(".rllm-worktrees/") {
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
+fn remove_slot(root: &GitRoot, path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => return Err("candidate worktree path is a symlink".into()),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    }
+    let shown = path_text(path)?;
+    let output = git_run(&root.git_dir, &root.workspace, &["worktree", "remove", "--force", &shown])?;
+    if output.code != Some(0) && path.exists() {
+        fs::remove_dir_all(path).map_err(|error| error.to_string())?;
+        let _ = git_run(&root.git_dir, &root.workspace, &["worktree", "prune"]);
+    }
+    Ok(())
+}
+
+/// The caller HEAD is the incumbent commit unless an evolve branch already exists.
+pub(crate) fn incumbent_base(root: &GitRoot) -> Result<String> {
+    let output = git_run(
+        &root.git_dir,
+        &root.workspace,
+        &["rev-parse", "-q", "--verify", &format!("refs/heads/{EVOLVE_BRANCH}")],
+    )?;
+    if output.code == Some(0) {
+        let tip = output.stdout.trim().to_string();
+        if commit_hex(&tip) {
+            return Ok(tip);
+        }
+    }
+    Ok(root.head.clone())
+}
+
+/// Commit `body` in slot `slot`, starting from `base`. Does not check out the caller's branch.
+pub(crate) fn commit_candidate(root: &GitRoot, slot: usize, body: &str, base: &str) -> Result<String> {
+    if slot >= WORKTREE_MAX {
+        return Err(format!("refusing to create more than {WORKTREE_MAX} worktrees"));
+    }
+    if !commit_hex(base) {
+        return Err("worktree base is not a commit".into());
+    }
+    if body.contains('\0') || body.len() > 32768 {
+        return Err("candidate harness exceeds 32 KiB".into());
+    }
+    let path = slot_path(&root.workspace, slot);
+    remove_slot(root, &path)?;
+    let live = rllm_worktree_count(root)?;
+    if live >= WORKTREE_MAX {
+        return Err(format!("refusing to create more than {WORKTREE_MAX} worktrees"));
+    }
+    fs::create_dir_all(root.workspace.join(".rllm-worktrees")).map_err(|error| error.to_string())?;
+    let shown = path_text(&path)?;
+    git_ok(&root.git_dir, &root.workspace, &["worktree", "add", "--detach", &shown, base])?;
+    let file = path.join("rllm-harness.txt");
+    fs::write(&file, body).map_err(|error| error.to_string())?;
+    let work_git = linked_git_dir(&path)?;
+    git_ok(&work_git, &path, &["add", "--", "rllm-harness.txt"])?;
+    git_ok(
+        &work_git,
+        &path,
+        &["commit", "-m", "rllm candidate", "--", "rllm-harness.txt"],
+    )?;
+    let head = git_ok(&work_git, &path, &["rev-parse", "HEAD"])?;
+    let digest = head.stdout.trim().to_string();
+    if !commit_hex(&digest) {
+        return Err("candidate commit digest is not hexadecimal".into());
+    }
+    Ok(digest)
+}
+
+/// Move `rllm-evolve` to `commit` only when that is a fast-forward and the caller is not on that branch.
+pub(crate) fn fast_forward_evolve(root: &GitRoot, commit: &str) -> Result<()> {
+    if !commit_hex(commit) {
+        return Err("evolve target is not a commit".into());
+    }
+    let symbolic = git_run(&root.git_dir, &root.workspace, &["symbolic-ref", "-q", "HEAD"])?;
+    if symbolic.code == Some(0) && symbolic.stdout.trim() == format!("refs/heads/{EVOLVE_BRANCH}") {
+        return Err("refusing to move the caller's checked-out branch".into());
+    }
+    let current = git_run(
+        &root.git_dir,
+        &root.workspace,
+        &["rev-parse", "-q", "--verify", &format!("refs/heads/{EVOLVE_BRANCH}")],
+    )?;
+    if current.code == Some(0) {
+        let old = current.stdout.trim().to_string();
+        if !commit_hex(&old) {
+            return Err("evolve branch tip is not a commit".into());
+        }
+        let ancestor = git_run(&root.git_dir, &root.workspace, &["merge-base", "--is-ancestor", &old, commit])?;
+        if ancestor.code != Some(0) {
+            return Err("evolve branch cannot fast-forward to the candidate commit".into());
+        }
+        git_ok(
+            &root.git_dir,
+            &root.workspace,
+            &["update-ref", &format!("refs/heads/{EVOLVE_BRANCH}"), commit, &old],
+        )?;
+    } else {
+        git_ok(
+            &root.git_dir,
+            &root.workspace,
+            &["update-ref", &format!("refs/heads/{EVOLVE_BRANCH}"), commit],
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod checks {
     use super::*;
@@ -1734,5 +2188,150 @@ mod checks {
         assert_eq!(get(&row, "score_after"), &Null);
         assert_eq!(get(&row, "accepted"), &Bool(false));
         assert!(!row.string().contains(task), "{}", row.string());
+    }
+
+    fn git_scratch() -> (Scratch, PathBuf) {
+        let scratch = Scratch::new();
+        let repo = scratch.0.join("repo");
+        fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{} {}",
+                String::from_utf8_lossy(&output.stderr),
+                String::from_utf8_lossy(&output.stdout)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        fs::write(repo.join("seed.txt"), "seed\n").unwrap();
+        git(&["-c", "user.name=RLLM", "-c", "user.email=rllm@localhost", "add", "--", "seed.txt"]);
+        git(&[
+            "-c",
+            "user.name=RLLM",
+            "-c",
+            "user.email=rllm@localhost",
+            "commit",
+            "-m",
+            "seed",
+        ]);
+        (scratch, repo)
+    }
+
+    fn git_text(repo: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?} {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn worktree_max_is_enforced() {
+        let (_scratch, repo) = git_scratch();
+        let root = require_worktree_root(&repo).unwrap();
+        let before = git_text(&repo, &["rev-parse", "HEAD"]);
+        assert_eq!(before, root.head);
+        let base = incumbent_base(&root).unwrap();
+        for slot in 0..WORKTREE_MAX {
+            let digest = commit_candidate(&root, slot, &format!("body {slot}"), &base).unwrap();
+            assert!(commit_hex(&digest), "{digest}");
+        }
+        let again = commit_candidate(&root, 0, "reused body", &base).unwrap();
+        assert!(commit_hex(&again));
+        assert_eq!(rllm_worktree_count(&root).unwrap(), WORKTREE_MAX);
+        let refused = commit_candidate(&root, WORKTREE_MAX, "one past the cap", &base).unwrap_err();
+        assert!(refused.contains(&format!("{WORKTREE_MAX}")), "{refused}");
+        assert!(refused.contains("worktree"), "{refused}");
+        assert_eq!(rllm_worktree_count(&root).unwrap(), WORKTREE_MAX);
+        assert_eq!(git_text(&repo, &["rev-parse", "HEAD"]), before);
+        assert_eq!(git_text(&repo, &["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn resumed_run_prompt_and_budget_reflect_prior_rounds() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let mut ledger = String::new();
+        for round in 1..=3 {
+            let row = edit(
+                "skills",
+                &format!("do-not-repeat-{round}"),
+                &diff_digest("a", &format!("h{round}")),
+                2,
+                2,
+                4,
+                4,
+                "rejected",
+                round,
+                RUN,
+            )
+            .unwrap();
+            ledger = text(&append_document(&ledger, &row, RUN).unwrap(), "document");
+            append_file(root, "edits.jsonl", &row, RUN).unwrap();
+        }
+        let harness = "ADOPTED-HARNESS-MARKER";
+        append_experience(root, "resume task", harness, &ledger, RUN).unwrap();
+        let ledger_bytes = fs::read(scratch.0.join("edits.jsonl")).unwrap();
+        let library_bytes = fs::read(scratch.0.join("experience.jsonl")).unwrap();
+        let resumed = resume_run(root, "edits.jsonl", "resume task").unwrap();
+        assert_eq!(fs::read(scratch.0.join("edits.jsonl")).unwrap(), ledger_bytes);
+        assert_eq!(fs::read(scratch.0.join("experience.jsonl")).unwrap(), library_bytes);
+        assert_eq!(number_field(&resumed, "round").unwrap(), 3);
+        assert_eq!(number_field(&resumed, "edit_budget").unwrap(), annealed_budget(3));
+        assert!(annealed_budget(3) < annealed_budget(0));
+        let prompt = text(&resumed, "prompt");
+        assert!(prompt.contains("do-not-repeat-1"), "{prompt}");
+        assert!(prompt.contains("do-not-repeat-3"), "{prompt}");
+        assert!(prompt.contains("Rejected hypotheses"), "{prompt}");
+        assert!(prompt.contains("skills"), "{prompt}");
+        assert!(prompt.contains("Pruned"), "{prompt}");
+        assert!(prompt.contains(&format!("The annealed budget is {}", annealed_budget(3))), "{prompt}");
+        assert!(prompt.contains("ADOPTED-HARNESS-MARKER"), "{prompt}");
+        assert!(prompt.contains("Adopted harness (historical)"), "{prompt}");
+        assert_eq!(text(&resumed, "adopted_harness"), harness);
+        let pruned = match get(&resumed, "pruned") {
+            Arr(items) => items.clone(),
+            other => panic!("pruned list missing: {other:?}"),
+        };
+        assert!(pruned.iter().any(|item| item.text().unwrap() == "skills"));
+        assert_eq!(number_field(&resumed, "rejected").unwrap(), 3);
+    }
+
+    #[test]
+    fn resume_over_tampered_library_leaves_bytes_unchanged() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let row = edit("prompt", "kept hypothesis", &diff_digest("a", "b"), 1, 2, 4, 4, "accepted", 1, RUN).unwrap();
+        append_file(root, "edits.jsonl", &row, RUN).unwrap();
+        append_experience(root, "resume task", "adopted harness", "", RUN).unwrap();
+        let path = scratch.0.join("experience.jsonl");
+        let ledger_path = scratch.0.join("edits.jsonl");
+        let original = fs::read(&path).unwrap();
+        let mut tampered = original.clone();
+        let at = tampered.windows(7).position(|window| window == b"adopted").unwrap();
+        tampered[at] = b'x';
+        assert_ne!(tampered, original);
+        fs::write(&path, &tampered).unwrap();
+        let ledger_before = fs::read(&ledger_path).unwrap();
+        let refused = resume_run(root, "edits.jsonl", "resume task").unwrap_err();
+        assert!(refused.contains("existing history was left unchanged"), "{refused}");
+        assert!(refused.contains("digest"), "{refused}");
+        assert_eq!(fs::read(&path).unwrap(), tampered);
+        assert_eq!(fs::read(&ledger_path).unwrap(), ledger_before);
     }
 }

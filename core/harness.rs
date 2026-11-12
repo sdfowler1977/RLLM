@@ -123,6 +123,10 @@ fn note_refinement_edit(run:&mut Json,hypothesis:&str,verdict:&str,before:usize,
   Ok(edit)=>edit,
   Err(error)=>{put(run,"edit_ledger_error",s(&error));return;}
  };
+ let edit=match crate::rrsi::attach(edit,policy){
+  Ok(edit)=>edit,
+  Err(error)=>{put(run,"edit_ledger_error",s(&error));return;}
+ };
  if verdict=="accepted"{
   let mut map=get(run,"incumbent_digests").clone();
   if !matches!(map,Obj(_)){map=obj(vec![]);}
@@ -139,27 +143,35 @@ fn record_unscored(run:&mut Json,component:&str,claim:&str,reply:&str,diff:&str,
  commit_edit(run,&edit);
  Ok(())
 }
-fn gate_candidate(run:&mut Json,reply:&str)->Result<bool>{
+struct Critic{component:String,claim:String,diff:String,leakage:String,decision:String,refused:bool}
+fn critic_against(run:&mut Json,records:&[Json],incumbent:&str,reply:&str)->Result<Critic>{
  let (component,claim,body)=declared_edit(reply);
  let run_digest=refinement_digest(run);
- let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
- let prior=incumbent_text(run);
  let changed=edit_body(reply,&claim,&body);
- let diff=crate::rrsi::diff_digest(&prior,changed);
- if let Some(round)=hypothesis_rejected(&records,&run_digest,&component,&claim){
-  record_unscored(run,&component,&claim,reply,&diff,"",&crate::rrsi::rejection_refusal(&component,round))?;
-  return Ok(true);
+ let diff=crate::rrsi::diff_digest(incumbent,changed);
+ if let Some(round)=hypothesis_rejected(records,&run_digest,&component,&claim){
+  let decision=crate::rrsi::rejection_refusal(&component,round);
+  return Ok(Critic{component,claim,diff,leakage:String::new(),decision,refused:true});
  }
- if crate::rrsi::pruned_components(&records,&run_digest).iter().any(|name|name==&component){
-  record_unscored(run,&component,&claim,reply,&diff,"",&crate::rrsi::prune_refusal(&component))?;
-  return Ok(true);
+ if crate::rrsi::pruned_components(records,&run_digest).iter().any(|name|name==&component){
+  let decision=crate::rrsi::prune_refusal(&component);
+  return Ok(Critic{component,claim,diff,leakage:String::new(),decision,refused:true});
  }
  let stored_incumbent=text(get(run,"incumbent_digests"),&component);
- let incumbent=if stored_incumbent.len()==64{stored_incumbent}else if component=="prompt"||component=="system prompt"{component_digest(&prior)}else{component_digest("")};
- let same_diff=crate::rrsi::incumbent_diff(&records,&run_digest,&component).as_deref()==Some(diff.as_str());
- let verdict=improvement::leakage_critic(reply,&component,&improvement::recorded_tasks(run),&improvement::recorded_expected(run),component_digest(changed)==incumbent||same_diff);
- if text(&verdict,"leakage")=="clean"{return Ok(false);}
- record_unscored(run,&component,&claim,reply,&diff,&text(&verdict,"leakage"),&text(&verdict,"reason"))?;
+ let incumbent_digest=if stored_incumbent.len()==64{stored_incumbent}else if component=="prompt"||component=="system prompt"{component_digest(incumbent)}else{component_digest("")};
+ let same_diff=crate::rrsi::incumbent_diff(records,&run_digest,&component).as_deref()==Some(diff.as_str());
+ let verdict=improvement::leakage_critic(reply,&component,&improvement::recorded_tasks(run),&improvement::recorded_expected(run),component_digest(changed)==incumbent_digest||same_diff);
+ if text(&verdict,"leakage")=="clean"{
+  return Ok(Critic{component,claim,diff,leakage:"clean".into(),decision:String::new(),refused:false});
+ }
+ Ok(Critic{component,claim,diff,leakage:text(&verdict,"leakage"),decision:text(&verdict,"reason"),refused:true})
+}
+fn gate_candidate(run:&mut Json,reply:&str)->Result<bool>{
+ let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
+ let incumbent=incumbent_text(run);
+ let critic=critic_against(run,&records,&incumbent,reply)?;
+ if !critic.refused{return Ok(false);}
+ record_unscored(run,&critic.component,&critic.claim,reply,&critic.diff,&critic.leakage,&critic.decision)?;
  Ok(true)
 }
 fn stop_refused(st:&mut Json,run:Json)->Result<Option<Json>>{
@@ -605,6 +617,14 @@ pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
  if ["propose","compose"].contains(&phase.as_str())&&reply.trim().is_empty(){return Err("Empty agent instructions; original agent preserved".into());}
  if ["propose","compose"].contains(&phase.as_str())&&reply.len()>32768{return Err("Agent instructions exceed 32 KiB; original agent preserved".into());}
  if reply.len()>65536{return Err("Refinement output exceeds 64 KiB; original agent preserved".into());}
+ if matches!(phase.as_str(),"propose"|"compose"){
+  if let Some(pool)=parse_pool(reply)?{
+   evaluate_pool(st,&mut run,&pool,&[])?;
+   if boolean(&run,"incumbent_kept"){return stop_refused(st,run);}
+   if phase=="propose"{let candidate=get(&run,"composition").clone();put(&mut run,"candidate",candidate);}
+   return queue_evaluation(st,run,"evaluation_base");
+  }
+ }
  match phase.as_str(){
   "baseline"|"probe"|"verify"=>{
    let (result,score,next)=match phase.as_str(){"baseline"=>("baseline","baseline_score","propose"),"probe"=>("probe","probe_score","compose"),_=>("replay","replay_score","review")};
@@ -646,6 +666,135 @@ fn keep_first_refinement(run:&mut Json,note:&str){
  put(run,"composition",instructions);put(run,"selected_score",score);
  put(run,"retained_probe",Bool(false));put(run,"round_note",s(note));
 }
+fn parse_pool(reply:&str)->Result<Option<Vec<String>>>{
+ let Some((first,rest))=reply.split_once('\n') else {
+  if reply.starts_with("candidates: "){return Err("candidate pool does not contain the declared candidates".into());}
+  return Ok(None);
+ };
+ let Some(count_text)=first.strip_prefix("candidates: ") else {return Ok(None);};
+ let count_text=count_text.trim();
+ if count_text.is_empty()||!count_text.bytes().all(|byte|byte.is_ascii_digit()){
+  return Err("candidate pool count is not a number".into());
+ }
+ let count:usize=count_text.parse().map_err(|_| "candidate pool count is not a number".to_string())?;
+ if count==0||count>crate::rrsi::CANDIDATE_MAX{
+  return Err(format!("a round carries at most {} candidates",crate::rrsi::CANDIDATE_MAX));
+ }
+ let parts:Vec<String>=rest.split("\n---\n").map(|part|part.to_string()).collect();
+ if parts.len()!=count{return Err("candidate pool does not contain the declared candidates".into());}
+ if parts.iter().any(|part|part.is_empty()||part.contains('\0')||part.len()>32768){
+  return Err("a pool candidate must be non-empty text within 32 KiB".into());
+ }
+ Ok(Some(parts))
+}
+#[derive(Clone)]
+struct PoolJudgement{
+ reply:String,early:bool,component:String,claim:String,diff:String,leakage:String,decision:String,
+ policy:Json,admissible:bool,before:usize,after:usize,commit:String,branch:String,
+}
+fn push_pool_row(run:&mut Json,item:&PoolJudgement,prior:&str,round:usize){
+ if item.early{
+  let stored=improvement::stored_hypothesis(&item.claim,run);
+  let edit=match crate::rrsi::unscored(&item.component,&stored,&item.diff,prior.len() as u64,item.reply.len() as u64,round as u64,&text(run,"run_digest"),&item.leakage,&item.decision){
+   Ok(edit)=>edit,
+   Err(error)=>{put(run,"edit_ledger_error",s(&error));return;}
+  };
+  let mut extra=obj(vec![("pool_status",s(&crate::rrsi::pool_status(false,&item.decision)))]);
+  if !item.commit.is_empty(){put(&mut extra,"commit",s(&item.commit));}
+  if !item.branch.is_empty(){put(&mut extra,"branch",s(&item.branch));}
+  let edit=match crate::rrsi::attach(edit,&extra){
+   Ok(edit)=>edit,
+   Err(error)=>{put(run,"edit_ledger_error",s(&error));return;}
+  };
+  commit_edit(run,&edit);
+  return;
+ }
+ let mut policy=item.policy.clone();
+ put(&mut policy,"pool_status",s(&crate::rrsi::pool_status(item.admissible,&item.decision)));
+ if !item.commit.is_empty(){put(&mut policy,"commit",s(&item.commit));}
+ if !item.branch.is_empty(){put(&mut policy,"branch",s(&item.branch));}
+ let verdict=if item.admissible{"accepted"}else{"rejected"};
+ note_refinement_edit(run,&item.reply,verdict,item.before,item.after,prior,round,&policy);
+}
+fn evaluate_pool(st:&Json,run:&mut Json,candidates:&[String],probes:&[String])->Result<()>{
+ if candidates.is_empty()||candidates.len()>crate::rrsi::CANDIDATE_MAX{
+  return Err(format!("a round carries at most {} candidates",crate::rrsi::CANDIDATE_MAX));
+ }
+ if !probes.is_empty()&&probes.len()!=candidates.len(){return Err("pool probes must match the candidate count".into());}
+ let workspace=text(run,"workspace");
+ let git=if workspace.is_empty(){None}else{match crate::rrsi::require_worktree_root(std::path::Path::new(&workspace)){
+  Ok(root)=>Some(root),
+  Err(error)=>{
+   let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
+   let incumbent=incumbent_text(run);
+   let round=round_index_of(run) as usize;
+   for reply in candidates{
+    let critic=critic_against(run,&records,&incumbent,reply)?;
+    let decision=error.clone();
+    push_pool_row(run,&PoolJudgement{reply:reply.clone(),early:true,component:critic.component,claim:critic.claim,diff:critic.diff,leakage:String::new(),decision,policy:Null,admissible:false,before:0,after:0,commit:String::new(),branch:String::new()},&incumbent,round);
+   }
+   put(run,"composition",s(&incumbent));
+   put(run,"incumbent_kept",Bool(true));
+   put(run,"round_note",s("incumbent kept because no candidate was admissible"));
+   return Ok(());
+  }
+ }};
+ let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
+ let incumbent=incumbent_text(run);
+ let reference=if get(run,"baseline_score")==&Null{obj(vec![("passed",Num("0".into())),("total",Num("0".into()))])}else{get(run,"baseline_score").clone()};
+ let round=round_index_of(run);
+ let mut judged=Vec::with_capacity(candidates.len());
+ for (index,reply) in candidates.iter().enumerate(){
+  let critic=critic_against(run,&records,&incumbent,reply)?;
+  if critic.refused{
+   judged.push(PoolJudgement{reply:reply.clone(),early:true,component:critic.component,claim:critic.claim,diff:critic.diff,leakage:critic.leakage,decision:critic.decision,policy:Null,admissible:false,before:number(&reference,"passed"),after:0,commit:String::new(),branch:String::new()});
+   continue;
+  }
+  let probe=if probes.is_empty()||probes[index].is_empty(){reply.clone()}else{probes[index].clone()};
+  let mut score=improvement::evaluate(st,get(run,"response_checks"),&probe);
+  if score==Null{score=obj(vec![("passed",Num("0".into())),("total",Num("0".into())),("strict",Bool(false))]);}
+  if get(&score,"context")==&Null{put(&mut score,"context",get(&reference,"context").clone());}
+  if get(&reference,"route")!=&Null&&get(&score,"route")==&Null{put(&mut score,"route",get(&reference,"route").clone());}
+  let policy=acceptance_policy(run,&reference,&score,reply,round);
+  let scored=improvement::acceptance(&reference,&score,number(&policy,"noise_floor") as u64,if get(&policy,"cost_before")==&Null{None}else{Some(number(&policy,"cost_before") as u64)},if get(&policy,"cost_after")==&Null{None}else{Some(number(&policy,"cost_after") as u64)});
+  let forced=text(&policy,"verdict");
+  let admissible=forced!="rejected"&&(forced=="accepted"||boolean(&scored,"admit"));
+  let decision=if text(&policy,"decision").starts_with("refused")||text(&policy,"decision").contains("unconfirmed")||text(&policy,"decision").contains("held-out")||text(&policy,"decision").contains("ood score"){
+   text(&policy,"decision")
+  }else if !admissible{
+   "the score did not rise".into()
+  }else{
+   text(&policy,"decision")
+  };
+  judged.push(PoolJudgement{reply:reply.clone(),early:false,component:critic.component,claim:critic.claim,diff:critic.diff,leakage:"clean".into(),decision,policy,admissible,before:number(&reference,"passed"),after:number(&score,"passed"),commit:String::new(),branch:String::new()});
+ }
+ let winner=judged.iter().position(|item|item.admissible);
+ if let Some(root)=git.as_ref(){
+  let base=crate::rrsi::incumbent_base(root)?;
+  for (index,item) in judged.iter_mut().enumerate(){
+   item.commit=crate::rrsi::commit_candidate(root,index,&item.reply,&base)?;
+  }
+  if let Some(index)=winner{
+   crate::rrsi::fast_forward_evolve(root,&judged[index].commit)?;
+   judged[index].branch=crate::rrsi::EVOLVE_BRANCH.into();
+  }
+ }
+ for (index,item) in judged.iter().enumerate(){
+  let mut row=item.clone();
+  if row.admissible&&winner!=Some(index){
+   row.admissible=false;
+   row.decision="an earlier candidate in this pool was already admissible".into();
+   row.branch.clear();
+  }
+  push_pool_row(run,&row,&incumbent,round as usize);
+ }
+ let kept=if let Some(index)=winner{judged[index].reply.clone()}else{incumbent.clone()};
+ put(run,"composition",s(&kept));
+ put(run,"incumbent_kept",Bool(winner.is_none()));
+ let note=if let Some(index)=winner{format!("kept candidate {index}")}else{"incumbent kept because no candidate was admissible".into()};
+ put(run,"round_note",s(&note));
+ Ok(())
+}
 fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:&str,round:u64)->Json{
  let digest=refinement_digest(run);
  let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
@@ -661,7 +810,7 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
  let (component,claim,_)=declared_edit(selected_text);
  let repeated=hypothesis_rejected(&records,&digest,&component,&claim);
  let pruned=crate::rrsi::pruned_components(&records,&digest).iter().any(|name|name==&component);
- let (verdict_override,decision_text)=if budget_block{
+ let (mut verdict_override,mut decision_text)=if budget_block{
   (Some("rejected"),format!("refused because the annealed edit budget {budget} is already spent"))
  }else if let Some(round)=repeated{
   (Some("rejected"),crate::rrsi::rejection_refusal(&component,round))
@@ -678,12 +827,50 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
  }else{
   (None,"score".into())
  };
+ let evolve_before=number(reference,"passed") as u64;
+ let evolve_after=number(selected,"passed") as u64;
+ let mut split=Null;
+ if get(run,"held_out_known")!=&Null{
+  let held=if boolean(run,"held_out_known"){Some((number(run,"held_out_before") as u64,number(run,"held_out_passed") as u64))}else{None};
+  let ood=if get(run,"ood_known")!=&Null&&boolean(run,"ood_known"){Some((number(run,"ood_before") as u64,number(run,"ood_passed") as u64))}else{None};
+  let judgement=improvement::split_judgement(evolve_before,evolve_after,held,ood);
+  let note=text(&judgement,"note");
+  if !note.is_empty()&&!boolean(&judgement,"reported_gain")&&verdict_override!=Some("rejected"){
+   verdict_override=Some("rejected");
+   decision_text=note;
+  }
+  split=judgement;
+ }
  let mut policy=obj(vec![
   ("edit_budget",Num(budget.to_string())),
   ("noise_floor",Num(floor.to_string())),
   ("cost_known",Bool(cost_known)),
   ("decision",s(&decision_text)),
  ]);
+ if split!=Null{
+  put(&mut policy,"held_out_known",Bool(boolean(run,"held_out_known")));
+  put(&mut policy,"evolve_passed",Num(evolve_after.to_string()));
+  let evolve_task=if text(run,"evolve_task_key").len()==64{text(run,"evolve_task_key")}else{improvement::task_key(&text(run,"task"))};
+  let evolve_verifier=if text(run,"evolve_verifier").len()==64{text(run,"evolve_verifier")}else{improvement::verifier_key(get(run,"response_checks"))};
+  if evolve_task.len()==64{put(&mut policy,"evolve_task_key",s(&evolve_task));}
+  if evolve_verifier.len()==64{put(&mut policy,"evolve_verifier",s(&evolve_verifier));}
+  if text(run,"harness_digest").len()==64{put(&mut policy,"harness_digest",s(&text(run,"harness_digest")));}
+  if !text(run,"evolve_shape").is_empty(){put(&mut policy,"evolve_shape",s(&text(run,"evolve_shape")));}
+  if boolean(run,"held_out_known"){
+   put(&mut policy,"held_out_passed",Num(number(run,"held_out_passed").to_string()));
+   put(&mut policy,"held_out_task_key",s(&text(run,"held_out_task_key")));
+   put(&mut policy,"held_out_verifier",s(&text(run,"held_out_verifier")));
+  }
+  if get(run,"ood_known")!=&Null{
+   put(&mut policy,"ood_known",Bool(boolean(run,"ood_known")));
+   if boolean(run,"ood_known"){
+    put(&mut policy,"ood_passed",Num(number(run,"ood_passed").to_string()));
+    put(&mut policy,"ood_task_key",s(&text(run,"ood_task_key")));
+    put(&mut policy,"ood_verifier",s(&text(run,"ood_verifier")));
+   }
+   if !text(run,"ood_shape").is_empty(){put(&mut policy,"ood_shape",s(&text(run,"ood_shape")));}
+  }
+ }
  if let Some((before,after))=costs{
   put(&mut policy,"cost_before",Num(before.to_string()));
   put(&mut policy,"cost_after",Num(after.to_string()));
@@ -1701,6 +1888,194 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert_eq!(text(&records[0],"hypothesis"),"legacy-hypothesis");
   assert_eq!(text(&records[1],"decision"),"cost not recorded");
   assert_eq!(text(&records[1],"verdict"),"accepted");
+ }
+ fn pool_state(instructions:&str)->(Json,Json){
+  let st=configured();
+  let checks=Arr(vec![s("REQUIRED-PHRASE")]);
+  let run=obj(vec![("mode",s("refine")),("phase",s("propose")),("task",s("pool task")),("chat",get(&st,"active").clone()),("agent",obj(vec![("name",s("General")),("instructions",s(instructions)),("tools",s("read"))])),("baseline_score",low_bits(1)),("response_checks",checks),("run_digest",s(POLICY_RUN)),("edit_ledger",s("")),("edit_ledger_root",s(&ledger_root())),("edit_ledger_path",s("edits.jsonl")),("refinement_rounds",Num("1".into()))]);
+  (st,run)
+ }
+ fn pool_rows(run:&Json)->Vec<Json>{crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap()}
+ #[test] fn pool_with_no_admissible_candidate_keeps_the_incumbent(){
+  let (st,mut run)=pool_state("INCUMBENT");
+  let candidates=vec!["copy pool task into the body".into(),"INCUMBENT".into(),"brand new instructions".into()];
+  evaluate_pool(&st,&mut run,&candidates,&[]).unwrap();
+  assert_eq!(text(&run,"composition"),"INCUMBENT");
+  assert_eq!(get(&run,"incumbent_kept"),&Bool(true));
+  assert_eq!(text(&run,"round_note"),"incumbent kept because no candidate was admissible");
+  assert_eq!(text(get(&run,"agent"),"instructions"),"INCUMBENT");
+  assert!(text(&run,"edit_ledger_error").is_empty(), "{}", text(&run,"edit_ledger_error"));
+  let rows=pool_rows(&run);
+  assert_eq!(rows.len(),3);
+  let status:Vec<String>=rows.iter().map(|row|text(row,"pool_status")).collect();
+  assert!(status.iter().all(|item|item.starts_with("refused:")), "{status:?}");
+  assert_eq!(status.iter().collect::<std::collections::BTreeSet<_>>().len(),3, "{status:?}");
+  assert!(status[0].contains("recorded task"), "{status:?}");
+  assert!(status[1].contains("no change"), "{status:?}");
+  assert!(status[2].contains("score did not rise"), "{status:?}");
+  assert!(rows.iter().all(|row|text(row,"verdict")=="rejected"));
+  assert!(!text(&run,"edit_ledger").contains("pool task"), "{}", text(&run,"edit_ledger"));
+  assert_eq!(get(&rows[0],"score_before"),&Null);
+  assert_eq!(get(&rows[1],"score_before"),&Null);
+ }
+ #[test] fn pool_ledger_bytes_match_across_two_evaluations(){
+  let candidates=vec!["copy pool task into the body".into(),"INCUMBENT".into(),"brand new instructions".into()];
+  let (st,mut first)=pool_state("INCUMBENT");
+  let (st2,mut second)=pool_state("INCUMBENT");
+  evaluate_pool(&st,&mut first,&candidates,&[]).unwrap();
+  evaluate_pool(&st2,&mut second,&candidates,&[]).unwrap();
+  assert_eq!(text(&first,"edit_ledger"),text(&second,"edit_ledger"));
+  assert!(text(&first,"edit_ledger").contains("refused:"));
+  assert_eq!(text(&first,"round_note"),text(&second,"round_note"));
+ }
+ struct GitScratch{repo:std::path::PathBuf,root:std::path::PathBuf}
+ impl GitScratch{
+  fn new()->Self{
+   let root=std::env::temp_dir().join(format!("rllm-b5-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+   let repo=root.join("repo");
+   std::fs::create_dir_all(&repo).unwrap();
+   let git=|args:&[&str]|{
+    let output=std::process::Command::new("git").args(args).current_dir(&repo).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").output().unwrap();
+    assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
+   };
+   git(&["init","-b","main"]);
+   std::fs::write(repo.join("seed.txt"),"seed\n").unwrap();
+   git(&["-c","user.name=RLLM","-c","user.email=rllm@localhost","add","--","seed.txt"]);
+   git(&["-c","user.name=RLLM","-c","user.email=rllm@localhost","commit","-m","seed"]);
+   Self{repo,root}
+  }
+ }
+ impl Drop for GitScratch{fn drop(&mut self){let _=std::fs::remove_dir_all(&self.root);}}
+ fn git_text(repo:&std::path::Path,args:&[&str])->String{
+  let output=std::process::Command::new("git").args(args).current_dir(repo).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").output().unwrap();
+  assert!(output.status.success(),"{args:?} {}",String::from_utf8_lossy(&output.stderr));
+  String::from_utf8_lossy(&output.stdout).trim().to_string()
+ }
+ #[test] fn worktree_candidate_records_branch_and_commit_and_plain_directory_refuses(){
+  let plain=std::env::temp_dir().join(format!("rllm-b5-plain-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+  std::fs::create_dir_all(&plain).unwrap();
+  let (st,mut run)=pool_state("INCUMBENT");
+  put(&mut run,"workspace",s(plain.to_str().unwrap()));
+  evaluate_pool(&st,&mut run,&["revised harness".into()],&[]).unwrap();
+  let rows=pool_rows(&run);
+  assert_eq!(rows.len(),1);
+  assert!(text(&rows[0],"pool_status").contains("not the root of a git work tree"), "{}", text(&rows[0],"pool_status"));
+  assert_eq!(get(&rows[0],"commit"),&Null);
+  assert_eq!(get(&rows[0],"branch"),&Null);
+  assert!(!plain.join(".rllm-worktrees").exists());
+  assert_eq!(text(&run,"composition"),"INCUMBENT");
+  let _=std::fs::remove_dir_all(&plain);
+  let scratch=GitScratch::new();
+  let (st,mut run)=pool_state("INCUMBENT");
+  let checks=Arr(vec![s("REQUIRED-PHRASE")]);
+  let baseline=improvement::evaluate(&st,&checks,"nothing here");
+  assert_eq!(number(&baseline,"passed"),0);
+  put(&mut run,"baseline_score",baseline);
+  put(&mut run,"response_checks",checks);
+  put(&mut run,"workspace",s(scratch.repo.to_str().unwrap()));
+  let before=git_text(&scratch.repo,&["rev-parse","HEAD"]);
+  evaluate_pool(&st,&mut run,&["revised harness".into()],&["REQUIRED-PHRASE".into()]).unwrap();
+  let rows=pool_rows(&run);
+  assert_eq!(rows.len(),1,"{}",text(&run,"edit_ledger_error"));
+  assert_eq!(text(&rows[0],"pool_status"),"admissible");
+  assert_eq!(text(&rows[0],"branch"),crate::rrsi::EVOLVE_BRANCH);
+  assert_eq!(text(&rows[0],"commit").len(),40);
+  assert_eq!(text(&rows[0],"verdict"),"accepted");
+  assert_eq!(git_text(&scratch.repo,&["rev-parse",&format!("refs/heads/{}",crate::rrsi::EVOLVE_BRANCH)]),text(&rows[0],"commit"));
+  assert_eq!(git_text(&scratch.repo,&["rev-parse","HEAD"]),before);
+  assert!(!text(&rows[0],"pool_status").contains("REQUIRED-PHRASE"));
+  assert!(!rows[0].string().contains("REQUIRED-PHRASE"));
+ }
+ #[test] fn candidate_round_leaves_caller_head_index_and_worktree(){
+  let scratch=GitScratch::new();
+  let before=git_text(&scratch.repo,&["rev-parse","HEAD"]);
+  assert_eq!(git_text(&scratch.repo,&["status","--porcelain"]),"");
+  let (st,mut run)=pool_state("INCUMBENT");
+  let checks=Arr(vec![s("REQUIRED-PHRASE")]);
+  put(&mut run,"baseline_score",improvement::evaluate(&st,&checks,"nothing here"));
+  put(&mut run,"response_checks",checks);
+  put(&mut run,"workspace",s(scratch.repo.to_str().unwrap()));
+  let candidates=vec!["INCUMBENT".into(),"revised harness".into(),"copy pool task into the body".into()];
+  let probes=vec!["".into(),"REQUIRED-PHRASE".into(),"".into()];
+  evaluate_pool(&st,&mut run,&candidates,&probes).unwrap();
+  let after=git_text(&scratch.repo,&["rev-parse","HEAD"]);
+  let status=git_text(&scratch.repo,&["status","--porcelain"]);
+  let rows=pool_rows(&run);
+  assert_eq!(rows.len(),3,"{}",text(&run,"edit_ledger_error"));
+  let kept=rows.iter().find(|row|text(row,"pool_status")=="admissible").unwrap();
+  let evolve=git_text(&scratch.repo,&["rev-parse",&format!("refs/heads/{}",crate::rrsi::EVOLVE_BRANCH)]);
+  let evidence=format!("HEAD before: {before}\nHEAD after: {after}\nstatus porcelain: {status:?}\nevolve: {evolve}\nledger commit: {}\nbranch: {}\n",text(kept,"commit"),text(kept,"branch"));
+  std::fs::write("/tmp/b5-git-evidence.txt",&evidence).unwrap();
+  assert_eq!(after,before,"{evidence}");
+  assert_eq!(status,"","{evidence}");
+  assert_eq!(text(kept,"branch"),crate::rrsi::EVOLVE_BRANCH);
+  assert_eq!(evolve,text(kept,"commit"));
+  assert_eq!(text(&run,"composition"),"revised harness");
+  assert_eq!(get(&run,"incumbent_kept"),&Bool(false));
+  assert!(!text(&run,"edit_ledger").contains("pool task"));
+  assert!(!text(&run,"edit_ledger").contains("REQUIRED-PHRASE"));
+ }
+ fn copy_split(run:&mut Json,scored:&Json){
+  for key in ["harness_digest","evolve_task_key","evolve_verifier","evolve_shape","held_out_task_key","held_out_verifier","ood_task_key","ood_verifier","ood_shape"]{
+   if get(scored,key)!=&Null{put(run,key,get(scored,key).clone());}
+  }
+  put(run,"held_out_known",get(scored,"held_out_known").clone());
+  put(run,"ood_known",get(scored,"ood_known").clone());
+  if boolean(scored,"held_out_known"){put(run,"held_out_passed",get(scored,"held_out_passed").clone());}
+  if boolean(scored,"ood_known"){put(run,"ood_passed",get(scored,"ood_passed").clone());}
+ }
+ #[test] fn held_out_absence_is_unknown_and_gain_is_unconfirmed(){
+  let (mut st,mut run)=policy_run(2,low_bits(0),low_bits(2),low_bits(2),"gained instructions","gained instructions","old","",&[],Null);
+  let harness="HARNESS-UNCHANGED-ABSENT";
+  let evolve_task="EVOLVE_TASK_ABSENT_BODY";
+  let scored=improvement::score_split(&st,harness,&[improvement::SplitCase{task:evolve_task.into(),checks:Arr(vec![s("evolve-token")]),reply:"evolve-token".into()}],None,None).unwrap();
+  assert_eq!(get(&scored,"held_out_known"),&Bool(false));
+  assert_eq!(get(&scored,"held_out_passed"),&Null);
+  assert!(!scored.string().contains(evolve_task));
+  copy_split(&mut run,&scored);
+  let settled=settled_run(&mut st,run);
+  let row=last_edit(&settled);
+  assert_eq!(text(&row,"verdict"),"rejected");
+  assert!(text(&row,"decision").contains("gain unconfirmed"), "{}", text(&row,"decision"));
+  assert!(text(&row,"decision").contains("held-out leg is unknown"), "{}", text(&row,"decision"));
+  assert_eq!(get(&row,"held_out_known"),&Bool(false));
+  assert_eq!(get(&row,"held_out_passed"),&Null);
+  assert_eq!(get(&row,"ood_known"),&Bool(false));
+  assert_eq!(text(&settled,"round_note"),text(&row,"decision"));
+  assert_eq!(get(&settled,"first_refinement"),&Null);
+  assert!(!row.string().contains("acceptance task"), "{}", row.string());
+  assert!(!row.string().contains(evolve_task));
+  assert!(!row.string().contains(harness));
+  assert_eq!(text(&row,"harness_digest"),text(&scored,"harness_digest"));
+ }
+ #[test] fn held_out_score_moving_the_other_way_is_reported(){
+  let (mut st,mut run)=policy_run(2,low_bits(0),low_bits(1),low_bits(1),"gained instructions","gained instructions","old","",&[],Null);
+  let harness="HARNESS-UNCHANGED-OPPOSITE";
+  let evolve=[improvement::SplitCase{task:"EVOLVE_TASK_OPPOSITE_BODY".into(),checks:Arr(vec![s("evolve-token")]),reply:"evolve-token".into()}];
+  let held_task="HELD_TASK_OPPOSITE_BODY";
+  let ood_task="OOD_TASK_OPPOSITE_BODY";
+  let before=improvement::score_split(&st,harness,&[improvement::SplitCase{task:"EVOLVE_TASK_OPPOSITE_BODY".into(),checks:Arr(vec![s("evolve-token")]),reply:"no evolve token".into()}],Some(&[improvement::SplitCase{task:held_task.into(),checks:Arr(vec![s("held-token")]),reply:"held-token".into()}]),Some(&[improvement::SplitCase{task:ood_task.into(),checks:obj(vec![("method",s("equals")),("expected",s("ood-exact"))]),reply:"ood-exact".into()}])).unwrap();
+  let after=improvement::score_split(&st,harness,&evolve,Some(&[improvement::SplitCase{task:held_task.into(),checks:Arr(vec![s("held-token")]),reply:"missing".into()}]),Some(&[improvement::SplitCase{task:ood_task.into(),checks:obj(vec![("method",s("equals")),("expected",s("ood-exact"))]),reply:"different shape".into()}])).unwrap();
+  assert_eq!(text(&before,"harness_digest"),text(&after,"harness_digest"));
+  assert!(number(&before,"held_out_passed")>number(&after,"held_out_passed"));
+  assert!(number(&after,"evolve_passed")>number(&before,"evolve_passed"));
+  assert_ne!(text(&after,"evolve_shape"),text(&after,"ood_shape"));
+  copy_split(&mut run,&after);
+  put(&mut run,"held_out_before",get(&before,"held_out_passed").clone());
+  put(&mut run,"ood_before",get(&before,"ood_passed").clone());
+  let settled=settled_run(&mut st,run);
+  let row=last_edit(&settled);
+  let decision=text(&row,"decision");
+  assert_eq!(text(&row,"verdict"),"rejected");
+  assert!(decision.contains("held-out score moved from 1 to 0"), "{decision}");
+  assert!(decision.contains("evolve score moved from 0 to 1"), "{decision}");
+  assert!(decision.contains("ood score moved from 1 to 0"), "{decision}");
+  assert_eq!(number(&row,"held_out_passed"),0);
+  assert_eq!(number(&row,"ood_passed"),0);
+  assert_eq!(get(&row,"held_out_known"),&Bool(true));
+  assert_eq!(text(&row,"held_out_task_key"),improvement::task_key(held_task));
+  assert_eq!(text(&settled,"round_note"),decision);
+  assert!(!row.string().contains(held_task)&&!row.string().contains(ood_task)&&!row.string().contains("ood-exact")&&!row.string().contains(harness), "{}", row.string());
  }
 
 }
