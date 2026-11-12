@@ -583,12 +583,20 @@ A **real run log** on the committed bytes is in `docs/SELF-BUILD-RUNLOG.md`: the
 whole sanctioned plan, appended journal revision `d4fdee92…` with gate 538/538 and the pre-edit
 binary as the rollback digest, detected a stale claimed digest, refused reload without review, then
 `exec`'d the rebuilt image and the **successor** answered a verb that exists only in the rebuilt
-source and appended journal revision `1c8ff4e0…` with parent `d4fdee92…` on the same pipe. Two
-defects came out of that log and are open: `self_build::run` never applies its own reviewed edit to
-disk (the disk write exists only in the `"write"` arm, `core/application.rs:3665`), and `handoff`
-walks with an empty skip list, so a rollback binary above the 4 MiB per-file walker cap makes reload
-return `file exceeds 4194304 bytes` at a non-skipped journal path — a product layout that keeps its
-journal inside the workspace cannot reload. `GAP1` also remains unproven in product reachability:
+source and appended journal revision `1c8ff4e0…` with parent `d4fdee92…` on the same pipe. The two
+defects that came out of that log are **closed at 2026-11-12T07:4Z** (`1598752`): `self_build::run` now
+calls `apply_reviewed_edit` before any builder leg and every receipt names the write
+(`Saved N bytes to <path>.`), using the same replacement policy as `write` — regular non-symlink
+target, `approved_previous` re-compared against the file on disk, bytes written to a fresh
+`.pending-<pid>-<nanos>` temp file that is `sync_all`'d, then `fs::rename`; and `handoff` accepts
+`journal`/`rollback` and walks with `tree(&root, &skip_paths(value)?)`. The reload fix is witnessed in
+the product, not only by a unit case: in a clean room at `1598752` whose controller was built in the
+room (11,983,664 bytes), `self_handoff` refused with `file exceeds 4194304 bytes` while an
+11,987,760-byte rollback store sat at `self/rollback`, and the same call naming `journal` and
+`rollback` proceeded; the journal commit itself succeeded there (revision `8c61e052…`, gate
+**541/541**, isolated 55, rollback preserved) and refused a wrong parent before spending a rebuild.
+The edit leg is witnessed at unit level — three new refusal cases inside the 541/541 gate, 538 before
+them — but still not through the product's own approval path. `GAP1` also remains unproven in product reachability:
 `self_build` is in `const TOOLS` and therefore in `agent_new`'s default tool string
 (`core/harness.rs:166`), but it is absent from `REFINEMENT_TOOLS` (`:274`) and **no connected group
 exercises it**. `GAP5`: `tools/alignment.py`, `tools/readback.py`, `tools/checkpoint.py` are deleted
