@@ -599,7 +599,15 @@ closed**: `tools/apk.py:10` and `tools/package.py:105` still name `tools/alignme
 the APK inspection build-input assert and stops the publication record binding the aligner that
 produces the shipped APK; `package.sh:101` runs `output/tools/alignment` with nothing building it;
 the ports' 8 tests are never compiled or run by any sanctioned instrument; `checkpoint.rs` has no
-code consumer at all, so it has no behavioural witness; and `GAP1` newly made the **product** depend
+code consumer at all, so it has no behavioural witness; and
+**the aligner is proven equivalent on real bytes** — measured 2026-11-12T01:20Z against the
+2026-11-11 packaging leg (`output/2026-11-11__14-59-03Z/package.apk`, 6,944,777 bytes), the native
+`output/tools/alignment` printed `Alignment payload validation: 25 exact members; attempt 1` and
+produced an APK **byte-identical** (`sha256 76cd2b996c6f…`, `cmp` clean) to the `aligned.apk` the
+deleted Python aligner produced at that leg; verify mode returned 25 with rc 0, truncating the
+candidate to 6,000,000 bytes refused with `BadZipFile: File is not a zip file` (rc 1), flipping one
+byte at offset 4096 refused with `zlib.error: Compressed back-reference outside member bounds`
+(rc 1), and the pristine control stayed green; and `GAP1` newly made the **product** depend
 on Python — `core/self_build.rs:435,556,983` name `python3` where `core/harness.rs` and
 `core/application.rs` named it zero times at the baseline.
 
