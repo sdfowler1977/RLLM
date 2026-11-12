@@ -263,6 +263,29 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
     }
 }
 
+// execve can return ETXTBSY, os error 26, for a file that was just closed.
+// Retry only that error, at most five times, with a few milliseconds between tries.
+fn executable_file_busy(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::ExecutableFileBusy || error.raw_os_error() == Some(26)
+}
+
+fn retry_executable_file_busy<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    const ATTEMPTS: u32 = 5;
+    let mut tried = 0u32;
+    loop {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                tried += 1;
+                if tried >= ATTEMPTS || !executable_file_busy(&error) {
+                    return Err(error);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+}
+
 fn run_cmd(binary: &Path, args: &[String], cwd: &Path, font: Option<&str>, timeout: Duration) -> Result<Captured, String> {
     let mut command = Command::new(binary);
     command
@@ -276,7 +299,8 @@ fn run_cmd(binary: &Path, args: &[String], cwd: &Path, font: Option<&str>, timeo
             command.env("CLIENT_CAPTURE_TEST_FONT", font);
         }
     }
-    let mut child = command.spawn().map_err(|error| format!("cannot start {}: {error}", binary.display()))?;
+    let mut child = retry_executable_file_busy(|| command.spawn())
+        .map_err(|error| format!("cannot start {}: {error}", binary.display()))?;
     let stdout = child.stdout.take().ok_or("unit gate stdout is unavailable")?;
     let stderr = child.stderr.take().ok_or("unit gate stderr is unavailable")?;
     let out_handle = std::thread::spawn(move || read_tail(stdout, 32 * 1024 * 1024));
@@ -492,6 +516,7 @@ fn main() {
 #[cfg(test)]
 mod checks {
     use super::*;
+    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -519,10 +544,11 @@ mod checks {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(path, body).unwrap();
-        let mut permissions = fs::metadata(path).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).unwrap();
+        let mut file = fs::File::create(path).unwrap();
+        file.write_all(body.as_bytes()).unwrap();
+        file.flush().unwrap();
+        drop(file);
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[test]
@@ -644,5 +670,43 @@ exit 1\n",
         );
         let error = run_gate(&dir.0, &duplicate).unwrap_err();
         assert!(error.contains("duplicate"), "{error}");
+    }
+
+    #[test]
+    fn written_script_executes_on_the_first_attempt() {
+        let dir = TempDir::new();
+        let script = dir.0.join("ready");
+        write_script(&script, "#!/bin/sh\nprintf 'ready\\n'\n");
+        let output = Command::new(&script).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(output.stdout, b"ready\n");
+    }
+
+    #[test]
+    fn executable_busy_retry_gives_up_on_not_found() {
+        let mut attempts = 0;
+        let error = retry_executable_file_busy(|| {
+            attempts += 1;
+            Err::<u8, _>(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"))
+        })
+        .unwrap_err();
+        assert_eq!(attempts, 1);
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn executable_busy_retry_succeeds_after_two_busy_failures() {
+        let mut attempts = 0;
+        let value = retry_executable_file_busy(|| {
+            attempts += 1;
+            if attempts <= 2 {
+                Err(std::io::Error::from_raw_os_error(26))
+            } else {
+                Ok(7u8)
+            }
+        })
+        .unwrap();
+        assert_eq!(value, 7);
+        assert_eq!(attempts, 3);
     }
 }
