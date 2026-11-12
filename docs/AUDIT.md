@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T02:55Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T06:44Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -594,12 +594,21 @@ journal inside the workspace cannot reload. `GAP1` also remains unproven in prod
 exercises it**. `GAP5`: `tools/alignment.py`, `tools/readback.py`, `tools/checkpoint.py` are deleted
 and replaced by `tools/alignment.rs` / `readback.rs` / `checkpoint.rs` (3,568 lines, 8 `#[test]`
 cases) built by `tools/build-tools.sh`, which ran green; tracked Python is now **76 files / 7,932
-lines** (`tools/` 5, `verification/` 71) — three fewer files, 72 fewer lines. The port is **not
-closed**: `tools/apk.py:10` and `tools/package.py:105` still name `tools/alignment.py`, which breaks
-the APK inspection build-input assert and stops the publication record binding the aligner that
-produces the shipped APK; `package.sh:101` runs `output/tools/alignment` with nothing building it;
-the ports' 8 tests are never compiled or run by any sanctioned instrument; `checkpoint.rs` has no
-code consumer at all, so it has no behavioural witness; and
+lines** (`tools/` 5, `verification/` 71) — three fewer files, 72 fewer lines. The four defects measured at 02:52Z are **closed and verified by the coordinator at 2026-11-12T06:44Z**:
+`tools/apk.py:10` and `tools/package.py:105` name `tools/alignment.rs` (both literals re-read),
+`package.sh` builds the tools inside the same input-drift window its fingerprint check measures and
+then runs `output/tools/alignment` (`bash -n` clean), and `bash tools/build-tools.sh` compiles each
+tool twice and executes its `--test` binary, printing `tool tests: … cases: 2`, `1`, `5` — 8 executed
+cases, each equal to that source's declared `#[test]` count, refusing otherwise. The connected
+instrument now drives the port: `./output/harness apk_alignment` in only-mode, with `RLLM_CHECK_APK`
+set to that same 6,944,777-byte APK, printed `apk_alignment PASS (exit 0, 7s, 11 checks)` while
+shelling `output/tools/alignment` for align and verify; the truncated, changed, missing, extra,
+duplicate and CRC-corruption arms still refuse and the group's readback assertions match the Rust
+source text. That subject is the packaging leg's unsigned `package.apk`, not the delivered signed
+companion, so the published record's `apk_alignment` UNAVAILABLE arm remains open until the owner's
+companion triple lands; `checkpoint.rs` still has no code consumer anywhere in the tree, so it has no
+behavioural witness beyond its five executed unit cases, and `readback.rs` still needs that companion
+triple; and
 **the aligner is proven equivalent on real bytes** — measured 2026-11-12T01:20Z against the
 2026-11-11 packaging leg (`output/2026-11-11__14-59-03Z/package.apk`, 6,944,777 bytes), the native
 `output/tools/alignment` printed `Alignment payload validation: 25 exact members; attempt 1` and

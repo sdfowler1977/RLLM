@@ -102,7 +102,7 @@ assert all(not f.is_symlink()for f in files)
 assert not any(f.suffix=='.apk' for f in files),'The signed APK is distributed separately'
 assert not any(f.suffix in ['.p12','.jks','.password','.keystore','.zip','.tar','.xz']for f in files)
 manifest['files']={f.relative_to(root).as_posix():dict(bytes=f.stat().st_size,sha256=hashlib.sha256(f.read_bytes()).hexdigest())for f in files}
-manifest['build_inputs']={f.relative_to(root).as_posix():hashlib.sha256(f.read_bytes()).hexdigest()for f in files if f.relative_to(root).parts[0]in ['core','platform','res','notices']or f.relative_to(root).as_posix()in ['AndroidManifest.xml','package.sh','tools/alignment.py']}
+manifest['build_inputs']={f.relative_to(root).as_posix():hashlib.sha256(f.read_bytes()).hexdigest()for f in files if f.relative_to(root).parts[0]in ['core','platform','res','notices']or f.relative_to(root).as_posix()in ['AndroidManifest.xml','package.sh','tools/alignment.rs']}
 assert manifest['build_inputs']==apk['build_inputs'],'Source differs from inspected APK inputs'
 (root/'PUBLICATION-MANIFEST.json').write_text(json.dumps(manifest,indent=2)+'\n');files.append(root/'PUBLICATION-MANIFEST.json')
 source=out/f'RLLM__Candidate-Source__{stamp}.zip'

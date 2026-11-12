@@ -1,12 +1,18 @@
 """Real zipalign output and damaged APK payload checks; no signing or delivery."""
-import hashlib,importlib.util,json,os,pathlib,tempfile,zipfile
+import hashlib,json,os,pathlib,subprocess,tempfile,zipfile
 PROJECT=pathlib.Path(__file__).resolve().parents[1]
-spec=importlib.util.spec_from_file_location('alignment',PROJECT/'tools/alignment.py');alignment=importlib.util.module_from_spec(spec);spec.loader.exec_module(alignment)
+ALIGNMENT=PROJECT/'output/tools/alignment'
 passed=[]
 def check(name,value):assert value,name;passed.append(name)
+def verify(original,candidate):
+    result=subprocess.run([str(ALIGNMENT),str(original),str(candidate)],capture_output=True,text=True,env=dict(os.environ,RLLM_ALIGNMENT_VERIFY='1'))
+    if result.returncode:raise ValueError((result.stderr or result.stdout).strip() or 'verify failed')
+    return int(result.stdout.strip())
+def align(tool,original,aligned):
+    subprocess.run([str(ALIGNMENT),'--tool',str(tool),str(original),str(aligned)],check=True)
 def rejected(name,original,candidate):
-    try:alignment.verify(original,candidate)
-    except (ValueError,zipfile.BadZipFile,RuntimeError,EOFError):passed.append(name)
+    try:verify(original,candidate)
+    except (ValueError,zipfile.BadZipFile,RuntimeError,EOFError,subprocess.CalledProcessError):passed.append(name)
     else:raise AssertionError(name)
 def subject():
     configured=os.environ.get('RLLM_CHECK_APK')
@@ -22,12 +28,12 @@ identity=hashlib.sha256(original.read_bytes()).hexdigest()
 readers=[path for path in sorted((PROJECT/'verification').glob('*.py'))if'RLLM_CHECK_APK'in path.read_text()]
 default_form="RLLM_CHECK_APK'"+","
 record=json.loads((PROJECT/'PUBLICATION-MANIFEST.json').read_text())['signed_apk']
-readback=(PROJECT/'tools/readback.py').read_text()
+readback=(PROJECT/'tools/readback.rs').read_text()
 check('every instrument that reads an APK subject resolves it from the publication record instead of a default path it never verifies',readers and all('PUBLICATION-MANIFEST.json'in path.read_text()and default_form not in path.read_text()for path in readers))
 check('the publication record names the delivered signed APK and the tree states no release APK while delivery is a companion file',record['location']=='companion'and record['path'].endswith('.apk')and record['bytes']>0 and len(record['sha256'])==64 and not any(path.suffix=='.apk'for path in(PROJECT/'release').glob('*.apk')))
-check('the readback leg verifies the companion artifact by name and byte identity instead of assuming a release path',"signed['path']==Path(m['paths']['apk']).name"in readback and 'assert not apks'in readback and "assert len(apk_bytes)==signed['bytes']"in readback)
+check('the readback leg verifies the companion artifact by name and byte identity instead of assuming a release path','signed_location == "companion"'in readback and 'apks.is_empty()'in readback and 'signed_path != apk_name'in readback and 'apk_bytes.len() as u64 != signed_bytes'in readback)
 with tempfile.TemporaryDirectory(prefix='apk-alignment-',dir=PROJECT/'output')as tmp:
-    root=pathlib.Path(tmp);aligned=root/'aligned.apk';alignment.align(pathlib.Path(os.environ['CLIENT_TOOLS'])/'zipalign',original,aligned);check('real official zipalign retains every current APK payload',alignment.verify(original,aligned)==len(zipfile.ZipFile(original).infolist()))
+    root=pathlib.Path(tmp);aligned=root/'aligned.apk';align(pathlib.Path(os.environ['CLIENT_TOOLS'])/'zipalign',original,aligned);check('real official zipalign retains every current APK payload',verify(original,aligned)==len(zipfile.ZipFile(original).infolist()))
     truncated=root/'truncated.apk';truncated.write_bytes(aligned.read_bytes()[:2_048_000]);rejected('truncated alignment output is rejected before signing',original,truncated)
     with zipfile.ZipFile(original)as z:
         entries=[(m.filename,z.read(m))for m in z.infolist()]
