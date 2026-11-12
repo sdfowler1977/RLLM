@@ -1752,12 +1752,25 @@ pub(crate) fn successor_states() -> Vec<Json> {
                     None => Null,
                 }
             };
+            // `exit` stays the wait status' exit code. A signal has no exit code,
+            // so the view names it here, and only once `exit_observed` is set.
+            // Until then `signal` is null, which is how an unobserved death stays
+            // distinct from a signal death. The durable reap row is not this object.
+            let signal = if tracked.exit_observed {
+                match tracked.signal {
+                    Some(number) => Num(number.to_string()),
+                    None => Null,
+                }
+            } else {
+                Null
+            };
             obj(vec![
                 ("pid", n(*pid)),
                 ("job", s(&tracked.job)),
                 ("job_source", s(&tracked.job_source)),
                 ("running", Bool(running)),
                 ("exit", exit),
+                ("signal", signal),
             ])
         })
         .collect()
@@ -4346,6 +4359,188 @@ mv "$tmp" "$1.done"
         let finished = tracked_state(pid);
         assert_eq!(get(&finished, "running"), &Bool(false));
         assert_eq!(get(&finished, "exit"), &n(9));
+    }
+
+    #[test]
+    fn handoff_view_names_a_signal_death_while_exit_stays_null() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("signal-view");
+        let root = scratch.path();
+        let journal = root.join("self/journal.jsonl");
+        let witness = successor_journal_path(&journal);
+        let pid = track_with(
+            Command::new("/bin/sleep")
+                .arg("30")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            "signaled-job",
+            "caller",
+            "spawn",
+            Some(witness.clone()),
+        );
+        assert!(
+            Command::new("/bin/kill").arg("-KILL").arg(pid.to_string()).status().unwrap().success(),
+            "kill did not signal the successor"
+        );
+        wait_dead(pid);
+        let seen = handoff_at(root, false).unwrap();
+        let state = viewed_state(&seen, pid);
+        assert_eq!(get(&state, "running"), &Bool(false));
+        assert_eq!(get(&state, "exit"), &Null, "signal death rendered {}", state.string());
+        assert_eq!(
+            get(&state, "signal"),
+            &n(9),
+            "signal death rendered {}",
+            state.string()
+        );
+        assert!(
+            state.string().contains("\"exit\":null") && state.string().contains("\"signal\":9"),
+            "signal death rendered {}",
+            state.string()
+        );
+        assert_eq!(get(&seen, "successor_rows"), &n(0));
+        assert_eq!(text(&seen, "successor_tip"), "");
+        assert!(!witness.exists(), "reading the handoff appended a successor journal row");
+        assert!(
+            !successor_mark_path(&journal).exists(),
+            "reading the handoff wrote a successor mark"
+        );
+        let stored_signal = {
+            let table = successors();
+            let tracked = table.get(&pid).unwrap();
+            assert!(tracked.exit_observed, "the view did not store the death");
+            assert_eq!(tracked.exit, None);
+            assert_eq!(tracked.signal, Some(9));
+            tracked.signal
+        };
+        assert_eq!(reap().unwrap(), 1);
+        assert_eq!(reap().unwrap(), 0);
+        let rows = durable_successor_rows(&journal).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(text(&rows[0], "event"), "reap");
+        assert_eq!(get(&rows[0], "exit"), &Null);
+        assert_eq!(get(&rows[0], "signal"), &Num(stored_signal.unwrap().to_string()));
+        assert_eq!(text(&rows[0], "job"), "signaled-job");
+        assert_eq!(get(&rows[0], "pid"), &n(pid));
+        let Obj(fields) = &rows[0] else { panic!("reap row is not an object") };
+        let keys: Vec<_> = fields.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["event", "exit", "job", "parent", "pid", "revision", "schema", "signal"]
+        );
+        let line = rows[0].string();
+        let exit_at = line.find("\"exit\":null").expect("reap row exit");
+        let signal_at = line.find("\"signal\":9").expect("reap row signal");
+        assert!(exit_at < signal_at, "{line}");
+        assert!(!line.contains("exit_observed"), "{line}");
+        let again = handoff_at(root, false).unwrap();
+        let reread = viewed_state(&again, pid);
+        assert_eq!(get(&reread, "running"), &Bool(false));
+        assert_eq!(get(&reread, "exit"), &Null);
+        assert_eq!(get(&reread, "signal"), &n(9));
+        assert_eq!(durable_successor_rows(&journal).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn successor_view_distinguishes_a_normal_exit_a_signal_death_and_an_unobserved_death() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("signal-three");
+        let root = scratch.path();
+        let normal = track(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg("exit 4")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            "normal-job",
+            "caller",
+            "spawn",
+        );
+        let signaled = track(
+            Command::new("/bin/sleep")
+                .arg("30")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            "signal-job",
+            "caller",
+            "spawn",
+        );
+        let pending = track(
+            Command::new("/bin/sleep")
+                .arg("30")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            "unobserved-job",
+            "caller",
+            "spawn",
+        );
+        struct StopSleep(u64);
+        impl Drop for StopSleep {
+            fn drop(&mut self) {
+                let _ = Command::new("/bin/kill").arg("-KILL").arg(self.0.to_string()).status();
+            }
+        }
+        // Only the still-running child. The signaled pid is reaped by the view,
+        // and killing it again could hit a reused pid.
+        let _stop_pending = StopSleep(pending);
+        wait_dead(normal);
+        assert!(
+            Command::new("/bin/kill").arg("-KILL").arg(signaled.to_string()).status().unwrap().success(),
+            "kill did not signal the successor"
+        );
+        wait_dead(signaled);
+        let seen = handoff_at(root, false).unwrap();
+        let normal_view = viewed_state(&seen, normal);
+        let signal_view = viewed_state(&seen, signaled);
+        let pending_view = viewed_state(&seen, pending);
+        assert_eq!(get(&normal_view, "running"), &Bool(false));
+        assert_eq!(get(&normal_view, "exit"), &n(4));
+        assert_eq!(get(&normal_view, "signal"), &Null);
+        assert_eq!(get(&signal_view, "running"), &Bool(false));
+        assert_eq!(get(&signal_view, "exit"), &Null);
+        assert_eq!(get(&signal_view, "signal"), &n(9));
+        assert_eq!(get(&pending_view, "running"), &Bool(true));
+        assert_eq!(get(&pending_view, "exit"), &Null);
+        assert_eq!(get(&pending_view, "signal"), &Null);
+        {
+            let table = successors();
+            let normal_tracked = table.get(&normal).unwrap();
+            let signal_tracked = table.get(&signaled).unwrap();
+            let pending_tracked = table.get(&pending).unwrap();
+            assert!(normal_tracked.exit_observed);
+            assert_eq!(normal_tracked.exit, Some(4));
+            assert_eq!(normal_tracked.signal, None);
+            assert!(signal_tracked.exit_observed);
+            assert_eq!(signal_tracked.exit, None);
+            assert_eq!(signal_tracked.signal, Some(9));
+            assert!(!pending_tracked.exit_observed);
+            assert_eq!(pending_tracked.exit, None);
+            assert_eq!(pending_tracked.signal, None);
+        }
+        let normal_text = normal_view.string();
+        let signal_text = signal_view.string();
+        let pending_text = pending_view.string();
+        assert_ne!(normal_text, signal_text, "normal and signal views match\n{normal_text}");
+        assert_ne!(signal_text, pending_text, "signal and unobserved views match\n{signal_text}");
+        assert_ne!(normal_text, pending_text, "normal and unobserved views match\n{pending_text}");
+        assert!(normal_text.contains("\"exit\":4") && normal_text.contains("\"signal\":null"), "{normal_text}");
+        assert!(signal_text.contains("\"exit\":null") && signal_text.contains("\"signal\":9"), "{signal_text}");
+        assert!(
+            pending_text.contains("\"exit\":null") && pending_text.contains("\"signal\":null") && pending_text.contains("\"running\":true"),
+            "{pending_text}"
+        );
     }
 
     fn handoff_exec_reaches_the_successor() {
