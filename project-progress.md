@@ -69,3 +69,52 @@ in the manifest. `docs/BUILD.md` and `docs/AUDIT.md` no longer describe deleted 
 Not claimed: any `GAP2`/`GAP3`/`GAP4` capability, device acceptance, the signed APK bytes, or a
 record republish (no connected sweep has been run since these edits; the record still reads
 69 groups / 4,185 checks / sha256 `7250328b5385`).
+
+# RLLM working checkpoint — 2026-11-12T07:0Z
+
+**`GAP5` step 1 landed and was verified by coordinator runs, not by the lane's report**
+(`812b23b`, `d57ac13`, `b48b405`):
+
+- `bash tools/build-tools.sh` executed **2 / 1 / 5** cases for `alignment` / `readback` /
+  `checkpoint`, each equal to that source's declared `#[test]` count; the builder exits 1 on a
+  failed run, an unreadable count, or a mismatch, so those tests cannot silently stop running.
+- A connected instrument now drives the port: `apk_alignment PASS (exit 0, 6-7s, 11 checks)` in
+  only-mode while `verification/apk_alignment.py` shells `output/tools/alignment` for both align
+  and verify, with the truncated / changed / missing / extra / duplicate / CRC-corruption arms
+  still refusing. Subjects: `output/2026-11-11__14-59-03Z/package.apk` and
+  `output/2026-11-12__05-31-35Z/package.apk`, both 6,944,777 bytes and unsigned.
+- `output/2026-11-12__05-31-35Z` is a **real `package.sh` run** (unsigned) made after the fixes: its
+  167-entry `build-inputs.sha256` names `tools/alignment.rs` (`f05de95d…`), and that inventory still
+  equals the current expected set, so `tools/apk.py:10`'s `'Build input inventory changed after
+  compilation'` assert passes on real bytes. Two per-file digests now mismatch because the `GAP1`
+  lane edited `core/` after that leg — the drift check working as designed.
+- Exposure found in my own change and fixed: the aligner went from an imported source file to a
+  **built artifact**, so `tools/harness.rs` now classifies a missing `output/tools/<tool>` as an
+  unavailable development input. Measured both arms with a private coordinator build: present →
+  `PASS (11 checks)`; moved aside → `UNAVAILABLE (not executed, missing: path output/tools/alignment
+  (built by tools/build-tools.sh))`.
+
+**`GAP5` step 2 dispatched to Grok Build 4.7** (background shell `bg_88dc7644`):
+`tools/signature.py` + `tools/apk.py` + `tools/toolchain.py` (177 lines) → native programs,
+`tools/build-tools.sh` extended, `tools/package.py:4` rewired to the native signature program, the
+three `.py` deleted, **no new `.py` anywhere**, and scoped away from `core/` so it cannot collide
+with the `GAP1` lane.
+
+**`GAP1` lane still in flight** (uncommitted: `core/` +217/−98). Its observed diff direction is the
+briefed one: `apply_reviewed_edit(root, args)` called from `run` (defect 1 — the reviewed edit never
+reached disk), `tree(&root, &skip_paths(value)?)` replacing the empty skip list (defect 2 — a
+rollback binary above the 4 MiB walker cap made reload refuse), `bounded_child` delegating to
+`execution::bounded_process` (removing the duplicated child runner), plus three tests named
+`reviewed_edit_lands_on_disk_and_the_receipt_names_the_write`,
+`reviewed_edit_refuses_a_symlink_a_directory_and_a_non_utf8_source` and
+`handoff_skips_the_journal_and_the_over_cap_rollback_store`. `python3` still appears three times in
+`core/self_build.rs`, so `GAP1` still entrenches the Python gate until `GAP5` step 3 makes that gate
+step native.
+
+Python exposure measured again: **76 files / 7,932 lines** tracked-and-present (`tools/` 5,
+`verification/` 71).
+
+Not claimed: signed-path behaviour (no signed APK exists anywhere under `output/` or `release/` on
+this host), `readback.rs`/`checkpoint.rs` behavioural witnesses, device acceptance, any
+`GAP2`/`GAP3`/`GAP4` capability, or a record republish — the record still reads 69 groups /
+4,185 checks / sha256 `7250328b5385`, because no full sweep has been run while two lanes write.
