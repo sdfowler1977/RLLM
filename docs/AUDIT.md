@@ -1546,13 +1546,16 @@ watches only `count`, `passed` and `checks` (`failed`/`scope` are skipped) and a
 code 0, while `Measure::finish` (`:362-378`) compares **only the watched fields that are present** — so the
 green line sets `passed` to the recorded count and a red record omits `passed` rather than publishing `0`
 against `count = 9`, which would have become a `Conflict` → `unparsed` and blocked the publish. Its group was
-then run on the committed bytes: 9 checks, exit 1 as predicted, because the product tree now carries four
-dead-code warnings — so the product's own `output/headless/RLLM` is not currently buildable, which is a
-regression in the committed tree and not a lane defect. The warnings map onto open work: `require_worktree_root`
-(`core/rrsi.rs`, orphaned by root3's guard swap), `durable_successor_rows`/`successor_states`/`job_source`
-(GAP1 read-back, a lane owns it), `field xrefs` (GAP4's typed graph, a lane owns it), `leg_score`/`score_split`
-(GAP2's held-out rows, the GAP2 lane's target). `verification/rrsi_loop.py`'s copy of the same fix is written
-and audited but deliberately uncommitted: that file is being edited by the GAP2 lane.
+then re-run on the committed bytes and is **green: 9 checks, exit 0** (record `output/self-rebuild.json`).
+An earlier note in this window said that group went red because the product could not build — **that was
+wrong**: a `git archive HEAD` room built `output/headless/RLLM` (12,534,832 bytes) with `headless.sh` exit 0
+and 64 warnings, so the dead-code warnings are a wiring signal, not a build blocker. The warnings that map
+onto open work are `field xrefs` (GAP4's typed graph, a lane owns it),
+`durable_successor_rows`/`successor_states`/`job_source` (GAP1 read-back, a lane owns it),
+`leg_score`/`score_split`/`SPLIT_CASE_MAX` (GAP2's held-out rows, the GAP2 lane's target) and
+`require_worktree_root` (`core/rrsi.rs`, orphaned by root3's guard swap). `verification/rrsi_loop.py`'s copy
+of the same fix is written and audited but deliberately uncommitted: that file is being edited by the GAP2
+lane.
 
 Open now, beyond the standing owner-gated items (the signed companion APK triple, `PUB-INPUT-DRIFT`, the
 `binary_flow`/`history_migration` comparators, `DESKTOP-SURFACE`, the memory index):
