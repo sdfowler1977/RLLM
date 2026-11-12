@@ -811,5 +811,20 @@
       "make binary_flow pass",
       "make history_migration pass"
     ]
+  },
+  "late_audit_self_rebuild_live_findings_2026_11_12T2045": {
+    "at": "2026-11-12T20:45Z",
+    "provenance": "a queue-delivered audit of the self_rebuild group from the 70-group era (tree at f228c74, audit window 07:14Z) arrived after that work had landed and superseded; re-measured against the current tree before acting",
+    "already_superseded": [
+      "70-group inventory is now 71 (census committed in c852ef7)",
+      "self_rebuild red is closed (it is in the published counts)",
+      "stale product binary under that audit's test no longer applies - lanes measure in rooms",
+      "the 'only tools/package.py republishes the Rust-case leg' refutation is already recorded at closure_ledger packager_claim_corrected (package.rs:1908 does it too)"
+    ],
+    "live_1_leg_swallow": "verification/self_rebuild.py leg() still reads: except Exception: traceback.print_exc(); if name not in evaluated: check(name,False,...) - a raise after the leg's own check(...) ran is reported as passed and the leg state is never advanced, so later legs run against stale state. Queued for a repair lane, not fixed silently by the coordinator.",
+    "live_2_report_shape": "verification/self_rebuild.py:284-285 still writes record=dict(checks=evaluated,count=len(evaluated),failed=problems,...) and adds record['passed']=passed (a list) only when green, deviating from the house shape passed=int; a red group therefore reports its failing checks in the executed count",
+    "live_3_record_hygiene": "verification/RESULTS.json checks block holds 65 entries while connected.counts holds 71 - missing desktop_runtime, permission_modes, rrsi_loop, self_rebuild, state_sealing, turn_background; release/NOTES.md:5 still reads '64/65 connected groups passed; 4228 executed checks and 513 Rust cases'. Only a packager publish (tools/package.py or tools/package.rs) repairs both, so the settled-tree sequence is: full harness sweep, then a package publish, and the notes line will read 67/71 (not 71/71) because four groups stay unavailable",
+    "live_4_scm_hygiene": "no __pycache__ entry in .gitignore and none for toolchain/; three .pyc files are tracked - still owner-gated, unchanged",
+    "cleared": "the Co-authored-by: Qwen-Coder trailer flagged in that audit is not on this window's commits - git log shows author Shawn Fowler <sdfowler1977@gmail.com> with no Co-authored-by trailer on 6c41172, 5a5b2f9, d7b68d8, b9a2c5b"
   }
 }
