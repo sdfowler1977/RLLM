@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T16:1Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T16:4Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -1197,6 +1197,37 @@ that went to zero in this room (`binary_flow`, `history_migration`, `field_flow`
 (`output/previous-controller`, `output/pre-branch-controller`, `output/pre-auth-controller`,
 `output/published-controller`, and the companion APK named by `PUBLICATION-MANIFEST.json`). A room can therefore
 never produce the delivered record's real totals; only the main tree, which holds those reference builds, can.
+
+### GAP1's last leg closes: a successor's spawn and exit survive the process that recorded them — 2026-11-12T16:4Z
+
+`12cdc6b` makes the handed-off successor observable. Spawn and reap rows go into a **sibling** content-addressed
+journal, `self/journal.successors.jsonl`, derived from the caller's revision-journal path — deliberately not into
+the revision journal itself, because that file's last line is the parent the next build must match and the existing
+witnesses count one row per successful build, so inserting rows there would move the parent chain. Rows reuse the
+file's own `append_record` / `journal_lines` / `tail_revision` rules (`schema "1"`, `parent` = the previous row's
+`revision`, `revision` = sha256 of the object with `revision` removed). Spawn rows carry `pid`, `job`,
+`source_digest`, `mode`, `timestamp`; reap rows carry `pid`, `job`, `exit`, `signal`. The spawn row is written only
+after `child.spawn()` succeeds, and `durable_successor_rows` reads the sibling **alone** — verifying every digest
+and parent link, touching nothing in the process table, and returning an empty list without creating a file when the
+journal is absent. A refused self-build leaves both journals absent. Verified alone in a room of `HEAD` plus that one
+file: **633/633 cases + 55 isolated application cases**, exit 0 (629 + its 4 new cases).
+
+The MiniMax seat on this diff was **cut short by its own token limit** (13,094 bytes, stopping mid-finding F3, so its
+masking / dependency / test-adequacy sections never ran). That is recorded rather than glossed, and I ran its missing
+R1 leg myself: grepping the diff's added lines for `Command::new` / `bounded_process` / `process::Command` returns
+nothing, so the change introduces no outside-program dependency. Its three findings were adjudicated, not accepted:
+- **F1 (called High)** — a spawn row can outlive a failed revision append. Kept as a design consequence rather than
+  a defect: the child really was spawned, so the row is not a false claim. The rule is that the sibling journal is
+  evidence of a spawn/exit, never of a completed handoff, and it joins to the revision journal through `job` and
+  `source_digest`.
+- **F2 (Medium-High)** — the reap row is written before the process-local table is updated, so a crash mid-reap
+  leaves the durable record ahead of the dying process's table. That is the intent of making it durable; recorded.
+- **F3 (Medium) — real, and dispatched.** `reap()` (`core/self_build.rs:1426`) collects ready children, then appends
+  with `?` (`:1452`) *before* clearing `tracked.child`. A failed append therefore returns before the state
+  transition, and because `Child::try_wait()` returns the cached status afterwards, the next `reap()` journals the
+  same exit a second time. Repair lane `bg_ed8ed3e7` reorders it (state first, row second, failure surfaced once) and
+  must also add the tamper legs the audit noted were untested: a flipped byte inside a reap row, a wrong `parent`, and
+  a row removed from a three-row chain.
 
 ## Historical baseline audit (original text)
 
