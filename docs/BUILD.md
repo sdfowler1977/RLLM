@@ -53,7 +53,7 @@ The host build uses `-C linker-features=-lld` and produces the shared-core contr
 
 ## Development recovery and delivery
 
-The tools directory retains the pinned toolchain restorer, connected-check runner, APK inspector, source packager and download readback verifier. Run tools/checks.py with the actual prior-controller reference, and use --units with the compiled selected Rust-check binary. Inspect the signed APK with tools/apk.py APK --version VERSION, package with tools/package.py --destination DESTINATION, then use tools/readback.py against the downloaded APK/source/checksums. These tools record the executed checks and exact file identities.
+The tools directory retains the pinned toolchain restorer, connected-check runner, APK inspector, source packager and download readback verifier, plus the native packaging tools built by tools/build-tools.sh from tools/alignment.rs, tools/readback.rs and tools/checkpoint.rs into output/tools/. Run tools/checks.py with the actual prior-controller reference, and use --units with the compiled selected Rust-check binary. Inspect the signed APK with tools/apk.py APK --version VERSION, package with tools/package.py --destination DESTINATION, then use output/tools/readback against the downloaded APK/source/checksums. These tools record the executed checks and exact file identities.
 
 Delivery captures the inspected APK bytes, verifies the staged and published APK signatures with the retained certificate, and records the companion APK’s exact length and digest in the source manifest. Download readback repeats the signature and archive-integrity checks against the actual delivered APK.
 

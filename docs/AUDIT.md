@@ -350,7 +350,9 @@ record does not say `companion`, otherwise looks for the record's basename at th
 `fn published_apk` (`tools/harness.rs:146-182`), so a missing companion is reported as a missing input that
 names the artifact. Three named checks pin it (`apk_alignment` 8 → 11 checks): the instrument set resolves its
 subject from the record, the record names a delivered signed APK while `release/` claims none, and
-`tools/readback.py` verifies the companion by name and byte identity rather than by a release path.
+`tools/readback.rs` (built by `tools/build-tools.sh` into `output/tools/readback` since the 2026-11-12
+port; formerly `tools/readback.py`) verifies the companion by name and byte identity rather than by a
+release path.
 Runner side, measured with `RLLM_CHECK_APK` unset:
 `apk_alignment UNAVAILABLE (not executed, missing: path companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json (not on this machine))`.
 
@@ -369,7 +371,7 @@ non-git tree, which leaked two mutations into the first arm run until the identi
 exposed it.
 
 What is left on `RELEASE-APK` is owner-only: the companion triple and `output/checks/packaged.json`
-(`tools/package.py:117`) are not on this machine, so `tools/readback.py` has nothing to verify until a signed
+(`tools/package.py:117`) are not on this machine, so the readback instrument has nothing to verify until a signed
 package leg runs with `CLIENT_KEYSTORE`/`CLIENT_KEY_ALIAS`/`CLIENT_KEY_PASSWORD` or the bytes are placed here.
 No keystore was minted. `verification/*.py` and `tools/harness.rs` are not build inputs, so the record's 162
 pinned input digests did not move.
@@ -673,17 +675,26 @@ a defect the instrument calls red, and both are product decisions rather than co
 unasked.
 
 Measured against `PUBLICATION-MANIFEST.json` (build 1794270237): `signed_apk.location` is `companion`,
-so the source bundle deliberately carries no APK — `tools/readback.py` asserts `not apks` in that branch —
+so the source bundle deliberately carries no APK — `tools/readback.rs` refuses when the release
+directory holds no APK list entry in that branch (`apks.is_empty()`, since the 2026-11-12 port of
+`tools/readback.py`) —
 and the companion bytes (`RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk`, 6,932,498 bytes,
 `86b7d741…`) exist nowhere on this machine, which is also why the readback leg cannot be run here
-(`output/checks/packaged.json` is absent too). Of the 162 pinned build inputs, 136 match the working tree exactly and 26
-have drifted (`AndroidManifest.xml`, `platform/com/local/client/Activity.java` and 24 `core/*.rs` files —
+(`output/checks/packaged.json` is absent too). Re-measured 2026-11-12T02:58Z against the 162 pinned build
+inputs: 131 match the working tree exactly and 30
+have drifted (`AndroidManifest.xml`, `package.sh`, `platform/com/local/client/Activity.java` and 27
+`core/*.rs` files —
 `application`, `capture_file`, `claim_records`, `comparison`, `control_flow`, `css_cascade`,
-`css_selectors`, `delegation`, `dex`, `dex_code`, `directory_observation`, `elf_observation`, `harness`,
-`hosted_search`, `image_png`, `instruction`, `investigation`, `lib`, `page_capture`, `page_layout`,
-`pe_observation`, `search`, `text_encoding`, `web_document`); 0 recorded inputs are missing from the tree.
-Three files the publisher would now enumerate are not in the manifest at all: `core/desktop.rs`,
-`core/state_crypto.rs` and `platform/com/local/client/TurnService.java`. So `tools/package.py:106`
+`css_selectors`, `delegation`, `dex`, `dex_code`, `directory_observation`, `elf_observation`,
+`execution`, `harness`, `harness_rules`, `hosted_search`, `image_png`, `instruction`, `investigation`,
+`lib`, `page_capture`, `page_layout`, `pe_observation`, `search`, `services`, `text_encoding`,
+`web_document`). **One recorded input is now missing from the tree**: `tools/alignment.py`, which the
+`GAP5` port deleted while `PUBLICATION-MANIFEST.json` still pins it (in `build_inputs`, in `files`, and
+in `verification/RESULTS.json`), so `PUB-INPUT-DRIFT` is no longer only stale digests — the manifest
+names an input that does not exist.
+Six files the publisher would now enumerate are not in the manifest at all: `core/desktop.rs`,
+`core/permissions.rs`, `core/self_build.rs`, `core/state_crypto.rs`,
+`platform/com/local/client/TurnService.java` and `tools/alignment.rs`. So `tools/package.py:106`
 ("Source differs from inspected APK inputs") and the per-input digest assert at `tools/package.py:11`
 refuse both a republish and the readback leg until a publication is made from the current bytes — which
 also needs the signing identity this machine does not have. The earlier figure for this same check was 7
