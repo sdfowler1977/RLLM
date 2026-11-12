@@ -2087,6 +2087,111 @@ My own probes of the seat's claims: its P1 that the whole `inspect` now fails on
 
 **Gap 3's remaining halves are now a census, not a guess.** The library half is **not** missing: `experience.jsonl` is written at `core/harness.rs:284` and read back at `:226` (`historical_section_checked` over the stored `library_index`) and `:256` (`load_experience`), so "later tasks never read the library" would be wrong. What measures as absent is `grep -rn "invariant|domain"` over `core/rrsi.rs core/harness.rs core/improvement.rs core/harness_rules.rs` → **0** hits (Gap 3 item 5: invariant-versus-domain scoping for every proposal) and `anonym` / `selector` over `core/*.rs` → **0** hits outside the CSS parser (item 7: choosing among anonymised deliverables when k > 1). `CANDIDATE_MAX = 3` with one worktree per slot is already the parallel-candidate pool, so item 2 is partially there and item 7 is the honest gap.
 
+## The unit line gets a measured baseline, the JS surface is byte-decided, and the STOP loop and the native sweep twin are refused — 2026-11-12T14:05Z–15:00Z (host clock; `87c1638` → `b4b6ee9`)
+
+### A baseline, not a chain of deltas
+
+Every unit-line figure in this audit had been carried forward as a chain of per-commit `#[test]`
+deltas. The chain is now anchored by a direct measurement: a room of `git archive HEAD` bytes and
+nothing else (`tools/build-units.sh`, `python3 tools/checks.py --all-units`) printed
+**`Rust cases passed: 806/806; isolated application cases: 57`**, build rc=0 with zero `warning:`
+lines, units digest `616b17aab2452e66d1c640056e5f7979dd38abc599a29d3ad3b78de67c520824`, with
+`core/harness.rs` 75 and `core/rrsi.rs` 42 `#[test]`. That corrects the 804 figure carried into
+this window: two cases had landed in commits whose deltas were never re-summed. With the anchor in
+place both lanes' self-reports became arithmetic identities instead of claims — 811 = 806 + 5
+(`core/harness.rs` 75 → 80) and 816 = 806 + 10 (`core/js_evidence.rs` 5 → 14,
+`core/file_evidence.rs` 6 → 7).
+
+### Gap 4 item 3 committed: kind comes from bytes, not from a file name
+
+`core/js_evidence.rs` (+665/−112), `core/file_evidence.rs` (+19), `core/investigation.rs` (+25/−1)
+committed at `b4b6ee9`. The lane's claim was a room witness of 816/816; the coordinator's room was
+independent (`git archive HEAD` plus exactly those three files, room shas equal to the worktree
+shas) and printed the same line — **816/816 plus 57 isolated cases**, build rc=0, zero warnings,
+units digest `2b8f55d98e9bebed6018648a69af5d5b4fdd8ad9ed4e4f180e7c4a9455f9e1ff`. Two audit seats
+read the whole diff; three of their findings were refuted by the code:
+
+- "the lexer sets module kind on any `(` token, so prose with `foo()` is a module" — the `(` arm
+  lives inside `after_import` (`core/js_evidence.rs:851-860`) and `after_require` only fires after
+  the word `require` plus `(`, which is the rule the file's own doc comment states ("a file is a
+  JavaScript module only when its bytes contain an import, an export declaration, or a `require`
+  call"), and the prose-with-`import` refusal is pinned by a test.
+- "the 5 MiB refusal may come after the bytes are read" — the read loop in
+  `core/investigation.rs:91-96` is itself bounded at 4 MiB+1, and `core/file_evidence.rs:87-89`
+  refuses on `file_len` before any parsing.
+- "an attacker-controlled ASAR header causes an arbitrarily large allocation" — `asar_directory`
+  rejects `header_len > bytes.len() - 8` and cross-checks the pickle against it, and the project's
+  JSON parser caps text at 8 MiB and nesting depth at 64 (`core/lib.rs:278-280`,
+  `core/lib.rs:175-176`, pinned by `depth_limit` at `core/lib.rs:554`). The 128-entry cap bounds the
+  listing, not the parse, and parse work stays proportional to the input.
+
+What remains open on this item is test coverage, not behaviour: the new
+`javascript native-addon cap` (64) has no dedicated test, and the lane's claim that "each parser
+arm was shown failing with that arm neutered" is not witnessed — its transcript shows one batch red
+run, not per-arm legs. Both are tracked as open items.
+
+### Gap 2 item 13 refused before commit: a STOP file that the round cap walks past
+
+The STOP-file/rejudge pair (`core/rrsi.rs` +65/−1, `core/harness.rs` +304/−0) was witnessed green in
+a room holding only those two files — **811/811 plus 57**, zero warnings — and still was **not**
+committed, because the audit found five real defects in it:
+
+- `stop_requested` is consulted only at the top of `open_next_round`, and the round-cap branch
+  follows it immediately, so a run with `refinement_rounds < 3` never consults the STOP file and
+  the hand-off from the last allowed round into evaluation records no STOP row at all.
+- the synthetic STOP row carries `component = "prompt"`, `component_counts`
+  (`core/rrsi.rs:694`) counts every row of a run regardless of verdict or score, and `prompt` is in
+  `COMPONENTS` (`core/rrsi.rs:25`), so a control row makes `prompt` look *tried*: it disappears
+  from `untried_components` (`core/rrsi.rs:854`) and can drive `reserved_slot_refusal`
+  (`core/rrsi.rs:911`) to refuse a genuine candidate citing a row that was never a trial. The gain
+  path is clean for the same measured reason — `edit_gain` returns `None` for unscored rows, so
+  `round_best_gains`, `component_rounds` and `pruned_components` already ignore it.
+- the validator accepts any score-less refusal whose text equals the STOP sentence
+  (`core/rrsi.rs:201-205`) with no structural pairing to the row that produced it.
+- `rejudge` does not judge with a row's sealed betas: `costs_for_betas`
+  (`core/harness.rs:1065-1084`) synthesises a cost pair so the *current* constants reproduce the
+  recorded verdict, and `improvement::acceptance` takes no beta parameters
+  (`core/improvement.rs:172-180`), so the reported reason always comes from current constants
+  (`core/improvement.rs:210-212`). The row already stores `beta0`/`beta1`, so threading them is the
+  honest fix.
+- no mutation legs were run for any of these guards.
+
+Two claims were refuted while adjudicating: the seat's "the sealed bound is never evaluated"
+(`core/harness.rs:1072` computes `over_row = delta > sealed bound` and steers with it), and the
+coordinator's own suspicion that the rejudge seen-set is wrong (the live path at
+`core/harness.rs:962-964` reads `records` from the ledger *before* the candidate row is appended,
+which is exactly `records[0..index]`). A repair lane was dispatched with these six findings; the
+pair stays uncommitted.
+
+### Gap 5: the native sweep twin is refused, and the Python publisher is revealed stale
+
+The native `harness sweep` twin (`tools/harness.rs` +458/−39, `tools/package.rs` census wording) was
+reaped, read in full, and **not committed**. Nine findings were adjudicated; two are product bugs in
+the twin:
+
+- the executed-count guard is `if count == 0 { Err(...) }`, which accepts a negative count, so a
+  report could *shrink* `total_executed` while the Python publisher asserts `count > 0`;
+- the sweep path never calls the file's own `required_inputs`, so the record's
+  unavailable-vs-failed split is lost. This was demonstrated, not argued: in one isolated room,
+  `python3 tools/checks.py` and the twin wrote the connected object over the same bytes and the
+  delivered-shape object went from 71 groups / 4215 checks / 67 passed to 5 pass / 126 checks with
+  64 zero-count groups that no row explains (record sha `acc7bc6517e9a590` → `85e487d2c6cb84e6`).
+
+The name-to-report-file mapping was censused directly: `tools/package.rs` `report_pairs()` is
+35 `EXPLICIT_PAIRS` + 22 `IDENTITY_PAIRS` + 14 `HYPHEN_PAIRS` = **71 rows for 71 distinct group
+names**, joining with zero residue to the 71 names in `tools/checks.py`; `tools/package.py`'s
+`pairs` covers only **57** groups, so the Python publisher cannot reproduce the delivered record it
+claims to write. The single-quoted `checks.py` name list and the double-quoted `GROUPS` array in
+`tools/harness.rs` were re-measured after the lane writes: 71 == 71, order-identical. The
+verification census is still exactly 73 files / 8570 lines — at the ceiling pinned in
+`tools/package.rs`, with no slack for the group currently being edited.
+
+### A fleet hazard worth recording
+
+`pgrep -f 'prompt-file …'` matches the launcher wrapper, not the model process. A `kill -9` on that
+PID left the lane running, and relaunching into the same log path truncated the survivor's output.
+Liveness must be read from `ps -eo pid,ppid,etimes,args`, not from a wrapper match.
+
 ## Historical baseline audit (original text)
 
 # Release audit
