@@ -7,7 +7,7 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **753/753 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
+  report bytes): **763/763 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
   69-group record is backed by 638/638, measured at `c34b170`), measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the 638 count is the tree at `c34b170`: 597 at `600e44d`,
   +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
@@ -17,7 +17,8 @@ their original counts and wording.
   re-derived per commit — and +1 in `98fb0d9` → 650, +8 in `e4118b1` → 658, +9 in `e7d13ec` → 667, +5 in
   `db16ffa` → 672, +14 in `436b281` → 686, +15 in `28b29d3` → 701, +7 in `2b041bc` → 708, +10 in `06d1f6b` → 718,
   +5 in `b6457b0` → 723, +6 in `f28e463` → 729, +6 in `0b1cf39` → 735, +2 in `f1051da` → 737 (re-measured directly on
-  `f1051da` in a room that held none of the pending lanes' work), +16 in `51ce540` → 753; the sums were
+  `f1051da` in a room that held none of the pending lanes' work), +16 in `51ce540` → 753, +4 in `966580b` → 757,
+  +6 in `c396323` → 763; the sums were
   re-derived by counting added `#[test]` lines per commit with `git show`, which is why `3e5eda1` (+3) and
   `112e251` (+1) are absent from the chain — those are `tools/` package-test legs, not core unit cases; every delta was
   re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
@@ -54,8 +55,8 @@ their original counts and wording.
   `services` 69 → 72, against `apk_alignment` 11 → 0 and `turn_background` 28 → 0 from the off-host signed
   APK, and the group total moved 68 → 69 on `permission_modes` alone.
   **The record's Rust-case leg is stale and is a measured drift, not a pass:** `full_rust_suite` pins
-  **513/513 cases + 55 isolated** with `binary_sha256 b621eccf4208…`, while the tree measures 611/611 + 55
-  today. Both packagers write that leg — `tools/package.py:52` (`validation['full_rust_suite']=full_units`)
+  **513/513 cases + 55 isolated** with `binary_sha256 b621eccf4208…`, while the tree measures 763/763 + 55 at
+  `c396323`. Both packagers write that leg — `tools/package.py:52` (`validation['full_rust_suite']=full_units`)
   and `tools/package.rs:1908` (`upsert(&mut validation, "full_rust_suite", full.clone())?`) — and a packaging
   run is blocked behind the signed-APK
   publication inputs (`apk['build_inputs']` digests are asserted per path, measured 130 match / 31 drift /
@@ -1586,25 +1587,37 @@ Open now, beyond the standing owner-gated items (the signed companion APK triple
 
 - GAP1 (wire the successor-state read-back and a real handoff chain): **stage 1 landed in `f28e463`** — the
   handoff now reads and validates the companion chain before exec, and `durable_successor_rows`/
-  `successor_states`/`job_source`/`track` are no longer dead code (64 → 60 warnings). Still open: an absent
-  companion journal is indistinguishable from a deleted or mislocated one (both read as the empty witness); the
-  chain resists reordering and insertion but not truncation to an earlier valid prefix, replacement or rollback;
-  a dead-but-unreaped PID still reads `running = true` until `reap()`; the exec-ordering test is not yet
-  mutation-sensitive (lane `xect`); and no connected verification group exercises the handoff chain yet, so the
-  delivered record still covers none of it.
+  `successor_states`/`job_source`/`track` are no longer dead code (64 → 60 warnings). **Stage 2 landed in
+  `c396323`** — the view observes and stores the exit instead of relying on `std::process::Child` caching it, so a
+  dead-but-unreaped PID no longer reads `running = true`; the missing-companion refusal fires only when this process
+  actually tracked that companion, and the tamper probe proves the row digest covers the payload. Still open: an
+  absent companion journal in a *fresh* process is still indistinguishable from a deleted one (the tracked table is
+  process memory and `exec` discards it); the chain resists reordering and insertion but not truncation to an
+  earlier valid prefix, replacement or rollback (lane `g1s4`); a signal-killed successor renders `exit: null` in the
+  view while the durable row carries the signal; and no connected verification group exercises the handoff chain
+  yet, so the delivered record still covers none of it.
 - GAP2 (raise the `refinement_rounds` ceiling with a real 3+-round run to `b_min`, and give `noise_floor` and
   the `held_out_*` keys production writers): a lane owns `core/improvement.rs`, `core/rrsi.rs`,
   `core/harness.rs` and `verification/rrsi_loop.py`, including the two `== 2` equality gates at
   `core/harness.rs:967`/:1053 and the pinned ceiling assertion at `verification/rrsi_loop.py:381-383`.
-- GAP3 depth (the improvement-library index `library_index` (`core/rrsi.rs:1202`) is still dead;
+- GAP3 depth (the improvement-library index `library_index` (`core/rrsi.rs:1202`) is now *produced and stored* —
+  `966580b` copies the resume receipt's index onto `task_run` — but it still has **no product reader**, so no round
+  consumes it (lane `g3c`);
   probe-scored and composed candidates; chained sequential PPC for `k > 1`; agentic selection; the
   non-atomic `apply_accepted` swap), plus removing `root3`'s orphaned `require_worktree_root`.
 - GAP4 (the white-room rebuild end-to-end, `.NET` depth/caps/cancellation, and the typed cross-reference
-  group that GAP4's own report names as "calls and cross-references"): lanes own `core/clean_room.rs` and
-  `core/binary_declarations.rs`.
+  group that GAP4's own report names as "calls and cross-references"): the white-room kernel is wired to disk
+  (`0b1cf39`), the `.NET` parser carries three named caps with a live consumer in `inspect` (`51ce540`), and the
+  typed declaration graph landed (`b6457b0`). The remaining named hole is the container: HAR is read and wired
+  (`core/har_evidence.rs` → `core/observation_records.rs:115`), but a `.saz` archive is not recognised at all —
+  lane `saz1` owns that, reusing `core/archive.rs`'s bounded `unpack` rather than a second zip reader.
 - GAP5 (retirement of the Python instrument roles, in the recorded order): the deflater is now the
-  product's own (`2b041bc`); still to retire is `tools/checks.py`'s sweep/units-replay role, then
-  `tools/package.py` once a real publication archive is compared against the Python one.
+  product's own (`2b041bc`), and since `56e1dbb` the **rule itself has a native gate** — the publisher prints and
+  enforces a Python census (`core` 0/0, `platform` 0/0, `tools` 2/189 allowlisted with named roles, `verification`
+  capped at 73 files / 8,570 lines and only shrinkable, anything else refuses). Still to retire is
+  `tools/checks.py`'s sweep/units-replay role, then `tools/package.py` once a real publication archive is compared
+  against the Python one. The 73/8,570 debt is instrument debt, not product debt, but it is now loud: adding a
+  `verification/*.py` file or growing one refuses `publish`.
 
 A running lane also reverted this document's uncommitted edits once during the window (`git stash list` empty,
 no conflict — a writer with `--always-approve` inside the main worktree can restore tracked files). The
@@ -1890,6 +1903,75 @@ rather than fixed: the fat-header path charges a prefix twice (conservative, can
 header mapping is charged as a row stride rather than per byte (worst case bounded by `METHOD_ROW_CAP` 4096), a
 declared size over the cap that is *not* fully present is parsed as the available prefix with no notice, and the
 64-iteration table loop and 4-heap loop do not poll cancellation.
+
+## The resume index lands, the publisher gains a Python gate, and the tools room turns out to be an invalid instrument — 2026-11-13T08:4Z–11:2Z (program clock; host clock 2026-11-12T11:1Z–12:2Z local)
+
+**`rr1` landed as `966580b`** (`core/rrsi.rs`, `core/harness.rs`). GAP3's "the improvement-library index is dead"
+is now only half true, and the half that was wrong is mine: `resume_run` **did** have a production call site at
+`core/harness.rs:253` — what was dead was the receipt. `resume_durable_ledger` called it, copied digest, ledger and
+path, and threw the rest away (`.map(|_|())` on one arm, `?` on the other), so `library_index`
+(`core/rrsi.rs:1202`) built rows nothing consumed. The route now copies `library_index` onto `task_run`. The lane's
+second library loader (`load_resume_library`, held from `rdx`) is gone: `resume_run` and `historical_section` both
+read `experience.jsonl` through `load_experience` → `parse_library`, so there is one file, one `LINE_CAP` of 64 and
+one cap sentence, and both wrap failures through `library_error`. Room witness `git archive 8de6fd0` plus those two
+files: build exit 0, **757/757 plus 55 isolated**, checks exit 0, `warning: 12 warnings emitted` (unchanged), md5
+`273b59107428c7054a7c40755e3372ff` / `0016422a72f2c9c24dd79eb15d8355d2` in tree and room. Mutations: dropping
+`put(run,"library_index",…)` → 755/757 naming both route cases; deleting `if lines.len() > LINE_CAP` → 755/757 with
+the *previous-link* sentence as the left value, which is what proves the over-cap leg discriminates the cap arm from
+the chain arm rather than merely observing some refusal. **Residual, and it is the next step, not a footnote:** the
+run key has no product reader — the route writes it and three tests read it. Lane `g3c` is dispatched to make a
+round consume it, so that history replaced or rolled back under a live run stops being silently accepted.
+
+**`rrule1` landed as `56e1dbb`** (`tools/package.rs`, +341). The R rule finally has a native instrument behind it
+instead of a table I re-ran by hand: `prepare()` runs `enforce_python_census` after its own walk and before
+`screen_files`, before any artifact byte exists, and `publish` uses that path for real and `--dry-run` publishes
+alike. `core/` and `platform/` must hold zero Python; `tools/` is allowlisted by exact relative name with the role
+each file still serves; `verification/` is capped in aggregate at 73 files / 8,570 lines and can only shrink;
+everything else refuses; `tooling`, `toolchain`, `.qwen`, `.playwright-mcp`, `output`, `__pycache__`, `.git` stay
+out of the count. Census measured by the tool and re-checked with `find`/`grep`/`wc`: **core 0/0, platform 0/0,
+tools 2/189, verification 73/8570, elsewhere 0/0**. Tools witness in the primary tree, exit 0: alignment 2,
+readback 24, checkpoint 5, signature 5, apk 6, toolchain 7, gate 8, package 39 = **96 cases** (package.rs 29 → 39).
+
+**Two instrument facts came out of that witness, and both cost me a false red.** A `git archive` room is **not a
+valid tools witness**: `gate`'s own tests read `output/checks/full-units.json`, and `output/` is gitignored, so the
+room has no such path. And under three concurrent builds, `checks::written_script_executes_on_the_first_attempt`
+panicked on `Os { code: 26, kind: ExecutableFileBusy }` ("Text file busy") — twice, in two different trees — and
+went green (`gate 8`, zero failures) on a quiet re-run. Both are harness facts, so `tools/` claims are witnessed in
+the primary tree, alone.
+
+**`g1s3` landed as `c396323`** (`core/self_build.rs`, the held xect/g1s2/g1s3 bundle). The successor view no longer
+depends on `std::process::Child` caching a status it never promised to cache: `Tracked` carries `exit`/`signal`/
+`exit_observed`, `observe_exit` stores the first observed status, `successor_states` calls it, `reap` records the
+stored value. Before this a dead-but-unreaped child reported `running = true`. The missing-companion refusal is
+narrowed to what the process can actually prove — journal has a row **and** `companion_tracked`, and production
+stores exactly the companion path (`core/self_build.rs:1682`), so the predicate is reachable rather than decorative;
+an unrelated journal with rows keeps the empty witness and really execs, proven by a sub-process probe with a proof
+file. Room witness `git archive 966580b` plus that file: build exit 0, **763/763 plus 55**, checks exit 0, 12
+warnings, md5 `2db510b4af767b95082a1092016bef35` in tree and room. Lane mutations red for the right reason: stored
+exit removed → `reap_uses_the_exit_stored_by_the_view` (`Num("4")` vs `Num("9")`); predicate weakened to "journal has
+rows" → `handoff_review_confirmed_execs_when_unrelated_journal_rows_have_no_tracked_successor`.
+
+**Five audit seats ran against these three diffs; four of their P1s died on the code, and I only caught the
+refutations by reading the files myself.** `journal_lines` is *not* unbounded — it refuses non-file/symlink,
+`journal exceeds 1 MiB` and `journal exceeds 256 revisions`, with `NOFOLLOW` (`core/self_build.rs`, `JOURNAL_MAX`/
+`JOURNAL_LINES`). `parse_library` checks the line count **before** the blank, record-size, parse and `linked_library`
+legs, so an over-cap library cannot be misattributed to a broken chain. `companion_tracked` does not compare the
+primary journal with the companion, because production tracks the companion. The real-tree census test *is* the
+line-ceiling accept case: the tree sits at exactly 8,570 verification lines and `enforce_python_census(...).unwrap()`
+passes there. What the seats genuinely earned: the publisher has **no publish fixture at exactly 8,570 lines** (the
+accept side is proved only through `enforce_python_census`), its census reads each Python file whole with no size
+bound, `verification/` refusals name a ceiling and not the file that grew, `core/self_build.rs:2140` quietly changed
+an older fixture from "companion missing" to "companion present and empty" (the behaviour is covered by the dedicated
+vanished-companion test, but the fixture no longer exercises that case), and a signal-killed successor renders
+`exit: null` in the view while the durable row carries the signal — no view field distinguishes it. Lane `g1s4` is
+dispatched on GAP1 stage 3: measure truncation, wholesale replacement, deletion and rollback of a successor journal
+today, then give the chain a durable high-water that survives `exec`.
+
+**Lanes in flight at 11:2Z:** `saz1` (`core/har_evidence.rs` +203, `core/observation_records.rs`, `core/archive.rs`
+— the `.saz` container GAP4 still cannot read), `g3c` (`core/harness.rs`, `core/rrsi.rs` — make the run's
+`library_index` a consumed product input), `g1s4` (`core/self_build.rs` — successor-journal high-water). Nothing of
+theirs is committed. The connected record is still the pre-`436b281` one (71 groups / 4,215 checks / 67 pass / 4
+unavailable); the sweep needs the primary tree, a clean tree and one quiet run, so it is queued behind these lanes.
 
 ## Historical baseline audit (original text)
 
