@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T14:4Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T15:4Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -38,7 +38,9 @@ their original counts and wording.
   APK, and the group total moved 68 → 69 on `permission_modes` alone.
   **The record's Rust-case leg is stale and is a measured drift, not a pass:** `full_rust_suite` pins
   **513/513 cases + 55 isolated** with `binary_sha256 b621eccf4208…`, while the tree measures 611/611 + 55
-  today. Only `tools/package.py:52` writes that leg, and a packaging run is blocked behind the signed-APK
+  today. Both packagers write that leg — `tools/package.py:52` (`validation['full_rust_suite']=full_units`)
+  and `tools/package.rs:1908` (`upsert(&mut validation, "full_rust_suite", full.clone())?`) — and a packaging
+  run is blocked behind the signed-APK
   publication inputs (`apk['build_inputs']` digests are asserted per path, measured 130 match / 31 drift /
   1 absent), so refreshing it is the owner-gated `PUB-INPUT-DRIFT` leg, not a coordinator action. The group
   sweep itself never touches that leg, which is why a byte-identical sweep record is not a unit-count witness.
@@ -1030,6 +1032,60 @@ Python exposure this window: **73 tracked `.py` files / 7,807 lines**, +52 lines
 all of it `verification/pe_declarations.py` (+55/−3 in `d8d0881`) — the R-rule tension is recorded, not hidden:
 the connected groups are still Python, `tools/package.py` is still the publisher of record until a real native
 publish replaces it, and `core/` still has zero `python3` references.
+
+### The full check on committed bytes, what the sweep does to the record, and the audits read this window — 2026-11-12T15:4Z
+
+**The full check ran and came back red at the tools stage.** On pinned `HEAD` bytes in a `git archive` room
+(nothing uncommitted): `bash tools/build-units.sh` + `python3 tools/checks.py --all-units` → **611/611 cases +
+55 application cases, exit 0**; then `bash tools/build-tools.sh` → **exit 1** because the gate tool's own test
+`failed_batch_records_the_output_tail` panicked at `tools/gate.rs:620` with
+`"cannot start /tmp/rllm-gate-3188754-2/units: Text file busy (os error 26)"` — it execs a `#!/bin/sh` fixture
+it has just written. Because that stage failed, `bash tools/build-harness.sh` and the group sweep never ran.
+Isolation trial: three consecutive `bash tools/build-tools.sh` runs in one room, all eight tools, twice each →
+`Text file busy` count **0**, failures **0**, exit 0. So this is a load-dependent race (about one red in four
+runs under fleet load), not a flaky test to be waved through; the bounded fix belongs in the gate tool.
+
+**What a sweep does to the delivered record, measured rather than assumed.** Two rules in `tools/harness.rs`
+were confirmed by reading and by an actual run:
+- `tools/harness.rs:1047` publishes only when `only.is_empty() && problems.is_empty() && failed == 0 &&
+  unparsed.is_empty()`. **One failing group blocks republishing the record entirely** — the record keeps the
+  old census instead of half-updating. That is why the 70-group census cannot land while `self_rebuild` leg 4
+  is red.
+- A sweep whose groups are all *unavailable* still publishes, and it **hollows the counts it writes**. Running
+  `./output/harness-run` in a room with no `output/headless/RLLM` printed `summary: 0 pass, 0 fail, 69
+  unavailable of 69 groups` and then `delivered record written: 69 groups, 0 checks`. Diffing that room's copy
+  against the delivered file: **69 leaf paths changed**, every `connected.counts.<group>` from a real number
+  (`commands` 79, `hosted_phases` 118, `pe_declarations` 18, `permission_modes` 27 …) to `0`, with the
+  runner's own `zero_count_disclosure` naming the unexecuted groups. The delivered record at this root stayed
+  byte-identical (`7250328b…` before and after). Delivered state read in full: `connected` 69 groups,
+  `total_executed` **4,185**, `groups_passed` 65, four groups recorded 0 (`binary_flow`, `history_migration`,
+  `apk_alignment`, `turn_background`). The working tree declares **70** names; the extra one is the
+  uncommitted `self_rebuild`, and it is the only name in the runner that is missing from the record.
+- Consequence for the standing rule: after a sweep the witness is the `delivered record written:` line plus the
+  file digest, **not** the `recorded in verification/RESULTS.json:` line, which is a pre-run read.
+
+**The independent audits read this window changed three things.**
+- **A claim of mine was refuted and is corrected above**: `full_rust_suite` is written by both packagers
+  (`tools/package.py:52`, `tools/package.rs:1908`), not only by `package.py`.
+- **The `self_rebuild` group passed its interlock audit and failed for a reason the group itself is right
+  about**: 8 checks, 7 pass, 1 fail, reproduced. The red leg is a product ordering defect —
+  `core/self_build.rs:1343` `run()` calls `1398` (apply the reviewed edit) **before** `validate_with`
+  (`1008`–`1026`) refuses an unsanctioned builder (`sanctioned_child:350`), so a refused self-build still
+  mutates the source. The audit's non-blocking caveats on the passing legs are recorded: it could not rebuild
+  the product, so legs 6/7 (spawn/reap) were judged against a binary that predates `63bf5c5`; its claim that
+  `checks.py` reports 37 of 70 groups was misread by me as a coverage gap — that array is the `--group` CLI
+  list and the coverage census is the `names` list asserted against the runner at `tools/checks.py:2265`.
+  The audit also flagged undeclared co-resident changes (`core/harness.rs`, lane F's workspace fix) and
+  untracked artefacts in the tree — both real, and both why `self_rebuild` will be committed as
+  `verification/self_rebuild.py` + the four interlock files only.
+- **The MiniMax GAP3 findings were adjudicated, not swallowed.** Confirmed: `commit_candidate`/
+  `fast_forward_evolve` failures propagate with `?`, which discards the ledger rows that `note_refinement_edit`
+  (`core/harness.rs:102`) and `critic_against` (`core/harness.rs:147`) had already attached — one rejected
+  candidate can erase the round's ledger; and `commit_candidate` (`core/rrsi.rs:1604`) only commits into a
+  scratch worktree, so a pool winner is *recorded*, never *applied* to the source. Refuted: the claim that the
+  three-slot cap makes round 2 abort — `commit_candidate` calls `remove_slot` on the same slot first, so
+  `worktrees` stays ≤ 3 across rounds. The related point stands: an aborted round leaves its slot directories
+  behind, and `require_worktree_root` (`core/rrsi.rs:1505`) treats a stale directory as usable.
 
 ## Historical baseline audit (original text)
 
