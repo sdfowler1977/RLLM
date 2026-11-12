@@ -557,10 +557,15 @@ open-items list, as ledger obligations `GAP1`-`GAP5`, ranked as the report ranks
    `tools/harness.rs` is the only native instrument. Owner rule: RLLM does not run on Python where
    a native route exists — this is an open violation, not a neutral fact.
 
-Substrate blocker for `GAP1` step 4 ("commits it") and `GAP2` feature 12 (worktree candidates):
-`/home/shawn/RLLM` is **not** a git repository (no `.git`; `git status` → `fatal: not a git
-repository`), so a commit or worktree has no substrate until the owner decides between `git init`
-and a project-native revision journal.
+Substrate for `GAP1` step 4 ("commits it") and `GAP2` feature 12 (worktree candidates) was
+resolved by the owner on 2026-11-12 (**both** a git substrate and a native content-addressed
+journal). Measured: `/home/shawn/RLLM` is now a git repository — branch `main`, baseline commit
+`727a33d`, 339 tracked files, clean `git status`, git 2.43.0. `.gitignore` gained `tooling/`
+(5.6 GB pinned toolchain, restored by `tools/toolchain.py`, so it must not be tracked),
+`.qwen/tmp/` and `.playwright-mcp/`; the pre-existing `!release/RLLM-Lab.apk` exception was left
+alone, so `GITIGNORE-ARTIFACT-NAMING` is still an open owner decision. Initialising the repo does
+**not** recover revisions 1793395702 / 1793592809 — history starts at the baseline, so the
+reference-controller groups are unaffected.
 
 Settled by the owner and not reopened by the report: no turn or round cap, YOLO never asks, web
 search and fetch always approved in every mode, shell/git/hosted search fine as tools, and no
@@ -568,7 +573,8 @@ copy of `rrsi`, `harness2` or `rea` anywhere in the tree (re-verified: no such f
 
 `output/previous-controller` and `output/pre-branch-controller` (2 groups — `binary_flow`,
 `history_migration` — require built binaries of revisions 1793395702 and 1793592809, this
-checkout is not a git repository, and a host-wide source census found exactly one out-of-project RLLM tree,
+checkout only became a git repository at the 2026-11-12 baseline `727a33d` — whose history starts
+there, so those two revisions are still absent — and a host-wide source census found exactly one out-of-project RLLM tree,
 so those two revisions are not recoverable here; `prompt_reference` declares the same reference optionally and
 now executes with its comparison leg recorded as unexercised), APK signing
 identity, the missing delivered companion APK, the **3 dead-code warning blocks / 6 items / 6 names /
