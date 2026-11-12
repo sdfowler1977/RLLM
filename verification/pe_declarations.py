@@ -8,11 +8,43 @@ with tempfile.TemporaryDirectory(prefix='pe-declarations-',dir=PROJECT/'output')
  env=dict(os.environ,TMPDIR=str(root));subprocess.run([str(ndk/'clang'),'--target=aarch64-pc-windows-msvc','-c',str(source),'-o',str(root/'original.obj')],check=True,capture_output=True,env=env);subprocess.run([str(ndk/'lld-link'),'/entry:entry','/subsystem:console','/nodefaultlib','/machine:arm64','/out:'+str(root/'original.exe'),str(root/'original.obj')],check=True,capture_output=True,env=env)
  ref=subprocess.check_output([str(ndk/'llvm-readobj'),'--coff-basereloc',str(root/'original.exe')],text=True);addresses=[int(x,16)for x in re.findall(r'Type: DIR64\s+Address: (0x[0-9A-Fa-f]+)',ref)];check('independent linked PE contains an actual DIR64 base relocation',len(addresses)==1)
  p=subprocess.Popen([str(PROJECT/'output/headless/RLLM'),'--jsonl'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
- def op(v):p.stdin.write(json.dumps(v)+'\n');p.stdin.flush();r=json.loads(p.stdout.readline());assert'value'in r,r;return r['value']
+ def raw(v):p.stdin.write(json.dumps(v)+'\n');p.stdin.flush();return json.loads(p.stdout.readline())
+ def op(v):r=raw(v);assert'value'in r,r;return r['value']
  def event(st,a,i=None):return op(dict(op='event',state=st,action=a,inputs=i or {},root=str(root)))
  def reply(d,text):
   b=json.dumps({'choices':[{'message':{'content':text},'finish_reason':'stop'}]}).encode();wire=b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(b)).encode()+b'\r\n\r\n'+b;return event(d['state'],'network_result',dict(purpose='model',model_ticket=d['state']['model_expected'],data=base64.b64encode(wire).decode()))
  def settle(d,e,out):return event(d['state'],'tool_result',dict({k:e[k]for k in ['purpose','tool_ticket','tool_binding','child_ticket','child_owner']if k in e},output=out))
+ def drive(state,record_id,mode,output,node='0'):
+  state=event(state,'investigation_record:'+record_id)['state'];state=event(state,'investigation_graph')['state'];state=event(state,'investigation_graph_node:'+str(node))['state'];state=event(state,'reconstruction_new')['state']
+  return event(state,'reconstruction_prepare',dict(record=record_id,snapshot='0',node=str(node),mode=mode,output=output))
+ def seal(document):
+  bare={k:v for k,v in document.items() if k!='digest'}
+  return hashlib.sha256(json.dumps(bare,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+ def markers(text):
+  provenance=None;units=[];refusals=[]
+  for line in text.splitlines():
+   if not line:continue
+   if line.startswith('provenance '):
+    if provenance is not None:return None,[],[]
+    provenance=json.loads(line[len('provenance '):])
+   elif line.startswith('unit '):units.append(json.loads(line[len('unit '):]))
+   elif line.startswith('refused '):refusals.append(json.loads(line[len('refused '):]))
+   else:return None,[],[]
+  return (provenance,units,refusals) if provenance is not None else (None,[],[])
+ def verdicts(document,provenance,units,refusals):
+  recorded=document.get('digest') or '';digest=provenance.get('behaviour_digest');citations=provenance.get('citations') or [];used=[False]*len(units);matched=missing=conflicting=0
+  for claim in document['claims']:
+   statement=claim.get('statement');citation=claim.get('citation');found=next((i for i,unit in enumerate(units) if not used[i] and unit.get('statement')==statement),None)
+   if found is None:missing+=1;continue
+   used[found]=True;unit=units[found];cited=isinstance(citation,dict) and unit.get('citation')==citation and any(item==citation for item in citations);refused=any(item.get('statement')==statement for item in refusals)
+   if cited and not refused and digest==recorded and recorded and unit.get('kind')=='behaviour':matched+=1
+   else:conflicting+=1
+  conflicting+=sum(1 for flag in used if not flag);return matched,missing,conflicting
+ def refused_dispatch(state,effect,answer):
+  if 'error' not in answer:return state,False
+  done=event(state,'failure',dict(purpose='local_tool',tool_ticket=effect.get('tool_ticket'),tool_binding=effect.get('tool_binding'),error=answer.get('error')))
+  return done['state'],bool(done['state'].get('notice_error')) and not done['state'].get('busy')
+ outside_artifact=root.parent/'pe-declarations-outside.txt'
  try:
   st=event(None,'resume')['state'];st['profiles']=[dict(name='Controlled',endpoint='http://model.test/v1/chat/completions',model='controlled',protocol='chat',stream=False,plain=True)];st['agents']=[dict(name='General',tools='inspect,list,read,observations,reconstruct,write')]
   d=event(st,'send',{'draft':'Investigate original.exe using the existing command process.'});check('ordinary command uses intrinsic investigation without a separate skill','Investigation is intrinsic'in d['effect']['wire'])
@@ -31,5 +63,25 @@ with tempfile.TemporaryDirectory(prefix='pe-declarations-',dir=PROJECT/'output')
   d=event(d['state'],'investigation_record:'+record['id']);d=event(d['state'],'investigation_graph');d=event(d['state'],'investigation_graph_node:0');d=event(d['state'],'reconstruction_new');d=event(d['state'],'reconstruction_prepare',{'record':record['id'],'snapshot':'0','node':'0','mode':'representation','output':'pe-report.txt'});d=event(d['state'],'approve');e=d['effect'];out=op(dict(e,op='tool',root=str(root)));report=(root/'pe-report.txt').read_bytes();rep=graph['nodes'][0]['representation'];check('retained source report exports exact hashed representation bytes',len(report)==rep['bytes']and hashlib.sha256(report).hexdigest()==rep['sha256']and'read back exactly'in out);d=settle(d,e,out)
   tampered=copy.deepcopy(d['state']);bad=next(x for x in tampered['investigation_records']['items']if x['id']==record['id']);bad['snapshots'][0]['declarations']['relocations']['rows'][0]['target_rva']+=4;denied=event(tampered,'investigation_record:'+record['id']);denied=event(denied['state'],'investigation_graph');check('altered typed declaration is not adopted as historical evidence',denied['state']['notice_error']and denied['state']['dialog']!='investigation_graph')
   check('ordinary file work remains available after optional history corruption',isinstance(op(dict(op='tool',tool='inspect',root=str(root),args={'path':'original.S'})),str))
- finally:p.stdin.close();p.wait(timeout=10)
-result={'passed':passed,'scope':'Owner connected checks: original assembled/linked PE, LLVM metadata comparison, guarded file inspection, callbacks, retained queries, native views and export/readback.'};(PROJECT/'output/checks/pe-declarations.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(dict(result,count=len(passed)),indent=2))
+  opened=drive(d['state'],record['id'],'behaviour','pe-behaviour.json');assert opened['state']['dialog']=='approval',opened['state'].get('notice');d=event(opened['state'],'approve');e=d['effect'];out=op(dict(e,op='tool',root=str(root)));behaviour=json.loads((root/'pe-behaviour.json').read_text());claims=behaviour['claims'];unknown=behaviour['unknown'];digest=behaviour.get('digest') or ''
+  check('cited behaviour document carries citations and a 64-hex self digest',behaviour.get('type')=='clean_room_behaviour' and behaviour.get('schema')==1 and re.fullmatch(r'[0-9a-f]{64}',digest) and digest==seal(behaviour) and bool(claims) and all(isinstance(c.get('citation'),dict) and c['citation'].get('record') and c['citation'].get('snapshot') is not None and c['citation'].get('node') is not None for c in claims) and bool(unknown) and 'cited clean-room behavioural specification' in out and 'read back exactly' in out);d=settle(d,e,out)
+  opened=drive(d['state'],record['id'],'implement','pe-implement.txt');assert opened['state']['dialog']=='approval',opened['state'].get('notice');d=event(opened['state'],'approve');e=d['effect'];out=op(dict(e,op='tool',root=str(root)));artifact=(root/'pe-implement.txt').read_text();provenance,units,refusals=markers(artifact)
+  check('clean-room artifact provenance names the behaviour document digest',provenance is not None and provenance.get('behaviour_digest')==digest and provenance.get('citations')==[c['citation'] for c in claims] and 'clean-room implementation generated from cited behavioural claims' in out and 'read back exactly' in out)
+  check('artifact unit and refused lines match cited claims and unknown items',len(units)==len(claims) and len(refusals)==len(unknown) and all(unit.get('kind')=='behaviour' and unit.get('statement')==claim.get('statement') and unit.get('citation')==claim.get('citation') for unit,claim in zip(units,claims)) and all(item.get('marker')=='refused' and item.get('statement')==row.get('statement') and item.get('reason')==row.get('reason') for item,row in zip(refusals,unknown)))
+  matched,missing,conflicting=verdicts(behaviour,provenance,units,refusals);check('implement receipt names the same verify counts as the artifact',matched==len(claims) and missing==0 and conflicting==0 and f'Verification matched {matched}, missing {missing}, conflicting {conflicting}.' in out);d=settle(d,e,out)
+  mode_refusal='Choose file reconstruction, retained representation, structural specification or cited behavioural specification'
+  for mode,name in (('verify','pe-verify-mode.txt'),('behavior','pe-behavior-mode.txt')):
+   opened=drive(d['state'],record['id'],mode,name);path=root/name;check('mode '+mode+' on the behaviour document is still refused',opened['state'].get('notice_error') and opened['state'].get('notice')==mode_refusal and not path.exists());d={'state':opened['state']}
+  opened=drive(d['state'],record['id'],'implement','../'+outside_artifact.name);check('output path outside the workspace is refused and the artifact is absent',opened['state'].get('notice_error') and opened['state'].get('notice') in ('Choose a new workspace-root output filename','Implementation artifact path is outside the workspace') and not outside_artifact.exists() and not (root/outside_artifact.name).exists());d={'state':opened['state']}
+  dispatch_refusal='Local execution arguments, workspace or current user rules differ from the approved dispatch'
+  opened=drive(d['state'],record['id'],'implement','pe-digest-mismatch.txt');assert opened['state']['dialog']=='approval',opened['state'].get('notice');approved=event(opened['state'],'approve');e=approved['effect'];tampered=copy.deepcopy(e);tampered['reconstruction_source']['behaviour']['document']['claims'][0]['statement']+=' digest mismatch';answer=raw(dict(tampered,op='tool',root=str(root)));path=root/'pe-digest-mismatch.txt';absent=not path.exists();state,cleared=refused_dispatch(approved['state'],e,answer);check('digest-mismatched document is refused and the artifact is absent',answer.get('error') in (dispatch_refusal,'Behaviour document digest does not match the handed document') and absent and not path.exists() and cleared);d={'state':state}
+  opened=drive(d['state'],record['id'],'implement','pe-citation-missing.txt');assert opened['state']['dialog']=='approval',opened['state'].get('notice');approved=event(opened['state'],'approve');e=approved['effect'];tampered=copy.deepcopy(e);document=tampered['reconstruction_source']['behaviour']['document'];removed=document['claims'][0].pop('citation');assert removed;document['digest']=seal(document);answer=raw(dict(tampered,op='tool',root=str(root)));path=root/'pe-citation-missing.txt';absent=not path.exists();state,cleared=refused_dispatch(approved['state'],e,answer);citation_error=answer.get('error') or '';check('citation-less claim is refused and the artifact is absent',(citation_error==dispatch_refusal or citation_error.startswith('Cited claim has no citation:')) and absent and not path.exists() and cleared);d={'state':state}
+  phrase=b'The subject was e';assert len(phrase)==17;(root/'poison.S').write_text('.text\n.global entry\nentry:\n mov x0,#7\n ret\n.data\n.ascii "The subject was e"\n');subprocess.run([str(ndk/'clang'),'--target=aarch64-pc-windows-msvc','-c',str(root/'poison.S'),'-o',str(root/'poison.obj')],check=True,capture_output=True,env=env);subprocess.run([str(ndk/'lld-link'),'/entry:entry','/subsystem:console','/nodefaultlib','/machine:arm64','/out:'+str(root/'poison.exe'),str(root/'poison.obj')],check=True,capture_output=True,env=env);assert phrase in (root/'poison.exe').read_bytes()
+  d=event(d['state'],'send',{'draft':'Investigate poison.exe using the existing command process.'});d=reply(d,json.dumps(dict(tool='inspect',args={'path':'poison.exe'})));assert d['state']['dialog']=='approval',d['state'].get('notice');d=event(d['state'],'approve');e=d['effect'];out=op(dict(e,op='tool',root=str(root)));d=settle(d,e,out)
+  if d.get('effect') and d['effect'].get('purpose')=='model':d=reply(d,'Answer from the retained observation only.')
+  assert not d['state']['busy'],d['state'].get('notice');poison=d['state']['investigation_records']['items'][-1];assert poison['args']['path']=='poison.exe'
+  opened=drive(d['state'],poison['id'],'implement','stolen.txt');assert opened['state']['dialog']=='approval',opened['state'].get('notice');approved=event(opened['state'],'approve');e=approved['effect'];answer=raw(dict(e,op='tool',root=str(root)));stolen=root/'stolen.txt';absent=not stolen.exists();state,cleared=refused_dispatch(approved['state'],e,answer);check('seventeen contiguous subject bytes are refused and the artifact is absent',answer.get('error')=='Behavioural specification copies 17 or more contiguous subject bytes; quoted fragments are limited to 16 bytes' and absent and not stolen.exists() and cleared)
+ finally:
+  if outside_artifact.exists():outside_artifact.unlink()
+  p.stdin.close();p.wait(timeout=10)
+result={'passed':passed,'scope':'Owner connected checks: original assembled/linked PE, LLVM metadata comparison, guarded file inspection, callbacks, retained queries, native views, export/readback, cited behaviour documents and clean-room implementation.'};(PROJECT/'output/checks/pe-declarations.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(dict(result,count=len(passed)),indent=2))
