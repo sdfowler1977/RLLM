@@ -163,6 +163,7 @@ fn xref_text(set:&CrossReferences)->String{
  // The refusal field keeps the first cap. A later cap still names itself in the report.
  let unknown_total=set.symbols.iter().fold(0u64,|total,symbol|total.saturating_add(symbol.unknown));
  if unknown_total>set.unknowns.len() as u64&&!out.contains(XREF_UNKNOWN_CAP){let _=xref_line(&mut out,&format!("Refusal: {XREF_UNKNOWN_CAP}."));}
+ // Compares each symbol's stored lists with edges still in set.edges. A shorter list is the per-symbol cap. It does not see edges the edge cap already dropped.
  let lists_cut=set.symbols.iter().any(|symbol|{let incoming=set.edges.iter().filter(|edge|edge.to_pc==symbol.address).count();let outgoing=set.edges.iter().filter(|edge|edge.kind==XrefKind::Call&&edge.from_pc==symbol.address).count();incoming>symbol.incoming.len()||outgoing>symbol.outgoing_calls.len()});
  if lists_cut&&!out.contains(XREF_LIST_CAP){let _=xref_line(&mut out,&format!("Refusal: {XREF_LIST_CAP}."));}
  let _=xref_line(&mut out,&format!("Edges {}; stored unknowns {}; symbols {}.",set.edges.len(),set.unknowns.len(),set.symbols.len()));
@@ -431,6 +432,16 @@ pub(super) fn observe(data:&[u8],regions:&[Region],inventory_complete:bool,label
   assert!(text.contains("Refusal: cross-reference unknown cap."));
   assert!(text.contains("stored unknowns 64"));
   assert!(text.len()<=XREF_OUTPUT);
+  let mut later=(0..=XREF_MAX).map(|i|(0x1000+i as u64*4,must(0x94000000|(i as u32+1)))).collect::<Vec<_>>();
+  later.extend((0..=XREF_MAX).map(|i|(0x8000+i as u64*4,branch)));
+  let named=cross_references(&later,&[],&[]);
+  assert_eq!(named.refusal,Some(XREF_EDGE_CAP));
+  assert_eq!(named.edges.len(),XREF_MAX);assert_eq!(named.unknowns.len(),XREF_MAX);
+  let named_text=xref_text(&named);
+  assert!(named_text.contains("Refusal: cross-reference edge cap."));
+  assert!(named_text.contains("Refusal: cross-reference unknown cap."));
+  assert!(!named_text.contains(XREF_LIST_CAP));
+  assert!(named_text.len()<=XREF_OUTPUT);
  }
  #[test]fn symbol_list_cap_names_the_refusal_in_the_report(){
   let sites=(0..XREF_SYMBOL_LIST+1).map(|i|{let imm=0x400-i as u32;(0x1000+i as u64*4,must(0x94000000|imm))}).collect::<Vec<_>>();
@@ -443,6 +454,17 @@ pub(super) fn observe(data:&[u8],regions:&[Region],inventory_complete:bool,label
   assert!(text.contains("incoming references 8 ("));
   assert!(!text.contains(XREF_OUTPUT_CAP));
   assert!(text.len()<=XREF_OUTPUT);
+  let mut beside=(0..=XREF_MAX).map(|i|(0x8000+i as u64*4,must(0xd61f0020))).collect::<Vec<_>>();
+  beside.extend((0..XREF_SYMBOL_LIST+1).map(|i|{let imm=0x400-i as u32;(0x1000+i as u64*4,must(0x94000000|imm))}));
+  let named=cross_references(&beside,&[region()],&[]);
+  assert_eq!(named.refusal,Some(XREF_UNKNOWN_CAP));
+  assert_eq!(named.edges.len(),XREF_SYMBOL_LIST+1);
+  assert_eq!(named.symbols.iter().find(|s|s.address==0x2000).unwrap().incoming.len(),XREF_SYMBOL_LIST);
+  let named_text=xref_text(&named);
+  assert!(named_text.contains("Refusal: cross-reference unknown cap."));
+  assert!(named_text.contains("Refusal: cross-reference symbol list cap."));
+  assert!(!named_text.contains(XREF_EDGE_CAP));
+  assert!(named_text.len()<=XREF_OUTPUT);
  }
  #[test]fn output_cap_names_itself_when_the_report_is_cut(){
   let name="callee-name-".repeat(400);
@@ -470,6 +492,21 @@ pub(super) fn observe(data:&[u8],regions:&[Region],inventory_complete:bool,label
   assert!(text.contains("Refusal: cross-reference unknown cap."));
   assert!(text.contains("Refusal: cross-reference symbol list cap."));
   assert!(text.contains("\ncross-reference output cap\n"));
+  assert!(text.len()<=XREF_OUTPUT);
+ }
+ #[test]fn list_cap_alone_names_the_list_and_not_the_edge_cap(){
+  let sites=(0..XREF_SYMBOL_LIST+1).map(|i|{let imm=0x400-i as u32;(0x1000+i as u64*4,must(0x94000000|imm))}).collect::<Vec<_>>();
+  let set=cross_references(&sites,&[region()],&[]);
+  assert_eq!(set.refusal,Some(XREF_LIST_CAP));
+  assert!(set.unknowns.is_empty());
+  assert_eq!(set.edges.len(),XREF_SYMBOL_LIST+1);
+  assert!(set.edges.len()<XREF_MAX);
+  let callee=set.symbols.iter().find(|s|s.address==0x2000).unwrap();
+  assert_eq!(callee.incoming.len(),XREF_SYMBOL_LIST);
+  let text=xref_text(&set);
+  assert!(text.contains("Refusal: cross-reference symbol list cap."));
+  assert!(!text.contains(XREF_EDGE_CAP));
+  assert!(!text.contains(XREF_UNKNOWN_CAP));
   assert!(text.len()<=XREF_OUTPUT);
  }
 }
