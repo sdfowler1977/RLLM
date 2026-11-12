@@ -739,12 +739,6 @@
     "reuse_finding": "dotnet_evidence re-implements MZ/optional-header parsing privately; pe_observation::Image (:24) and its reader are not exposed (only analyze/observe_with_cancel are pub(super)), so the duplication is private-API-level, recorded not fixed",
     "remedy": "lane dotnet5 dispatched to move the consumer into the data.starts_with(b\"MZ\") branch of core/investigation.rs:101-103 and delete the dead line"
   },
-  "lanes_in_flight_2026_11_12T1955": [
-    "root3 (core/rrsi.rs, core/harness.rs - GAP3 approval_root provenance)",
-    "defl5 (core/compression.rs, tools/package.rs - native DEFLATE replacing stored blocks)",
-    "loop7 (verification/rrsi_loop.py - GAP2 >=3-round proof bar)",
-    "dotnet5 (core/dotnet_evidence.rs, core/investigation.rs - .NET consumer onto the inspect route)"
-  ],
   "gap3_headline_bar_already_witnessed": {
     "at": "2026-11-12T20:10Z",
     "finding": "Gap 3 stated bar (task t+1 visibly reading the library entry written by task t) is already closed by a connected group and must not be listed as open",
@@ -943,11 +937,7 @@
     ],
     "same_defect_elsewhere": "verification/rrsi_loop.py:77/:405/:440 still has the 'if name not in evaluated' swallow and the list-shaped passed; that file is owned by the in-flight GAP2 lane"
   },
-  "lanes_in_flight_2026_11_12T2325": [
-    "room6 (core/clean_room.rs new + core/file_evidence.rs + core/reconstruction.rs - GAP4 white-room rebuild)",
-    "gap2e (core/improvement.rs, core/rrsi.rs, core/harness.rs, verification/rrsi_loop.py - GAP2 route ceiling)",
-    "natx (core/binary_declarations.rs typed xrefs)",
-    "gap1b (core/self_build.rs successor readback - GAP1)",
-    "dotnet6 (core/dotnet_evidence.rs + investigation.rs - .NET caps, cancellation, depth)"
-  ]
+  "defl5_conformance_cross_check_2026_11_12T2330": "DEFLATE conformance measured without the product's own inflater: a probe compiled against core/compression.rs deflates 230,800 bytes of mixed data to 21,519 bytes and python zlib's raw-DEFLATE decoder returns the exact original; two runs byte-identical; the native inflater accepts zlib-9 output byte-identical. 4.98 % over zlib-9, 0.14 % under zlib-6 - near parity, not byte parity, so no pinned archive digest is claimed and tools/package.py stays until a real publication archive is compared.",
+  "audit_md_reverted_by_lane_2026_11_12T2330": "A grok lane reverted docs/AUDIT.md's uncommitted edits mid-window (git stash list empty). Committed promptly as 4132937 after re-applying. Writers with --always-approve in the main worktree can restore tracked files, so documentation is committed before starting a seat.",
+  "lanes_in_flight_2026_11_12T2330": "room6 (core/clean_room.rs + file_evidence/reconstruction, GAP4 white-room rebuild); gap2e (core/improvement.rs + rrsi.rs + harness.rs + verification/rrsi_loop.py, GAP2 rounds ceiling and the two == 2 gates at harness.rs:967/:1053); natx (core/binary_declarations.rs typed cross-references, must clear the field xrefs warning); gap1b (core/self_build.rs successor read-back, must clear durable_successor_rows/successor_states/job_source); dotnet6 (core/dotnet_evidence.rs + investigation.rs caps, cancellation, depth). loop7's rrsi_loop.py delivery is written and audited, held uncommitted because gap2e edits that file."
 }
