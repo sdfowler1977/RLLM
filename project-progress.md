@@ -9,3 +9,34 @@ Installed Android microphone/playback/UI/lifecycle acceptance, real user server 
 Protected baseline: version1793750802, immutable source SHA2562676d5476035cc32db9b85f652c94ecc5e21ca09f925ac2dc983cce932e94917, baseline commit36a5075caa58110ba33ef58990d91c1a102ae970. Immutable baseline source Drive1pBK9HP49rMqBuftLOhH_IMfgWIs0gIdB, APK1mFRkR3ubuMLrVE0Y0iDroRlWivpChtqi. Do not overwrite those baseline copies.
 
 Next: publish and verify this signed candidate. Broaden product-owned semantic repair and reusable deterministic verification. Continue the protocol, storage and resource roadmap with remaining integration gaps. Recover genuine revision-two source through the selected stable source's revision history if browser authentication becomes available; run all three historical checks without changing the reader fingerprint or current decoder. Complete current-device/live-endpoint and independent acceptance separately. Earlier broader accepted roadmap remains in the canonical cumulative engineering record, not cancelled by this upgrade: https://docs.google.com/document/d/1jyJ1ma1juoWacfJFpei5MdzPS05i7EiNy-FyWs9UPRI/edit . This build does not claim whole-project closure. The existing hourly build task Automation_787bc0676d388191bc52212c823ab48b and hourly delivery task Automation_1188b1045d7481919a5069a82a9def98 were updated and read back. Both are enabled. Their prompts prefer the newest verified project Drive source and reconcile later working changes. The scheduler did not expose the next-run timestamps at this checkpoint. Signing custody remains in the separate protected archive.
+
+# RLLM working checkpoint — 2026-11-12T02:35Z (uncommitted lanes in flight)
+
+Permission modes are complete: harness-wide `review` / `limited` / `yolo`, one mode per saved
+connection plus per-connection web and file limits under App settings → Permissions, the mode
+selector on the chat page footer (LLM · agent · permission mode · tok/s), and web search standing
+down for review in every mode — `permission_modes` (27 connected checks) is wired into the runner,
+`checks.py` and `package.py` inventories. A capability with no saved default now resolves only to
+the selected connection's own provider host, so a defaulted-away capability still reports as not
+ready.
+
+Verification state at this checkpoint: unit gate **532/532** Rust cases; connected coordinator
+sweep **69 groups → 65 passed, 0 failed, 4 unavailable**, **4,185** executed checks,
+`verification/RESULTS.json` sha256 `7250328b5385`. The four unavailable groups need the signed
+companion APK and the three historical reference controllers, all owner-supplied.
+
+The repository substrate now exists: branch `main`, baseline `727a33d` (339 files),
+`tooling/` (5.6 GB pinned toolchain), `.qwen/tmp/` and `.playwright-mcp/` ignored. History starts
+here, so revisions 1793395702 and 1793592809 are still unrecoverable.
+
+`docs/RLLM-recursion-gap-report.md` is adopted as five open obligations `GAP1`–`GAP5` in
+`closure_ledger.json` and in `docs/AUDIT.md`. Gap 1 (self rebuild → revision → re-exec) and Gap 5
+(native tooling, removing Python) are in flight with Grok Build: `core/self_build.rs` and
+`tools/build-tools.sh` + the `alignment`/`readback`/`checkpoint` port. Measured Python exposure
+today: **79 files / 8,004 lines** (`tools/` 444, `verification/` 7,560) — wider than the report's
+eight `tools/` files, and it grew this window because the new verification group is Python. That
+is an open R-rule violation, not a neutral fact; the standing rule now is that no lane adds a `.py`
+without stating why.
+
+Not claimed: device acceptance, the signed APK bytes, PUBLICATION-MANIFEST republish (sources moved
+past it), and any Gap 2/3/4 capability.
