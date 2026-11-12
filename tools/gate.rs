@@ -1,6 +1,8 @@
-// Native unit gate for the --all-units role of tools/checks.py.
-// Run the binary from tools/build-tools.sh. One argument: the unit binary.
-// The gate line is what core/self_build.rs::parse_gate_line reads.
+// Native unit gate for tools/checks.py.
+// `gate <unit-binary>` is the --all-units role. Its gate line is what
+// core/self_build.rs::parse_gate_line reads, so that argv stays one path.
+// `gate --units <unit-binary>` is the --units role: verification/RESULTS.json,
+// the pinned filter merge, one child per filter, output/checks/selected-units.json.
 
 use std::collections::BTreeSet;
 use std::env;
@@ -141,7 +143,7 @@ fn json_string(text: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || (c as u32) > 0x7f => {
+            c if (c as u32) < 0x20 || (c as u32) >= 0x7f => {
                 let mut buf = [0u16; 2];
                 for unit in c.encode_utf16(&mut buf) {
                     out.push_str(&format!("\\u{unit:04x}"));
@@ -385,6 +387,573 @@ fn scratch_dir(out: &Path) -> Result<Remove, String> {
     Err("could not create a unit-gate scratch directory".into())
 }
 
+// The --units loop in tools/checks.py names these filters and appends any that
+// the prior record omitted. checks::pinned_filters_match_checks_py parses that
+// list; a drift fails the tools suite instead of diverging quietly.
+const PINNED_FILTERS: &[&str] = &[
+    "network::etag_checks::",
+    "network::chunk_checks::",
+    "network::response_checks::",
+    "network::field_checks::",
+    "network::authorization_response_checks::",
+    "application::scene::checks::",
+    "application::scene::scene_texture::checks::",
+    "application::tool_format::tests::",
+    "application::search::checks::",
+    "application::oauth::checks::",
+    "application::oauth::credential_checks::",
+    "application::inquiry::design_brief::checks::",
+    "application::oauth::device_authorization::checks::",
+    "application::voice_audio::checks::",
+    "application::monitor::checks::",
+    "application::request_metrics::",
+    "application::throughput::",
+    "application::checks::live_rate_opens_analytics_without_losing_stream_or_draft",
+    "application::checks::tls_guidance_preserves_explicit_endpoint",
+];
+
+struct SelectedRow {
+    filter: String,
+    code: i32,
+    summary: String,
+}
+
+struct SelectedReport {
+    rows: Vec<SelectedRow>,
+    passed: Option<u64>,
+}
+
+fn universal_newlines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            out.push('\n');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn python_line_break(ch: char) -> bool {
+    matches!(
+        ch,
+        '\n' | '\r' | '\u{000b}' | '\u{000c}' | '\u{001c}' | '\u{001d}' | '\u{001e}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
+    )
+}
+
+fn first_test_result_line(text: &str) -> Option<&str> {
+    let mut start = 0usize;
+    let mut chars = text.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        if !python_line_break(ch) {
+            continue;
+        }
+        let line = &text[start..index];
+        if line.starts_with("test result:") {
+            return Some(line);
+        }
+        if ch == '\r' && chars.peek().map(|(_, next)| *next) == Some('\n') {
+            let (next_index, _) = chars.next().unwrap();
+            start = next_index + 1;
+        } else {
+            start = index + ch.len_utf8();
+        }
+    }
+    if start < text.len() {
+        let line = &text[start..];
+        if line.starts_with("test result:") {
+            return Some(line);
+        }
+    }
+    None
+}
+
+fn summary_of(stdout: &str, stderr: &str) -> String {
+    let stdout = universal_newlines(stdout);
+    let stderr = universal_newlines(stderr);
+    if let Some(line) = first_test_result_line(&stdout) {
+        return line.to_string();
+    }
+    let mut summary = tail_chars(&stdout, 700);
+    summary.push_str(&tail_chars(&stderr, 700));
+    summary
+}
+
+fn passed_in_summary(summary: &str) -> Option<u64> {
+    let bytes = summary.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_digit() {
+            let start = index;
+            while index < bytes.len() && bytes[index].is_ascii_digit() {
+                index += 1;
+            }
+            if bytes.get(index..index + " passed".len()) == Some(b" passed") {
+                return std::str::from_utf8(&bytes[start..index]).ok()?.parse().ok();
+            }
+        } else {
+            index += 1;
+        }
+    }
+    None
+}
+
+fn selected_total(rows: &[SelectedRow]) -> Option<u64> {
+    if rows.iter().any(|row| row.code != 0) {
+        return None;
+    }
+    let mut total = 0u64;
+    for row in rows {
+        total = total.checked_add(passed_in_summary(&row.summary)?)?;
+    }
+    Some(total)
+}
+
+fn selected_cases_line(passed: u64) -> String {
+    format!("Selected cases: {passed}")
+}
+
+fn merge_pinned(mut prior: Vec<String>) -> Vec<String> {
+    for name in PINNED_FILTERS {
+        if !prior.iter().any(|existing| existing == name) {
+            prior.push((*name).to_string());
+        }
+    }
+    prior
+}
+
+fn render_selected(rows: &[SelectedRow]) -> String {
+    if rows.is_empty() {
+        return "[]\n".to_string();
+    }
+    let mut out = String::from("[\n");
+    for (index, row) in rows.iter().enumerate() {
+        if index > 0 {
+            out.push_str(",\n");
+        }
+        out.push_str("  {\n    \"filter\": ");
+        out.push_str(&json_string(&row.filter));
+        out.push_str(",\n    \"code\": ");
+        out.push_str(&row.code.to_string());
+        out.push_str(",\n    \"summary\": ");
+        out.push_str(&json_string(&row.summary));
+        out.push_str("\n  }");
+    }
+    out.push_str("\n]\n");
+    out
+}
+
+struct Scan<'a> {
+    bytes: &'a [u8],
+    index: usize,
+}
+
+impl<'a> Scan<'a> {
+    fn skip_ws(&mut self) {
+        while matches!(self.bytes.get(self.index), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+            self.index += 1;
+        }
+    }
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.index).copied()
+    }
+    fn bump(&mut self) -> Result<u8, String> {
+        let byte = self.peek().ok_or_else(|| "verification/RESULTS.json".to_string())?;
+        self.index += 1;
+        Ok(byte)
+    }
+    fn eat(&mut self, text: &[u8]) -> Result<(), String> {
+        if self.bytes.get(self.index..self.index + text.len()) == Some(text) {
+            self.index += text.len();
+            Ok(())
+        } else {
+            Err("verification/RESULTS.json".into())
+        }
+    }
+    fn hex4(&mut self) -> Result<u32, String> {
+        let mut value = 0u32;
+        for _ in 0..4 {
+            let byte = self.bump()?;
+            let digit = match byte {
+                b'0'..=b'9' => byte - b'0',
+                b'a'..=b'f' => byte - b'a' + 10,
+                b'A'..=b'F' => byte - b'A' + 10,
+                _ => return Err("verification/RESULTS.json".into()),
+            };
+            value = (value << 4) | u32::from(digit);
+        }
+        Ok(value)
+    }
+    fn string(&mut self) -> Result<String, String> {
+        if self.bump()? != b'"' {
+            return Err("verification/RESULTS.json".into());
+        }
+        let mut out = String::new();
+        loop {
+            let byte = self.peek().ok_or_else(|| "verification/RESULTS.json".to_string())?;
+            if byte == b'"' {
+                self.index += 1;
+                return Ok(out);
+            }
+            if byte == b'\\' {
+                self.index += 1;
+                match self.bump()? {
+                    b'"' => out.push('"'),
+                    b'\\' => out.push('\\'),
+                    b'/' => out.push('/'),
+                    b'b' => out.push('\u{0008}'),
+                    b'f' => out.push('\u{000c}'),
+                    b'n' => out.push('\n'),
+                    b'r' => out.push('\r'),
+                    b't' => out.push('\t'),
+                    b'u' => {
+                        let unit = self.hex4()?;
+                        let code = if (0xD800..=0xDBFF).contains(&unit) {
+                            if self.bump()? != b'\\' || self.bump()? != b'u' {
+                                return Err("verification/RESULTS.json".into());
+                            }
+                            let low = self.hex4()?;
+                            if !(0xDC00..=0xDFFF).contains(&low) {
+                                return Err("verification/RESULTS.json".into());
+                            }
+                            0x10000 + (((unit - 0xD800) << 10) | (low - 0xDC00))
+                        } else if (0xDC00..=0xDFFF).contains(&unit) {
+                            return Err("verification/RESULTS.json".into());
+                        } else {
+                            unit
+                        };
+                        out.push(char::from_u32(code).ok_or_else(|| "verification/RESULTS.json".to_string())?);
+                    }
+                    _ => return Err("verification/RESULTS.json".into()),
+                }
+                continue;
+            }
+            if byte < 0x20 {
+                return Err("verification/RESULTS.json".into());
+            }
+            let width = match byte {
+                0x00..=0x7F => 1,
+                0xC0..=0xDF => 2,
+                0xE0..=0xEF => 3,
+                0xF0..=0xF7 => 4,
+                _ => return Err("verification/RESULTS.json".into()),
+            };
+            let end = self.index + width;
+            let text = std::str::from_utf8(self.bytes.get(self.index..end).ok_or_else(|| "verification/RESULTS.json".to_string())?)
+                .map_err(|_| "verification/RESULTS.json".to_string())?;
+            out.push_str(text);
+            self.index = end;
+        }
+    }
+    fn skip_number(&mut self) -> Result<(), String> {
+        if self.peek() == Some(b'-') {
+            self.index += 1;
+        }
+        if self.peek() == Some(b'0') {
+            self.index += 1;
+            if matches!(self.peek(), Some(b'0'..=b'9')) {
+                return Err("verification/RESULTS.json".into());
+            }
+        } else if matches!(self.peek(), Some(b'1'..=b'9')) {
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.index += 1;
+            }
+        } else {
+            return Err("verification/RESULTS.json".into());
+        }
+        if self.peek() == Some(b'.') {
+            self.index += 1;
+            let mark = self.index;
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.index += 1;
+            }
+            if self.index == mark {
+                return Err("verification/RESULTS.json".into());
+            }
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.index += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.index += 1;
+            }
+            let mark = self.index;
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.index += 1;
+            }
+            if self.index == mark {
+                return Err("verification/RESULTS.json".into());
+            }
+        }
+        Ok(())
+    }
+    fn skip_value(&mut self) -> Result<(), String> {
+        self.skip_ws();
+        match self.peek() {
+            Some(b'n') => self.eat(b"null"),
+            Some(b't') => self.eat(b"true"),
+            Some(b'f') => self.eat(b"false"),
+            Some(b'"') => {
+                self.string()?;
+                Ok(())
+            }
+            Some(b'{') => self.skip_object(),
+            Some(b'[') => self.skip_array(),
+            Some(b'-' | b'0'..=b'9') => self.skip_number(),
+            _ => Err("verification/RESULTS.json".into()),
+        }
+    }
+    fn skip_object(&mut self) -> Result<(), String> {
+        self.index += 1;
+        let mut started = false;
+        loop {
+            self.skip_ws();
+            if self.peek() == Some(b'}') {
+                self.index += 1;
+                return Ok(());
+            }
+            if started && self.bump()? != b',' {
+                return Err("verification/RESULTS.json".into());
+            }
+            started = true;
+            self.skip_ws();
+            if self.peek() != Some(b'"') {
+                return Err("verification/RESULTS.json".into());
+            }
+            self.string()?;
+            self.skip_ws();
+            if self.bump()? != b':' {
+                return Err("verification/RESULTS.json".into());
+            }
+            self.skip_value()?;
+        }
+    }
+    fn skip_array(&mut self) -> Result<(), String> {
+        self.index += 1;
+        let mut started = false;
+        loop {
+            self.skip_ws();
+            if self.peek() == Some(b']') {
+                self.index += 1;
+                return Ok(());
+            }
+            if started && self.bump()? != b',' {
+                return Err("verification/RESULTS.json".into());
+            }
+            started = true;
+            self.skip_value()?;
+        }
+    }
+    fn parse_string_array(&mut self) -> Result<Vec<String>, String> {
+        self.skip_ws();
+        if self.bump()? != b'[' {
+            return Err("verification/RESULTS.json selected_rust_filters".into());
+        }
+        let mut names = Vec::new();
+        loop {
+            self.skip_ws();
+            if self.peek() == Some(b']') {
+                self.index += 1;
+                return Ok(names);
+            }
+            if !names.is_empty() && self.bump()? != b',' {
+                return Err("verification/RESULTS.json selected_rust_filters".into());
+            }
+            self.skip_ws();
+            if self.peek() != Some(b'"') {
+                return Err("verification/RESULTS.json selected_rust_filters".into());
+            }
+            names.push(self.string()?);
+        }
+    }
+    fn parse_run_object(&mut self) -> Result<String, String> {
+        self.skip_ws();
+        if self.bump()? != b'{' {
+            return Err("verification/RESULTS.json selected_rust_runs".into());
+        }
+        let mut filter = None;
+        let mut started = false;
+        loop {
+            self.skip_ws();
+            if self.peek() == Some(b'}') {
+                self.index += 1;
+                return filter.ok_or_else(|| "verification/RESULTS.json filter".to_string());
+            }
+            if started && self.bump()? != b',' {
+                return Err("verification/RESULTS.json selected_rust_runs".into());
+            }
+            started = true;
+            self.skip_ws();
+            if self.peek() != Some(b'"') {
+                return Err("verification/RESULTS.json selected_rust_runs".into());
+            }
+            let key = self.string()?;
+            self.skip_ws();
+            if self.bump()? != b':' {
+                return Err("verification/RESULTS.json selected_rust_runs".into());
+            }
+            if key == "filter" {
+                self.skip_ws();
+                if self.peek() != Some(b'"') {
+                    return Err("verification/RESULTS.json filter".into());
+                }
+                filter = Some(self.string()?);
+            } else {
+                self.skip_value()?;
+            }
+        }
+    }
+    fn parse_run_array(&mut self) -> Result<Vec<String>, String> {
+        self.skip_ws();
+        if self.bump()? != b'[' {
+            return Err("verification/RESULTS.json selected_rust_runs".into());
+        }
+        let mut names = Vec::new();
+        loop {
+            self.skip_ws();
+            if self.peek() == Some(b']') {
+                self.index += 1;
+                return Ok(names);
+            }
+            if !names.is_empty() && self.bump()? != b',' {
+                return Err("verification/RESULTS.json selected_rust_runs".into());
+            }
+            names.push(self.parse_run_object()?);
+        }
+    }
+}
+
+fn prior_filters(text: &str) -> Result<Vec<String>, String> {
+    let mut scan = Scan { bytes: text.as_bytes(), index: 0 };
+    scan.skip_ws();
+    if scan.peek() != Some(b'{') {
+        return Err("verification/RESULTS.json".into());
+    }
+    scan.index += 1;
+    let mut filters = None;
+    let mut runs = None;
+    let mut started = false;
+    loop {
+        scan.skip_ws();
+        if scan.peek() == Some(b'}') {
+            scan.index += 1;
+            break;
+        }
+        if started && scan.bump()? != b',' {
+            return Err("verification/RESULTS.json".into());
+        }
+        started = true;
+        scan.skip_ws();
+        if scan.peek() != Some(b'"') {
+            return Err("verification/RESULTS.json".into());
+        }
+        let key = scan.string()?;
+        scan.skip_ws();
+        if scan.bump()? != b':' {
+            return Err("verification/RESULTS.json".into());
+        }
+        match key.as_str() {
+            "selected_rust_filters" => filters = Some(scan.parse_string_array()?),
+            "selected_rust_runs" => runs = Some(scan.parse_run_array()?),
+            _ => scan.skip_value()?,
+        }
+    }
+    scan.skip_ws();
+    if scan.index != scan.bytes.len() {
+        return Err("verification/RESULTS.json extra data".into());
+    }
+    if let Some(filters) = filters {
+        Ok(filters)
+    } else if let Some(runs) = runs {
+        Ok(runs)
+    } else {
+        Err("verification/RESULTS.json has no selected_rust_filters or selected_rust_runs".into())
+    }
+}
+
+fn read_pipe(mut pipe: impl Read) -> Result<Vec<u8>, String> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) => return Ok(buf),
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
+fn decode_pipe(bytes: Vec<u8>, filter: &str, which: &str) -> Result<String, String> {
+    String::from_utf8(bytes).map_err(|_| format!("unit filter {filter} {which} is not utf-8"))
+}
+
+// checks.py --units inherits the working directory and the environment.
+// It does not use the all-units scratch directory or the capture-font override.
+fn capture_filter(binary: &Path, filter: &str) -> Result<Captured, String> {
+    let mut command = Command::new(binary);
+    command
+        .arg(filter)
+        .arg("--test-threads=1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = retry_executable_file_busy(|| command.spawn())
+        .map_err(|error| format!("cannot start {}: {error}", binary.display()))?;
+    let stdout = child.stdout.take().ok_or("selected unit stdout is unavailable")?;
+    let stderr = child.stderr.take().ok_or("selected unit stderr is unavailable")?;
+    let out_handle = std::thread::spawn(move || read_pipe(stdout));
+    let err_handle = std::thread::spawn(move || read_pipe(stderr));
+    let status = child.wait().map_err(|error| error.to_string())?;
+    let stdout = decode_pipe(out_handle.join().map_err(|_| format!("unit filter {filter} stdout failed"))??, filter, "stdout")?;
+    let stderr = decode_pipe(err_handle.join().map_err(|_| format!("unit filter {filter} stderr failed"))??, filter, "stderr")?;
+    Ok(Captured { code: exit_code(status), stdout, stderr })
+}
+
+fn write_text(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(path, text).map_err(|error| error.to_string())
+}
+
+fn run_selected(root: &Path, binary: &Path) -> Result<SelectedReport, String> {
+    let binary = resolve_binary(binary)?;
+    let recorded = fs::read_to_string(root.join("verification/RESULTS.json"))
+        .map_err(|error| format!("verification/RESULTS.json: {error}"))?;
+    let prior = merge_pinned(prior_filters(&recorded)?);
+    let mut rows = Vec::with_capacity(prior.len());
+    for filter in &prior {
+        let captured = capture_filter(&binary, filter)?;
+        rows.push(SelectedRow {
+            filter: filter.clone(),
+            code: captured.code,
+            summary: summary_of(&captured.stdout, &captured.stderr),
+        });
+    }
+    let text = render_selected(&rows);
+    write_text(&root.join("output/checks/selected-units.json"), &text)?;
+    let passed = selected_total(&rows);
+    Ok(SelectedReport { rows, passed })
+}
+
+fn finish_selected(report: &SelectedReport) -> i32 {
+    for row in &report.rows {
+        println!("{} {}", row.filter, row.code);
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    }
+    if let Some(passed) = report.passed {
+        println!("{}", selected_cases_line(passed));
+        0
+    } else {
+        1
+    }
+}
+
 fn write_report(path: &Path, run: &GateRun) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -497,19 +1066,29 @@ fn project_root() -> PathBuf {
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
-    if args.len() != 1 {
-        eprintln!("usage: gate <unit-binary>");
+    let root = project_root();
+    if args.len() == 1 {
+        match run_gate(&root, Path::new(&args[0])) {
+            Ok(run) => {
+                println!("{}", run.line());
+                std::process::exit(run.exit_code());
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    } else if args.len() == 2 && args[0] == "--units" {
+        match run_selected(&root, Path::new(&args[1])) {
+            Ok(report) => std::process::exit(finish_selected(&report)),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        eprintln!("usage: gate <unit-binary>\n       gate --units <unit-binary>");
         std::process::exit(2);
-    }
-    match run_gate(&project_root(), Path::new(&args[0])) {
-        Ok(run) => {
-            println!("{}", run.line());
-            std::process::exit(run.exit_code());
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
     }
 }
 
@@ -708,5 +1287,318 @@ exit 1\n",
         .unwrap();
         assert_eq!(value, 7);
         assert_eq!(attempts, 3);
+    }
+
+    fn declared_pinned_filters(source: &str) -> Result<Vec<String>, String> {
+        let marker = "for name in [";
+        let start = source.find(marker).ok_or("tools/checks.py has no selected-unit filter list")?;
+        let rest = &source[start + marker.len()..];
+        let end = rest.find("]:").ok_or("tools/checks.py selected-unit filter list")?;
+        let mut names = Vec::new();
+        for part in rest[..end].split(',') {
+            let part = part.trim();
+            let name = part
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+                .or_else(|| part.strip_prefix('"').and_then(|value| value.strip_suffix('"')))
+                .ok_or("tools/checks.py selected-unit filter list")?;
+            if name.is_empty() || name.contains('\\') {
+                return Err("tools/checks.py selected-unit filter list".into());
+            }
+            names.push(name.to_string());
+        }
+        if names.is_empty() {
+            return Err("tools/checks.py selected-unit filter list".into());
+        }
+        Ok(names)
+    }
+
+    fn plant_results(root: &Path, body: &str) {
+        fs::create_dir_all(root.join("verification")).unwrap();
+        fs::write(root.join("verification/RESULTS.json"), body).unwrap();
+    }
+
+    fn filters_json(names: &[&str]) -> String {
+        let body = names.iter().map(|name| json_string(name)).collect::<Vec<_>>().join(",");
+        format!("{{\"selected_rust_filters\":[{body}]}}\n")
+    }
+
+    fn argv_guard() -> &'static str {
+        "if [ \"$2\" != \"--test-threads=1\" ] || [ -n \"$3\" ]; then echo bad-argv >&2; exit 9; fi\n\
+case \"$PWD\" in */output/checks/rust-*) echo scratch-cwd >&2; exit 8;; esac\n"
+    }
+
+    fn filter_names(text: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        let bytes = text.as_bytes();
+        let needle = b"\"filter\": \"";
+        let mut index = 0;
+        while index + needle.len() <= bytes.len() {
+            if &bytes[index..index + needle.len()] == needle {
+                index += needle.len();
+                let start = index;
+                while index < bytes.len() && bytes[index] != b'"' {
+                    if bytes[index] == b'\\' {
+                        index += 2;
+                        continue;
+                    }
+                    index += 1;
+                }
+                names.push(text[start..index].to_string());
+            } else {
+                index += 1;
+            }
+        }
+        names
+    }
+
+    #[test]
+    fn pinned_filters_match_checks_py() {
+        let path = project_root().join("tools/checks.py");
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let declared = declared_pinned_filters(&source).unwrap();
+        let declared_refs: Vec<&str> = declared.iter().map(String::as_str).collect();
+        assert_eq!(
+            declared_refs,
+            PINNED_FILTERS,
+            "the two selected-unit instruments pin different filters"
+        );
+    }
+
+    #[test]
+    fn selected_report_bytes_match_the_python_document() {
+        let rows = vec![
+            SelectedRow {
+                filter: "a::b".into(),
+                code: 0,
+                summary: "test result: ok. 2 passed; 0 failed; 0 ignored;".into(),
+            },
+            SelectedRow {
+                filter: "q\"x\\y".into(),
+                code: -9,
+                summary: "no\nlineé\u{007f}".into(),
+            },
+        ];
+        let expected = "\
+[\n  {\n    \"filter\": \"a::b\",\n    \"code\": 0,\n    \"summary\": \"test result: ok. 2 passed; 0 failed; 0 ignored;\"\n  },\n  {\n    \"filter\": \"q\\\"x\\\\y\",\n    \"code\": -9,\n    \"summary\": \"no\\nline\\u00e9\\u007f\"\n  }\n]\n";
+        let actual = render_selected(&rows);
+        assert_eq!(
+            actual.as_bytes(),
+            expected.as_bytes(),
+            "selected-units.json bytes differ from the Python document"
+        );
+    }
+
+    #[test]
+    fn selected_child_delete_is_escaped_in_the_report() {
+        let dir = TempDir::new();
+        plant_results(&dir.0, &filters_json(&["del::case"]));
+        let binary = dir.0.join("units");
+        write_script(
+            &binary,
+            &format!(
+                "#!/bin/sh\n{guard}\
+printf '%s\\n' 'test result: ok. 1 passed; 0 failed; 0 ignored; \u{007f}'\n\
+exit 0\n",
+                guard = argv_guard(),
+            ),
+        );
+        let report = run_selected(&dir.0, &binary).unwrap();
+        assert!(report.rows.iter().all(|row| row.summary.contains('\u{007f}')));
+        let written = fs::read(dir.0.join("output/checks/selected-units.json")).unwrap();
+        assert!(
+            written.windows(6).any(|window| window == b"\\u007f"),
+            "selected-units.json did not spell U+007F as \\u007f: {written:?}"
+        );
+        assert!(
+            !written.contains(&0x7f),
+            "selected-units.json contains a raw U+007F byte"
+        );
+    }
+
+    #[test]
+    fn prior_record_prefers_filters_and_keeps_legacy_objects() {
+        let filters = prior_filters(
+            r#"{"note":"say \"hi\"\n","connected":{"groups":[1,{"name":"a"}]},"selected_rust_runs":[{"filter":"from_runs::"}],"selected_rust_filters":["from_filters::"]}"#,
+        )
+        .unwrap();
+        assert_eq!(filters, vec!["from_filters::".to_string()]);
+        let legacy = prior_filters(r#"{"selected_rust_runs":[{"code":1,"filter":"legacy::item","summary":"x"}]}"#).unwrap();
+        assert_eq!(legacy, vec!["legacy::item".to_string()]);
+        let last = prior_filters(r#"{"selected_rust_filters":["first::"],"selected_rust_filters":["second::"]}"#).unwrap();
+        assert_eq!(last, vec!["second::".to_string()]);
+        let empty = prior_filters(r#"{"selected_rust_filters":[],"selected_rust_runs":[{"filter":"nope"}]}"#).unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn missing_selection_is_refused() {
+        let error = prior_filters("{}").unwrap_err();
+        assert!(error.contains("selected_rust"), "{error}");
+    }
+
+    #[test]
+    fn missing_pinned_filters_are_appended_after_the_prior_record() {
+        let dir = TempDir::new();
+        plant_results(&dir.0, &filters_json(&["custom::kept", "network::etag_checks::"]));
+        let binary = dir.0.join("units");
+        write_script(
+            &binary,
+            &format!(
+                "#!/bin/sh\n{guard}\
+printf '%s\\n' 'test result: ok. 1 passed; 0 failed; 0 ignored;'\nexit 0\n",
+                guard = argv_guard(),
+            ),
+        );
+        let report = run_selected(&dir.0, &binary).unwrap();
+        let written = fs::read_to_string(dir.0.join("output/checks/selected-units.json")).unwrap();
+        let mut expected = vec!["custom::kept".to_string(), "network::etag_checks::".to_string()];
+        for name in PINNED_FILTERS {
+            if !expected.iter().any(|item| item == name) {
+                expected.push((*name).to_string());
+            }
+        }
+        assert_eq!(
+            filter_names(&written),
+            expected,
+            "pinned filters missing from the prior record were not appended"
+        );
+        assert_eq!(report.rows.len(), expected.len());
+        assert_eq!(report.passed, Some(expected.len() as u64));
+        assert!(report.rows.iter().all(|row| row.code == 0));
+    }
+
+    #[test]
+    fn green_selected_run_counts_the_first_result_line() {
+        let dir = TempDir::new();
+        plant_results(&dir.0, &filters_json(PINNED_FILTERS));
+        let binary = dir.0.join("units");
+        write_script(
+            &binary,
+            &format!(
+                "#!/bin/sh\n{guard}\
+printf '%s\\n' 'noise' 'test result: ok. 2 passed; 0 failed; 0 ignored;' 'test result: ok. 9 passed; 0 failed; 0 ignored;'\n\
+exit 0\n",
+                guard = argv_guard(),
+            ),
+        );
+        let report = run_selected(&dir.0, &binary).unwrap();
+        let line = "test result: ok. 2 passed; 0 failed; 0 ignored;";
+        assert!(report.rows.iter().all(|row| row.summary == line && row.code == 0));
+        let passed = (PINNED_FILTERS.len() as u64) * 2;
+        assert_eq!(report.passed, Some(passed));
+        assert_eq!(selected_cases_line(passed), format!("Selected cases: {passed}"));
+        let written = fs::read(dir.0.join("output/checks/selected-units.json")).unwrap();
+        assert_eq!(written, render_selected(&report.rows).into_bytes());
+        assert_eq!(filter_names(&String::from_utf8(written).unwrap()), PINNED_FILTERS);
+        let names: Vec<_> = fs::read_dir(dir.0.join("output/checks"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["selected-units.json".to_string()]);
+    }
+
+    #[test]
+    fn legacy_selected_rust_runs_are_the_fallback() {
+        let dir = TempDir::new();
+        let mut body = String::from("{\"selected_rust_runs\":[");
+        let mut names = vec!["legacy::item"];
+        names.extend(PINNED_FILTERS.iter().copied());
+        for (index, name) in names.iter().enumerate() {
+            if index > 0 {
+                body.push(',');
+            }
+            body.push_str(&format!("{{\"code\":7,\"summary\":\"old\",\"filter\":{}}}", json_string(name)));
+        }
+        body.push_str("]}\n");
+        plant_results(&dir.0, &body);
+        let binary = dir.0.join("units");
+        write_script(
+            &binary,
+            &format!(
+                "#!/bin/sh\n{guard}\
+printf '%s\\n' 'test result: ok. 3 passed; 0 failed; 0 ignored;'\nexit 0\n",
+                guard = argv_guard(),
+            ),
+        );
+        let report = run_selected(&dir.0, &binary).unwrap();
+        assert_eq!(report.rows[0].filter, "legacy::item");
+        assert_eq!(report.rows.len(), names.len());
+        assert_eq!(report.passed, Some((names.len() as u64) * 3));
+        let written = fs::read_to_string(dir.0.join("output/checks/selected-units.json")).unwrap();
+        assert_eq!(filter_names(&written), names);
+    }
+
+    #[test]
+    fn nonzero_code_writes_the_report_without_a_selected_line() {
+        let dir = TempDir::new();
+        plant_results(&dir.0, &filters_json(PINNED_FILTERS));
+        let binary = dir.0.join("units");
+        let failing = PINNED_FILTERS[3];
+        write_script(
+            &binary,
+            &format!(
+                "#!/bin/sh\n{guard}\
+if [ \"$1\" = '{failing}' ]; then\n\
+  printf '%s\\n' 'test result: FAILED. 0 passed; 1 failed; 0 ignored;'\n\
+  exit 1\n\
+fi\n\
+printf '%s\\n' 'test result: ok. 1 passed; 0 failed; 0 ignored;'\n\
+exit 0\n",
+                guard = argv_guard(),
+                failing = failing,
+            ),
+        );
+        let report = run_selected(&dir.0, &binary).unwrap();
+        assert!(report.passed.is_none());
+        assert_eq!(report.rows[3].filter, failing);
+        assert_eq!(report.rows[3].code, 1);
+        assert_eq!(report.rows[3].summary, "test result: FAILED. 0 passed; 1 failed; 0 ignored;");
+        let written = fs::read_to_string(dir.0.join("output/checks/selected-units.json")).unwrap();
+        assert!(written.contains("\"code\": 1"), "{written}");
+        assert!(!written.contains("Selected cases:"));
+    }
+
+    #[test]
+    fn summary_falls_back_to_the_output_tail() {
+        let mut stdout = "Z".repeat(699);
+        stdout.push('é');
+        stdout.push_str(&"Q".repeat(10));
+        let stderr = "B".repeat(800);
+        let mut expected = "Z".repeat(689);
+        expected.push('é');
+        expected.push_str(&"Q".repeat(10));
+        expected.push_str(&"B".repeat(700));
+        assert_eq!(summary_of(&stdout, &stderr), expected);
+        assert_eq!(expected.chars().count(), 1400);
+
+        let dir = TempDir::new();
+        let mut names = vec!["tail::case"];
+        names.extend(PINNED_FILTERS.iter().copied());
+        plant_results(&dir.0, &filters_json(&names));
+        let binary = dir.0.join("units");
+        write_script(
+            &binary,
+            &format!(
+                "#!/bin/sh\n{guard}\
+if [ \"$1\" = 'tail::case' ]; then\n\
+  printf '%s' '{stdout}'\n\
+  printf '%0800s' '' | tr ' ' 'B' >&2\n\
+  exit 0\n\
+fi\n\
+printf '%s\\n' 'test result: ok. 1 passed; 0 failed; 0 ignored;'\n\
+exit 0\n",
+                guard = argv_guard(),
+                stdout = stdout,
+            ),
+        );
+        let report = run_selected(&dir.0, &binary).unwrap();
+        assert_eq!(report.rows[0].filter, "tail::case");
+        assert_eq!(report.rows[0].code, 0);
+        assert_eq!(report.rows[0].summary, expected);
+        assert!(report.passed.is_none());
+        let written = fs::read_to_string(dir.0.join("output/checks/selected-units.json")).unwrap();
+        assert!(written.contains("\\u00e9"), "{written}");
+        assert!(!written.chars().any(|ch| ch == 'é'), "{written}");
     }
 }
