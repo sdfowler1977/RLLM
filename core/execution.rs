@@ -165,8 +165,8 @@ pub(super) fn bounded_process(
     timeout: Duration,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<BoundedOutput> {
-    if timeout.is_zero() || timeout > Duration::from_secs(600) {
-        return Err("Child process limit must be from 1 millisecond through 600 seconds".into());
+    if timeout.is_zero() || timeout > Duration::from_secs(900) {
+        return Err("Child process limit must be from 1 millisecond through 900 seconds".into());
     }
     let mut command = Command::new(program);
     command

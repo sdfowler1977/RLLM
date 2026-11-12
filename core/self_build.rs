@@ -9,7 +9,7 @@ use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const NOFOLLOW: i32 = 131072;
 const DIRECTORY: i32 = 65536;
@@ -155,8 +155,6 @@ unsafe extern "C" {
     fn readdir(dir: *mut std::ffi::c_void) -> *mut u8;
     fn closedir(dir: *mut std::ffi::c_void) -> i32;
     fn close(fd: i32) -> i32;
-    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
-    fn kill(pid: i32, sig: i32) -> i32;
 }
 struct Listed(*mut std::ffi::c_void);
 impl Drop for Listed {
@@ -451,85 +449,28 @@ pub(crate) fn plan(value: &Json) -> Result<Json> {
     ]))
 }
 
-struct Captured {
-    stdout: String,
-    exit: Option<i32>,
-}
-fn set_nonblock(fd: i32) -> Result<()> {
-    let flags = unsafe { fcntl(fd, 3) };
-    if flags < 0 || unsafe { fcntl(fd, 4, flags | NONBLOCK) } < 0 {
-        return Err("unable to bound builder output".into());
+/// One bounded child runner for every self-build leg. The sanctioned plan steps, a
+/// probe and the reviewed builder/gate all run through the single product runner,
+/// which owns the child process group and stops it on timeout or cancellation.
+fn bounded_child(
+    root: &Path,
+    program: &str,
+    args: &[String],
+    wall: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<super::execution::BoundedOutput> {
+    let output = super::execution::bounded_process(program, args, root, wall, cancelled)?;
+    if output.stdout.len() >= OUTPUT_MAX || output.stderr.len() >= OUTPUT_MAX {
+        return Err("builder output exceeded its bound".into());
     }
-    Ok(())
+    Ok(output)
 }
-fn drain(input: &mut impl Read, out: &mut Vec<u8>) -> Result<()> {
-    let mut buffer = [0u8; 4096];
-    for _ in 0..32 {
-        if out.len() >= OUTPUT_MAX {
-            break;
-        }
-        match input.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(count) => {
-                let room = OUTPUT_MAX - out.len();
-                out.extend_from_slice(&buffer[..count.min(room)]);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-            Err(error) => return Err(error.to_string()),
-        }
-    }
-    Ok(())
+/// The journal verb has no caller-held cancellation handle, so its own legs stay
+/// wall-bound exactly as they were under the runner this seam replaced.
+fn uncancelled() -> bool {
+    false
 }
-fn stop_child(child: &mut std::process::Child) {
-    unsafe { kill(-(child.id() as i32), 9) };
-    let _ = child.kill();
-    let _ = child.wait();
-}
-fn run_command(program: &str, args: &[String], cwd: &Path, wall: Duration) -> Result<Captured> {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    let mut child = command.spawn().map_err(|error| format!("builder spawn failed: {error}"))?;
-    let mut stdout = child.stdout.take().ok_or("builder stdout unavailable")?;
-    let mut stderr = child.stderr.take().ok_or("builder stderr unavailable")?;
-    if let Err(error) = set_nonblock(stdout.as_raw_fd()).and_then(|_| set_nonblock(stderr.as_raw_fd())) {
-        stop_child(&mut child);
-        return Err(error);
-    }
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let start = Instant::now();
-    let status = loop {
-        drain(&mut stdout, &mut out)?;
-        drain(&mut stderr, &mut err)?;
-        if out.len() >= OUTPUT_MAX || err.len() >= OUTPUT_MAX {
-            stop_child(&mut child);
-            return Err("builder output exceeded its bound".into());
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() > wall => {
-                stop_child(&mut child);
-                return Err("builder exceeded its wall bound".into());
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(error) => {
-                stop_child(&mut child);
-                return Err(error.to_string());
-            }
-        }
-    };
-    drain(&mut stdout, &mut out)?;
-    drain(&mut stderr, &mut err)?;
-    let stdout = String::from_utf8(out).map_err(|_| "builder stdout is not UTF-8")?;
-    Ok(Captured { stdout, exit: status.code() })
-}
-fn run_probe(root: &Path, rel: &str, wall: Duration) -> Result<Captured> {
+fn run_probe(root: &Path, rel: &str, wall: Duration) -> Result<super::execution::BoundedOutput> {
     let path = root.join(relative(rel)?);
     if path.file_name().and_then(|name| name.to_str()) != Some("self-build-probe.sh") {
         return Err("probe must be self-build-probe.sh inside the project".into());
@@ -538,9 +479,9 @@ fn run_probe(root: &Path, rel: &str, wall: Duration) -> Result<Captured> {
     if meta.file_type().is_symlink() || !meta.is_file() {
         return Err("probe must be a regular non-symlink file".into());
     }
-    run_command("bash", &[path.to_string_lossy().into_owned()], root, wall)
+    bounded_child(root, "bash", &[path.to_string_lossy().into_owned()], wall, &uncancelled)
 }
-fn run_sanctioned(root: &Path, units: &str) -> Result<Captured> {
+fn run_sanctioned(root: &Path, units: &str) -> Result<super::execution::BoundedOutput> {
     let steps = [
         ("headless", "builder", "bash", vec!["headless.sh".to_string()], BUILDER_WALL),
         (
@@ -560,9 +501,9 @@ fn run_sanctioned(root: &Path, units: &str) -> Result<Captured> {
     ];
     let mut last = None;
     for (name, role, program, args, wall) in steps {
-        let captured = run_command(program, &args, root, Duration::from_secs(wall))?;
-        if role == "builder" && captured.exit != Some(0) {
-            return Err(format!("builder failed: {name} exited {:?}", captured.exit));
+        let captured = bounded_child(root, program, &args, Duration::from_secs(wall), &uncancelled)?;
+        if role == "builder" && captured.code != Some(0) {
+            return Err(format!("builder failed: {name} exited {:?}", captured.code));
         }
         last = Some(captured);
     }
@@ -590,7 +531,7 @@ fn gate_text(value: &Json, root: &Path) -> Result<GateText> {
             return Err("sanctioned rebuild requires review_confirmed".into());
         }
         return match run_sanctioned(root, &units_dir(value)?) {
-            Ok(captured) => Ok(GateText::Ready(captured.stdout, captured.exit)),
+            Ok(captured) => Ok(GateText::Ready(captured.stdout, captured.code)),
             Err(error) if error.starts_with("builder failed:") => Ok(GateText::BuilderFailed(error)),
             Err(error) => Err(error),
         };
@@ -600,7 +541,7 @@ fn gate_text(value: &Json, root: &Path) -> Result<GateText> {
             return Err("running a builder requires review_confirmed".into());
         }
         let captured = run_probe(root, &text(value, "probe"), probe_wall(value)?)?;
-        return Ok(GateText::Ready(captured.stdout, captured.exit));
+        return Ok(GateText::Ready(captured.stdout, captured.code));
     }
     if !text(value, "gate_output").is_empty() {
         return Ok(GateText::Ready(text(value, "gate_output"), None));
@@ -886,12 +827,25 @@ fn run_log(pid: u64, argv: &[String], binary_digest: &str, source_digest: &str) 
 }
 
 pub(crate) fn handoff(value: &Json) -> Result<Json> {
-    only(value, &["root", "binary", "args", "source_digest", "review_confirmed", "parent", "revision"])?;
+    only(
+        value,
+        &[
+            "root",
+            "binary",
+            "args",
+            "source_digest",
+            "review_confirmed",
+            "parent",
+            "revision",
+            "journal",
+            "rollback",
+        ],
+    )?;
     let root = root_of(value)?;
     let binary = resolve_file(&root, field(value, "binary")?)?;
     let binary_bytes = read_regular(&binary, BINARY_MAX)?;
     let binary_digest = sha256(&binary_bytes);
-    let (source_digest, _, _) = tree(&root, &[])?;
+    let (source_digest, _, _) = tree(&root, &skip_paths(value)?)?;
     let claimed = text(value, "source_digest");
     digest_text(&claimed)?;
     if !claimed.is_empty() && claimed != source_digest {
@@ -958,6 +912,62 @@ pub(crate) fn prepare(root: &Path, pending: &mut Json) -> Result<()> {
         Err(error) => Err(error.to_string()),
     }
 }
+fn pending_stamp() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+/// The edit leg of the seam. The reviewed content replaces the workspace source with
+/// the same replacement policy as the write operation: parent directories are created,
+/// the bytes go into a new temporary file that is synced, and the rename is what puts
+/// them at the target. The target must already be a regular non-symlink file, or absent.
+fn apply_reviewed_edit(root: &Path, args: &Json) -> Result<(String, usize)> {
+    let path = text(args, "path");
+    let content = field(args, "content")?;
+    if content.len() > MAX_FILE as usize {
+        return Err("self-build content exceeds 4 MiB".into());
+    }
+    if get(args, "previous_exists") == &Null {
+        return Err("self-build operation has not been reviewed".into());
+    }
+    let target = locate(root, &path, true)?;
+    let previous = match fs::symlink_metadata(&target) {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+            return Err("self-build path must be a regular file".into());
+        }
+        Ok(_) => {
+            let bytes = read_regular(&target, MAX_FILE)?;
+            Some(String::from_utf8(bytes).map_err(|_| "self-build source must be UTF-8")?)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.to_string()),
+    };
+    let reviewed_exists = get(args, "previous_exists") == &Bool(true) || text(args, "previous_exists") == "true";
+    let unchanged = match (&previous, field(args, "approved_previous")) {
+        (Some(old), Ok(approved)) => old == approved,
+        (Some(_), Err(error)) => return Err(error),
+        (None, _) => true,
+    };
+    if reviewed_exists != previous.is_some() || !unchanged {
+        return Err("File changed since review; review the operation again".into());
+    }
+    let parent = target.parent().ok_or("Invalid parent")?;
+    let temp = parent.join(format!(".pending-{}-{}", std::process::id(), pending_stamp()));
+    let written = content.len();
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|error| error.to_string())?;
+    let applied = file.write_all(content.as_bytes()).and_then(|_| file.sync_all());
+    drop(file);
+    if let Err(error) = applied.and_then(|_| fs::rename(&temp, &target)) {
+        let _ = fs::remove_file(&temp);
+        return Err(format!("Cannot apply the reviewed edit: {error}"));
+    }
+    Ok((path, written))
+}
 fn reviewed_timeout(args: &Json) -> Result<Duration> {
     match get(args, "timeout_seconds") {
         Null => Ok(Duration::from_secs(30)),
@@ -990,11 +1000,7 @@ fn sanctioned_child(
     if !allowed {
         return Err("builder is not one of the sanctioned commands".into());
     }
-    let output = super::execution::bounded_process(program, args, root, timeout, cancelled)?;
-    if output.stdout.len() > OUTPUT_MAX || output.stderr.len() > OUTPUT_MAX {
-        return Err("builder output exceeded its bound".into());
-    }
-    Ok(output)
+    bounded_child(root, program, args, timeout, cancelled)
 }
 pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Result<String> {
     if cancelled() {
@@ -1007,6 +1013,8 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
         return Err("reload must be exec, spawn, or empty".into());
     }
     let timeout = reviewed_timeout(args)?;
+    let (edited, written) = apply_reviewed_edit(root, args)?;
+    let saved = format!("Saved {written} bytes to {edited}.");
     let mut gate_text = String::new();
     if !text(args, "builder").is_empty() {
         let built = sanctioned_child(root, &text(args, "builder"), &strings(args, "builder_args")?, timeout, cancelled)?;
@@ -1038,12 +1046,12 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
         let mut child = Command::new(&binary);
         child.current_dir(root).stdin(Stdio::null());
         let child = child.spawn().map_err(|error| format!("successor spawn failed: {error}"))?;
-        return Ok(format!("successor pid {}", child.id()));
+        return Ok(format!("{saved} successor pid {}", child.id()));
     }
     if gate_text.is_empty() {
-        Ok("self-build reviewed; no builder was requested".into())
+        Ok(format!("{saved} self-build reviewed; no builder was requested"))
     } else {
-        Ok(gate_text)
+        Ok(format!("{saved} {gate_text}"))
     }
 }
 
@@ -1354,5 +1362,116 @@ mod checks {
         let second = request(&digest);
         assert_eq!(get(&second, "stale"), &Bool(false));
         assert_eq!(text(&second, "source_digest"), digest);
+    }
+
+    #[test]
+    fn reviewed_edit_lands_on_disk_and_the_receipt_names_the_write() {
+        let scratch = Scratch::new("edit");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        let content = "fn a() { let _ = 1; }\n";
+        let request = |approved: &str| {
+            obj(vec![(
+                "args",
+                obj(vec![
+                    ("path", s("src/lib.rs")),
+                    ("content", s(content)),
+                    ("previous_exists", Bool(true)),
+                    ("approved_previous", s(approved)),
+                ]),
+            )])
+        };
+        let live = || false;
+        let receipt = run(root, &request("fn a() {}\n"), &live).unwrap();
+        assert!(
+            receipt.contains(&format!("Saved {} bytes to src/lib.rs.", content.len())),
+            "{receipt}"
+        );
+        assert_eq!(fs::read_to_string(root.join("src/lib.rs")).unwrap(), content);
+        let error = run(root, &request("fn a() {}\n"), &live).unwrap_err();
+        assert!(error.contains("File changed since review"), "{error}");
+        assert_eq!(fs::read_to_string(root.join("src/lib.rs")).unwrap(), content);
+        let unreviewed = obj(vec![(
+            "args",
+            obj(vec![("path", s("src/lib.rs")), ("content", s(content))]),
+        )]);
+        let error = run(root, &unreviewed, &live).unwrap_err();
+        assert!(error.contains("has not been reviewed"), "{error}");
+        assert_eq!(fs::read_to_string(root.join("src/lib.rs")).unwrap(), content);
+        let pending = fs::read_dir(root.join("src"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".pending-"))
+            .count();
+        assert_eq!(pending, 0);
+    }
+
+    #[test]
+    fn reviewed_edit_refuses_a_symlink_a_directory_and_a_non_utf8_source() {
+        let scratch = Scratch::new("edit-refusal");
+        let outside = Scratch::new("edit-outside");
+        let root = scratch.path();
+        write(&outside.path().join("target.rs"), b"fn outside() {}\n");
+        std::os::unix::fs::symlink(outside.path().join("target.rs"), root.join("link.rs")).unwrap();
+        fs::create_dir_all(root.join("nest")).unwrap();
+        write(&root.join("raw.rs"), &[0xff, 0xfe, 0x00, 0x80]);
+        let live = || false;
+        let request = |path: &str, approved: &str| {
+            obj(vec![(
+                "args",
+                obj(vec![
+                    ("path", s(path)),
+                    ("content", s("fn replaced() {}\n")),
+                    ("previous_exists", Bool(true)),
+                    ("approved_previous", s(approved)),
+                ]),
+            )])
+        };
+        let error = run(root, &request("link.rs", "fn outside() {}\n"), &live).unwrap_err();
+        assert!(error.contains("symlink"), "{error}");
+        assert_eq!(fs::read_to_string(outside.path().join("target.rs")).unwrap(), "fn outside() {}\n");
+        let error = run(root, &request("nest", ""), &live).unwrap_err();
+        assert!(error.contains("regular file"), "{error}");
+        let error = run(root, &request("raw.rs", ""), &live).unwrap_err();
+        assert!(error.contains("UTF-8"), "{error}");
+        assert_eq!(fs::read(root.join("raw.rs")).unwrap(), vec![0xff, 0xfe, 0x00, 0x80]);
+    }
+
+    #[test]
+    fn handoff_skips_the_journal_and_the_over_cap_rollback_store() {
+        let scratch = Scratch::new("handoff-skip");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn shipped() {}\n");
+        write(&root.join("next-bin"), b"successor-image");
+        write(&root.join("self/journal.jsonl"), b"{\"schema\":\"1\"}\n");
+        let mut rollback = vec![7u8; 4 * 1024 * 1024 + 4096];
+        for (index, byte) in rollback.iter_mut().enumerate() {
+            *byte = (index % 251) as u8;
+        }
+        write(&root.join("self/rollback"), &rollback);
+        let base = vec![
+            ("root", s(root.to_str().unwrap())),
+            ("binary", s(root.join("next-bin").to_str().unwrap())),
+            ("args", Arr(vec![s("continue")])),
+            ("review_confirmed", Bool(false)),
+        ];
+        let error = handoff(&obj(base.clone())).unwrap_err();
+        assert!(error.contains("file exceeds"), "{error}");
+        let seen = fingerprint(&obj(vec![
+            ("root", s(root.to_str().unwrap())),
+            ("binary", s(root.join("next-bin").to_str().unwrap())),
+            ("journal", s("self/journal.jsonl")),
+            ("rollback", s("self/rollback")),
+        ]))
+        .unwrap();
+        let mut stored = base;
+        stored.push(("journal", s("self/journal.jsonl")));
+        stored.push(("rollback", s("self/rollback")));
+        stored.push(("source_digest", s(&text(&seen, "source_digest"))));
+        let logged = handoff(&obj(stored)).unwrap();
+        assert_eq!(get(&logged, "executed"), &Bool(false));
+        assert_eq!(text(&logged, "source_digest"), text(&seen, "source_digest"));
+        assert_eq!(text(&logged, "binary_digest"), sha256(b"successor-image"));
+        assert!(text(&logged, "log").contains("continue"));
     }
 }
