@@ -608,7 +608,15 @@ source text. That subject is the packaging leg's unsigned `package.apk`, not the
 companion, so the published record's `apk_alignment` UNAVAILABLE arm remains open until the owner's
 companion triple lands; `checkpoint.rs` still has no code consumer anywhere in the tree, so it has no
 behavioural witness beyond its five executed unit cases, and `readback.rs` still needs that companion
-triple; and
+triple. A real `package.sh` run at 2026-11-12T05:31Z (`output/2026-11-12__05-31-35Z`,
+`CLIENT_UNSIGNED=1`) proves the native aligner inside the actual pipeline rather than only in a
+standalone differential: that leg's `build-inputs.sha256` names `tools/alignment.rs`
+(`f05de95d…`) among its 167 recorded inputs, and that inventory still equals the current expected
+set, so `tools/apk.py:10`'s `'Build input inventory changed after compilation'` assert passes on
+real bytes; two recorded per-file digests now mismatch (`core/execution.rs`, `core/self_build.rs`)
+because the `GAP1` lane edited `core/` after that leg — the drift check working as designed. No
+signed APK exists anywhere under `output/` or `release/` on this host, so the positive signature
+path and the full `apk.py` inspection remain unrunnable here; and
 **the aligner is proven equivalent on real bytes** — measured 2026-11-12T01:20Z against the
 2026-11-11 packaging leg (`output/2026-11-11__14-59-03Z/package.apk`, 6,944,777 bytes), the native
 `output/tools/alignment` printed `Alignment payload validation: 25 exact members; attempt 1` and
