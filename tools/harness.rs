@@ -1058,7 +1058,13 @@ fn sweep_arguments(name: &str, root: &Path, opts: &SweepOpts) -> Vec<String> {
 extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
     fn poll(fds: *mut PollFd, nfds: usize, timeout: i32) -> i32;
+    fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32;
 }
+
+const F_GETFL: i32 = 3;
+const F_SETFL: i32 = 4;
+const O_NONBLOCK: i32 = 2048;
+const POLLIN: i16 = 1;
 
 #[repr(C)]
 struct PollFd {
@@ -1095,35 +1101,40 @@ fn kill_child_group(child: &mut std::process::Child) {
     }
 }
 
-// poll bounds the read. A grandchild that still holds the write end cannot
-// keep join() blocked after the deadline.
-fn drain_bounded(mut pipe: impl Read + AsRawFd, deadline: Instant) -> Vec<u8> {
-    let fd = pipe.as_raw_fd();
-    let mut buffer = Vec::new();
-    let mut chunk = [0u8; 8192];
-    loop {
-        if Instant::now() >= deadline {
-            break;
-        }
-        let mut pollfd = PollFd { fd, events: 1, revents: 0 };
-        let ready = unsafe { poll(&mut pollfd, 1, 200) };
-        if ready == 0 {
-            continue;
-        }
-        if ready < 0 {
-            continue;
-        }
-        match pipe.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => buffer.extend_from_slice(&chunk[..n]),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
-            Err(_) => break,
-        }
+fn set_nonblocking(fd: i32) {
+    let flags = unsafe { fcntl(fd, F_GETFL, 0) };
+    if flags >= 0 {
+        unsafe { fcntl(fd, F_SETFL, flags | O_NONBLOCK); }
     }
-    buffer
 }
 
+// Returns true while some writer still holds the pipe. Bytes already read stay
+// in `buf`. The fd is nonblocking, so this returns at WouldBlock instead of
+// waiting for EOF.
+fn pipe_still_open(pipe: &mut impl Read, buf: &mut Vec<u8>, chunk: &mut [u8]) -> bool {
+    loop {
+        match pipe.read(chunk) {
+            Ok(0) => return false,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return true,
+            Err(_) => return false,
+        }
+    }
+}
+
+fn poll_wait_ms(deadline: Instant) -> Option<i32> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let millis = remaining.as_millis();
+    if millis == 0 {
+        return None;
+    }
+    Some(millis.min(200) as i32)
+}
+
+// The parent reads both pipes. There is no reader thread and no join. A setsid
+// grandchild is outside kill(-pid) and can hold the write end; nonblocking
+// poll stops at the drain deadline and the bytes already read are kept.
 fn sweep_run(root: &Path, name: &str, arguments: &[String], seconds: u64) -> (i32, Vec<u8>, u64) {
     let started = Instant::now();
     let drain_deadline = started + std::time::Duration::from_secs(seconds.saturating_add(5));
@@ -1132,37 +1143,73 @@ fn sweep_run(root: &Path, name: &str, arguments: &[String], seconds: u64) -> (i3
         Ok(child) => child,
         Err(error) => return (-1, format!("runner could not start the group: {error}").into_bytes(), 0),
     };
-    let stdout = child.stdout.take().expect("stdout");
-    let stderr = child.stderr.take().expect("stderr");
-    let out_handle = std::thread::spawn(move || drain_bounded(stdout, drain_deadline));
-    let err_handle = std::thread::spawn(move || drain_bounded(stderr, drain_deadline));
+    let mut stdout = child.stdout.take().expect("stdout");
+    let mut stderr = child.stderr.take().expect("stderr");
+    set_nonblocking(stdout.as_raw_fd());
+    set_nonblocking(stderr.as_raw_fd());
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    let mut stdout_open = true;
+    let mut stderr_open = true;
+    let mut chunk = [0u8; 8192];
     let mut timed_out = false;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status.code().unwrap_or(-1),
-            Ok(None) => {
-                if started.elapsed().as_secs() >= seconds {
+    let mut status = None;
+    loop {
+        if status.is_none() {
+            match child.try_wait() {
+                Ok(Some(finished)) => status = Some(finished.code().unwrap_or(-1)),
+                Ok(None) if started.elapsed().as_secs() >= seconds => {
                     kill_child_group(&mut child);
                     timed_out = true;
-                    break 124;
+                    status = Some(124);
                 }
-                std::thread::sleep(std::time::Duration::from_millis(200));
-            }
-            Err(error) => {
-                kill_child_group(&mut child);
-                let elapsed = started.elapsed().as_secs();
-                let _ = out_handle.join();
-                let _ = err_handle.join();
-                return (-1, format!("runner could not wait for the group: {error}").into_bytes(), elapsed);
+                Ok(None) => {}
+                Err(error) => {
+                    kill_child_group(&mut child);
+                    let elapsed = started.elapsed().as_secs();
+                    return (-1, format!("runner could not wait for the group: {error}").into_bytes(), elapsed);
+                }
             }
         }
-    };
-    let stdout_bytes = out_handle.join().unwrap_or_default();
-    let stderr_bytes = err_handle.join().unwrap_or_default();
+        if status.is_some() && !stdout_open && !stderr_open {
+            break;
+        }
+        let Some(timeout_ms) = poll_wait_ms(drain_deadline) else {
+            break;
+        };
+        let mut fds = [
+            PollFd { fd: if stdout_open { stdout.as_raw_fd() } else { -1 }, events: POLLIN, revents: 0 },
+            PollFd { fd: if stderr_open { stderr.as_raw_fd() } else { -1 }, events: POLLIN, revents: 0 },
+        ];
+        let ready = unsafe { poll(fds.as_mut_ptr(), fds.len(), timeout_ms) };
+        if ready < 0 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            continue;
+        }
+        if stdout_open && fds[0].revents != 0 {
+            stdout_open = pipe_still_open(&mut stdout, &mut stdout_bytes, &mut chunk);
+        }
+        if stderr_open && fds[1].revents != 0 {
+            stderr_open = pipe_still_open(&mut stderr, &mut stderr_bytes, &mut chunk);
+        }
+    }
+    if stdout_open {
+        stdout_open = pipe_still_open(&mut stdout, &mut stdout_bytes, &mut chunk);
+    }
+    if stderr_open {
+        stderr_open = pipe_still_open(&mut stderr, &mut stderr_bytes, &mut chunk);
+    }
+    let status = status.unwrap_or(-1);
     let mut log = stdout_bytes.clone();
     log.extend_from_slice(&stderr_bytes);
     if timed_out {
         log.extend(format!("\nDevelopment check exceeded {seconds} seconds.\n").into_bytes());
+    }
+    if stdout_open {
+        log.extend(b"abandoned stdout\n");
+    }
+    if stderr_open {
+        log.extend(b"abandoned stderr\n");
     }
     std::fs::write(root.join(format!("output/checks/{name}.log")), &log).ok();
     (status, stdout_bytes, started.elapsed().as_secs())
@@ -1941,6 +1988,37 @@ mod checks {
         assert!(wall < 15, "timeout wall time {wall}s was not bounded");
         assert!(pid > 0, "grandchild pid was not recorded");
         assert!(!alive, "grandchild was still alive after the timeout");
+    }
+
+    #[test]
+    fn sweep_timeout_abandons_a_setsid_grandchild_holding_stdout() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        std::fs::write(
+            root.join("verification/scene.py"),
+            "import os, sys, time\nsys.stdout.write('{\"passed\": 1, \"checks\": [1]}\\n')\nsys.stdout.flush()\nchild = os.fork()\nif child == 0:\n    os.setsid()\n    open('output/checks/grandchild', 'w').write(str(os.getpid()))\n    time.sleep(30)\n    sys.exit(0)\ntime.sleep(120)\n",
+        )
+        .unwrap();
+        let started = Instant::now();
+        let (code, stdout, _elapsed) = sweep_run(root, "scene", &[], 2);
+        let wall = started.elapsed().as_secs();
+        let pid = std::fs::read_to_string(root.join("output/checks/grandchild")).unwrap_or_default().trim().parse::<i32>().unwrap_or(0);
+        let alive = process_running(pid);
+        if pid > 0 {
+            unsafe { kill(pid, 9); }
+        }
+        assert_eq!(code, 124, "setsid grandchild holding stdout must be a 124 timeout");
+        assert!(wall < 15, "setsid drain wall time {wall}s was not bounded");
+        assert!(pid > 0, "setsid grandchild pid was not recorded");
+        assert!(alive, "setsid grandchild died with the process group");
+        let counted = executed_count_of(&String::from_utf8_lossy(&stdout)).ok().map(|item| item.count);
+        assert_eq!(counted, Some(1), "setsid drain dropped the executed count already read");
+        let log = std::fs::read_to_string(root.join("output/checks/scene.log")).unwrap_or_default();
+        assert!(log.contains("abandoned stdout"), "setsid drain did not say stdout was abandoned: {log}");
+        assert!(log.contains("abandoned stderr"), "setsid drain did not say stderr was abandoned: {log}");
+        assert!(log.contains("{\"passed\": 1"), "setsid drain log lost the bytes already read: {log}");
     }
 
     #[test]
