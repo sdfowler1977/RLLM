@@ -7,7 +7,7 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **737/737 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
+  report bytes): **753/753 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
   69-group record is backed by 638/638, measured at `c34b170`), measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the 638 count is the tree at `c34b170`: 597 at `600e44d`,
   +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
@@ -17,7 +17,7 @@ their original counts and wording.
   re-derived per commit — and +1 in `98fb0d9` → 650, +8 in `e4118b1` → 658, +9 in `e7d13ec` → 667, +5 in
   `db16ffa` → 672, +14 in `436b281` → 686, +15 in `28b29d3` → 701, +7 in `2b041bc` → 708, +10 in `06d1f6b` → 718,
   +5 in `b6457b0` → 723, +6 in `f28e463` → 729, +6 in `0b1cf39` → 735, +2 in `f1051da` → 737 (re-measured directly on
-  `f1051da` in a room that held none of the pending lanes' work); the sums were
+  `f1051da` in a room that held none of the pending lanes' work), +16 in `51ce540` → 753; the sums were
   re-derived by counting added `#[test]` lines per commit with `git show`, which is why `3e5eda1` (+3) and
   `112e251` (+1) are absent from the chain — those are `tools/` package-test legs, not core unit cases; every delta was
   re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
@@ -585,7 +585,10 @@ open-items list, as ledger obligations `GAP1`-`GAP5`, ranked as the report ranks
    no composition from a pool, and no persistent improvement library that a later task reads back.
 4. **`GAP4-REA-FEATURE-REBUILD`** — `reconstruct` copies bytes, exports a retained representation,
    or writes a structural spec; its own review warning says it "does not recreate original source
-   bytes or behavior". No JS/Electron, .NET/CIL or HAR/SAZ analysis in `core/`.
+   bytes or behavior". Of the three named missing analyses, JS/Electron and .NET/CIL have landed
+   (the .NET parser with three named caps and a live `inspect` consumer in `51ce540`); saved
+   HAR traffic is read and wired (`core/har_evidence.rs` → `core/observation_records.rs:115`), and
+   its **SAZ** container form is still unrecognised — there is no ZIP path in that reader.
 5. **`GAP5-NATIVE-TOOLING-NO-PYTHON`** — measured 2026-11-12: **79 Python files / 8,004 lines**
    (`tools/` 8 files / 444 lines, `verification/` 71 files / 7,560 lines). The report names only
    the `tools/` eight; the exposure is larger, and this window made it worse because the new
@@ -1860,6 +1863,33 @@ directory) stays a separate, real finding: any git-reading group must run in the
 `/tmp/preguard` (`44b755e` archive, used for the pre-guard cells above), `/tmp/g2x` (`475e34c` + `gap2e`, mutated and
 restored), `/tmp/sb2w` (`f1051da` + `self_build`), `/tmp/rdxw`, `/tmp/room7w`, `/tmp/g2w`, `/tmp/dn6w`, `/tmp/xectw`,
 `/tmp/wtexp`. Nothing in the commit chain depends on a lane's uncommitted file.
+
+## The .NET parser lands with three named caps after two seats over-called it — 2026-11-13T08:0Z–08:4Z
+
+`core/dotnet_evidence.rs` + the `MZ` call site in `core/investigation.rs` are committed as `51ce540` (lanes
+`dotnet6` then `dn7`, the second closing three High findings the first seat raised). Isolated-room witness
+(`git archive 8eff3b5` + those two files, md5 `272d503e98e25a89` / `a43c75754bf17cbf`): **753/753 cases plus 55
+isolated application cases, exit 0**, warning count unchanged at 13 — consistent with the chain (`737 → +16 in
+51ce540 → 753`).
+
+What is now bounded: the parse budget charges **bytes actually mapped or read**, so a 700-byte image declaring
+4026531840-byte streams parses instead of being refused, while a declared range that is fully present and over the cap
+is refused under its own name (`dotnet declared size cap`); emitted text is charged line by line as it is produced with
+the omission notice pre-charged inside the 16 KiB `dotnet observation byte cap`; `partial_methods` takes the same
+budget, charges a row stride per row, is bounded by `METHOD_ROW_CAP`, and its cancellation surfaces as the existing
+`Inspection cancelled`. The consumer is no longer dead wiring: `cli_evidence` returns `Absent`/`Observed`/`Bounded`
+and the `MZ` branch of `inspect` consumes all three, with tests driving `inspect` rather than the helper.
+
+**Three of the two seats' P1s are refuted against the code, and one of them is a claim I could only catch by reading
+the file myself:** the omission notice *is* pre-charged on every accepted line (`charge_observation` adds
+`OBSERVATION_NOTICE.len()` to every charge) and a test pins `text.len() <= OBSERVATION_BYTE_CAP`; `sections_of` takes
+the same `Budget` and names its own truncation, so section probing is not unbudgeted work; and the pair of
+`matches("Refusal: dotnet observation byte cap.\\n")` / full-sentence assertions are **not** duplicate counts — the
+patterns differ by the newline, so the short one matches only the notice's first line. Accepted residuals, recorded
+rather than fixed: the fat-header path charges a prefix twice (conservative, can refuse near the limit), per-method
+header mapping is charged as a row stride rather than per byte (worst case bounded by `METHOD_ROW_CAP` 4096), a
+declared size over the cap that is *not* fully present is parsed as the available prefix with no notice, and the
+64-iteration table loop and 4-heap loop do not poll cancellation.
 
 ## Historical baseline audit (original text)
 
