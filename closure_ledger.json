@@ -788,5 +788,17 @@
     },
     "total_cases": 77,
     "exit": 0
+  },
+  "gap5_interlock_mutation_witness": {
+    "at": "2026-11-12T20:25Z",
+    "purpose": "prove the census interlock can detect a missing group before any retirement lane touches it (the seat could not judge this leg)",
+    "clean_census": "tools/checks.py names = 71; tools/harness.rs const GROUPS = 71; the two sets are identical (the seat's '81 in both' was an excerpt artifact)",
+    "red_mutant": "in room /tmp/htools, replace \",'rrsi_loop']\" with ']' in tools/checks.py, then run tbm/package-tests runner_names_match_packaging_pairs -> test checks::runner_names_match_packaging_pairs FAILED, panicked at RLLM/tools/package.rs:2395:9, assertion `left == right` failed: 70 (left 70, right 71)",
+    "masked_first_attempt": "the first mutant used .replace(\"'rrsi_loop', \",\"\") style substitutions whose guard assert ('rrsi_loop', with a comma) is absent from the file (rrsi_loop occurs exactly once, as the last entry), so python wrote nothing and the run was vacuously green at cases: 20",
+    "test_source_fact": "tools/package.rs:2391-2400 reads root/tools/checks.py, asserts len==71, first=='provider_process', last=='rrsi_loop', duplicate_groups/pairs_cover, and report_pairs().len()==71",
+    "root_resolution": "project_root() (tools/package.rs:2244) walks up from current_exe, current_dir and argv0 looking for a dir holding both tools/package.rs and tools/checks.py, so the room's own copy is what the test reads",
+    "production_dependency": "tools/package.rs:1917 refuses 'tools/checks.py absent', so the file cannot be deleted before the parser is repointed",
+    "restored": "room tools/checks.py md5 35efe63d7df2ea47f7a768dd45272549 after restore (mutant md5 2029492d615b304d033eafb7d9acc60a)",
+    "still_load_bearing_after_repoint": "tools/harness.rs:297-301 pushes 'group <name> has no verification/<name>.py' for every GROUPS entry, and tools/package.py:25 reads checks.py names via AST - both survive step 1"
   }
 }
