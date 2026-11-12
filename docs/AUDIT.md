@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T22:3Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T23:3Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -7,7 +7,7 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **701/701 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
+  report bytes): **708/708 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
   69-group record is backed by 638/638, measured at `c34b170`), measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the 638 count is the tree at `c34b170`: 597 at `600e44d`,
   +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
@@ -15,7 +15,7 @@ their original counts and wording.
   +4 durable-successor cases in `12cdc6b`, +5 cross-reference cap-disclosure cases in `c34b170`; continued by
   +4 in `4758d28` → 642 and +7 in `5c93aed` → 645, then 649 re-measured in a room at `e4b7452` — that +4 was not
   re-derived per commit — and +1 in `98fb0d9` → 650, +8 in `e4118b1` → 658, +9 in `e7d13ec` → 667, +5 in
-  `db16ffa` → 672, +14 in `436b281` → 686, +15 in `28b29d3` → 701; the sums were
+  `db16ffa` → 672, +14 in `436b281` → 686, +15 in `28b29d3` → 701, +7 in `2b041bc` → 708; the sums were
   re-derived by counting added `#[test]` lines per commit with `git show`, which is why `3e5eda1` (+3) and
   `112e251` (+1) are absent from the chain — those are `tools/` package-test legs, not core unit cases; every delta was
   re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
@@ -1511,6 +1511,67 @@ computed at :294 and printed at :295 but never read as a field (`warning: field 
 `binary_declarations::derive` (`core/binary_declarations.rs:45`) emits only mappings, classifications and
 relocations even though that projection is production-live (`core/binary_evidence.rs:50`/:81,
 `core/reconstruction.rs:12`) — so cross-reference edges reach the prose but never the typed graph.
+
+`defl5` closed GAP5's first half — the archive compressor. `deflate` (`core/compression.rs:644`, outside
+`#[cfg(test)]`) writes RFC1951 raw DEFLATE with fixed Huffman blocks and a hash-chain LZ77 match finder;
+`tools/package.rs`'s `write_zip` now calls the tool's own copy of it (the tool is a standalone binary that
+already carried its own inflater) instead of storing every member. Verified in a `git archive` room of
+`28b29d3` plus the lane's two files: **708/708 cases plus 55 isolated application cases, exit 0** — 701 + 7,
+matching the lane's own new-case count — and the package tool's suite is **29/29**, up from 20, exit 0. The
+lane's first delivery was refused for two defects found by measurement, not review: it had written the
+compressor to a new `core/deflate.rs` with **zero markers and no `mod` line** (dead code that would not even
+compile, and would have needed two interlock edits), and its archive test asserted a hand-computed header
+offset that was wrong by two bytes — `fnv(&archive[..payload - 6..])` covered the extra-field length field and
+the CRC, so the pinned digest refused it while the comment claimed the whole member prefix.
+
+Conformance was measured without the product's own inflater, so the claim does not rest on a self-consistent
+pair: a standalone probe compiled against `core/compression.rs` deflates a 230,800-byte corpus
+(repetitive text, random bytes, a zero run, and `/etc/hostname` + `/etc/os-release`) to 21,519 bytes, and
+python zlib's raw-DEFLATE decoder returns the exact original; two runs are byte-identical; and the project's
+native inflater accepts a zlib-9 stream byte-identical. Size against zlib level 9 on the same corpus is
+4.98 % over (`21,519` vs `20,500`), 0.14 % under level 6 — near parity, **not** byte parity, so the archive
+bytes change and no pinned archive digest may be claimed from this. The Python packager is therefore still
+not retired: `tools/package.py` remains until a real publication archive is produced and compared against the
+Python one, which is still blocked behind the packager-publish blocker (`output/checks/apk.json`).
+
+`selfreb` fixed the `leg()` swallow in `verification/self_rebuild.py` (`fb2adc9`): a leg that raises after
+its own check has been recorded now lands in `problems`, so a raising leg is a failure. Group checks 8 → 9,
+and its record shape was corrected against the runner source rather than guessed: `tools/harness.rs:577-594`
+watches only `count`, `passed` and `checks` (`failed`/`scope` are skipped) and a group passes only on exit
+code 0, while `Measure::finish` (`:362-378`) compares **only the watched fields that are present** — so the
+green line sets `passed` to the recorded count and a red record omits `passed` rather than publishing `0`
+against `count = 9`, which would have become a `Conflict` → `unparsed` and blocked the publish. Its group was
+then run on the committed bytes: 9 checks, exit 1 as predicted, because the product tree now carries four
+dead-code warnings — so the product's own `output/headless/RLLM` is not currently buildable, which is a
+regression in the committed tree and not a lane defect. The warnings map onto open work: `require_worktree_root`
+(`core/rrsi.rs`, orphaned by root3's guard swap), `durable_successor_rows`/`successor_states`/`job_source`
+(GAP1 read-back, a lane owns it), `field xrefs` (GAP4's typed graph, a lane owns it), `leg_score`/`score_split`
+(GAP2's held-out rows, the GAP2 lane's target). `verification/rrsi_loop.py`'s copy of the same fix is written
+and audited but deliberately uncommitted: that file is being edited by the GAP2 lane.
+
+Open now, beyond the standing owner-gated items (the signed companion APK triple, `PUB-INPUT-DRIFT`, the
+`binary_flow`/`history_migration` comparators, `DESKTOP-SURFACE`, the memory index):
+
+- GAP1 (wire the successor-state read-back and a real handoff chain): a lane owns `core/self_build.rs`, and
+  clearing `durable_successor_rows`/`successor_states`/`job_source` is part of its contract.
+- GAP2 (raise the `refinement_rounds` ceiling with a real 3+-round run to `b_min`, and give `noise_floor` and
+  the `held_out_*` keys production writers): a lane owns `core/improvement.rs`, `core/rrsi.rs`,
+  `core/harness.rs` and `verification/rrsi_loop.py`, including the two `== 2` equality gates at
+  `core/harness.rs:967`/:1053 and the pinned ceiling assertion at `verification/rrsi_loop.py:381-383`.
+- GAP3 depth (the improvement-library index `library_index` (`core/rrsi.rs:1202`) is still dead;
+  probe-scored and composed candidates; chained sequential PPC for `k > 1`; agentic selection; the
+  non-atomic `apply_accepted` swap), plus removing `root3`'s orphaned `require_worktree_root`.
+- GAP4 (the white-room rebuild end-to-end, `.NET` depth/caps/cancellation, and the typed cross-reference
+  group that GAP4's own report names as "calls and cross-references"): lanes own `core/clean_room.rs` and
+  `core/binary_declarations.rs`.
+- GAP5 (retirement of the Python instrument roles, in the recorded order): the deflater is now the
+  product's own (`2b041bc`); still to retire is `tools/checks.py`'s sweep/units-replay role, then
+  `tools/package.py` once a real publication archive is compared against the Python one.
+
+A running lane also reverted this document's uncommitted edits once during the window (`git stash list` empty,
+no conflict — a writer with `--always-approve` inside the main worktree can restore tracked files). The
+deflater and self-rebuild paragraphs above were re-applied after that; keeping the record current means
+committing documentation promptly rather than leaving it staged.
 
 The delivered record is unchanged this window: 71 groups, 4,215 checks, 67 pass, 4 unavailable, still backed
 by the 09:23:49 mixed-provenance binary. A single sweep on a settled tree must supersede it, and that sweep
