@@ -397,7 +397,7 @@ pub(super) fn event_for(st:&mut Json,a:&str,inputs:&Json)->Result<Json>{
  "capture_file"=>{let mut args=get(st,"edit").clone();if boolean(&args,"capture_scripts"){put(&mut args,"scripts",s("inline"));}let pending=obj(vec![("tool",s("capture")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "compare_files"=>{if text(st,"dialog")!="investigation"{return Err("Open File investigation before comparing paths".into());}if interaction::locked(st){return Err("Finish or cancel the current operation before comparing paths".into());}let e=get(st,"edit");let mut args=obj(vec![("path",s(&text(e,"path"))),("other",s(&text(e,"other")))]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("compare")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "inspect_file"=>{let e=get(st,"edit");let mut args=obj(vec![("path",get(e,"path").clone())]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("inspect")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
- "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));put(&mut next,"task_run",obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]));if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
+ "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));let mut task_run=obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]);if a=="refine"{let workspace=text(st,"approval_root");if !workspace.is_empty(){put(&mut task_run,"workspace",s(&workspace));}}put(&mut next,"task_run",task_run);if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
  "refinement_review"|"refinement_discard_review"=>{
   completed_refinement(st)?;
   put(st,"dialog",s(a));
@@ -1931,7 +1931,9 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
  struct GitScratch{repo:std::path::PathBuf,root:std::path::PathBuf}
  impl GitScratch{
   fn new()->Self{
-   let root=std::env::temp_dir().join(format!("rllm-b5-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+   static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
+   let n=NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+   let root=std::env::temp_dir().join(format!("rllm-b5-{}-{}",std::process::id(),n));
    let repo=root.join("repo");
    std::fs::create_dir_all(&repo).unwrap();
    let git=|args:&[&str]|{
@@ -1946,6 +1948,18 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   }
  }
  impl Drop for GitScratch{fn drop(&mut self){let _=std::fs::remove_dir_all(&self.root);}}
+ struct PlainScratch{dir:std::path::PathBuf,root:std::path::PathBuf}
+ impl PlainScratch{
+  fn new()->Self{
+   static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
+   let n=NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+   let root=std::env::temp_dir().join(format!("rllm-b5-nongit-{}-{}",std::process::id(),n));
+   let dir=root.join("plain");
+   std::fs::create_dir_all(&dir).unwrap();
+   Self{dir,root}
+  }
+ }
+ impl Drop for PlainScratch{fn drop(&mut self){let _=std::fs::remove_dir_all(&self.root);}}
  fn git_text(repo:&std::path::Path,args:&[&str])->String{
   let output=std::process::Command::new("git").args(args).current_dir(repo).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").output().unwrap();
   assert!(output.status.success(),"{args:?} {}",String::from_utf8_lossy(&output.stderr));
@@ -2014,6 +2028,109 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert_eq!(get(&run,"incumbent_kept"),&Bool(false));
   assert!(!text(&run,"edit_ledger").contains("pool task"));
   assert!(!text(&run,"edit_ledger").contains("REQUIRED-PHRASE"));
+ }
+ fn park_ledger(st:&mut Json,root:&std::path::Path){
+  let mut run=get(st,"task_run").clone();
+  put(&mut run,"edit_ledger_root",s(root.to_str().unwrap()));
+  put(&mut run,"edit_ledger_path",s("edits.jsonl"));
+  put(st,"task_run",run);
+ }
+ fn settled_pool(st:&Json)->Json{
+  let pending=get(st,"refinement_pending");
+  if pending!=&Null{pending.clone()}else{get(st,"task_run").clone()}
+ }
+ #[test] fn refine_entry_puts_the_git_workspace_on_the_next_pool(){
+  let scratch=GitScratch::new();
+  let path=scratch.repo.to_str().unwrap().to_string();
+  let candidate="{\"answer\":\"\"}";
+  let mut st=configured();
+  put(&mut st,"approval_root",s(&path));
+  event_for(&mut st,"refine",&obj(vec![("task",s("pool workspace task")),("response_check_method",s("json_fields")),("response_checks",s("{\"/answer\":\"\"}"))])).unwrap();
+  assert_eq!(text(get(&st,"task_run"),"workspace"),path);
+  park_ledger(&mut st,&scratch.root);
+  put(&mut st,"busy",Bool(false));
+  model_reply(&mut st,"baseline answer").unwrap();
+  assert_eq!(text(get(&st,"task_run"),"phase"),"propose");
+  assert_eq!(text(get(&st,"task_run"),"workspace"),path);
+  let before=git_text(&scratch.repo,&["rev-parse","HEAD"]);
+  put(&mut st,"busy",Bool(false));
+  model_reply(&mut st,&format!("candidates: 1\n{candidate}")).unwrap();
+  let settled=settled_pool(&st);
+  let rows=pool_rows(&settled);
+  assert_eq!(rows.len(),1,"{} {}",text(&settled,"edit_ledger_error"),text(&settled,"round_note"));
+  let commit=text(&rows[0],"commit");
+  assert_eq!(commit.len(),40);
+  assert!(commit.bytes().all(|byte|byte.is_ascii_hexdigit()&&!byte.is_ascii_uppercase()),"{commit}");
+  assert_eq!(text(&rows[0],"branch"),crate::rrsi::EVOLVE_BRANCH);
+  assert_eq!(git_text(&scratch.repo,&["rev-parse","HEAD"]),before);
+  assert_eq!(git_text(&scratch.repo,&["rev-parse",&format!("refs/heads/{}",crate::rrsi::EVOLVE_BRANCH)]),commit);
+ }
+ #[test] fn refine_entry_without_a_workspace_refuses_each_candidate_and_skips_git(){
+  for root in [Null,s("")]{
+   let scratch=GitScratch::new();
+   let before=git_text(&scratch.repo,&["rev-parse","HEAD"]);
+   let mut st=configured();
+   if root!=Null{put(&mut st,"approval_root",root.clone());}
+   event_for(&mut st,"refine",&obj(vec![("task",s("pool workspace task"))])).unwrap();
+   let run=get(&st,"task_run");
+   assert_eq!(get(run,"workspace"),&Null);
+   assert!(text(run,"workspace").is_empty());
+   park_ledger(&mut st,&scratch.root);
+   put(&mut st,"busy",Bool(false));
+   model_reply(&mut st,"baseline answer").unwrap();
+   put(&mut st,"busy",Bool(false));
+   model_reply(&mut st,"candidates: 2\nbrand new instructions\n---\nanother rewrite").unwrap();
+   let settled=settled_pool(&st);
+   assert!(text(&settled,"workspace").is_empty());
+   assert_eq!(get(&settled,"incumbent_kept"),&Bool(true));
+   let rows=pool_rows(&settled);
+   assert_eq!(rows.len(),2,"{} {}",text(&settled,"edit_ledger_error"),text(&settled,"round_note"));
+   assert!(rows.iter().all(|row|text(row,"pool_status").starts_with("refused:")&&text(row,"pool_status").len()>"refused:".len()),"{:?}",rows.iter().map(|row|text(row,"pool_status")).collect::<Vec<_>>());
+   let exclude=scratch.repo.join(".git").join("info").join("exclude");
+   let body=if exclude.exists(){std::fs::read_to_string(&exclude).unwrap()}else{String::new()};
+   assert!(body.lines().all(|line|line!=".rllm-worktrees/"),"{body}");
+   assert!(!scratch.repo.join(".git").join("worktrees").exists());
+   assert_eq!(git_text(&scratch.repo,&["rev-parse","HEAD"]),before);
+   assert_eq!(git_text(&scratch.repo,&["status","--porcelain"]),"");
+   assert!(!scratch.repo.join(".rllm-worktrees").exists());
+   assert!(!scratch.root.join(".rllm-worktrees").exists());
+  }
+ }
+ #[test] fn refine_entry_with_a_non_git_directory_refuses_each_candidate_and_adds_no_git_state(){
+  let scratch=PlainScratch::new();
+  let path=scratch.dir.to_str().unwrap().to_string();
+  let candidate="{\"answer\":\"\"}";
+  let mut st=configured();
+  put(&mut st,"approval_root",s(&path));
+  event_for(&mut st,"refine",&obj(vec![("task",s("pool workspace task")),("response_check_method",s("json_fields")),("response_checks",s("{\"/answer\":\"\"}"))])).unwrap();
+  assert_eq!(text(get(&st,"task_run"),"workspace"),path);
+  park_ledger(&mut st,&scratch.root);
+  put(&mut st,"busy",Bool(false));
+  model_reply(&mut st,"baseline answer").unwrap();
+  put(&mut st,"busy",Bool(false));
+  model_reply(&mut st,&format!("candidates: 2\n{candidate}\n---\nanother rewrite")).unwrap();
+  let settled=settled_pool(&st);
+  assert_eq!(text(&settled,"workspace"),path);
+  assert_eq!(get(&settled,"incumbent_kept"),&Bool(true));
+  let rows=pool_rows(&settled);
+  assert_eq!(rows.len(),2,"{} {}",text(&settled,"edit_ledger_error"),text(&settled,"round_note"));
+  assert!(rows.iter().all(|row|text(row,"pool_status").starts_with("refused:")&&text(row,"pool_status").contains("not the root of a git work tree")),"{:?}",rows.iter().map(|row|text(row,"pool_status")).collect::<Vec<_>>());
+  assert!(scratch.dir.is_dir());
+  assert!(!scratch.dir.join(".rllm-worktrees").exists());
+  assert!(!scratch.dir.join(".git").exists());
+ }
+ #[test] fn delegate_and_compact_do_not_copy_the_workspace(){
+  let mut st=configured();
+  put(&mut st,"approval_root",s("/selected/workspace"));
+  event_for(&mut st,"delegate",&obj(vec![("task",s("Read the notes"))])).unwrap();
+  assert_eq!(text(get(&st,"task_run"),"mode"),"delegate");
+  assert_eq!(get(get(&st,"task_run"),"workspace"),&Null);
+  reset_task(&mut st);
+  put(&mut st,"busy",Bool(false));
+  for n in 0..5{append(&mut st,if n%2==0{"user"}else{"assistant"},&format!("line {n}")).unwrap();}
+  event_for(&mut st,"compact",&Null).unwrap();
+  assert_eq!(text(get(&st,"task_run"),"mode"),"compact");
+  assert_eq!(get(get(&st,"task_run"),"workspace"),&Null);
  }
  fn copy_split(run:&mut Json,scored:&Json){
   for key in ["harness_digest","evolve_task_key","evolve_verifier","evolve_shape","held_out_task_key","held_out_verifier","ood_task_key","ood_verifier","ood_shape"]{
