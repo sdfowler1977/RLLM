@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T01:41Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-12T02:55Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -566,6 +566,40 @@ journal). Measured: `/home/shawn/RLLM` is now a git repository — branch `main`
 alone, so `GITIGNORE-ARTIFACT-NAMING` is still an open owner decision. Initialising the repo does
 **not** recover revisions 1793395702 / 1793592809 — history starts at the baseline, so the
 reference-controller groups are unaffected.
+
+**Progress on `GAP1` and `GAP5` measured 2026-11-12T02:50Z.** `GAP1` step 1 landed at commit
+`2f44536`: `core/self_build.rs` (fingerprint / plan / journal / handoff plus the tool seam), four
+`self_*` verbs in `core/lib.rs`, `self_build` in the `const TOOLS` catalog and operation reference
+(`core/harness.rs`), approval routed through the write posture (`core/application.rs:3100`,
+`harness_rules::check` with tool `write`, `permission_subject` feeding
+`harness_rules::standing`/`permissions::stands_down`), and `bounded_process`/`exec_replace`
+exported from `core/execution.rs` reusing that module's existing process-group cancellation. Child
+processes are allowlisted to `bash headless.sh`, `bash tools/build-units.sh <units>` and
+`python3 tools/checks.py --all-units <units>` with 900 s / 300 s walls
+(`core/self_build.rs:29-30`); builders and `exec` refuse unless `review_confirmed` is set.
+A **real run log** on the committed bytes is in `docs/SELF-BUILD-RUNLOG.md`: the product ran the
+whole sanctioned plan, appended journal revision `d4fdee92…` with gate 538/538 and the pre-edit
+binary as the rollback digest, detected a stale claimed digest, refused reload without review, then
+`exec`'d the rebuilt image and the **successor** answered a verb that exists only in the rebuilt
+source and appended journal revision `1c8ff4e0…` with parent `d4fdee92…` on the same pipe. Two
+defects came out of that log and are open: `self_build::run` never applies its own reviewed edit to
+disk (the disk write exists only in the `"write"` arm, `core/application.rs:3665`), and `handoff`
+walks with an empty skip list, so a rollback binary above the 4 MiB per-file walker cap makes reload
+return `file exceeds 4194304 bytes` at a non-skipped journal path — a product layout that keeps its
+journal inside the workspace cannot reload. `GAP1` also remains unproven in product reachability:
+`self_build` is in `const TOOLS` and therefore in `agent_new`'s default tool string
+(`core/harness.rs:166`), but it is absent from `REFINEMENT_TOOLS` (`:274`) and **no connected group
+exercises it**. `GAP5`: `tools/alignment.py`, `tools/readback.py`, `tools/checkpoint.py` are deleted
+and replaced by `tools/alignment.rs` / `readback.rs` / `checkpoint.rs` (3,568 lines, 8 `#[test]`
+cases) built by `tools/build-tools.sh`, which ran green; tracked Python is now **76 files / 7,932
+lines** (`tools/` 5, `verification/` 71) — three fewer files, 72 fewer lines. The port is **not
+closed**: `tools/apk.py:10` and `tools/package.py:105` still name `tools/alignment.py`, which breaks
+the APK inspection build-input assert and stops the publication record binding the aligner that
+produces the shipped APK; `package.sh:101` runs `output/tools/alignment` with nothing building it;
+the ports' 8 tests are never compiled or run by any sanctioned instrument; `checkpoint.rs` has no
+code consumer at all, so it has no behavioural witness; and `GAP1` newly made the **product** depend
+on Python — `core/self_build.rs:435,556,983` name `python3` where `core/harness.rs` and
+`core/application.rs` named it zero times at the baseline.
 
 Settled by the owner and not reopened by the report: no turn or round cap, YOLO never asks, web
 search and fetch always approved in every mode, shell/git/hosted search fine as tools, and no
