@@ -44,12 +44,70 @@ fn refinement_digest(run:&mut Json)->String{
  let digest=crate::rrsi::digest(format!("{}\n{}\n{}",text(run,"task"),text(run,"chat"),now()).as_bytes());
  put(run,"run_digest",s(&digest));digest
 }
+fn declared_edit(reply:&str)->(String,String,String){
+ let mut lines=reply.lines();
+ let Some(first)=lines.next() else {return ("prompt".into(),reply.into(),reply.into());};
+ let Some(name)=first.strip_prefix("component: ") else {return ("prompt".into(),reply.into(),reply.into());};
+ let name=name.trim();
+ if !crate::rrsi::known_component(name){return ("prompt".into(),reply.into(),reply.into());}
+ let rest=lines.collect::<Vec<_>>().join("\n");
+ if let Some(after)=rest.strip_prefix("hypothesis: "){
+  if let Some((hypothesis,body))=after.split_once('\n'){
+   let hypothesis=hypothesis.trim();
+   if !hypothesis.is_empty()&&!hypothesis.contains('\0')&&hypothesis.len()<=32768{return (name.into(),hypothesis.into(),body.into());}
+  }else{
+   let hypothesis=after.trim();
+   if !hypothesis.is_empty()&&!hypothesis.contains('\0')&&hypothesis.len()<=32768{return (name.into(),hypothesis.into(),String::new());}
+  }
+ }
+ (name.into(),reply.into(),rest)
+}
+fn component_digest(text:&str)->String{harness_rules::digest(&s(text))}
+fn incumbent_text(run:&Json)->String{
+ let first=get(run,"first_refinement");
+ if first!=&Null{return text(first,"instructions");}
+ text(get(run,"agent"),"instructions")
+}
+fn round_index_of(run:&Json)->u64{if get(run,"first_refinement")!=&Null{2}else{1}}
+fn hypothesis_rejected(records:&[Json],digest:&str,component:&str,hypothesis:&str)->Option<u64>{
+ if let Some(round)=crate::rrsi::prior_rejection(records,digest,component,hypothesis){return Some(round);}
+ crate::rrsi::prior_rejection(records,digest,component,&harness_rules::digest(&s(hypothesis)))
+}
+fn edit_body<'a>(reply:&'a str,claim:&str,body:&'a str)->&'a str{if claim==reply{reply}else{body}}
+fn remember_pruned(run:&mut Json){
+ let digest=text(run,"run_digest");
+ let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
+ let pruned=crate::rrsi::pruned_components(&records,&digest);
+ if pruned.is_empty(){return;}
+ let live=crate::rrsi::live_components(&records,&digest);
+ put(run,"pruned_components",Arr(pruned.into_iter().map(|name|s(&name)).collect()));
+ put(run,"live_components",Arr(live.into_iter().map(|name|s(name)).collect()));
+}
+fn commit_edit(run:&mut Json,edit:&Json){
+ let run_digest=text(run,"run_digest");
+ let saved=match crate::rrsi::append_document(&text(run,"edit_ledger"),edit,&run_digest){
+  Ok(saved)=>saved,
+  Err(error)=>{put(run,"edit_ledger_error",s(&error));return;}
+ };
+ put(run,"edit_ledger",get(&saved,"document").clone());
+ if text(run,"edit_ledger_root").is_empty(){
+  put(run,"edit_ledger_root",s(&crate::rrsi::default_root()));
+  put(run,"edit_ledger_path",s(&format!("{run_digest}.jsonl")));
+ }
+ if let Err(error)=crate::rrsi::append_file(&text(run,"edit_ledger_root"),&text(run,"edit_ledger_path"),edit,&run_digest){
+  put(run,"edit_ledger_file_error",s(&error));
+ }
+ remember_pruned(run);
+}
 fn note_refinement_edit(run:&mut Json,hypothesis:&str,verdict:&str,before:usize,after:usize,prior:&str,round:usize,policy:&Json){
  if hypothesis.is_empty(){return;}
  let run_digest=refinement_digest(run);
+ let (component,claim,body)=declared_edit(hypothesis);
+ let stored=improvement::stored_hypothesis(&claim,run);
+ let changed=edit_body(hypothesis,&claim,&body);
  let cost_before=if get(policy,"cost_before")==&Null{prior.len() as u64}else{number(policy,"cost_before") as u64};
  let cost_after=if get(policy,"cost_after")==&Null{hypothesis.len() as u64}else{number(policy,"cost_after") as u64};
- let mut edit=match crate::rrsi::edit("prompt",hypothesis,&crate::rrsi::diff_digest(prior,hypothesis),before as u64,after as u64,cost_before,cost_after,verdict,round as u64,&run_digest){
+ let mut edit=match crate::rrsi::edit(&component,&stored,&crate::rrsi::diff_digest(prior,changed),before as u64,after as u64,cost_before,cost_after,verdict,round as u64,&run_digest){
   Ok(edit)=>edit,
   Err(error)=>{put(run,"edit_ledger_error",s(&error));return;}
  };
@@ -61,18 +119,55 @@ fn note_refinement_edit(run:&mut Json,hypothesis:&str,verdict:&str,before:usize,
  put(&mut edit,"noise_floor",get(policy,"noise_floor").clone());
  put(&mut edit,"cost_known",get(policy,"cost_known").clone());
  put(&mut edit,"decision",s(&decision));
- let saved=match crate::rrsi::append_document(&text(run,"edit_ledger"),&edit,&run_digest){
-  Ok(saved)=>saved,
+ let edit=match crate::rrsi::annotate(edit,"clean"){
+  Ok(edit)=>edit,
   Err(error)=>{put(run,"edit_ledger_error",s(&error));return;}
  };
- put(run,"edit_ledger",get(&saved,"document").clone());
- if text(run,"edit_ledger_root").is_empty(){
-  put(run,"edit_ledger_root",s(&crate::rrsi::default_root()));
-  put(run,"edit_ledger_path",s(&format!("{run_digest}.jsonl")));
+ if verdict=="accepted"{
+  let mut map=get(run,"incumbent_digests").clone();
+  if !matches!(map,Obj(_)){map=obj(vec![]);}
+  put(&mut map,&component,s(&component_digest(changed)));
+  put(run,"incumbent_digests",map);
  }
- if let Err(error)=crate::rrsi::append_file(&text(run,"edit_ledger_root"),&text(run,"edit_ledger_path"),&edit,&run_digest){
-  put(run,"edit_ledger_file_error",s(&error));
+ commit_edit(run,&edit);
+}
+fn record_unscored(run:&mut Json,component:&str,claim:&str,reply:&str,diff:&str,leakage:&str,decision:&str)->Result<()>{
+ let stored=improvement::stored_hypothesis(claim,run);
+ let prior=incumbent_text(run);
+ let edit=crate::rrsi::unscored(component,&stored,diff,prior.len() as u64,reply.len() as u64,round_index_of(run),&text(run,"run_digest"),leakage,decision)?;
+ put(run,"round_note",s(decision));
+ commit_edit(run,&edit);
+ Ok(())
+}
+fn gate_candidate(run:&mut Json,reply:&str)->Result<bool>{
+ let (component,claim,body)=declared_edit(reply);
+ let run_digest=refinement_digest(run);
+ let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
+ let prior=incumbent_text(run);
+ let changed=edit_body(reply,&claim,&body);
+ let diff=crate::rrsi::diff_digest(&prior,changed);
+ if let Some(round)=hypothesis_rejected(&records,&run_digest,&component,&claim){
+  record_unscored(run,&component,&claim,reply,&diff,"",&crate::rrsi::rejection_refusal(&component,round))?;
+  return Ok(true);
  }
+ if crate::rrsi::pruned_components(&records,&run_digest).iter().any(|name|name==&component){
+  record_unscored(run,&component,&claim,reply,&diff,"",&crate::rrsi::prune_refusal(&component))?;
+  return Ok(true);
+ }
+ let stored_incumbent=text(get(run,"incumbent_digests"),&component);
+ let incumbent=if stored_incumbent.len()==64{stored_incumbent}else if component=="prompt"||component=="system prompt"{component_digest(&prior)}else{component_digest("")};
+ let same_diff=crate::rrsi::incumbent_diff(&records,&run_digest,&component).as_deref()==Some(diff.as_str());
+ let verdict=improvement::leakage_critic(reply,&component,&improvement::recorded_tasks(run),&improvement::recorded_expected(run),component_digest(changed)==incumbent||same_diff);
+ if text(&verdict,"leakage")=="clean"{return Ok(false);}
+ record_unscored(run,&component,&claim,reply,&diff,&text(&verdict,"leakage"),&text(&verdict,"reason"))?;
+ Ok(true)
+}
+fn stop_refused(st:&mut Json,run:Json)->Result<Option<Json>>{
+ let note=text(&run,"round_note");
+ put(st,"task_run",run);
+ put(st,"busy",Bool(false));put(st,"agent_running",Bool(false));put(st,"agent_pending",Bool(false));put(st,"model_expected",Null);
+ put(st,"notice",s(&note));
+ Ok(Some(Null))
 }
 fn record_round_edit(run:&mut Json,retain_probe:bool,composed:&str,candidate:&str,verdict:&str,before:usize,replay_passed:usize,selected_passed:usize,prior:&str,round:usize,policy:&Json){
  if retain_probe{
@@ -491,6 +586,7 @@ pub(super) fn request_messages(st:&Json,mut messages:Vec<Json>)->Result<Vec<Json
   if get(run,"baseline_score")!=&Null{prompt.push_str(&format!("\nAPP RESPONSE CHECK OUTCOMES\n{}\nUse partial progress to target the next rewrite. Reserve completion for all required checks.",improvement::refinement_summary(run)));}
   prompt.push_str(&lesson_data(run));
   prompt.push_str(&refinement_ledger_section(run));
+  prompt.push_str("\nA candidate that repeats a rejected component and hypothesis, names a pruned component, copies a recorded task or expected check, or leaves its component unchanged is refused before scoring.");
   prompt.push_str(&historical_experience(run));
  }
  let mut messages=vec![obj(vec![("role",s("system")),("content",s(&system))]),obj(vec![("role",s("user")),("content",s(&prompt))])];
@@ -521,8 +617,12 @@ pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
    put(&mut run,result,s(reply));put(&mut run,score,value);put(&mut run,"phase",s(next));
    if next=="review"{return complete_refinement_round(st,run);}
   },
-  "propose"=>{put(&mut run,"candidate",s(reply));put(&mut run,"phase",s("probe"));},
+  "propose"=>{
+   if gate_candidate(&mut run,reply)?{return stop_refused(st,run);}
+   put(&mut run,"candidate",s(reply));put(&mut run,"phase",s("probe"));
+  },
   "compose"=>{
+   if gate_candidate(&mut run,reply)?{return stop_refused(st,run);}
    put(&mut run,"composition",s(reply));
    if get(&run,"baseline_score")==&Null{return queue_evaluation(st,run,"evaluation_base");}
    put(&mut run,"phase",s("verify"));
@@ -558,8 +658,15 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
  let gain=text(&decision,"gain");
  let cost_known=boolean(&decision,"cost_known");
  let budget_block=remaining==0;
+ let (component,claim,_)=declared_edit(selected_text);
+ let repeated=hypothesis_rejected(&records,&digest,&component,&claim);
+ let pruned=crate::rrsi::pruned_components(&records,&digest).iter().any(|name|name==&component);
  let (verdict_override,decision_text)=if budget_block{
   (Some("rejected"),format!("refused because the annealed edit budget {budget} is already spent"))
+ }else if let Some(round)=repeated{
+  (Some("rejected"),crate::rrsi::rejection_refusal(&component,round))
+ }else if pruned{
+  (Some("rejected"),crate::rrsi::prune_refusal(&component))
  }else if reason=="floor"{
   (Some("rejected"),format!("refused because the gain {gain} does not exceed the noise floor {floor}"))
  }else if reason=="cost rose"{
@@ -1455,6 +1562,145 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert_eq!(number(&row,"noise_floor"),0);
   assert_eq!(get(&row,"cost_known"),&Bool(false));
   assert_eq!(text(&row,"decision"),"cost not recorded");
+ }
+ fn propose_run(task:&str,ledger:&str,instructions:&str,checks:Json)->Json{
+  let mut st=configured();
+  let run=obj(vec![("mode",s("refine")),("phase",s("propose")),("task",s(task)),("chat",get(&st,"active").clone()),("agent",obj(vec![("name",s("General")),("instructions",s(instructions)),("tools",s("read"))])),("run_digest",s(POLICY_RUN)),("edit_ledger",s(ledger)),("edit_ledger_root",s(&ledger_root())),("edit_ledger_path",s("edits.jsonl")),("response_checks",checks)]);
+  put(&mut st,"task_run",run);st
+ }
+ fn plant(document:&str,component:&str,hypothesis:&str,round:u64,before:u64,after:u64)->String{
+  let row=crate::rrsi::edit(component,hypothesis,&crate::rrsi::diff_digest("a",hypothesis),before,after,4,4,"rejected",round,POLICY_RUN).unwrap();
+  text(&crate::rrsi::append_document(document,&row,POLICY_RUN).unwrap(),"document")
+ }
+ #[test] fn rejected_pair_cannot_be_reproposed_and_names_the_round(){
+  let ledger=plant("", "skills", "cache the listing", 1, 1, 1);
+  let mut st=propose_run("a later task",&ledger,"CURRENT",Arr(vec![]));
+  let reply="component: skills\nhypothesis: cache the listing\nnew body";
+  model_reply(&mut st,reply).unwrap();
+  let run=get(&st,"task_run");
+  assert_eq!(text(run,"phase"),"propose");
+  assert_eq!(get(run,"probe_score"),&Null);
+  assert_eq!(text(run,"round_note"),"refused because component skills with that hypothesis was already rejected in round 1");
+  assert_eq!(text(&st,"notice"),text(run,"round_note"));
+  let row=last_edit(run);
+  assert_eq!(get(&row,"score_before"),&Null);
+  assert_eq!(get(&row,"score_after"),&Null);
+  assert_eq!(get(&row,"accepted"),&Bool(false));
+  assert!(!row.string().contains("a later task"));
+ }
+ #[test] fn propose_prompt_lists_rejected_history_only_after_a_rejection(){
+  let mut st=propose_run("Show history","", "CURRENT", Arr(vec![]));
+  let fresh=text(&request_messages(&st,vec![]).unwrap()[1],"content");
+  assert!(!fresh.contains("Rejected hypotheses"),"{fresh}");
+  assert!(fresh.contains("Edits remaining this round:"));
+  let ledger=plant("", "prompt", "do-not-repeat-hypothesis", 1, 1, 1);
+  let mut run=get(&st,"task_run").clone();
+  put(&mut run,"edit_ledger",s(&ledger));
+  put(&mut st,"task_run",run);
+  let later=text(&request_messages(&st,vec![]).unwrap()[1],"content");
+  assert!(later.contains("Rejected hypotheses (do not propose these again):"),"{later}");
+  assert!(later.contains("do-not-repeat-hypothesis"),"{later}");
+  assert!(later.contains("prompt"),"{later}");
+  assert!(later.contains("round 1"),"{later}");
+ }
+ #[test] fn critic_refuses_a_recorded_task_before_scoring(){
+  let task="UNIQUE_TASK_BODY_for_the_row";
+  let mut st=propose_run(task,"","CURRENT",Arr(vec![]));
+  model_reply(&mut st,&format!("Copy the task {task} into the instructions.")).unwrap();
+  let run=get(&st,"task_run");
+  assert_eq!(text(run,"phase"),"propose");
+  assert_eq!(get(run,"probe_score"),&Null);
+  assert_eq!(get(run,"candidate"),&Null);
+  let row=last_edit(run);
+  assert_eq!(text(&row,"leakage"),"task_text");
+  assert_eq!(get(&row,"score_before"),&Null);
+  assert_eq!(get(&row,"score_after"),&Null);
+  assert_eq!(get(&row,"accepted"),&Bool(false));
+  assert!(!row.string().contains(task), "{}", row.string());
+ }
+ #[test] fn critic_refuses_seventeen_bytes_of_an_expected_value(){
+  let expected="ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
+  let fragment=&expected[..17];
+  let checks=Arr(vec![s(expected)]);
+  let mut st=propose_run("separate task","", "CURRENT", checks);
+  let reply=format!("return the bytes {fragment} to pass");
+  assert!(!reply.contains(expected));
+  model_reply(&mut st,&reply).unwrap();
+  let run=get(&st,"task_run");
+  assert_eq!(get(run,"probe_score"),&Null);
+  let row=last_edit(run);
+  assert_eq!(text(&row,"leakage"),"answer_text");
+  assert_eq!(get(&row,"score_before"),&Null);
+  assert_eq!(get(&row,"score_after"),&Null);
+  assert!(!row.string().contains(fragment), "{}", row.string());
+  assert!(!row.string().contains(expected));
+ }
+ #[test] fn inert_candidate_is_refused_and_recorded(){
+  let mut st=propose_run("another task","","SAME BODY",Arr(vec![]));
+  model_reply(&mut st,"SAME BODY").unwrap();
+  let run=get(&st,"task_run");
+  assert_eq!(text(run,"phase"),"propose");
+  assert_eq!(get(run,"probe_score"),&Null);
+  let row=last_edit(run);
+  assert_eq!(text(&row,"leakage"),"inert");
+  assert_eq!(text(&row,"component"),"prompt");
+  assert_eq!(get(&row,"score_before"),&Null);
+  assert_eq!(text(run,"round_note"),"refused because the candidate adds no change to component prompt");
+ }
+ #[test] fn flat_component_is_pruned_and_a_gain_is_kept(){
+  let mut flat=String::new();
+  for round in 1..=crate::rrsi::PRUNE_WINDOW as u64{flat=plant(&flat,"skills",&format!("flat {round}"),round,2,2);}
+  let mut st=propose_run("prune task",&flat,"CURRENT",Arr(vec![]));
+  let reply="component: skills\nhypothesis: try the cache again\nbody that is new";
+  let mut run=get(&st,"task_run").clone();
+  assert!(gate_candidate(&mut run,reply).unwrap());
+  put(&mut st,"task_run",run);
+  let run=get(&st,"task_run");
+  assert_eq!(text(run,"round_note"),format!("refused because component skills was pruned after {} rounds without a strictly positive gain",crate::rrsi::PRUNE_WINDOW));
+  assert_eq!(get(&last_edit(run),"score_before"),&Null);
+  assert!(text(run,"round_note").contains("skills"));
+  let prompt=text(&request_messages(&st,vec![]).unwrap()[1],"content");
+  let live=prompt.lines().find(|line|line.starts_with("Live components:")).expect(&prompt);
+  assert!(!live.contains("skills"),"{live}");
+  assert!(prompt.contains("Pruned: skills."),"{prompt}");
+  let mut gained=String::new();
+  for (round,after) in [(1u64,2u64),(2,3),(3,2)]{gained=plant(&gained,"skills",&format!("gain {round}"),round,2,after);}
+  let mut kept=propose_run("prune task",&gained,"CURRENT",Arr(vec![]));
+  let mut run=get(&kept,"task_run").clone();
+  assert!(!gate_candidate(&mut run,reply).unwrap());
+  put(&mut kept,"task_run",run);
+  assert_eq!(get(get(&kept,"task_run"),"round_note"),&Null);
+  assert!(crate::rrsi::live_components(&crate::rrsi::records_of(&gained).unwrap(),POLICY_RUN).contains(&"skills"));
+ }
+ #[test] fn scored_edit_row_carries_history_and_omits_the_task(){
+  let (mut st,run)=policy_run(1,low_bits(0),low_bits(1),low_bits(1),"history fields","history fields","old","",&[],Null);
+  let settled=settled_run(&mut st,run);
+  let row=last_edit(&settled);
+  assert_eq!(text(&row,"component"),"prompt");
+  assert_eq!(text(&row,"hypothesis"),"history fields");
+  assert_eq!(text(&row,"diff_digest").len(),64);
+  assert_eq!(number(&row,"score_before"),0);
+  assert_eq!(number(&row,"score_after"),1);
+  assert!(get(&row,"cost_before")!=&Null&&get(&row,"cost_after")!=&Null);
+  let change=(number(&row,"cost_after") as i64)-(number(&row,"cost_before") as i64);
+  assert_eq!(get(&row,"cost_change"),&Num(change.to_string()));
+  assert_eq!(get(&row,"accepted"),&Bool(true));
+  assert_eq!(text(&row,"leakage"),"clean");
+  assert!(!row.string().contains("acceptance task"), "{}", row.string());
+ }
+ #[test] fn legacy_ledger_row_keeps_today_decision(){
+  let legacy=seed_edit("",1,"rejected",4,"legacy-hypothesis",false);
+  let before=legacy.clone();
+  let (mut st,run)=policy_run(1,low_bits(0),low_bits(1),low_bits(1),"fresh wording","fresh wording","old",&legacy,&[],Null);
+  let settled=settled_run(&mut st,run);
+  let records=crate::rrsi::records_of(&text(&settled,"edit_ledger")).unwrap();
+  assert!(text(&settled,"edit_ledger").starts_with(&before));
+  assert_eq!(get(&records[0],"leakage"),&Null);
+  assert_eq!(get(&records[0],"accepted"),&Null);
+  assert_eq!(get(&records[0],"cost_change"),&Null);
+  assert_eq!(text(&records[0],"hypothesis"),"legacy-hypothesis");
+  assert_eq!(text(&records[1],"decision"),"cost not recorded");
+  assert_eq!(text(&records[1],"verdict"),"accepted");
  }
 
 }

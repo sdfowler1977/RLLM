@@ -32,6 +32,22 @@ const COMPONENTS: &[&str] = &[
     "memory",
     "subagents",
 ];
+// Gap 2 names the eight editable harness parts. The older stall list above stays
+// so an existing ledger still renders the same tried and untried lines.
+const EDITABLE: &[&str] = &[
+    "system prompt",
+    "guardrails",
+    "memory",
+    "tool guidance",
+    "subagents",
+    "skills",
+    "scripts",
+    "plugins",
+];
+const LEAKAGE: &[&str] = &["clean", "task_text", "answer_text", "inert"];
+const ROW_EXTRA: &[&str] = &["cost_change", "accepted", "leakage"];
+/// Rounds of a component with no strictly positive score gain before it is pruned.
+pub(crate) const PRUNE_WINDOW: usize = 3;
 const EDIT_KEYS: &[&str] = &[
     "component",
     "hypothesis",
@@ -91,9 +107,21 @@ fn only_keys(value: &Json, keys: &[&str]) -> Result<()> {
 fn component_index(name: &str) -> Option<usize> {
     COMPONENTS.iter().position(|item| *item == name)
 }
+pub(crate) fn known_component(name: &str) -> bool {
+    component_index(name).is_some() || EDITABLE.iter().any(|item| *item == name)
+}
+fn signed_field(value: &Json, key: &str) -> Result<i64> {
+    match get(value, key) {
+        Num(text) => text.parse::<i64>().map_err(|_| format!("invalid {key}")),
+        _ => Err(format!("{key} must be a number")),
+    }
+}
+fn score_missing(value: &Json) -> bool {
+    get(value, "score_before") == &Null && get(value, "score_after") == &Null
+}
 fn validate_fields(value: &Json, expected_run: &str) -> Result<()> {
     let component = text(value, "component");
-    if component_index(&component).is_none() {
+    if !known_component(&component) {
         return Err("unknown edit component".into());
     }
     let hypothesis = text(value, "hypothesis");
@@ -111,8 +139,44 @@ fn validate_fields(value: &Json, expected_run: &str) -> Result<()> {
     if !(1..=1024).contains(&round) {
         return Err("round is outside 1..=1024".into());
     }
-    for key in ["score_before", "score_after", "cost_before", "cost_after"] {
+    for key in ["cost_before", "cost_after"] {
         number_field(value, key)?;
+    }
+    let leakage = text(value, "leakage");
+    if get(value, "leakage") != &Null && !LEAKAGE.contains(&leakage.as_str()) {
+        return Err("leakage must be clean, task_text, answer_text or inert".into());
+    }
+    let refused = matches!(leakage.as_str(), "task_text" | "answer_text" | "inert");
+    let unscored = refused
+        || (score_missing(value) && text(value, "decision").starts_with("refused because component "));
+    if refused && !score_missing(value) {
+        return Err("a leakage refusal must not record a score".into());
+    }
+    if unscored {
+        if verdict != "rejected" {
+            return Err("an unscored refusal is rejected".into());
+        }
+    } else {
+        for key in ["score_before", "score_after"] {
+            number_field(value, key)?;
+        }
+    }
+    if get(value, "cost_change") != &Null {
+        let change = signed_field(value, "cost_change")?;
+        let before = number_field(value, "cost_before")? as i64;
+        let after = number_field(value, "cost_after")? as i64;
+        if change != after - before {
+            return Err("cost_change does not match the recorded costs".into());
+        }
+    }
+    if get(value, "accepted") != &Null {
+        let accepted = match get(value, "accepted") {
+            Bool(bit) => *bit,
+            _ => return Err("accepted must be a boolean".into()),
+        };
+        if accepted != (verdict == "accepted") {
+            return Err("accepted does not match the verdict".into());
+        }
     }
     let run_digest = text(value, "run_digest");
     if !hex_digest(&run_digest) || run_digest != expected_run {
@@ -123,6 +187,7 @@ fn validate_fields(value: &Json, expected_run: &str) -> Result<()> {
 fn edit_keys(sealed: bool) -> Vec<&'static str> {
     let mut keys = EDIT_KEYS.to_vec();
     keys.extend_from_slice(POLICY_KEYS);
+    keys.extend_from_slice(ROW_EXTRA);
     if sealed {
         keys.extend_from_slice(&["schema", "previous", "revision"]);
     }
@@ -396,6 +461,51 @@ pub(crate) fn edit(
     validate_edit(&value, run_digest)?;
     Ok(value)
 }
+/// Attach the history fields a scored edit carries. An old row omits them and still seals.
+pub(crate) fn annotate(mut edit: Json, leakage: &str) -> Result<Json> {
+    let before = number_field(&edit, "cost_before")? as i64;
+    let after = number_field(&edit, "cost_after")? as i64;
+    put(&mut edit, "cost_change", Num((after - before).to_string()));
+    let accepted = text(&edit, "verdict") == "accepted";
+    put(&mut edit, "accepted", Bool(accepted));
+    if !leakage.is_empty() {
+        put(&mut edit, "leakage", s(leakage));
+    }
+    validate_edit(&edit, &text(&edit, "run_digest"))?;
+    Ok(edit)
+}
+/// A refusal written before scoring. The row keeps costs and the verdict, and omits both scores.
+pub(crate) fn unscored(
+    component: &str,
+    hypothesis: &str,
+    diff_digest: &str,
+    cost_before: u64,
+    cost_after: u64,
+    round: u64,
+    run_digest: &str,
+    leakage: &str,
+    decision: &str,
+) -> Result<Json> {
+    let mut fields = vec![
+        ("component", s(component)),
+        ("hypothesis", s(hypothesis)),
+        ("diff_digest", s(diff_digest)),
+        ("cost_before", n(cost_before)),
+        ("cost_after", n(cost_after)),
+        ("cost_change", Num((cost_after as i64 - cost_before as i64).to_string())),
+        ("verdict", s("rejected")),
+        ("accepted", Bool(false)),
+        ("round", n(round)),
+        ("run_digest", s(run_digest)),
+        ("decision", s(decision)),
+    ];
+    if !leakage.is_empty() {
+        fields.push(("leakage", s(leakage)));
+    }
+    let value = obj(fields);
+    validate_edit(&value, run_digest)?;
+    Ok(value)
+}
 pub(crate) fn append_document(document: &str, edit: &Json, run_digest: &str) -> Result<Json> {
     let existing = load_text(document)?;
     let line = seal(&existing, edit, run_digest)?;
@@ -481,7 +591,111 @@ pub(crate) fn budget_for(records: &[Json], run_digest: &str, round: u64) -> (u64
 }
 pub(crate) fn budget_line(records: &[Json], run_digest: &str, round: u64) -> String {
     let (budget, remaining) = budget_for(records, run_digest, round);
-    format!("\nEDIT BUDGET\nEdits remaining this round: {remaining}. The annealed budget is {budget}.")
+    let mut line = format!("\nEDIT BUDGET\nEdits remaining this round: {remaining}. The annealed budget is {budget}.");
+    let pruned = pruned_components(records, run_digest);
+    if !pruned.is_empty() {
+        line.push_str(" Pruned: ");
+        line.push_str(&pruned.join(", "));
+        line.push('.');
+    }
+    line
+}
+pub(crate) fn rejection_refusal(component: &str, round: u64) -> String {
+    format!("refused because component {component} with that hypothesis was already rejected in round {round}")
+}
+pub(crate) fn prune_refusal(component: &str) -> String {
+    format!(
+        "refused because component {component} was pruned after {PRUNE_WINDOW} rounds without a strictly positive gain"
+    )
+}
+pub(crate) fn inert_refusal(component: &str) -> String {
+    format!("refused because the candidate adds no change to component {component}")
+}
+pub(crate) fn prior_rejection(records: &[Json], run_digest: &str, component: &str, hypothesis: &str) -> Option<u64> {
+    let mut found = None;
+    for record in records {
+        if text(record, "run_digest") != run_digest
+            || text(record, "component") != component
+            || text(record, "verdict") != "rejected"
+            || text(record, "hypothesis") != hypothesis
+        {
+            continue;
+        }
+        if let Ok(round) = number_field(record, "round") {
+            if found.is_none() {
+                found = Some(round);
+            }
+        }
+    }
+    found
+}
+pub(crate) fn incumbent_diff(records: &[Json], run_digest: &str, component: &str) -> Option<String> {
+    records.iter().rev().find_map(|record| {
+        if text(record, "run_digest") != run_digest
+            || text(record, "component") != component
+            || text(record, "verdict") != "accepted"
+        {
+            return None;
+        }
+        let diff = text(record, "diff_digest");
+        hex_digest(&diff).then_some(diff)
+    })
+}
+fn edit_gain(record: &Json) -> Option<i64> {
+    let before = number_field(record, "score_before").ok()? as i64;
+    let after = number_field(record, "score_after").ok()? as i64;
+    Some(after - before)
+}
+fn component_rounds(records: &[Json], run_digest: &str, component: &str) -> Vec<(u64, i64)> {
+    let mut rounds = Vec::new();
+    for record in records {
+        if text(record, "run_digest") != run_digest || text(record, "component") != component {
+            continue;
+        }
+        let (Ok(round), Some(gain)) = (number_field(record, "round"), edit_gain(record)) else {
+            continue;
+        };
+        if let Some(existing) = rounds.iter_mut().find(|(id, _)| *id == round) {
+            if gain > existing.1 {
+                existing.1 = gain;
+            }
+        } else {
+            rounds.push((round, gain));
+        }
+    }
+    rounds.sort_by_key(|(round, _)| *round);
+    rounds
+}
+fn editable_names() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = EDITABLE.to_vec();
+    for name in COMPONENTS {
+        if !names.contains(name) {
+            names.push(*name);
+        }
+    }
+    names
+}
+pub(crate) fn pruned_components(records: &[Json], run_digest: &str) -> Vec<String> {
+    let mut pruned = Vec::new();
+    for name in editable_names() {
+        let rounds = component_rounds(records, run_digest, name);
+        if rounds.len() < PRUNE_WINDOW {
+            continue;
+        }
+        let window = &rounds[rounds.len() - PRUNE_WINDOW..];
+        if window.iter().all(|(_, gain)| *gain <= 0) {
+            pruned.push((*name).to_string());
+        }
+    }
+    pruned
+}
+pub(crate) fn live_components(records: &[Json], run_digest: &str) -> Vec<&'static str> {
+    let pruned = pruned_components(records, run_digest);
+    EDITABLE
+        .iter()
+        .copied()
+        .filter(|name| pruned.iter().all(|pruned_name| pruned_name != name))
+        .collect()
 }
 // Every row stores measured lengths. cost_known is false when a row had no pair
 // of costs to compare, and those lengths are not a later comparison.
@@ -537,11 +751,17 @@ pub(crate) fn prompt_document(document: &str, run_digest: &str) -> Result<String
     } else {
         lines.push("Rejected hypotheses (do not propose these again):".to_string());
         for record in shown.into_iter().rev() {
+            let decision = if get(record, "accepted") == &Null {
+                String::new()
+            } else {
+                format!(" · {}", text(record, "verdict"))
+            };
             lines.push(format!(
-                "- round {} · {} · {}",
+                "- round {} · {} · {}{}",
                 number_field(record, "round")?,
                 text(record, "component"),
-                clip(&text(record, "hypothesis"), PROMPT_HYPOTHESIS)
+                clip(&text(record, "hypothesis"), PROMPT_HYPOTHESIS),
+                decision
             ));
         }
         let hidden = rejected.len().saturating_sub(PROMPT_REJECTED);
@@ -560,6 +780,18 @@ pub(crate) fn prompt_document(document: &str, run_digest: &str) -> Result<String
         "Not yet tried: {}",
         if untried.is_empty() { "none".to_string() } else { untried }
     ));
+    let pruned = pruned_components(&records, run_digest);
+    if !pruned.is_empty() {
+        lines.push(format!(
+            "Pruned components (do not propose these): {}",
+            pruned.join(", ")
+        ));
+        let live = live_components(&records, run_digest).join(", ");
+        lines.push(format!(
+            "Live components: {}",
+            if live.is_empty() { "none".to_string() } else { live }
+        ));
+    }
     let mut section = format!("\nEDIT HISTORY\n{}", lines.join("\n"));
     if section.len() > PROMPT_MAX {
         section.truncate(PROMPT_MAX);
@@ -1372,5 +1604,135 @@ mod checks {
         put(&mut known, "cost_known", Bool(true));
         document = text(&append_document(&document, &known, RUN).unwrap(), "document");
         assert_eq!(incumbent_cost(&records_of(&document).unwrap(), RUN), Some(11));
+    }
+
+    fn flat(component: &str, hypothesis: &str, round: u64, before: u64, after: u64) -> Json {
+        edit(component, hypothesis, &diff_digest("a", hypothesis), before, after, 4, 4, "rejected", round, RUN).unwrap()
+    }
+
+    #[test]
+    fn rejected_component_hypothesis_names_the_round() {
+        let row = flat("skills", "cache the listing", 2, 1, 1);
+        let saved = append_document("", &row, RUN).unwrap();
+        let records = records_of(&text(&saved, "document")).unwrap();
+        assert_eq!(prior_rejection(&records, RUN, "skills", "cache the listing"), Some(2));
+        assert_eq!(prior_rejection(&records, RUN, "skills", "a different hypothesis"), None);
+        assert_eq!(prior_rejection(&records, RUN, "plugins", "cache the listing"), None);
+        assert_eq!(
+            rejection_refusal("skills", 2),
+            "refused because component skills with that hypothesis was already rejected in round 2"
+        );
+    }
+
+    #[test]
+    fn prune_window_drops_a_flat_component_and_keeps_a_gain() {
+        let mut flat_doc = String::new();
+        for round in 1..=PRUNE_WINDOW as u64 {
+            let row = flat("skills", &format!("flat {round}"), round, 2, 2);
+            flat_doc = text(&append_document(&flat_doc, &row, RUN).unwrap(), "document");
+        }
+        let flat_records = records_of(&flat_doc).unwrap();
+        assert_eq!(pruned_components(&flat_records, RUN), vec!["skills".to_string()]);
+        assert!(!live_components(&flat_records, RUN).contains(&"skills"));
+        assert!(live_components(&flat_records, RUN).contains(&"plugins"));
+        assert_eq!(
+            prune_refusal("skills"),
+            format!("refused because component skills was pruned after {PRUNE_WINDOW} rounds without a strictly positive gain")
+        );
+        let mut gained = String::new();
+        for (round, after) in [(1, 2), (2, 3), (3, 2)] {
+            let row = flat("skills", &format!("gain {round}"), round, 2, after);
+            gained = text(&append_document(&gained, &row, RUN).unwrap(), "document");
+        }
+        let gained_records = records_of(&gained).unwrap();
+        assert!(pruned_components(&gained_records, RUN).is_empty(), "{gained_records:?}");
+        assert!(live_components(&gained_records, RUN).contains(&"skills"));
+        let line = budget_line(&flat_records, RUN, 4);
+        assert!(line.contains("Pruned: skills."), "{line}");
+        assert!(line.starts_with("\nEDIT BUDGET\nEdits remaining this round:"));
+        let section = prompt_document(&flat_doc, RUN).unwrap();
+        assert!(section.contains("Pruned components (do not propose these): skills"), "{section}");
+        let live = section.lines().find(|line| line.starts_with("Live components:")).unwrap();
+        assert!(!live.contains("skills"), "{live}");
+        assert!(live.contains("plugins"), "{live}");
+    }
+
+    #[test]
+    fn legacy_row_keeps_today_prompt_and_budget_line() {
+        let legacy = edit(
+            "prompt",
+            "legacy hypothesis",
+            &diff_digest("before", "legacy hypothesis"),
+            1,
+            2,
+            6,
+            17,
+            "rejected",
+            1,
+            RUN,
+        )
+        .unwrap();
+        let saved = append_document("", &legacy, RUN).unwrap();
+        let document = text(&saved, "document");
+        let records = records_of(&document).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(get(&records[0], "leakage"), &Null);
+        assert_eq!(get(&records[0], "accepted"), &Null);
+        assert_eq!(get(&records[0], "cost_change"), &Null);
+        assert_eq!(get(&records[0], "score_before"), &Num("1".into()));
+        let section = prompt_document(&document, RUN).unwrap();
+        assert_eq!(
+            section,
+            "\nEDIT HISTORY\nRejected hypotheses (do not propose these again):\n- round 1 · prompt · legacy hypothesis\nTried: prompt (1)\nNot yet tried: control flow, config, context management, tools, skills, memory, subagents"
+        );
+        assert_eq!(
+            budget_line(&records, RUN, 1),
+            "\nEDIT BUDGET\nEdits remaining this round: 3. The annealed budget is 4."
+        );
+        assert!(!section.contains("Pruned"));
+        assert!(!section.contains("Live components"));
+    }
+
+    #[test]
+    fn scored_history_fields_round_trip_without_task_text() {
+        let task = "TASK_BODY_must_stay_out_of_the_row";
+        let row = annotate(
+            edit("system prompt", "shorten the tool list", &diff_digest("old", "shorten the tool list"), 1, 3, 10, 7, "accepted", 1, RUN).unwrap(),
+            "clean",
+        )
+        .unwrap();
+        let saved = append_document("", &row, RUN).unwrap();
+        let records = records_of(&text(&saved, "document")).unwrap();
+        let serialised = records[0].string();
+        assert_eq!(text(&records[0], "component"), "system prompt");
+        assert_eq!(text(&records[0], "hypothesis"), "shorten the tool list");
+        assert_eq!(text(&records[0], "diff_digest").len(), 64);
+        assert_eq!(get(&records[0], "score_before"), &Num("1".into()));
+        assert_eq!(get(&records[0], "score_after"), &Num("3".into()));
+        assert_eq!(get(&records[0], "cost_before"), &Num("10".into()));
+        assert_eq!(get(&records[0], "cost_after"), &Num("7".into()));
+        assert_eq!(get(&records[0], "cost_change"), &Num("-3".into()));
+        assert_eq!(get(&records[0], "accepted"), &Bool(true));
+        assert_eq!(text(&records[0], "leakage"), "clean");
+        assert!(!serialised.contains(task), "{serialised}");
+        let refused = unscored(
+            "skills",
+            &digest(task.as_bytes()),
+            &diff_digest("old", "new"),
+            4,
+            4,
+            2,
+            RUN,
+            "task_text",
+            "refused because the candidate contains a recorded task",
+        )
+        .unwrap();
+        let saved = append_document("", &refused, RUN).unwrap();
+        let row = records_of(&text(&saved, "document")).unwrap().pop().unwrap();
+        assert_eq!(text(&row, "leakage"), "task_text");
+        assert_eq!(get(&row, "score_before"), &Null);
+        assert_eq!(get(&row, "score_after"), &Null);
+        assert_eq!(get(&row, "accepted"), &Bool(false));
+        assert!(!row.string().contains(task), "{}", row.string());
     }
 }

@@ -432,3 +432,182 @@ fn comparison(run: &Json) -> (&Json, &Json) {
     let retained = get(run,"selected_score");
     (get(run, "baseline_score"), if retained==&Null{get(run,selected)}else{retained})
 }
+
+fn push_secret(out: &mut Vec<String>, value: &str) {
+    if value.is_empty() || out.iter().any(|item| item == value) {
+        return;
+    }
+    out.push(value.to_string());
+}
+
+fn collect_expected(out: &mut Vec<String>, checks: &Json) {
+    if let Arr(lines) = checks {
+        for line in lines {
+            if let Ok(line) = line.text() {
+                push_secret(out, line);
+            }
+        }
+        return;
+    }
+    match text(checks, "method").as_str() {
+        "equals" | "sha256" | "json" => push_secret(out, &text(checks, "expected")),
+        "json_fields" => {
+            if let Obj(fields) = get(checks, "fields") {
+                for value in fields.values() {
+                    let rendered = match value {
+                        Str(text) | Num(text) => text.clone(),
+                        Bool(bit) => bit.to_string(),
+                        other => other.string(),
+                    };
+                    push_secret(out, &rendered);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Raw task strings the run still holds. The ledger stores digests, not these strings.
+pub(super) fn recorded_tasks(run: &Json) -> Vec<String> {
+    let mut tasks = Vec::new();
+    push_secret(&mut tasks, &text(run, "task"));
+    for key in ["evaluation", "evaluation_next"] {
+        push_secret(&mut tasks, &text(get(run, key), "task"));
+    }
+    tasks
+}
+
+/// Raw expected check values the run still holds.
+pub(super) fn recorded_expected(run: &Json) -> Vec<String> {
+    let mut values = Vec::new();
+    collect_expected(&mut values, get(run, "response_checks"));
+    for key in ["evaluation", "evaluation_next"] {
+        collect_expected(&mut values, get(get(run, key), "checks"));
+    }
+    values
+}
+
+fn copies_secret(body: &str, secret: &str) -> bool {
+    !secret.is_empty()
+        && (body.contains(secret)
+            || behaviour_spec::refuse_subject_copy(body.as_bytes(), secret.as_bytes()).is_err())
+}
+
+/// Keep model prose. A hypothesis that carries a recorded task or expected value is stored as a digest.
+pub(super) fn stored_hypothesis(hypothesis: &str, run: &Json) -> String {
+    let leaked = recorded_tasks(run).iter().any(|task| copies_secret(hypothesis, task))
+        || recorded_expected(run).iter().any(|value| copies_secret(hypothesis, value));
+    if leaked {
+        harness_rules::digest(&s(hypothesis))
+    } else {
+        hypothesis.to_string()
+    }
+}
+
+/// Critic over the candidate harness text. It returns a verdict and does not score.
+pub(super) fn leakage_critic(candidate: &str, component: &str, tasks: &[String], expected: &[String], unchanged: bool) -> Json {
+    for task in tasks {
+        if !task.is_empty() && candidate.contains(task) {
+            return obj(vec![
+                ("leakage", s("task_text")),
+                ("reason", s("refused because the candidate contains a recorded task")),
+            ]);
+        }
+    }
+    for value in expected {
+        if !value.is_empty() && candidate.contains(value) {
+            return obj(vec![
+                ("leakage", s("answer_text")),
+                ("reason", s("refused because the candidate contains a recorded expected value")),
+            ]);
+        }
+    }
+    for value in expected {
+        if behaviour_spec::refuse_subject_copy(candidate.as_bytes(), value.as_bytes()).is_err() {
+            return obj(vec![
+                ("leakage", s("answer_text")),
+                ("reason", s("refused because the candidate reproduces a recorded expected value")),
+            ]);
+        }
+    }
+    if unchanged {
+        return obj(vec![
+            ("leakage", s("inert")),
+            ("reason", s(&crate::rrsi::inert_refusal(component))),
+        ]);
+    }
+    obj(vec![("leakage", s("clean")), ("reason", s(""))])
+}
+
+#[cfg(test)]
+mod checks {
+    use super::*;
+
+    #[test]
+    fn critic_refuses_a_recorded_task_before_any_score() {
+        let task = "UNIQUE_TASK_BODY_for_the_critic".to_string();
+        let verdict = leakage_critic(&format!("Follow {task} exactly."), "skills", &[task.clone()], &[], false);
+        assert_eq!(text(&verdict, "leakage"), "task_text");
+        assert_eq!(get(&verdict, "score_before"), &Null);
+        assert_eq!(get(&verdict, "score_after"), &Null);
+        assert_eq!(get(&verdict, "passed"), &Null);
+        assert!(!verdict.string().contains(&task), "{}", verdict.string());
+    }
+
+    #[test]
+    fn critic_refuses_seventeen_bytes_of_a_recorded_expected_value() {
+        let expected = "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345".to_string();
+        let seventeen = &expected[..behaviour_spec::QUOTED_FRAGMENT_MAX + 1];
+        assert_eq!(seventeen.len(), 17);
+        let candidate = format!("match the fixture {seventeen} then stop");
+        assert!(!candidate.contains(&expected));
+        let verdict = leakage_critic(&candidate, "skills", &[], &[expected.clone()], false);
+        assert_eq!(text(&verdict, "leakage"), "answer_text");
+        assert!(text(&verdict, "reason").contains("expected value"), "{}", text(&verdict, "reason"));
+        assert_eq!(get(&verdict, "score_before"), &Null);
+        let sixteen = &expected[..behaviour_spec::QUOTED_FRAGMENT_MAX];
+        let allowed = format!("match the fixture {sixteen} then stop");
+        let clean = leakage_critic(&allowed, "skills", &[], &[expected], false);
+        assert_eq!(text(&clean, "leakage"), "clean", "{}", text(&clean, "reason"));
+    }
+
+    #[test]
+    fn critic_marks_an_unchanged_component_inert() {
+        let verdict = leakage_critic("same body", "skills", &[], &[], true);
+        assert_eq!(text(&verdict, "leakage"), "inert");
+        assert_eq!(
+            text(&verdict, "reason"),
+            "refused because the candidate adds no change to component skills"
+        );
+        assert_eq!(get(&verdict, "score_before"), &Null);
+        assert_eq!(get(&verdict, "score_after"), &Null);
+    }
+
+    #[test]
+    fn legacy_acceptance_is_unchanged_without_history() {
+        let score = |passed: &str| {
+            obj(vec![
+                ("passed", Num(passed.into())),
+                ("total", Num("2".into())),
+                ("route", s("same")),
+                ("context", s("same")),
+            ])
+        };
+        let before = score("1");
+        let after = score("2");
+        let decision = acceptance(&before, &after, 0, None, None);
+        assert_eq!(boolean(&decision, "admit"), check_gain(&before, &after));
+        assert_eq!(boolean(&decision, "admit"), true);
+        assert_eq!(boolean(&decision, "legacy"), true);
+        assert_eq!(text(&decision, "reason"), "score");
+        assert_eq!(text(&decision, "gain"), "1");
+        assert_eq!(get(&decision, "noise_floor"), &Num("0".into()));
+        assert_eq!(boolean(&decision, "cost_known"), false);
+        let equal = acceptance(&before, &before, 0, None, None);
+        assert_eq!(boolean(&equal, "admit"), false);
+        assert_eq!(boolean(&equal, "admit"), check_gain(&before, &before));
+        assert_eq!(boolean(&equal, "legacy"), boolean(&equal, "admit"));
+        assert_eq!(text(&equal, "reason"), "score");
+        assert_eq!(boolean(&equal, "cost_known"), false);
+    }
+}
