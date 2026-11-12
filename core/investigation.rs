@@ -102,7 +102,16 @@ pub(super) fn inspect(p:&Path,source:&file_evidence::Source<'_>,cancelled:&impl 
         if graph{let observation=super::pe_observation::observe_with_cancel(&data,complete,after.len(),cancelled)?;structure.push('\n');structure.push_str(&observation.text);binary=Some(observation);}
         else{let text=super::pe_observation::analyze(&data,complete,after.len(),cancelled)?;structure.push('\n');structure.push_str(&text);}
         if cancelled(){return Err("Inspection cancelled".into());}
-        if let Some(dotnet)=super::super::dotnet_evidence::cli_evidence(&data){structure.push('\n');structure.push_str(&dotnet);}
+        // Observed carries a parse, including a malformed-image refusal.
+        // Bounded is a cap refusal. Err is cancellation. The sentences in the text are unchanged.
+        match super::super::dotnet_evidence::cli_evidence(&data, cancelled) {
+            Ok(super::super::dotnet_evidence::CliText::Observed(dotnet) | super::super::dotnet_evidence::CliText::Bounded(dotnet)) => {
+                structure.push('\n');
+                structure.push_str(&dotnet);
+            }
+            Ok(super::super::dotnet_evidence::CliText::Absent) => {}
+            Err(()) => return Err("Inspection cancelled".into()),
+        }
     }
     if data.starts_with(b"\x7fELF") {
         if graph{let observation=super::elf_observation::observe_with_cancel(&data,complete,after.len(),cancelled)?;structure.push('\n');structure.push_str(&observation.text);binary=Some(observation);}
@@ -396,6 +405,12 @@ mod dotnet_inspect_checks {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
+    fn cli_string(bytes: &[u8]) -> Option<String> {
+        match super::super::super::dotnet_evidence::cli_evidence(bytes, &|| false).expect("not cancelled") {
+            super::super::super::dotnet_evidence::CliText::Absent => None,
+            super::super::super::dotnet_evidence::CliText::Observed(text) | super::super::super::dotnet_evidence::CliText::Bounded(text) => Some(text),
+        }
+    }
     fn inspect_bytes(label: &str, bytes: &[u8]) -> String {
         let root = std::env::temp_dir().join(format!("rllm-dotnet5-{label}-{}-{}", std::process::id(), now()));
         let _cleanup = Rm(root.clone());
@@ -422,7 +437,7 @@ mod dotnet_inspect_checks {
     fn pe_without_cli_directory_keeps_inspect_text() {
         // Fails if a CLI-less PE gains a .NET section, or if the PE observation text is rewritten.
         let bytes = pe(b"BSJB is not a cli directory by itself", 0, 0, 14);
-        assert_eq!(super::super::super::dotnet_evidence::cli_evidence(&bytes), None);
+        assert!(matches!(super::super::super::dotnet_evidence::cli_evidence(&bytes, &|| false).expect("not cancelled"), super::super::super::dotnet_evidence::CliText::Absent));
         let shown = inspect_bytes("native", &bytes);
         let pe_text = super::super::pe_observation::analyze(&bytes, true, bytes.len() as u64, &|| false).unwrap();
         assert_eq!(shown.matches(pe_text.as_str()).count(), 1);
@@ -437,7 +452,7 @@ mod dotnet_inspect_checks {
     fn cli_directory_appends_exact_dotnet_lines() {
         // Fails if inspect drops the CLI text or splices it into the PE observation.
         let bytes = cli_image(&version_root());
-        let evidence = super::super::super::dotnet_evidence::cli_evidence(&bytes).expect("cli image");
+        let evidence = cli_string(&bytes).expect("cli image");
         let shown = inspect_bytes("cli", &bytes);
         let pe_text = super::super::pe_observation::analyze(&bytes, true, bytes.len() as u64, &|| false).unwrap();
         assert_eq!(shown.matches(pe_text.as_str()).count(), 1);
@@ -453,7 +468,7 @@ mod dotnet_inspect_checks {
     fn inconsistent_cli_extent_is_refused_by_name_in_inspect() {
         // Fails if an extent past the section is omitted or refused without the CLR directory name.
         let bytes = pe(b"short", 0x2000, 72, 16);
-        let evidence = super::super::super::dotnet_evidence::cli_evidence(&bytes).expect("inconsistent extent");
+        let evidence = cli_string(&bytes).expect("inconsistent extent");
         let shown = inspect_bytes("extent", &bytes);
         let refusal = "Refusal: CLR data directory entry 14 size 72 at RVA 0x2000 points outside the mapped file.\n";
         assert_eq!(evidence.matches(refusal).count(), 1);
@@ -484,7 +499,7 @@ mod dotnet_inspect_checks {
         push32(&mut carried, 0);
         carried.extend_from_slice(b"BAITSTREAM\0\0");
         let bytes = pe(&clr_sized(&carried, meta.len() as u32), 0x2000, 72, 16);
-        let evidence = super::super::super::dotnet_evidence::cli_evidence(&bytes).expect("truncated stream");
+        let evidence = cli_string(&bytes).expect("truncated stream");
         let shown = inspect_bytes("truncated", &bytes);
         let refusal = "Refusal: metadata stream header truncated. No stream is listed.\n";
         assert_eq!(evidence.matches(refusal).count(), 1);
@@ -492,5 +507,330 @@ mod dotnet_inspect_checks {
         assert_eq!(evidence.matches("BAITSTREAM").count(), 0);
         assert_eq!(evidence.matches("#~").count(), 0);
         assert_eq!(shown.matches(evidence.as_str()).count(), 1);
+    }
+
+    fn align4(value: usize) -> usize {
+        value.saturating_add(3) & !3
+    }
+
+    fn metadata(version: &str, streams: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut version_bytes = version.as_bytes().to_vec();
+        version_bytes.push(0);
+        while version_bytes.len() % 4 != 0 {
+            version_bytes.push(0);
+        }
+        let mut header_len = 16 + version_bytes.len() + 4;
+        for (name, _) in streams {
+            header_len += 8 + align4(name.len() + 1);
+        }
+        let mut cursor = align4(header_len);
+        let mut placed = Vec::new();
+        for (name, data) in streams {
+            placed.push((cursor, *data, *name));
+            cursor = align4(cursor + data.len());
+        }
+        let mut out = Vec::new();
+        out.extend_from_slice(b"BSJB");
+        push16(&mut out, 1);
+        push16(&mut out, 1);
+        push32(&mut out, 0);
+        push32(&mut out, version_bytes.len() as u32);
+        out.extend_from_slice(&version_bytes);
+        push16(&mut out, 0);
+        push16(&mut out, streams.len() as u16);
+        for (offset, data, name) in &placed {
+            push32(&mut out, *offset as u32);
+            push32(&mut out, data.len() as u32);
+            let mut name_bytes = name.as_bytes().to_vec();
+            name_bytes.push(0);
+            while name_bytes.len() % 4 != 0 {
+                name_bytes.push(0);
+            }
+            out.extend_from_slice(&name_bytes);
+        }
+        assert_eq!(out.len(), header_len);
+        for (offset, data, _) in &placed {
+            while out.len() < *offset {
+                out.push(0);
+            }
+            assert_eq!(out.len(), *offset);
+            out.extend_from_slice(data);
+        }
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out
+    }
+
+    fn tilde(entries: &[(u8, u32)], heaps: u8, body: &[u8]) -> Vec<u8> {
+        let mut valid = 0u64;
+        for (index, _) in entries {
+            valid |= 1u64 << index;
+        }
+        let mut out = Vec::new();
+        push32(&mut out, 0);
+        out.push(2);
+        out.push(0);
+        out.push(heaps);
+        out.push(1);
+        out.extend_from_slice(&valid.to_le_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes());
+        for (_, count) in entries {
+            push32(&mut out, *count);
+        }
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn strings(items: &[&str]) -> (Vec<u8>, Vec<u32>) {
+        let mut heap = vec![0u8];
+        let mut indexes = Vec::new();
+        for item in items {
+            indexes.push(heap.len() as u32);
+            heap.extend_from_slice(item.as_bytes());
+            heap.push(0);
+        }
+        (heap, indexes)
+    }
+
+    fn module_row(name_index: u16) -> Vec<u8> {
+        let mut row = Vec::new();
+        push16(&mut row, 0);
+        push16(&mut row, name_index);
+        push16(&mut row, 0);
+        push16(&mut row, 0);
+        push16(&mut row, 0);
+        row
+    }
+
+    fn method_row(rva: u32) -> Vec<u8> {
+        let mut row = Vec::new();
+        push32(&mut row, rva);
+        push16(&mut row, 0);
+        push16(&mut row, 0);
+        push16(&mut row, 0);
+        push16(&mut row, 0);
+        push16(&mut row, 1);
+        row
+    }
+
+    fn clr(metadata: &[u8]) -> Vec<u8> {
+        clr_sized(metadata, metadata.len() as u32)
+    }
+
+    fn access_for(root_label: &str) -> (std::path::PathBuf, operation::InspectionAccess) {
+        let root = std::env::temp_dir().join(format!("rllm-dotnet7-{root_label}-{}-{}", std::process::id(), now()));
+        fs::create_dir_all(&root).unwrap();
+        super::super::super::execution::reset();
+        let access = operation::InspectionAccess {
+            list: true,
+            read: true,
+            graph: false,
+            budget: 2 * 1024 * 1024,
+            root_identity: None,
+            cancellation_token: super::super::super::execution::cancellation_token(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(120),
+        };
+        (root, access)
+    }
+
+    fn assert_file_untouched(root: &std::path::Path, bytes: &[u8]) {
+        let path = root.join("sample.bin");
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let mut names: Vec<_> = fs::read_dir(root).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        names.sort();
+        assert_eq!(names, vec![std::ffi::OsString::from("sample.bin")]);
+    }
+
+    fn inspect_kept(label: &str, bytes: &[u8]) -> String {
+        let (root, access) = access_for(label);
+        let _cleanup = Rm(root.clone());
+        let path = root.join("sample.bin");
+        fs::write(&path, bytes).unwrap();
+        let shown = super::inspect_scoped(&root, &path, "sample.bin", &access).unwrap_or_else(|error| panic!("{label}: {error}"));
+        assert_file_untouched(&root, bytes);
+        shown
+    }
+
+    fn inspect_cancel(label: &str, bytes: &[u8], cancelled: &impl Fn() -> bool) -> Result<String> {
+        let (root, access) = access_for(label);
+        let _cleanup = Rm(root.clone());
+        let path = root.join("sample.bin");
+        fs::write(&path, bytes).unwrap();
+        let source = super::inspect_projected(&root, "sample.bin", &access)?;
+        let outcome = super::inspect(&path, &source, cancelled, (&root, "sample.bin", &access));
+        assert_file_untouched(&root, bytes);
+        outcome
+    }
+
+    fn named_module_image(strings_size: u32, table_size: u32) -> Vec<u8> {
+        let (heap, indexes) = strings(&["DemoModule"]);
+        let body = module_row(indexes[0] as u16);
+        let stream = tilde(&[(0x00, 1)], 0, &body);
+        let mut root = metadata("v4.0.30319", &[("#~", stream.as_slice()), ("#Strings", heap.as_slice())]);
+        let table_at = root.windows(3).position(|window| window == b"#~\0").unwrap();
+        put32(&mut root, table_at - 4, table_size);
+        let strings_at = root.windows(9).position(|window| window == b"#Strings\0").unwrap();
+        put32(&mut root, strings_at - 4, strings_size);
+        pe(&clr(&root), 0x2000, 72, 16)
+    }
+
+    fn padded_metadata(len: usize) -> Vec<u8> {
+        let mut padded = version_root();
+        assert!(len >= padded.len());
+        padded.resize(len, 0);
+        pe(&clr_sized(&padded, padded.len() as u32), 0x2000, 72, 16)
+    }
+
+    fn method_image(declared: u32, present: usize, body: &[u8]) -> (Vec<u8>, u32) {
+        let (heap, indexes) = strings(&["Demo"]);
+        let build = |rvas: &[u32]| {
+            let mut rows = module_row(indexes[0] as u16);
+            for rva in rvas {
+                rows.extend(method_row(*rva));
+            }
+            let stream = tilde(&[(0x00, 1), (0x06, declared)], 0, &rows);
+            metadata("v4.0.30319", &[("#~", stream.as_slice()), ("#Strings", heap.as_slice())])
+        };
+        let probe = build(&vec![0; present]);
+        let base = 0x2000 + 72 + probe.len() as u32;
+        let rvas: Vec<u32> = if body.is_empty() {
+            vec![0; present]
+        } else {
+            (0..present).map(|index| base + (index * body.len()) as u32).collect()
+        };
+        let root = build(&rvas);
+        assert_eq!(root.len(), probe.len());
+        let mut section = clr(&root);
+        for _ in 0..present {
+            section.extend_from_slice(body);
+        }
+        (pe(&section, 0x2000, 72, 16), base)
+    }
+
+    #[test]
+    fn huge_stream_declarations_with_few_bytes_stay_accepted() {
+        // Fails if a #~ or #Strings size is charged or refused when the bytes actually present are few.
+        let bytes = named_module_image(0xF000_0000, 0xF000_0000);
+        let shown = inspect_kept("declared-few", &bytes);
+        assert_eq!(shown.matches("table 0x00 Module rows 1.\n").count(), 1, "{shown}");
+        assert_eq!(shown.matches("Module name: DemoModule.\n").count(), 1, "{shown}");
+        assert_eq!(shown.matches("dotnet parse work cap").count(), 0, "{shown}");
+        assert_eq!(shown.matches("dotnet declared size cap").count(), 0, "{shown}");
+        assert_eq!(shown.matches("Refusal:").count(), 0, "{shown}");
+        match super::super::super::dotnet_evidence::cli_evidence(&bytes, &|| false).expect("not cancelled") {
+            super::super::super::dotnet_evidence::CliText::Observed(text) => {
+                assert_eq!(text.matches("Module name: DemoModule.\n").count(), 1);
+            }
+            other => panic!("a large declaration was not an ordinary observation: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn touched_bytes_over_the_budget_name_the_parse_work_cap() {
+        // Fails if the mapped metadata length is not charged onto the parse work cap.
+        let meta_len = super::super::super::dotnet_evidence::PARSE_WORK_CAP - 72 - 8;
+        let bytes = padded_metadata(meta_len);
+        let shown = inspect_kept("work-cap", &bytes);
+        assert_eq!(shown.matches("Refusal: dotnet parse work cap.\n").count(), 1, "{shown}");
+        assert_eq!(shown.matches("Refusal: dotnet parse work cap. Remaining streams, tables, rows, and names were not read.\n").count(), 1, "{shown}");
+        assert_eq!(shown.matches("dotnet declared size cap").count(), 0, "{shown}");
+        assert_eq!(shown.matches("table 0x00 ").count(), 0, "{shown}");
+        assert_eq!(shown.matches("Metadata version v4.0.30319.\n").count(), 0, "{shown}");
+        match super::super::super::dotnet_evidence::cli_evidence(&bytes, &|| false).expect("not cancelled") {
+            super::super::super::dotnet_evidence::CliText::Bounded(text) => {
+                assert!(text.contains("dotnet parse work cap"), "{text}");
+            }
+            other => panic!("work cap was not a bounded refusal: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn declared_range_over_the_budget_uses_its_own_name() {
+        // Fails if a present range whose length alone exceeds the budget is charged as the work cap.
+        let bytes = padded_metadata(super::super::super::dotnet_evidence::PARSE_WORK_CAP + 64);
+        let shown = inspect_kept("declared-cap", &bytes);
+        assert_eq!(shown.matches("Refusal: dotnet declared size cap.\n").count(), 1, "{shown}");
+        assert_eq!(shown.matches("Refusal: dotnet declared size cap. The declared range was not scanned.\n").count(), 1, "{shown}");
+        assert_eq!(shown.matches("dotnet parse work cap").count(), 0, "{shown}");
+        assert_eq!(shown.matches("Metadata signature BSJB.\n").count(), 0, "{shown}");
+        match super::super::super::dotnet_evidence::cli_evidence(&bytes, &|| false).expect("not cancelled") {
+            super::super::super::dotnet_evidence::CliText::Bounded(text) => {
+                assert!(text.contains("dotnet declared size cap"), "{text}");
+                assert!(!text.contains("dotnet parse work cap"), "{text}");
+            }
+            other => panic!("declared size was not a bounded refusal: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn emitted_method_headers_stop_at_the_observation_byte_cap() {
+        // Fails if method-header lines are accumulated past the observation byte cap, or if the cut is unnamed.
+        let (bytes, base) = method_image(320, 320, &[0x02]);
+        let shown = inspect_kept("output-cap", &bytes);
+        let wrapped = after_pe(&shown);
+        assert!(wrapped.starts_with('\n') && wrapped.ends_with('\n'), "{wrapped}");
+        let dotnet = &wrapped[1..wrapped.len() - 1];
+        let first = format!("MethodDef RVA {base:#x} header tiny, code size 0. IL was not decoded.\n");
+        let last = format!("MethodDef RVA {:#x} header tiny, code size 0. IL was not decoded.\n", base + 319);
+        assert_eq!(dotnet.matches(first.as_str()).count(), 1, "{dotnet}");
+        assert_eq!(dotnet.matches(last.as_str()).count(), 0, "{dotnet}");
+        assert_eq!(dotnet.matches("Refusal: dotnet observation byte cap.\n").count(), 1, "{dotnet}");
+        assert_eq!(dotnet.matches("Refusal: dotnet observation byte cap. Later observation lines were not emitted.\n").count(), 1, "{dotnet}");
+        assert!(dotnet.len() <= super::super::super::dotnet_evidence::OBSERVATION_BYTE_CAP, "{}", dotnet.len());
+        assert!(dotnet.ends_with("Later observation lines were not emitted.\n"), "{dotnet}");
+        match super::super::super::dotnet_evidence::cli_evidence(&bytes, &|| false).expect("not cancelled") {
+            super::super::super::dotnet_evidence::CliText::Bounded(_) => {}
+            other => panic!("output cap was not a bounded refusal: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cancellation_during_partial_methods_is_inspection_cancelled() {
+        // Fails if partial_methods does not poll the cancellation token.
+        // The at-cap image reads every MethodDef row and does not enter partial_methods.
+        // The over-cap image takes that error path and scans the same rows again.
+        // Those two files differ by the declared row count, so their poll totals differ
+        // by the partial_methods charges. A trip at the at-cap total therefore falls
+        // inside that second scan, and only while the scan still polls.
+        let present = super::super::super::dotnet_evidence::METHOD_ROW_CAP;
+        let (at_cap, _) = method_image(present as u32, present, &[]);
+        let (over, _) = method_image(present as u32 + 1, present, &[]);
+        let run = |bytes: &[u8], trip: u32| {
+            let calls = std::cell::Cell::new(0u32);
+            let cancel = || {
+                let seen = calls.get();
+                calls.set(seen + 1);
+                seen >= trip
+            };
+            let outcome = inspect_cancel("partial-methods", bytes, &cancel);
+            (outcome, calls.get())
+        };
+        let (finished_at, at_calls) = run(&at_cap, u32::MAX);
+        let at_shown = finished_at.expect("at-cap image");
+        assert_eq!(at_shown.matches("dotnet method row cap").count(), 0, "{at_shown}");
+        let (still, _) = run(&at_cap, at_calls);
+        assert!(still.is_ok(), "trip landed before partial_methods: {still:?}");
+        let (finished_over, _) = run(&over, u32::MAX);
+        let over_shown = finished_over.expect("method row cap path");
+        assert!(over_shown.contains("dotnet method row cap"), "{over_shown}");
+        let (stopped, _) = run(&over, at_calls);
+        assert_eq!(stopped.expect_err("cancel during partial_methods"), "Inspection cancelled");
+    }
+
+    #[test]
+    fn malformed_image_stays_observed_while_a_cap_is_bounded() {
+        // Fails if a cap refusal and a malformed image share one presence value.
+        let malformed = pe(b"short", 0x2000, 72, 16);
+        match super::super::super::dotnet_evidence::cli_evidence(&malformed, &|| false).expect("not cancelled") {
+            super::super::super::dotnet_evidence::CliText::Observed(text) => {
+                assert_eq!(text.matches("Refusal: CLR data directory entry 14 size 72 at RVA 0x2000 points outside the mapped file.\n").count(), 1);
+                assert_eq!(text.matches("dotnet parse work cap").count(), 0);
+                assert_eq!(text.matches("dotnet declared size cap").count(), 0);
+            }
+            other => panic!("malformed image was not Observed: {other:?}"),
+        }
+        let shown = inspect_kept("malformed-vs-cap", &malformed);
+        assert_eq!(shown.matches("Refusal: CLR data directory entry 14 size 72 at RVA 0x2000 points outside the mapped file.\n").count(), 1);
     }
 }
