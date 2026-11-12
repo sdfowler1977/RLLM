@@ -1,4 +1,4 @@
-# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-13T01:0Z)
+# Linux host, packaging and verification audit (2026-11-10, current through 2026-11-13T03:3Z)
 
 This section is the current audit. The sections below it describe earlier signed candidates and keep
 their original counts and wording.
@@ -7,7 +7,7 @@ their original counts and wording.
 
 - Core unit suite through the sanctioned runner (`python3 tools/checks.py --all-units`, and since this
   window the native `output/tools/gate <units>`, which prints the identical line and writes byte-identical
-  report bytes): **723/723 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
+  report bytes): **729/729 cases plus 55 isolated application cases, exit 0** on the current tree (the delivered
   69-group record is backed by 638/638, measured at `c34b170`), measured with the pinned
   `rustc 1.99.1` toolchain from `tooling/env.sh` (the 638 count is the tree at `c34b170`: 597 at `600e44d`,
   +10 candidate-pool cases in `f2a6ad8`, +4 self-build environment cases in `63bf5c5`, +5 self-build ordering
@@ -16,7 +16,7 @@ their original counts and wording.
   +4 in `4758d28` → 642 and +7 in `5c93aed` → 645, then 649 re-measured in a room at `e4b7452` — that +4 was not
   re-derived per commit — and +1 in `98fb0d9` → 650, +8 in `e4118b1` → 658, +9 in `e7d13ec` → 667, +5 in
   `db16ffa` → 672, +14 in `436b281` → 686, +15 in `28b29d3` → 701, +7 in `2b041bc` → 708, +10 in `06d1f6b` → 718,
-  +5 in `b6457b0` → 723; the sums were
+  +5 in `b6457b0` → 723, +6 in `f28e463` → 729; the sums were
   re-derived by counting added `#[test]` lines per commit with `git show`, which is why `3e5eda1` (+3) and
   `112e251` (+1) are absent from the chain — those are `tools/` package-test legs, not core unit cases; every delta was
   re-measured by the coordinator in a room that held only the lane's own file, and C4's room was
@@ -1579,8 +1579,14 @@ lane.
 Open now, beyond the standing owner-gated items (the signed companion APK triple, `PUB-INPUT-DRIFT`, the
 `binary_flow`/`history_migration` comparators, `DESKTOP-SURFACE`, the memory index):
 
-- GAP1 (wire the successor-state read-back and a real handoff chain): a lane owns `core/self_build.rs`, and
-  clearing `durable_successor_rows`/`successor_states`/`job_source` is part of its contract.
+- GAP1 (wire the successor-state read-back and a real handoff chain): **stage 1 landed in `f28e463`** — the
+  handoff now reads and validates the companion chain before exec, and `durable_successor_rows`/
+  `successor_states`/`job_source`/`track` are no longer dead code (64 → 60 warnings). Still open: an absent
+  companion journal is indistinguishable from a deleted or mislocated one (both read as the empty witness); the
+  chain resists reordering and insertion but not truncation to an earlier valid prefix, replacement or rollback;
+  a dead-but-unreaped PID still reads `running = true` until `reap()`; the exec-ordering test is not yet
+  mutation-sensitive (lane `xect`); and no connected verification group exercises the handoff chain yet, so the
+  delivered record still covers none of it.
 - GAP2 (raise the `refinement_rounds` ceiling with a real 3+-round run to `b_min`, and give `noise_floor` and
   the `held_out_*` keys production writers): a lane owns `core/improvement.rs`, `core/rrsi.rs`,
   `core/harness.rs` and `verification/rrsi_loop.py`, including the two `== 2` equality gates at
@@ -1657,6 +1663,57 @@ The delivered record is unchanged this window: 71 groups, 4,215 checks, 67 pass,
 by the 09:23:49 mixed-provenance binary. A single sweep on a settled tree must supersede it, and that sweep
 is gated behind the four in-flight lanes plus the signed-APK inputs that keep `apk_alignment` and
 `turn_background` unavailable.
+
+## GAP1's handoff reads its successor chain off disk, my own mutation claim turns out to be wrong, and the audit seat's prediction beats it — 2026-11-13T01:0Z–03:3Z (program clock; host clock 2026-11-12T04:0Z–11:0Z local, `f28e463` committed at 11:01:57-05:00)
+
+**GAP1 stage 1 landed as `f28e463`** (`core/self_build.rs`, +241/−18). `successor_witness`
+(`core/self_build.rs:975-983`) reads the companion journal beside the handoff's `journal` field through the
+pre-existing `durable_successor_rows` (`:1419-1440`), which parses **every** line, refuses a row whose `revision`
+is not `sha256(without_revision(row))` (`successor journal row is not content-addressed`) and a row whose `parent`
+is not the previous row's revision (`successor journal parent does not match the previous row`). `handoff` emits
+`successor_rows`, `successor_tip` (disk-derived) and the live table `successors` at `:1012-1019`, **before** the
+`review_confirmed` exec arm at `:1021+`, so an invalid companion journal is refused rather than exec'd.
+`job_source` is now carried into the tracked-successor table (`:1632-1635`), which is what clears the GAP1 dead-code
+trio: the product build's warning count went **64 → 60** (main tree at `b6457b0` versus the room's own product
+build, `/tmp/gap1bv-product.log`). Witness: room `/tmp/gap1bv` = `git archive b6457b0` plus **only** this file
+(the other four modified core files in the worktree verified byte-identical to `b6457b0`) measures
+**729/729 plus 55 isolated application cases, exit 0**, and the mutant binary measures 726/729.
+
+**A claim of mine was wrong and is corrected.** My in-progress note said removing only the successor read turns
+"5 of 6" new tests red. Measured, with the read replaced by `Ok((0, String::new()))` and the log fields and exec arm
+kept, the answer is **3 of 6**: `handoff_reports_the_tip_of_a_valid_two_row_successor_chain`,
+`handoff_refuses_a_successor_row_whose_revision_is_not_the_body_digest`,
+`handoff_refuses_a_successor_parent_that_misses_the_previous_row`. The three that survive are
+`handoff_reads_a_missing_successor_journal_as_an_empty_witness` (it expects zero rows, so an always-zero mutant
+satisfies it), `handoff_successor_view_separates_a_running_spawn_from_a_reaped_exit` (live table only), and — the
+one that matters — `handoff_review_confirmed_execs_the_binary_after_a_valid_chain`: its child writes a proof file
+and the parent asserts the proof, **but the proof is still written when the disk read is deleted**, so that test
+does not prove exec is gated on a validated chain. That is a test defect, not a documentation slip, so writer lane
+`xect` is dispatched to add a tampered-chain leg with its own proof-file name — refused child, no proof file,
+refusal sentence asserted — and to prove that leg red under the same mutant.
+
+**Audit seat (MiniMax-M3, diff inlined because the seat has no file access).** First pass refused to credit
+anything it could not see and marked six claims NOT SUPPORTED; that was correct behaviour, since
+`durable_successor_rows`, `successor_states` and `reap` are pre-existing code and therefore absent from the diff.
+Sent their HEAD bodies, it concluded: every element of the returned vector passed both the digest and parent-chain
+checks; a torn or partial final line **aborts the read** rather than being skipped, so `rows.last()` is a validated
+tip; the tip is disk-only and cannot be overridden by a stale in-process entry; **no Critical or High finding in the
+new code**. Open items it produced, all recorded rather than fixed here: an absent companion journal reads as the
+empty witness, which cannot distinguish "never existed" from "deleted, renamed or mislocated" — a formerly durable
+chain that vanishes reports *no successor* instead of failing; the parent chain buys anti-reordering,
+anti-omission and anti-insertion inside a chain, **not** protection against truncation to an earlier valid prefix,
+wholesale replacement, deletion or rollback; and a tracked PID that has died but has not been reaped still reports
+`running = true` until `reap()` runs.
+
+**Lanes in flight at 03:3Z:** `dotnet6` (`core/dotnet_evidence.rs` +1,020, `core/investigation.rs` — inspect-budget
+bound, in-parser cancellation, missing metadata/CIL/offset coverage), `room7` (`core/clean_room.rs`,
+`core/file_evidence.rs` — the three open `06d1f6b` findings: `verify_artifact` with no production caller, the
+copy-refusal test driving the helper instead of the route, caps checked after `observe_items`), `gap4v` (a connected
+verification leg for the clean-room route; `verification/product_flow.py` touched), `gap2e` (`core/improvement.rs`,
+`core/harness.rs`, `verification/rrsi_loop.py` — three-round refinement ceiling with a production `round_index`
+writer and a `held_out` phase), and `xect`. None of their work is committed; `verification/rrsi_loop.py` (+225,
+from the finished `rrsik` lane) is still awaiting adjudication, and its leg list is still **six** names, so no
+three-round loop witness exists yet.
 
 ## Historical baseline audit (original text)
 

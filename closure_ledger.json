@@ -942,5 +942,44 @@
   "room6_landed_06d1f6b": "GAP4 white-room rebuild: mode clean_room on the reconstruct route (core/clean_room.rs new, file_evidence.rs, reconstruction.rs). Room witness 718/718 +55 exit 0 (=708+10). Mutants: removing the dispatch reddens clean_room_route_cites_generates_and_verifies at core/file_evidence.rs:133 (717/718); neutering the copy refusal at clean_room.rs:65 reddens byte_identical_artifact_is_refused_as_a_copy (717/718). OPEN from the audit seat: clean_room::verify_artifact (:468) has no production caller so the on-disk bytes are compared but never re-observed; byte_identical_artifact_is_refused_as_a_copy drives the helper directly, not the route; item/spec caps are checked after observe_items.",
   "natx_landed_b6457b0": "GAP4 stage 2 typed graph: derive emits a fourth group cross_references (observed/retained/omitted/rows) and the flag cross_reference_inventory_complete; Observation.xrefs read at binary_declarations.rs:62/:66 (clears 'field xrefs is never read'); xrefs_complete tri-state; PE resolved target >2**32 refused by name, ELF declared VA accepted. Same room witness 723/723 +55 exit 0 (+5 cases). OPEN: the emitted meaning sentence still names only mappings/labels/relocations; the projection still materialises rows before comparing state_bytes with the budget (pre-existing).",
   "git_archive_room_wrong_for_sweeps": "Measured: a full connected sweep inside a git-archive room (tools+product+runner built in the room) gives 63 pass, 1 fail, 7 unavailable of 71 groups and publishes nothing. binary_flow, history_migration, field_flow, flags_flow and product_flow are UNAVAILABLE because their declared inputs are gitignored output/*-controller files; the lone FAIL is rrsi_loop's 'refine entry copies approval_root onto task_run.workspace and records source_digest' leg, a substrate artifact: an archive room has no .git so require_recorded_worktree (436b281) falls back to approval_root and source_digest is never recorded. The delivered sweep must run in a tree with real git state.",
-  "lanes_in_flight_2026_11_13T0100": "gap2e (core/harness.rs + improvement.rs + verification/rrsi_loop.py: refinement_rounds now accepts 3, the ==2 equality gates are now caps, a new held_out phase, a round_index production writer at harness.rs:1025, and a three-round end-state test); gap1b (core/self_build.rs: durable_successor_rows called at :980, successor_states at :1021, job_source emitted - clears the GAP1 dead-code trio, 6 new tests); dotnet6 (core/dotnet_evidence.rs + investigation.rs caps/cancellation/depth); gap4v (verification/product_flow.py clean_room connected leg). room6 and natx have landed as 06d1f6b and b6457b0."
+  "gap1b_landed_f28e463": {
+    "status": "landed",
+    "claim": "core/self_build.rs (+241/-18): handoff reads and validates the companion successor chain before the review_confirmed exec arm; successor_tip is disk-derived, successors is the live table; job_source is carried into the tracked-successor table",
+    "witness": "room /tmp/gap1bv = git archive b6457b0 + only core/self_build.rs (core/dotnet_evidence.rs, core/harness.rs, core/improvement.rs, core/pe_observation.rs verified byte-identical to b6457b0): python3 tools/checks.py --all-units -> Rust cases passed: 729/729; isolated application cases: 55, exit 0 (/tmp/gap1bv-checks.log)",
+    "warning_census": "product build warnings 64 (main tree at b6457b0, headless.sh) -> 60 (room product build, /tmp/gap1bv-product.log); instruments differ in tree but are the same command family, stated as measured",
+    "seat": "MiniMax-M3 seat: no Critical or High finding in the new code after being sent the pre-existing bodies it could not see in the diff"
+  },
+  "gap1b_mutation_claim_corrected": {
+    "status": "corrected",
+    "wrong_claim": "removing only the successor disk read turns 5 of the 6 new tests red (coordinator note, never committed)",
+    "measured": "mutant body Ok((0, String::new())) in successor_witness, fields and exec kept -> 726/729; red: handoff_reports_the_tip_of_a_valid_two_row_successor_chain, handoff_refuses_a_successor_row_whose_revision_is_not_the_body_digest, handoff_refuses_a_successor_parent_that_misses_the_previous_row",
+    "insensitive": [
+      "handoff_reads_a_missing_successor_journal_as_an_empty_witness",
+      "handoff_successor_view_separates_a_running_spawn_from_a_reaped_exit",
+      "handoff_review_confirmed_execs_the_binary_after_a_valid_chain"
+    ],
+    "consequence": "the exec test does not prove exec is gated on a validated chain: the proof file is written even with the read deleted. Lane xect dispatched (core/self_build.rs only) to add a tampered-chain leg with its own proof-file name and prove it red under the same mutant. Witness json kept at /tmp/gap1bv-mut-full-units.json",
+    "lesson": "the audit seat predicted exactly which two tests would survive; a chat seat reasoning over the diff out-predicted the coordinator's own mutation note"
+  },
+  "gap1_seat_findings_open": {
+    "status": "open",
+    "items": [
+      "an absent companion journal reads as the empty witness, so a deleted, renamed or mislocated chain reports 'no successor' instead of failing (never-existed vs gone are indistinguishable)",
+      "the parent chain resists reordering, omission and insertion inside a chain, but not truncation to an earlier valid prefix, wholesale replacement, deletion or rollback",
+      "a tracked PID that died but has not been reaped still reports running=true until reap() runs",
+      "no connected verification group exercises the handoff chain, so the delivered record covers none of it"
+    ]
+  },
+  "lanes_in_flight_2026_11_13T0330": {
+    "status": "in flight",
+    "lanes": {
+      "dotnet6": "core/dotnet_evidence.rs (+1020), core/investigation.rs (+14) - inspect-budget bound, in-parser cancellation, metadata/#US/#Blob/CIL/RVA/PE32 coverage",
+      "room7": "core/clean_room.rs, core/file_evidence.rs - the three open 06d1f6b findings (verify_artifact has no production caller; copy-refusal test drives the helper not the route; caps checked after observe_items)",
+      "gap4v": "connected verification leg for the clean-room route; verification/product_flow.py (+14) touched",
+      "gap2e": "core/improvement.rs (+26), core/harness.rs (+240), verification/rrsi_loop.py - three-round ceiling, production round_index writer, held_out phase",
+      "xect": "core/self_build.rs - make the handoff exec test prove the journal read happened"
+    },
+    "uncommitted_adjudication_pending": "verification/rrsi_loop.py (+225) from the finished rrsik lane; leg list still six names, so no three-round loop witness exists",
+    "note": "four lanes verified alive by pid + jiffies sampling; grok writes its JSON log only at exit"
+  }
 }
