@@ -88,6 +88,8 @@ const SPLIT_KEYS: &[&str] = &[
 pub(crate) const CANDIDATE_MAX: usize = 3;
 pub(crate) const WORKTREE_MAX: usize = 3;
 pub(crate) const EVOLVE_BRANCH: &str = "rllm-evolve";
+const HARNESS_FILE: &str = "rllm-harness.txt";
+const SOURCE_ABSENT: &str = "absent";
 const GIT_WALL_SECS: u64 = 15;
 const GIT_OUTPUT_MAX: usize = 64 * 1024;
 // The product has no fixed round horizon, so each round already in the ledger
@@ -1492,14 +1494,29 @@ fn ignore_worktrees(git_dir: &Path) -> Result<()> {
     } else {
         String::new()
     };
-    if body.lines().any(|line| line == ".rllm-worktrees/") {
-        return Ok(());
-    }
-    if !body.is_empty() && !body.ends_with('\n') {
+    // The slot checkouts stay out of status. The caller copy of the harness file is
+    // excluded too, so applying it does not stage the caller's index. The slot commit
+    // force-adds that same name.
+    let mut changed = false;
+    for line in [".rllm-worktrees/", HARNESS_FILE] {
+        if body.lines().any(|existing| existing == line) {
+            continue;
+        }
+        if !body.is_empty() && !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push_str(line);
         body.push('\n');
+        changed = true;
     }
-    body.push_str(".rllm-worktrees/\n");
-    fs::write(&exclude, body).map_err(|error| error.to_string())
+    if changed {
+        fs::write(&exclude, body).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn path_has_slot(path: &Path) -> bool {
+    path.components().any(|component| component.as_os_str() == ".rllm-worktrees")
 }
 
 pub(crate) fn require_worktree_root(workspace: &Path) -> Result<GitRoot> {
@@ -1508,6 +1525,9 @@ pub(crate) fn require_worktree_root(workspace: &Path) -> Result<GitRoot> {
         _ => return Err("workspace is not the root of a git work tree".into()),
     };
     let _ = meta;
+    if path_has_slot(workspace) {
+        return Err("workspace is not the root of a git work tree".into());
+    }
     let git_dir = workspace.join(".git");
     match fs::symlink_metadata(&git_dir) {
         Ok(meta) if !meta.file_type().is_symlink() && meta.is_dir() => {}
@@ -1520,7 +1540,7 @@ pub(crate) fn require_worktree_root(workspace: &Path) -> Result<GitRoot> {
     let top = git_ok(&git_dir, workspace, &["rev-parse", "--show-toplevel"])?;
     let wanted = fs::canonicalize(workspace).map_err(|error| error.to_string())?;
     let got = fs::canonicalize(Path::new(top.stdout.trim())).map_err(|error| error.to_string())?;
-    if wanted != got {
+    if wanted != got || path_has_slot(&wanted) {
         return Err("workspace is not the root of a git work tree".into());
     }
     let head = git_ok(&git_dir, &wanted, &["rev-parse", "HEAD"])?;
@@ -1576,12 +1596,26 @@ fn remove_slot(root: &GitRoot, path: &Path) -> Result<()> {
         Err(error) => return Err(error.to_string()),
     }
     let shown = path_text(path)?;
-    let output = git_run(&root.git_dir, &root.workspace, &["worktree", "remove", "--force", &shown])?;
-    if output.code != Some(0) && path.exists() {
+    let _ = git_run(&root.git_dir, &root.workspace, &["worktree", "remove", "--force", &shown])?;
+    if path.exists() {
         fs::remove_dir_all(path).map_err(|error| error.to_string())?;
         let _ = git_run(&root.git_dir, &root.workspace, &["worktree", "prune"]);
     }
+    if path.exists() {
+        return Err("candidate slot was left in place".into());
+    }
     Ok(())
+}
+
+/// Drop every slot directory from an aborted round. A symlink is left in place.
+pub(crate) fn discard_round_slots(root: &GitRoot) {
+    for slot in 0..WORKTREE_MAX {
+        let path = slot_path(&root.workspace, slot);
+        if matches!(fs::symlink_metadata(&path), Ok(meta) if meta.file_type().is_symlink()) {
+            continue;
+        }
+        let _ = remove_slot(root, &path);
+    }
 }
 
 /// The caller HEAD is the incumbent commit unless an evolve branch already exists.
@@ -1613,23 +1647,34 @@ pub(crate) fn commit_candidate(root: &GitRoot, slot: usize, body: &str, base: &s
     }
     let path = slot_path(&root.workspace, slot);
     remove_slot(root, &path)?;
+    if path.exists() {
+        return Err("candidate slot was left in place".into());
+    }
     let live = rllm_worktree_count(root)?;
     if live >= WORKTREE_MAX {
         return Err(format!("refusing to create more than {WORKTREE_MAX} worktrees"));
     }
     fs::create_dir_all(root.workspace.join(".rllm-worktrees")).map_err(|error| error.to_string())?;
     let shown = path_text(&path)?;
-    git_ok(&root.git_dir, &root.workspace, &["worktree", "add", "--detach", &shown, base])?;
-    let file = path.join("rllm-harness.txt");
+    let created = commit_in_slot(root, &path, &shown, body, base);
+    if created.is_err() {
+        let _ = remove_slot(root, &path);
+    }
+    created
+}
+
+fn commit_in_slot(root: &GitRoot, path: &Path, shown: &str, body: &str, base: &str) -> Result<String> {
+    git_ok(&root.git_dir, &root.workspace, &["worktree", "add", "--detach", shown, base])?;
+    let file = path.join(HARNESS_FILE);
     fs::write(&file, body).map_err(|error| error.to_string())?;
-    let work_git = linked_git_dir(&path)?;
-    git_ok(&work_git, &path, &["add", "--", "rllm-harness.txt"])?;
+    let work_git = linked_git_dir(path)?;
+    git_ok(&work_git, path, &["add", "-f", "--", HARNESS_FILE])?;
     git_ok(
         &work_git,
-        &path,
-        &["commit", "-m", "rllm candidate", "--", "rllm-harness.txt"],
+        path,
+        &["commit", "-m", "rllm candidate", "--", HARNESS_FILE],
     )?;
-    let head = git_ok(&work_git, &path, &["rev-parse", "HEAD"])?;
+    let head = git_ok(&work_git, path, &["rev-parse", "HEAD"])?;
     let digest = head.stdout.trim().to_string();
     if !commit_hex(&digest) {
         return Err("candidate commit digest is not hexadecimal".into());
@@ -1671,6 +1716,116 @@ pub(crate) fn fast_forward_evolve(root: &GitRoot, commit: &str) -> Result<()> {
             &root.workspace,
             &["update-ref", &format!("refs/heads/{EVOLVE_BRANCH}"), commit],
         )?;
+    }
+    Ok(())
+}
+
+fn harness_path(workspace: &Path) -> Result<PathBuf> {
+    if path_has_slot(workspace) {
+        return Err("candidate target is outside the workspace".into());
+    }
+    let path = workspace.join(HARNESS_FILE);
+    if path.parent() != Some(workspace) {
+        return Err("candidate target is outside the workspace".into());
+    }
+    Ok(path)
+}
+
+fn read_harness(path: &Path) -> Result<Vec<u8>> {
+    let meta = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return Err("candidate target is not a regular file".into());
+    }
+    if meta.len() > 32768 {
+        return Err("candidate harness exceeds 32 KiB".into());
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(NOFOLLOW | CLOEXEC)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    if bytes.len() > 32768 {
+        return Err("candidate harness exceeds 32 KiB".into());
+    }
+    Ok(bytes)
+}
+
+fn write_harness(path: &Path, body: &[u8]) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+            return Err("candidate target is not a regular file".into());
+        }
+        Ok(_) => {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .custom_flags(NOFOLLOW | CLOEXEC)
+                .open(path)
+                .map_err(|error| error.to_string())?;
+            file.write_all(body).map_err(|error| error.to_string())?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .custom_flags(NOFOLLOW | CLOEXEC)
+                .open(path)
+                .map_err(|error| error.to_string())?;
+            file.write_all(body).map_err(|error| error.to_string())?;
+        }
+        Err(error) => return Err(error.to_string()),
+    }
+    Ok(())
+}
+
+fn harness_marker(path: &Path) -> Result<String> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SOURCE_ABSENT.into()),
+        Err(error) => Err(error.to_string()),
+        Ok(_) => Ok(digest(&read_harness(path)?)),
+    }
+}
+
+pub(crate) fn recorded_source(root: &GitRoot) -> Result<String> {
+    if path_has_slot(&root.workspace) {
+        return Err("workspace is not the root of a git work tree".into());
+    }
+    harness_marker(&harness_path(&root.workspace)?)
+}
+
+/// Digest of the caller harness file. `absent` means the file was not there.
+pub(crate) fn source_digest(workspace: &Path) -> Result<String> {
+    let meta = fs::symlink_metadata(workspace).map_err(|error| error.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err("workspace is not the root of a git work tree".into());
+    }
+    let workspace = fs::canonicalize(workspace).map_err(|error| error.to_string())?;
+    if path_has_slot(&workspace) {
+        return Err("workspace is not the root of a git work tree".into());
+    }
+    harness_marker(&harness_path(&workspace)?)
+}
+
+/// Write `body` onto the caller worktree after a fast-forward.
+/// A digest mismatch leaves the file byte-identical.
+pub(crate) fn apply_accepted(root: &GitRoot, body: &str, recorded: &str) -> Result<()> {
+    if body.contains('\0') || body.len() > 32768 {
+        return Err("candidate harness exceeds 32 KiB".into());
+    }
+    if path_has_slot(&root.workspace) {
+        return Err("candidate target is outside the workspace".into());
+    }
+    let path = harness_path(&root.workspace)?;
+    let current = harness_marker(&path)?;
+    if current != recorded {
+        return Err("target file changed since the candidate was made".into());
+    }
+    write_harness(&path, body.as_bytes())?;
+    let landed = read_harness(&path)?;
+    if landed != body.as_bytes() {
+        return Err("candidate target write did not land".into());
     }
     Ok(())
 }
@@ -2260,6 +2415,76 @@ mod checks {
         assert_eq!(rllm_worktree_count(&root).unwrap(), WORKTREE_MAX);
         assert_eq!(git_text(&repo, &["rev-parse", "HEAD"]), before);
         assert_eq!(git_text(&repo, &["status", "--porcelain"]), "");
+    }
+
+    fn git_at(dir: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn stale_slot_is_reinitialised_not_reused() {
+        let (_scratch, repo) = git_scratch();
+        let root = require_worktree_root(&repo).unwrap();
+        let stale = repo.join(".rllm-worktrees").join("c0");
+        fs::create_dir_all(&stale).unwrap();
+        git_at(&stale, &["init", "-b", "main"]);
+        fs::write(stale.join("junk.txt"), "junk").unwrap();
+        git_at(&stale, &["add", "--", "junk.txt"]);
+        git_at(
+            &stale,
+            &["-c", "user.name=RLLM", "-c", "user.email=rllm@localhost", "commit", "-m", "stale"],
+        );
+        let refused = match require_worktree_root(&stale) {
+            Err(error) => error,
+            Ok(_) => panic!("stale slot was accepted as a workspace"),
+        };
+        assert!(refused.contains("not the root of a git work tree"), "{refused}");
+        let base = incumbent_base(&root).unwrap();
+        let digest = commit_candidate(&root, 0, "fresh body", &base).unwrap();
+        assert!(commit_hex(&digest), "{digest}");
+        assert!(!stale.join("junk.txt").exists(), "stale file was reused");
+        assert_eq!(fs::read_to_string(stale.join("rllm-harness.txt")).unwrap(), "fresh body");
+        let meta = fs::symlink_metadata(stale.join(".git")).unwrap();
+        assert!(meta.is_file(), "stale git directory was reused");
+        let again = match require_worktree_root(&stale) {
+            Err(error) => error,
+            Ok(_) => panic!("reinitialised slot was accepted as a workspace"),
+        };
+        assert!(again.contains("not the root of a git work tree"), "{again}");
+    }
+
+    #[test]
+    fn aborted_commit_removes_the_slot_directory() {
+        let (_scratch, repo) = git_scratch();
+        let blocked = repo.join("rllm-harness.txt");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("blocked"), "x\n").unwrap();
+        git_at(&repo, &["add", "--", "rllm-harness.txt"]);
+        git_at(
+            &repo,
+            &["-c", "user.name=RLLM", "-c", "user.email=rllm@localhost", "commit", "-m", "block"],
+        );
+        let root = require_worktree_root(&repo).unwrap();
+        let before = git_text(&repo, &["rev-parse", "HEAD"]);
+        let base = incumbent_base(&root).unwrap();
+        let refused = commit_candidate(&root, 0, "fresh body", &base).unwrap_err();
+        assert!(refused.contains("directory"), "{refused}");
+        assert!(!repo.join(".rllm-worktrees").join("c0").exists());
+        assert_eq!(git_text(&repo, &["rev-parse", "HEAD"]), before);
+        let listed = git_text(&repo, &["worktree", "list", "--porcelain"]);
+        assert!(!listed.contains(".rllm-worktrees"), "{listed}");
     }
 
     #[test]

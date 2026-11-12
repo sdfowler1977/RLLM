@@ -397,7 +397,7 @@ pub(super) fn event_for(st:&mut Json,a:&str,inputs:&Json)->Result<Json>{
  "capture_file"=>{let mut args=get(st,"edit").clone();if boolean(&args,"capture_scripts"){put(&mut args,"scripts",s("inline"));}let pending=obj(vec![("tool",s("capture")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "compare_files"=>{if text(st,"dialog")!="investigation"{return Err("Open File investigation before comparing paths".into());}if interaction::locked(st){return Err("Finish or cancel the current operation before comparing paths".into());}let e=get(st,"edit");let mut args=obj(vec![("path",s(&text(e,"path"))),("other",s(&text(e,"other")))]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("compare")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
  "inspect_file"=>{let e=get(st,"edit");let mut args=obj(vec![("path",get(e,"path").clone())]);if !text(e,"content").is_empty(){file_evidence::validate_mode(e)?;put(&mut args,"content",get(e,"content").clone());}let pending=obj(vec![("tool",s("inspect")),("args",args)]);validate_tool(&pending)?;put(st,"pending",pending);put(st,"agent_pending",Bool(false));put(st,"dialog",s("approval"));},
- "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));let mut task_run=obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]);if a=="refine"{let workspace=text(st,"approval_root");if !workspace.is_empty(){put(&mut task_run,"workspace",s(&workspace));}}put(&mut next,"task_run",task_run);if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
+ "delegate"|"compact"|"refine"=>{if a=="refine"&&get(st,"refinement_pending")!=&Null{return Err("Review or discard the saved refinement before starting another".into());}if get(st,"task_run")!=&Null{return Err("Finish or cancel the active task before starting another".into());}let task=if !text(inputs,"task").trim().is_empty(){text(inputs,"task")}else if !text(st,"draft").trim().is_empty(){text(st,"draft")}else{array(&chat(st),"messages").into_iter().rev().find(|m|text(m,"role")=="user").map(|mut m|{mcp_history::project(&mut m);text(&m,"content")}).unwrap_or_default()};if task.is_empty()&&a!="compact"{return Err("Enter a task".into());}let checks=if a=="refine"{improvement::training_checks(inputs)?}else{Null};let rounds=if a=="refine"{improvement::refinement_rounds(get(inputs,"refinement_rounds"),&checks)?}else{1};let (evaluation,evaluation_next)=if a=="refine"{improvement::evaluation_tasks(inputs,&task)?}else{(Null,Null)};let messages=array(&chat(st),"messages");let task_images=if a=="compact"{vec![]}else if !array(&chat(st),"draft_attachments").is_empty(){array(&chat(st),"draft_attachments")}else if text(inputs,"task").trim().is_empty()&&text(st,"draft").trim().is_empty(){messages.iter().rev().find(|m|text(m,"role")=="user").map(|m|array(m,"attachments")).unwrap_or_default()}else{vec![]};let count=messages.len().saturating_sub(4);if a=="compact"&&count==0{return Err("At least five messages are needed for context compaction".into());}let mut next=st.clone();put(&mut next,"steps",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));put(&mut next,"agent_running",Bool(false));let mut task_run=obj(vec![("mode",s(a)),("phase",s(if a=="refine"{"baseline"}else{a})),("task",s(&task)),("attachments",Arr(task_images)),("chat",s(&text(st,"active"))),("count",Num(count.to_string())),("agent",active_agent(st)),("observations",Arr(vec![])),("response_checks",checks),("refinement_rounds",Num(rounds.to_string())),("evaluation_requested",Bool(evaluation!=Null)),("evaluation",evaluation),("evaluation_next",evaluation_next),("lesson_context",if a=="refine"{lesson_snapshot(st,get(inputs,"reuse_lessons")!=&Bool(false)&&text(inputs,"reuse_lessons")!="false")}else{Null})]);if a=="refine"{let workspace=text(st,"approval_root");if !workspace.is_empty(){put(&mut task_run,"workspace",s(&workspace));if let Ok(digest)=crate::rrsi::source_digest(std::path::Path::new(&workspace)){put(&mut task_run,"source_digest",s(&digest));}}}put(&mut next,"task_run",task_run);if !text(inputs,"task").trim().is_empty()||!text(st,"draft").trim().is_empty(){harness_rules::capture_user(&mut next,true)?;}else{put(&mut next,"harness_native_source",Null);}put(&mut next,"dialog",Null);let role=if a=="compact"{"compaction"}else{"subagent"};let effect=model_effect_at(&mut next,route(st,role)?)?;if a=="refine"{refinement_room(&next)?;}*st=next;return Ok(effect);},
  "refinement_review"|"refinement_discard_review"=>{
   completed_refinement(st)?;
   put(st,"dialog",s(a));
@@ -692,6 +692,26 @@ struct PoolJudgement{
  reply:String,early:bool,component:String,claim:String,diff:String,leakage:String,decision:String,
  policy:Json,admissible:bool,before:usize,after:usize,commit:String,branch:String,
 }
+fn pool_refusal(role:&str,error:&str)->String{
+ let mut text=format!("{role}: {error}").replace(['\n','\r']," ");
+ if text.len()>240{text.truncate(240);while !text.is_char_boundary(text.len()){text.pop();}}
+ text
+}
+fn refuse_pool(item:&mut PoolJudgement,role:&str,error:&str,keep_commit:bool){
+ item.admissible=false;
+ item.branch.clear();
+ if !keep_commit{item.commit.clear();}
+ let decision=pool_refusal(role,error);
+ item.decision=decision.clone();
+ if item.policy!=Null{put(&mut item.policy,"decision",s(&decision));put(&mut item.policy,"verdict",s("rejected"));}
+}
+struct RoundSlots<'a>{root:Option<&'a crate::rrsi::GitRoot>}
+impl RoundSlots<'_>{
+ fn keep(mut self){self.root=None;}
+}
+impl Drop for RoundSlots<'_>{
+ fn drop(&mut self){if let Some(root)=self.root.take(){crate::rrsi::discard_round_slots(root);}}
+}
 fn push_pool_row(run:&mut Json,item:&PoolJudgement,prior:&str,round:usize){
  if item.early{
   let stored=improvement::stored_hypothesis(&item.claim,run);
@@ -769,16 +789,43 @@ fn evaluate_pool(st:&Json,run:&mut Json,candidates:&[String],probes:&[String])->
   judged.push(PoolJudgement{reply:reply.clone(),early:false,component:critic.component,claim:critic.claim,diff:critic.diff,leakage:"clean".into(),decision,policy,admissible,before:number(&reference,"passed"),after:number(&score,"passed"),commit:String::new(),branch:String::new()});
  }
  let winner=judged.iter().position(|item|item.admissible);
- if let Some(root)=git.as_ref(){
-  let base=crate::rrsi::incumbent_base(root)?;
-  for (index,item) in judged.iter_mut().enumerate(){
-   item.commit=crate::rrsi::commit_candidate(root,index,&item.reply,&base)?;
-  }
-  if let Some(index)=winner{
-   crate::rrsi::fast_forward_evolve(root,&judged[index].commit)?;
-   judged[index].branch=crate::rrsi::EVOLVE_BRANCH.into();
+ let root_ref=git.as_ref();
+ let slots=RoundSlots{root:root_ref};
+ if let Some(root)=root_ref{
+  let recorded=if !text(run,"source_digest").is_empty(){Ok(text(run,"source_digest"))}else{crate::rrsi::recorded_source(root)};
+  match crate::rrsi::incumbent_base(root){
+   Ok(base)=>{
+    for (index,item) in judged.iter_mut().enumerate(){
+     match crate::rrsi::commit_candidate(root,index,&item.reply,&base){
+      Ok(digest)=>item.commit=digest,
+      Err(error)=>refuse_pool(item,"commit_candidate",&error,false),
+     }
+    }
+    if let Some(index)=winner{
+     if judged[index].admissible&&!judged[index].commit.is_empty(){
+      match crate::rrsi::fast_forward_evolve(root,&judged[index].commit){
+       Ok(())=>{
+        let reply=judged[index].reply.clone();
+        let applied=match &recorded{
+         Ok(digest)=>crate::rrsi::apply_accepted(root,&reply,digest),
+         Err(error)=>Err(error.clone()),
+        };
+        match applied{
+         Ok(())=>judged[index].branch=crate::rrsi::EVOLVE_BRANCH.into(),
+         Err(error)=>refuse_pool(&mut judged[index],"apply_accepted",&error,true),
+        }
+       }
+       Err(error)=>refuse_pool(&mut judged[index],"fast_forward_evolve",&error,true),
+      }
+     }
+    }
+   }
+   Err(error)=>{
+    for item in judged.iter_mut(){refuse_pool(item,"incumbent_base",&error,false);}
+   }
   }
  }
+ slots.keep();
  for (index,item) in judged.iter().enumerate(){
   let mut row=item.clone();
   if row.admissible&&winner!=Some(index){
@@ -788,10 +835,11 @@ fn evaluate_pool(st:&Json,run:&mut Json,candidates:&[String],probes:&[String])->
   }
   push_pool_row(run,&row,&incumbent,round as usize);
  }
- let kept=if let Some(index)=winner{judged[index].reply.clone()}else{incumbent.clone()};
+ let adopted=winner.filter(|&index| judged[index].admissible&&judged[index].branch==crate::rrsi::EVOLVE_BRANCH);
+ let kept=if let Some(index)=adopted{judged[index].reply.clone()}else{incumbent.clone()};
  put(run,"composition",s(&kept));
- put(run,"incumbent_kept",Bool(winner.is_none()));
- let note=if let Some(index)=winner{format!("kept candidate {index}")}else{"incumbent kept because no candidate was admissible".into()};
+ put(run,"incumbent_kept",Bool(adopted.is_none()));
+ let note=if let Some(index)=adopted{format!("kept candidate {index}")}else{"incumbent kept because no candidate was admissible".into()};
  put(run,"round_note",s(&note));
  Ok(())
 }
@@ -1965,6 +2013,18 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert!(output.status.success(),"{args:?} {}",String::from_utf8_lossy(&output.stderr));
   String::from_utf8_lossy(&output.stdout).trim().to_string()
  }
+ fn git_in(repo:&std::path::Path,args:&[&str]){
+  let output=std::process::Command::new("git").args(args).current_dir(repo).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").output().unwrap();
+  assert!(output.status.success(),"{} {}",args.join(" "),String::from_utf8_lossy(&output.stderr));
+ }
+ fn scoring_run(workspace:&str)->(Json,Json){
+  let (st,mut run)=pool_state("INCUMBENT");
+  let checks=Arr(vec![s("REQUIRED-PHRASE")]);
+  put(&mut run,"baseline_score",improvement::evaluate(&st,&checks,"nothing here"));
+  put(&mut run,"response_checks",checks);
+  put(&mut run,"workspace",s(workspace));
+  (st,run)
+ }
  #[test] fn worktree_candidate_records_branch_and_commit_and_plain_directory_refuses(){
   let plain=std::env::temp_dir().join(format!("rllm-b5-plain-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
   std::fs::create_dir_all(&plain).unwrap();
@@ -2028,6 +2088,107 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert_eq!(get(&run,"incumbent_kept"),&Bool(false));
   assert!(!text(&run,"edit_ledger").contains("pool task"));
   assert!(!text(&run,"edit_ledger").contains("REQUIRED-PHRASE"));
+ }
+ #[test] fn failed_candidate_commit_keeps_the_round_rows(){
+  let scratch=GitScratch::new();
+  let slots=scratch.repo.join(".rllm-worktrees");
+  std::fs::create_dir_all(&slots).unwrap();
+  std::os::unix::fs::symlink("outside-the-workspace",slots.join("c0")).unwrap();
+  let (st,mut run)=scoring_run(scratch.repo.to_str().unwrap());
+  let candidates=vec!["revised harness".into(),"another rewrite".into(),"copy pool task into the body".into()];
+  let probes=vec!["REQUIRED-PHRASE".into(),"".into(),"".into()];
+  evaluate_pool(&st,&mut run,&candidates,&probes).unwrap();
+  assert_eq!(get(&run,"incumbent_kept"),&Bool(true));
+  assert_eq!(text(&run,"composition"),"INCUMBENT");
+  let rows=pool_rows(&run);
+  assert_eq!(rows.len(),3,"{}",text(&run,"edit_ledger_error"));
+  assert!(text(&rows[0],"pool_status").contains("commit_candidate"),"{}",text(&rows[0],"pool_status"));
+  assert!(text(&rows[0],"pool_status").contains("candidate worktree path is a symlink"),"{}",text(&rows[0],"pool_status"));
+  assert!(text(&rows[1],"pool_status").contains("score did not rise"),"{}",text(&rows[1],"pool_status"));
+  assert!(text(&rows[2],"pool_status").contains("recorded task"),"{}",text(&rows[2],"pool_status"));
+  assert_eq!(text(&rows[1],"commit").len(),40);
+  assert!(slots.join("c1").is_dir(),"a commit that succeeded was removed");
+  assert!(std::fs::symlink_metadata(slots.join("c0")).unwrap().file_type().is_symlink());
+ }
+ #[test] fn accepted_candidate_lands_in_the_caller_file(){
+  let scratch=GitScratch::new();
+  let before=git_text(&scratch.repo,&["rev-parse","HEAD"]);
+  let (st,mut run)=scoring_run(scratch.repo.to_str().unwrap());
+  evaluate_pool(&st,&mut run,&["revised harness".into()],&["REQUIRED-PHRASE".into()]).unwrap();
+  let rows=pool_rows(&run);
+  assert_eq!(rows.len(),1,"{}",text(&run,"edit_ledger_error"));
+  assert_eq!(text(&rows[0],"pool_status"),"admissible");
+  let commit=text(&rows[0],"commit");
+  let path=scratch.repo.join("rllm-harness.txt");
+  let body=std::fs::read(&path).unwrap();
+  assert_eq!(body,b"revised harness");
+  let blob=git_text(&scratch.repo,&["rev-parse",&format!("{commit}:rllm-harness.txt")]);
+  let hashed=git_text(&scratch.repo,&["hash-object",path.to_str().unwrap()]);
+  assert_eq!(hashed,blob,"{commit}");
+  assert_eq!(git_text(&scratch.repo,&["rev-parse","HEAD"]),before);
+  assert_eq!(git_text(&scratch.repo,&["status","--porcelain"]),"");
+  assert_eq!(std::fs::read_to_string(scratch.repo.join("seed.txt")).unwrap(),"seed\n");
+ }
+ #[test] fn changed_target_refuses_apply_and_keeps_the_incumbent(){
+  let scratch=GitScratch::new();
+  let path=scratch.repo.join("rllm-harness.txt");
+  std::fs::write(&path,b"INCUMBENT").unwrap();
+  let recorded=crate::rrsi::digest(b"INCUMBENT");
+  let (st,mut run)=scoring_run(scratch.repo.to_str().unwrap());
+  put(&mut run,"source_digest",s(&recorded));
+  std::fs::write(&path,b"TAMPERED").unwrap();
+  let tampered=crate::rrsi::digest(b"TAMPERED");
+  evaluate_pool(&st,&mut run,&["revised harness".into()],&["REQUIRED-PHRASE".into()]).unwrap();
+  assert_eq!(get(&run,"incumbent_kept"),&Bool(true));
+  assert_eq!(text(&run,"composition"),"INCUMBENT");
+  let landed=std::fs::read(&path).unwrap();
+  assert_eq!(landed,b"TAMPERED");
+  assert_eq!(crate::rrsi::digest(&landed),tampered);
+  let rows=pool_rows(&run);
+  assert_eq!(rows.len(),1,"{}",text(&run,"edit_ledger_error"));
+  assert!(text(&rows[0],"pool_status").contains("apply_accepted"),"{}",text(&rows[0],"pool_status"));
+  assert!(text(&rows[0],"pool_status").contains("target file changed since the candidate was made"),"{}",text(&rows[0],"pool_status"));
+  assert_eq!(text(&rows[0],"commit").len(),40);
+  assert_eq!(git_text(&scratch.repo,&["rev-parse",&format!("refs/heads/{}",crate::rrsi::EVOLVE_BRANCH)]),text(&rows[0],"commit"));
+ }
+ #[test] fn aborted_candidate_round_leaves_no_slot_directory(){
+  let scratch=GitScratch::new();
+  let blocked=scratch.repo.join("rllm-harness.txt");
+  std::fs::create_dir(&blocked).unwrap();
+  std::fs::write(blocked.join("blocked"),"x\n").unwrap();
+  git_in(&scratch.repo,&["add","--","rllm-harness.txt"]);
+  git_in(&scratch.repo,&["-c","user.name=RLLM","-c","user.email=rllm@localhost","commit","-m","block"]);
+  let (st,mut run)=scoring_run(scratch.repo.to_str().unwrap());
+  evaluate_pool(&st,&mut run,&["revised harness".into(),"another rewrite".into()],&["REQUIRED-PHRASE".into(),"".into()]).unwrap();
+  assert_eq!(get(&run,"incumbent_kept"),&Bool(true));
+  let rows=pool_rows(&run);
+  assert_eq!(rows.len(),2,"{}",text(&run,"edit_ledger_error"));
+  assert!(rows.iter().all(|row| text(row,"pool_status").starts_with("refused:commit_candidate:")&&text(row,"pool_status").contains("directory")),"{:?}",rows.iter().map(|row| text(row,"pool_status")).collect::<Vec<_>>());
+  assert!(!scratch.repo.join(".rllm-worktrees").join("c0").exists());
+  assert!(!scratch.repo.join(".rllm-worktrees").join("c1").exists());
+  let listed=git_text(&scratch.repo,&["worktree","list","--porcelain"]);
+  assert!(!listed.contains(".rllm-worktrees"),"{listed}");
+ }
+ #[test] fn stale_slot_directory_is_not_a_valid_workspace(){
+  let scratch=GitScratch::new();
+  let stale=scratch.repo.join(".rllm-worktrees").join("c0");
+  std::fs::create_dir_all(&stale).unwrap();
+  git_in(&stale,&["init","-b","main"]);
+  std::fs::write(stale.join("marker.txt"),"stale\n").unwrap();
+  git_in(&stale,&["add","--","marker.txt"]);
+  git_in(&stale,&["-c","user.name=RLLM","-c","user.email=rllm@localhost","commit","-m","stale"]);
+  let marker=std::fs::read(&stale.join("marker.txt")).unwrap();
+  let marker_digest=crate::rrsi::digest(&marker);
+  let refused=match crate::rrsi::require_worktree_root(&stale){Err(error)=>error,Ok(_)=>panic!("stale slot was accepted as a workspace")};
+  assert!(refused.contains("not the root of a git work tree"),"{refused}");
+  let (st,mut run)=scoring_run(stale.to_str().unwrap());
+  evaluate_pool(&st,&mut run,&["revised harness".into(),"another rewrite".into()],&["REQUIRED-PHRASE".into(),"".into()]).unwrap();
+  assert_eq!(get(&run,"incumbent_kept"),&Bool(true));
+  let rows=pool_rows(&run);
+  assert_eq!(rows.len(),2,"{}",text(&run,"edit_ledger_error"));
+  assert!(rows.iter().all(|row| text(row,"pool_status").contains("not the root of a git work tree")),"{:?}",rows.iter().map(|row| text(row,"pool_status")).collect::<Vec<_>>());
+  assert_eq!(std::fs::read(stale.join("marker.txt")).unwrap(),marker);
+  assert_eq!(crate::rrsi::digest(&std::fs::read(stale.join("marker.txt")).unwrap()),marker_digest);
  }
  fn park_ledger(st:&mut Json,root:&std::path::Path){
   let mut run=get(st,"task_run").clone();
