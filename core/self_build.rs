@@ -26,6 +26,8 @@ const BINARY_MAX: u64 = 64 * 1024 * 1024;
 const OUTPUT_MAX: usize = 64 * 1024;
 const JOURNAL_MAX: u64 = 1024 * 1024;
 const JOURNAL_LINES: usize = 256;
+const JOB_MAX: usize = 256;
+const INSTRUCTION_MAX: usize = 16384;
 const BUILDER_WALL: u64 = 900;
 const GATE_WALL: u64 = 300;
 const PROBE_WALL: u64 = 5;
@@ -703,6 +705,8 @@ pub(crate) fn journal(value: &Json) -> Result<Json> {
             "previous_binary",
             "successor_binary",
             "successor_args",
+            "job",
+            "instruction",
             "source_digest",
             "journal",
             "rollback",
@@ -891,6 +895,12 @@ pub(crate) fn validate(args: &Json) -> Result<()> {
     if text(args, "content").len() > MAX_FILE as usize {
         return Err("self-build content exceeds 4 MiB".into());
     }
+    if text(args, "job").len() > JOB_MAX {
+        return Err(format!("job exceeds {JOB_MAX} bytes"));
+    }
+    if text(args, "instruction").len() > INSTRUCTION_MAX {
+        return Err(format!("instruction exceeds {INSTRUCTION_MAX} bytes"));
+    }
     Ok(())
 }
 pub(crate) fn approve(pending: &Json) -> Result<()> {
@@ -1019,6 +1029,7 @@ fn append_journal_revision(
     source_digest: &str,
     rollback_digest: &str,
     gate_output: &str,
+    spawned: Option<(u64, Vec<String>)>,
 ) -> Result<String> {
     let gate = parse_gate(gate_output)?;
     if !gate.green {
@@ -1030,11 +1041,28 @@ fn append_journal_revision(
     for arg in strings(args, "successor_args")? {
         argv.push(s(&arg));
     }
-    let successor = obj(vec![
-        ("pid", n(u64::from(std::process::id()))),
+    let reload_mode = text(args, "reload");
+    let mode = if reload_mode == "exec" || reload_mode == "spawn" {
+        reload_mode
+    } else {
+        "none".to_string()
+    };
+    let (pid, handed) = match spawned {
+        Some((pid, names)) => (pid, names),
+        None => (u64::from(std::process::id()), Vec::new()),
+    };
+    let mut successor_fields = vec![
+        ("pid", n(pid)),
+        ("mode", s(&mode)),
         ("argv", Arr(argv)),
         ("binary_digest", s(&build_digest)),
-    ]);
+        ("job", s(&text(args, "job"))),
+        ("instruction", s(&text(args, "instruction"))),
+    ];
+    if mode == "spawn" {
+        successor_fields.push(("env", Arr(handed.iter().map(|name| s(name)).collect())));
+    }
+    let successor = obj(successor_fields);
     let body = obj(vec![
         ("schema", s("1")),
         ("source_digest", s(source_digest)),
@@ -1125,10 +1153,16 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
         }
         gate_text = gate.stdout;
     }
-    let revision = if journal_rel.is_empty() {
+    if reload == "spawn" && !journal_rel.is_empty() {
+        let gate = parse_gate(&gate_text)?;
+        if !gate.green {
+            return Err(format!("reload refused: unit gate is not green ({}/{})", gate.passed, gate.cases));
+        }
+    }
+    let revision = if journal_rel.is_empty() || reload == "spawn" {
         String::new()
     } else {
-        append_journal_revision(root, args, &source_digest, &rollback_digest, &gate_text)?
+        append_journal_revision(root, args, &source_digest, &rollback_digest, &gate_text, None)?
     };
     if reload == "exec" || reload == "spawn" {
         if parse_gate(&gate_text).map(|gate| gate.green).unwrap_or(false) == false {
@@ -1138,15 +1172,39 @@ pub(crate) fn run(root: &Path, value: &Json, cancelled: &dyn Fn() -> bool) -> Re
         if reload == "exec" {
             super::execution::exec_replace(&binary, &[], root, &[])?;
         }
+        let successor_args = strings(args, "successor_args")?;
         let mut child = Command::new(&binary);
-        child.current_dir(root).stdin(Stdio::null());
+        child.current_dir(root).stdin(Stdio::null()).args(&successor_args);
+        let job = text(args, "job");
+        let instruction = text(args, "instruction");
+        let mut handed = Vec::new();
+        if !job.is_empty() {
+            child.env("RLLM_SELF_JOB", &job);
+            handed.push("RLLM_SELF_JOB".to_string());
+        }
+        if !instruction.is_empty() {
+            child.env("RLLM_SELF_INSTRUCTION", &instruction);
+            handed.push("RLLM_SELF_INSTRUCTION".to_string());
+        }
         let child = child.spawn().map_err(|error| format!("successor spawn failed: {error}"))?;
+        let pid = u64::from(child.id());
+        let revision = if journal_rel.is_empty() {
+            String::new()
+        } else {
+            append_journal_revision(
+                root,
+                args,
+                &source_digest,
+                &rollback_digest,
+                &gate_text,
+                Some((pid, handed)),
+            )?
+        };
         if revision.is_empty() {
-            return Ok(format!("{saved} successor pid {}", child.id()));
+            return Ok(format!("{saved} successor pid {pid}"));
         }
         return Ok(format!(
-            "{saved} recorded revision {revision} in {journal_rel} successor pid {}",
-            child.id()
+            "{saved} recorded revision {revision} in {journal_rel} successor pid {pid}"
         ));
     }
     if !revision.is_empty() {
@@ -1716,5 +1774,290 @@ mod checks {
         assert!(error.contains("bash tools/build-tools.sh"), "{error}");
         assert!(!error.contains("No such file"), "{error}");
         assert!(!error.contains("Cannot start"), "{error}");
+    }
+
+    const SUCCESSOR_SCRIPT: &str = r#"#!/bin/sh
+tmp="$1.part"
+{
+printf '%s\0' "$0"
+printf '%s\0' "$2"
+printf '%s\0' "$RLLM_SELF_JOB"
+printf '%s\0' "$RLLM_SELF_INSTRUCTION"
+if [ -n "${RLLM_SELF_JOB+x}" ]; then printf 'job-set\0'; else printf 'job-unset\0'; fi
+if [ -n "${RLLM_SELF_INSTRUCTION+x}" ]; then printf 'instruction-set\0'; else printf 'instruction-unset\0'; fi
+} > "$tmp"
+mv "$tmp" "$1.done"
+"#;
+
+    fn executable(path: &Path, bytes: &[u8]) {
+        write(path, bytes);
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+    fn green_builder(root: &Path) {
+        write(
+            &root.join("headless.sh"),
+            b"#!/bin/sh\nprintf '%s\\n' 'Rust cases passed: 2/2; isolated application cases: 1'\n",
+        );
+    }
+    fn wait_bytes(path: &Path) -> Vec<u8> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(bytes) = fs::read(path) {
+                if !bytes.is_empty() {
+                    return bytes;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("successor did not write {}", path.display());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    fn spawn_fields(content: &str, approved: &str, parent: &str, extra: Vec<(&str, Json)>) -> Json {
+        let mut fields = vec![
+            ("path", s("src/lib.rs")),
+            ("content", s(content)),
+            ("previous_exists", Bool(true)),
+            ("approved_previous", s(approved)),
+            ("builder", s("bash")),
+            ("builder_args", Arr(vec![s("headless.sh")])),
+            ("binary", s("bin")),
+            ("journal", s("self/journal.jsonl")),
+            ("rollback", s("self/rollback")),
+            ("parent", s(parent)),
+            ("reload", s("spawn")),
+        ];
+        fields.extend(extra);
+        obj(vec![("args", obj(fields))])
+    }
+
+    #[test]
+    fn spawn_journal_records_the_child_pid_argv_and_env_names() {
+        let scratch = Scratch::new("spawn-pid");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        executable(&root.join("bin"), SUCCESSOR_SCRIPT.as_bytes());
+        green_builder(root);
+        let proof = root.join("proof");
+        let proof_text = proof.to_str().unwrap();
+        let binary = root.join("bin");
+        let binary_text = binary.to_str().unwrap();
+        let live = || false;
+        let content = "fn a() { let _ = 1; }\n";
+        let receipt = run(
+            root,
+            &spawn_fields(
+                content,
+                "fn a() {}\n",
+                "",
+                vec![
+                    ("job", s("alpha-job")),
+                    ("instruction", s("keep going")),
+                    ("successor_args", Arr(vec![s(proof_text), s("continue")])),
+                ],
+            ),
+            &live,
+        )
+        .unwrap();
+        let stored = rows(&root.join("self/journal.jsonl"));
+        assert_eq!(stored.len(), 1);
+        addressed(&stored[0]);
+        let successor = get(&stored[0], "successor");
+        assert_eq!(text(successor, "mode"), "spawn");
+        let Num(recorded) = get(successor, "pid") else { panic!("successor pid is not a number") };
+        let recorded_pid = recorded.parse::<u64>().unwrap();
+        assert!(recorded_pid > 0, "{recorded}");
+        assert_ne!(recorded_pid, u64::from(std::process::id()));
+        let suffix = format!(
+            "recorded revision {} in self/journal.jsonl successor pid {recorded}",
+            text(&stored[0], "revision")
+        );
+        assert!(receipt.ends_with(&suffix), "{receipt}");
+        assert_eq!(
+            get(successor, "argv").array().unwrap(),
+            &vec![s(binary_text), s(proof_text), s("continue")]
+        );
+        assert_eq!(
+            get(successor, "env").array().unwrap(),
+            &vec![s("RLLM_SELF_JOB"), s("RLLM_SELF_INSTRUCTION")]
+        );
+        let dumped = wait_bytes(&PathBuf::from(format!("{proof_text}.done")));
+        let parts: Vec<&[u8]> = dumped.split(|byte| *byte == 0).collect();
+        assert_eq!(parts[0], binary_text.as_bytes());
+        assert_eq!(parts[1], b"continue");
+        assert_eq!(parts[2], b"alpha-job");
+        assert_eq!(parts[3], b"keep going");
+        assert_eq!(parts[4], b"job-set");
+        assert_eq!(parts[5], b"instruction-set");
+    }
+
+    #[test]
+    fn spawn_journal_stores_job_and_instruction_verbatim_and_absent_job_is_empty() {
+        let scratch = Scratch::new("spawn-job");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        executable(&root.join("bin"), SUCCESSOR_SCRIPT.as_bytes());
+        green_builder(root);
+        let job = "job-9";
+        let instruction = "keep \"both\"\nlines";
+        let live = || false;
+        let first_content = "fn a() { let _ = 1; }\n";
+        let first_proof = root.join("proof-set");
+        let receipt = run(
+            root,
+            &spawn_fields(
+                first_content,
+                "fn a() {}\n",
+                "",
+                vec![
+                    ("job", s(job)),
+                    ("instruction", s(instruction)),
+                    ("successor_args", Arr(vec![s(first_proof.to_str().unwrap()), s("continue")])),
+                ],
+            ),
+            &live,
+        )
+        .unwrap();
+        assert!(receipt.contains("successor pid "), "{receipt}");
+        let stored = rows(&root.join("self/journal.jsonl"));
+        let successor = get(&stored[0], "successor");
+        assert_eq!(text(successor, "job"), job);
+        assert_eq!(text(successor, "instruction"), instruction);
+        let dumped = wait_bytes(&PathBuf::from(format!("{}.done", first_proof.display())));
+        let parts: Vec<&[u8]> = dumped.split(|byte| *byte == 0).collect();
+        assert_eq!(parts[2], job.as_bytes());
+        assert_eq!(parts[3], instruction.as_bytes());
+        let second_content = "fn a() { let _ = 2; }\n";
+        let second_proof = root.join("proof-unset");
+        let absent = run(
+            root,
+            &spawn_fields(
+                second_content,
+                first_content,
+                &text(&stored[0], "revision"),
+                vec![("successor_args", Arr(vec![s(second_proof.to_str().unwrap()), s("continue")]))],
+            ),
+            &live,
+        )
+        .unwrap();
+        assert!(absent.contains("successor pid "), "{absent}");
+        let stored = rows(&root.join("self/journal.jsonl"));
+        assert_eq!(stored.len(), 2);
+        let successor = get(&stored[1], "successor");
+        assert_eq!(text(successor, "mode"), "spawn");
+        assert_eq!(get(successor, "job"), &s(""));
+        assert_eq!(get(successor, "instruction"), &s(""));
+        assert!(get(successor, "env").array().unwrap().is_empty());
+        let dumped = wait_bytes(&PathBuf::from(format!("{}.done", second_proof.display())));
+        let parts: Vec<&[u8]> = dumped.split(|byte| *byte == 0).collect();
+        assert_eq!(parts[2], b"");
+        assert_eq!(parts[3], b"");
+        assert_eq!(parts[4], b"job-unset");
+        assert_eq!(parts[5], b"instruction-unset");
+    }
+
+    #[test]
+    fn overbound_job_and_instruction_refuse_before_the_edit() {
+        let scratch = Scratch::new("bounds");
+        let root = scratch.path();
+        let original = b"fn a() {}\n";
+        write(&root.join("src/lib.rs"), original);
+        let live = || false;
+        let request = |key: &str, value: &str| {
+            obj(vec![(
+                "args",
+                obj(vec![
+                    ("path", s("src/lib.rs")),
+                    ("content", s("fn a() { let _ = 1; }\n")),
+                    ("previous_exists", Bool(true)),
+                    ("approved_previous", s("fn a() {}\n")),
+                    (key, s(value)),
+                ]),
+            )])
+        };
+        let error = run(root, &request("job", &"j".repeat(257)), &live).unwrap_err();
+        assert_eq!(error, "job exceeds 256 bytes");
+        assert_eq!(fs::read(root.join("src/lib.rs")).unwrap(), original);
+        let error = run(root, &request("instruction", &"i".repeat(16385)), &live).unwrap_err();
+        assert_eq!(error, "instruction exceeds 16384 bytes");
+        assert_eq!(fs::read(root.join("src/lib.rs")).unwrap(), original);
+    }
+
+    #[test]
+    fn journal_mode_is_none_without_reload_and_exec_records_exec_only_when_it_writes() {
+        let scratch = Scratch::new("mode");
+        let root = scratch.path();
+        write(&root.join("src/lib.rs"), b"fn a() {}\n");
+        write(&root.join("bin"), b"not a program\n");
+        green_builder(root);
+        let live = || false;
+        let first = "fn a() { let _ = 1; }\n";
+        let receipt = run(root, &journal_request(first, "", Vec::new()), &live).unwrap();
+        assert!(receipt.contains("recorded revision "), "{receipt}");
+        assert!(
+            !receipt.contains("successor pid"),
+            "{receipt}; a journal leg with no reload must not report a spawned pid"
+        );
+        let stored = rows(&root.join("self/journal.jsonl"));
+        assert_eq!(stored.len(), 1);
+        assert_eq!(text(get(&stored[0], "successor"), "mode"), "none");
+        assert_eq!(get(get(&stored[0], "successor"), "job"), &s(""));
+        assert_eq!(get(get(&stored[0], "successor"), "instruction"), &s(""));
+        assert_eq!(get(get(&stored[0], "successor"), "env"), &Null);
+        let error = run(
+            root,
+            &journal_request(first, &sha256(b"wrong-parent"), vec![("reload", s("exec"))]),
+            &live,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error, "parent revision does not match the journal tail",
+            "{error}; exec was refused before a revision was recorded, so there is no successor row to read"
+        );
+        assert_eq!(fs::read_to_string(root.join("src/lib.rs")).unwrap(), first);
+        assert_eq!(rows(&root.join("self/journal.jsonl")).len(), 1);
+        let second = "fn a() { let _ = 2; }\n";
+        let error = run(
+            root,
+            &obj(vec![(
+                "args",
+                obj(vec![
+                    ("path", s("src/lib.rs")),
+                    ("content", s(second)),
+                    ("previous_exists", Bool(true)),
+                    ("approved_previous", s(first)),
+                    ("builder", s("bash")),
+                    ("builder_args", Arr(vec![s("headless.sh")])),
+                    ("binary", s("bin")),
+                    ("journal", s("self/journal.jsonl")),
+                    ("rollback", s("self/rollback")),
+                    ("parent", s(&text(&stored[0], "revision"))),
+                    ("reload", s("exec")),
+                    ("job", s("exec-job")),
+                    ("instruction", s("exec-instruction")),
+                ]),
+            )]),
+            &live,
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("Successor exec failed"),
+            "{error}; exec was refused and this process was not replaced"
+        );
+        assert_eq!(fs::read_to_string(root.join("src/lib.rs")).unwrap(), second);
+        let stored = rows(&root.join("self/journal.jsonl"));
+        assert_eq!(stored.len(), 2);
+        assert_eq!(text(get(&stored[0], "successor"), "mode"), "none");
+        let successor = get(&stored[1], "successor");
+        assert_eq!(text(successor, "mode"), "exec");
+        assert_eq!(get(successor, "pid"), &Num(std::process::id().to_string()));
+        assert_eq!(text(successor, "job"), "exec-job");
+        assert_eq!(text(successor, "instruction"), "exec-instruction");
+        assert_eq!(
+            get(successor, "env"), &Null,
+            "exec must not claim it handed environment variables to a spawned child"
+        );
     }
 }
