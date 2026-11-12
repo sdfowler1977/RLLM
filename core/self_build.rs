@@ -1448,13 +1448,19 @@ fn reap() -> Result<usize> {
     }
     let mut exited = 0usize;
     for (pid, job, journal, code, signal) in ready {
-        if let Some(path) = journal {
-            append_reap_row(&path, pid, &job, code, signal)?;
-        }
         if let Some(tracked) = table.get_mut(&pid) {
-            tracked.exit = code;
+            if tracked.child.is_none() {
+                continue;
+            }
             tracked.child = None;
+            tracked.exit = code;
             exited += 1;
+        } else {
+            continue;
+        }
+        if let Some(path) = journal {
+            // A failed append costs a missing witness row, not a lost transition.
+            append_reap_row(&path, pid, &job, code, signal)?;
         }
     }
     Ok(exited)
@@ -3493,5 +3499,146 @@ mv "$tmp" "$1.done"
         assert!(durable_successor_rows(&journal).unwrap().is_empty());
         assert!(!companion.exists(), "reading successors created a file");
         assert!(successor_states().is_empty(), "a refused command tracked a successor");
+    }
+
+    fn successor_lines(journal: &Path) -> Vec<String> {
+        fs::read_to_string(successor_journal_path(journal))
+            .unwrap()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+    fn store_successor_lines(journal: &Path, lines: &[String]) {
+        let mut text = lines.join("\n");
+        text.push('\n');
+        fs::write(successor_journal_path(journal), text).unwrap();
+    }
+    fn three_linked_successor_rows(name: &str) -> (Scratch, PathBuf) {
+        let scratch = Scratch::new(name);
+        let journal = scratch.path().join("self/journal.jsonl");
+        let witness = successor_journal_path(&journal);
+        append_spawn_row(&witness, 41, "job-a", &sha256(b"source-a"), "spawn").unwrap();
+        append_reap_row(&witness, 41, "job-a", Some(9), None).unwrap();
+        append_spawn_row(&witness, 42, "job-b", &sha256(b"source-b"), "spawn").unwrap();
+        let read = durable_successor_rows(&journal).unwrap();
+        assert_eq!(read.len(), 3);
+        assert_eq!(text(&read[1], "event"), "reap");
+        assert_eq!(text(&read[1], "parent"), text(&read[0], "revision"));
+        assert_eq!(text(&read[2], "parent"), text(&read[1], "revision"));
+        (scratch, journal)
+    }
+
+    #[test]
+    fn failed_reap_append_keeps_the_exit_and_does_not_journal_it_twice() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("reap-append-fail");
+        let journal = scratch.path().join("self/journal.jsonl");
+        let witness = successor_journal_path(&journal);
+        append_spawn_row(&witness, 7, "seed-job", &sha256(b"seed-source"), "spawn").unwrap();
+        let saved = fs::read(&witness).unwrap();
+        let pid = track_with(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg("exit 9")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+            "reap-job",
+            "caller",
+            "spawn",
+            Some(witness.clone()),
+        );
+        wait_dead(pid);
+        fs::remove_file(&witness).unwrap();
+        fs::create_dir(&witness).unwrap();
+        assert_eq!(reap().unwrap_err(), "journal must be a regular non-symlink file");
+        let state = tracked_state(pid);
+        assert_eq!(get(&state, "running"), &Bool(false));
+        assert_eq!(get(&state, "exit"), &Num("9".into()));
+        assert_eq!(text(&state, "job"), "reap-job");
+        fs::remove_dir(&witness).unwrap();
+        fs::write(&witness, &saved).unwrap();
+        assert_eq!(reap().unwrap(), 0);
+        assert_eq!(fs::read(&witness).unwrap(), saved);
+        let rows = durable_successor_rows(&journal).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(text(&rows[0], "event"), "spawn");
+        assert_eq!(get(&tracked_state(pid), "exit"), &Num("9".into()));
+    }
+
+    #[test]
+    fn durable_successor_rows_refuse_a_flipped_reap_payload_on_the_digest() {
+        let _isolate = isolate();
+        let (_scratch, journal) = three_linked_successor_rows("reap-digest");
+        let mut lines = successor_lines(&journal);
+        let before = parse(&lines[1]).unwrap();
+        assert_eq!(text(&before, "event"), "reap");
+        let revision = text(&before, "revision");
+        let parent = text(&before, "parent");
+        let marker = "\"job\":\"job-a\"";
+        let at = lines[1].find(marker).expect("reap payload job");
+        let mut bytes = lines[1].clone().into_bytes();
+        let index = at + marker.len() - 2;
+        assert_eq!(bytes[index], b'a');
+        bytes[index] = b'b';
+        lines[1] = String::from_utf8(bytes).unwrap();
+        let after = parse(&lines[1]).unwrap();
+        assert_eq!(text(&after, "revision"), revision);
+        assert_eq!(text(&after, "parent"), parent);
+        assert_eq!(parent, text(&parse(&lines[0]).unwrap(), "revision"));
+        assert_ne!(revision, sha256(without_revision(&after).unwrap().string().as_bytes()));
+        assert_ne!(text(&after, "job"), "job-a");
+        store_successor_lines(&journal, &lines);
+        assert_eq!(
+            durable_successor_rows(&journal).unwrap_err(),
+            "successor journal row is not content-addressed"
+        );
+    }
+
+    #[test]
+    fn durable_successor_rows_refuse_a_rewritten_parent_on_the_link() {
+        let _isolate = isolate();
+        let (_scratch, journal) = three_linked_successor_rows("reap-parent");
+        let mut lines = successor_lines(&journal);
+        let previous = text(&parse(&lines[0]).unwrap(), "revision");
+        let mut row = parse(&lines[1]).unwrap();
+        assert_eq!(text(&row, "event"), "reap");
+        assert_eq!(text(&row, "parent"), previous);
+        let wrong = sha256(b"wrong-parent");
+        assert_ne!(wrong, previous);
+        put(&mut row, "parent", s(&wrong));
+        let revision = sha256(without_revision(&row).unwrap().string().as_bytes());
+        put(&mut row, "revision", s(&revision));
+        assert_eq!(text(&row, "revision"), sha256(without_revision(&row).unwrap().string().as_bytes()));
+        lines[1] = row.string();
+        store_successor_lines(&journal, &lines);
+        assert_eq!(
+            durable_successor_rows(&journal).unwrap_err(),
+            "successor journal parent does not match the previous row"
+        );
+    }
+
+    #[test]
+    fn durable_successor_rows_refuse_a_dropped_middle_row() {
+        let _isolate = isolate();
+        let (_scratch, journal) = three_linked_successor_rows("reap-chain");
+        let mut lines = successor_lines(&journal);
+        assert_eq!(lines.len(), 3);
+        let removed = parse(&lines.remove(1)).unwrap();
+        let first = parse(&lines[0]).unwrap();
+        let last = parse(&lines[1]).unwrap();
+        assert_eq!(text(&removed, "event"), "reap");
+        assert_eq!(text(&last, "parent"), text(&removed, "revision"));
+        assert_ne!(text(&last, "parent"), text(&first, "revision"));
+        assert_eq!(text(&first, "revision"), sha256(without_revision(&first).unwrap().string().as_bytes()));
+        assert_eq!(text(&last, "revision"), sha256(without_revision(&last).unwrap().string().as_bytes()));
+        store_successor_lines(&journal, &lines);
+        assert_eq!(
+            durable_successor_rows(&journal).unwrap_err(),
+            "successor journal parent does not match the previous row"
+        );
     }
 }
