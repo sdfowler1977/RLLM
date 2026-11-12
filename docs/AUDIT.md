@@ -2288,7 +2288,99 @@ so filtering one side would desync `index_disagrees`.
 The unit line is now anchored at **816/816 + 57** for pure HEAD (the previously carried 806 was two
 commits stale), and every lane count in this window is an identity against it. The headless
 *application* build at HEAD is not warning-clean: the pure-HEAD room printed 46 `^warning:` lines,
-while the unit and tools builds print zero. That is pre-existing, caused by no lane, and still open.
+while the unit build prints zero. The **tools** build was carried as warning-clean and is not: a room
+of `git archive 37918f2` printed 33 lines beginning `warning:` (30 dead-code items once the three
+`4 warnings emitted` summary lines are excluded), attributed by site to `tools/signature.rs` 11,
+`tools/toolchain.rs` 10, `tools/apk.rs` 6. That is pre-existing, caused by no lane, and open as
+lane `deadw1`.
+
+## Sweep twin certified; five evidence and tool repairs landed (2026-11-13, later same day)
+
+### The native sweep twin is certified at delivered scale
+
+In a room of pure HEAD (`git archive` of `08c39ea`, built with `tools/build-harness.sh`, full inputs
+including the product binary from `headless.sh` and `output/checks/full-units.json`),
+`output/harness sweep` printed `harness sweep: 71 groups` and
+`summary: 64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4146 checks` with exit 0 in 194 s.
+
+Per-group comparison against the Python driver, pairing the two by the mapping in `tools/package.rs`
+(`EXPLICIT_PAIRS` 35 + `IDENTITY_PAIRS` 22 + `HYPHEN_PAIRS` 14 = 71 pairs): **zero count differences**,
+Python total **4146** equals native total **4146**, and the seven groups the Python run reported no
+count for are exactly the seven the native run marked unavailable — the unavailable-versus-failed
+split survives the rewrite (`0 fail`, `7 unavailable`). Each unavailable group is traced to a named
+missing input: five reference controller builds that live under the gitignored `output/`, two the
+companion APK. The structural interlocks were re-measured after the lane writes: `tools/harness.rs`
+`const GROUPS: &[&str]` (71) and `tools/checks.py` `names` (71) are the same list in the same order,
+and `verification/` stands at 73 `.py` files / 8,570 lines — the recorded ceiling, zero slack, so no
+new Python file is available.
+
+### The delivered record cannot state why a group ran nothing (open)
+
+Reading the committed bytes of `verification/RESULTS.json` (`sha 0e4983d475ebb711…`): 71 rows in
+`connected.counts`, only 65 in `connected.checks`. Six groups have a count and no detail row —
+`desktop_runtime`, `permission_modes`, `rrsi_loop`, `self_rebuild`, `state_sealing`,
+`turn_background`. Four groups carry count 0 in three mutually inconsistent shapes:
+`binary_flow` (`executed_checks`, `passed: 94`, `reason`, `retained_compatibility`, `unavailable`),
+`history_migration` (`passed: 7` only), `apk_alignment` (`scope`, `checks: 8`, `passed: 8`, no
+unavailability marker), `turn_background` (absent). So for three of the four zeros a reader cannot
+distinguish "not executed, input missing" from "executed, nothing passed". The native twin reproduces
+the same shape and diverges only by adding `code: null` to its unavailable entries. Lane `record1`
+owns the fix; no record was regenerated while the tree was dirty.
+
+### Landed in this window, each witnessed in a room and audited by a seat before commit
+
+- `6474c41` — the JavaScript observer caps that had no test at all, pinned through the observation
+  route. Room witness `Rust cases passed: 829/829; isolated application cases: 57` (= 816 + 13), zero
+  warnings; seat accept-with-notes with both notes adjudicated against `core/js_evidence.rs`.
+- `0edbed6` — the sweep drain no longer joins a pipe reader it cannot close (a `setsid` grandchild
+  inheriting stdout used to hold a group open until the wall timeout). A/B inside a copy of a fully
+  built room: identical summary and a byte-identical record digest `93746bfb607f6d95`, so the repair
+  is behaviour-identical. The new case asserts exit code 124, wall under 15 s, the grandchild still
+  alive after the group is killed, the count kept, and both `abandoned stdout` / `abandoned stderr`
+  markers.
+- `37918f2` — `.NET` evidence now decodes the `0xFE` opcode family, exception sections and clauses,
+  and switch operands. Witness room (`git archive ddddc19` plus that file, digest `711a98b18c39cb41`):
+  `841/841 + 57` = the pinned 829 + 12, zero warnings. The seat's two notes were closed against the
+  spec rather than against the lane: `FE 19 <unsigned int8>` is `no.` with a one-byte check value, the
+  tiny/fat header field offsets and flag bits match ECMA-335 II.25.4.2–II.25.4.5, and an oversized
+  clause list prints both the shown and the declared count, so an output cap never reads as unread
+  bytes (`core/dotnet_evidence.rs:1727-1744`).
+- `38a3b5a` — saved HAR/SAZ captures bound their fields where the values are produced (8 headers,
+  64-byte names, 32-byte timing text), count and name every omission (`core/har_evidence.rs:334-348`,
+  disclosure `:694-702`), store only a header name plus a redaction flag so no raw header value can
+  reach JSON (`:49-52`), and label timings "recorded by the capture, not measured by RLLM". Witness
+  `839/839 + 57` = 829 + 10, zero warnings. The seat's note about a missing consumer is closed against
+  the worktree: the capture view is published at `core/observation_records.rs:115-116` and pinned
+  cross-module by `saz_capture_reaches_observations_route` and
+  `har_capture_still_reaches_observations_route`.
+- `8367d80` — the gate test suite execs a script it wrote microseconds earlier, and a busy first exec
+  (ETXTBSY, code 26) used to publish `gate-tests cases: none (test run failed)`, i.e. machine load
+  looked like a broken tool suite. The test now uses the retry helper the product exec routes already
+  use (`tools/gate.rs:292/:304`, `:898/:905`); every write-then-exec site is inside the test module
+  (`mod checks` at `:1096`). Witness: `cases: 18` and five runs under a `yes` spinner each reported
+  `18 passed; 0 failed` with zero busy hits; falsifier: the helper's `ATTEMPTS` cut to 1 reddens at
+  `:1290`. The seat required an A/B warning control, measured in the same room — pure-HEAD
+  `tools/gate.rs` also emits 33 — so those warnings belong to the tools tree, not to this change.
+
+### Held, not committed
+
+The refinement-loop (RRSI `STOP` control) lane was **rejected** by its seat on the ground recorded
+above, and I found one further site while confirming it: `refuse_for_stop` passes `index.max(1)` as
+the round (`core/harness.rs:190`) where the resume path passes `ledger_round(run)` (`:1186`), so the
+round a refusal is attributed to is not the round that produced it. The repair lane is running. A
+witness of the rejected bytes printed `840/840 + 57`; that number belongs to the rejected version and
+is not a HEAD anchor.
+
+### Corrected stale audit claims
+
+The U+007F escape defect was recorded as open and is closed at `c574286`: `tools/gate.rs:146` escapes
+`c >= 0x7f`, and the byte-parity tests at `:1417-1421` require `\u007f` with no raw DEL byte present.
+The signal-death view gap is closed at `core/self_build.rs:1755-1766`, which names `signal` only once
+`exit_observed` is set and leaves `exit` as the wait status' code. Still open from that same seat
+list: the successor-journal refusals (`core/self_build.rs:1010`, `:1597-1608`, unit-pinned at `:4777`,
+`:4822`, `:4915`) have **no connected verification leg** — the phrase `successor journal` appears
+nowhere under `verification/` or `tools/`, so none of those four named refusals reaches the delivered
+record.
 
 ## Historical baseline audit (original text)
 
