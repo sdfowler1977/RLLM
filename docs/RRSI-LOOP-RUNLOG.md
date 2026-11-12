@@ -24,6 +24,11 @@ workspace is planted in the room the way the delivered group does it (hand-writt
 `65103240f6e7fc83f18720f836f0ba5a925e5bae`. The model is a controlled fixture endpoint; the agent carries
 `instructions: INCUMBENT RULES`, so the incumbent body is 15 bytes long.
 
+`product_warning_lines` is a `grep -c '^warning:'` count over the build log. The value 3 is two dead-code
+warnings (`function historical_section is never used` at `RLLM/core/rrsi.rs:1538:15`, `function
+require_worktree_root is never used` at `RLLM/core/rrsi.rs:1881:15`) plus rustc's own summary line
+`warning: 2 warnings emitted`.
+
 ### The run, and the budget shrinking in the prompt the model actually receives
 
 `refine` with `task='Drive three rounds.'`, `response_check_method='json_fields'`,
@@ -145,7 +150,8 @@ in `output/g2-xdg/rllm/experience.jsonl`, which is what the next section follows
 
 The bar: *task t+1 visibly reading the library entry written by task t.* Driver `/tmp/g3drive.py`,
 transcript `/tmp/g3drive-run7.log`. The room is built the same way (`git archive HEAD` at `b8b0e71`,
-`bash headless.sh` → `headless_rc=0`, `product_warning_lines=3`), with a planted git workspace seeded at
+`bash headless.sh` → `headless_rc=0`, `product_warning_lines=3` — the same two dead-code warnings plus
+rustc's summary line explained above), with a planted git workspace seeded at
 `65103240f6e7fc83f18720f836f0ba5a925e5bae`. **Task t and task t+1 are two separate product processes**,
 so the second one can only see the first one's entry by reading it off disk.
 

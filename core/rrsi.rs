@@ -1535,6 +1535,7 @@ fn index_disagrees(stored: &Json, records: &[Json]) -> bool {
             .any(|(row, disk)| !index_row_agrees(row, disk))
 }
 
+#[cfg(test)]
 pub(crate) fn historical_section(root: &str, task: &str) -> Result<String> {
     historical_section_checked(root, task, &Null)
 }
@@ -1878,6 +1879,7 @@ pub(crate) fn require_recorded_worktree(workspace: &Path, recorded: &str) -> Res
     finish_worktree(wanted)
 }
 
+#[cfg(test)]
 pub(crate) fn require_worktree_root(workspace: &Path) -> Result<GitRoot> {
     require_recorded_worktree(workspace, "")
 }

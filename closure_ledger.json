@@ -971,6 +971,17 @@
       "tools/toolchain.rs": "8b91595dc758f5b888d5a70dd1b02fd4f3330dba7333f52196ea32aaef1ad813"
     }
   },
+  "last_two_wrappers_test_only_green": {
+    "bar": "Product build carries no dead-code warning; the wrappers that caused them are compiled only for tests",
+    "change": "core/rrsi.rs: #[cfg(test)] on historical_section (now :1539) and require_worktree_root (now :1883). sha256 24464d557b745c26e11a8cf919404ca0665a336eee22f9ed40fc208f88f6675a.",
+    "control": "At HEAD without these bytes the product build prints product_warning_lines=3: two dead-code warnings (function historical_section is never used at RLLM/core/rrsi.rs:1538:15, function require_worktree_root is never used at RLLM/core/rrsi.rs:1881:15) plus rustc's line 'warning: 2 warnings emitted'.",
+    "date": "2026-11-12",
+    "neuter": "Room /tmp/wwarn2n-N (one attribute removed, only the one before historical_section; core/rrsi.rs digest d900e0c74aebd40b0825e97e3af03b2ae9b7b2a1adaf83b501b505e72dad33fc): headless_rc=0 and the named warning returns ('warning: function `historical_section` is never used', 'warning: 1 warning emitted', product_warning_lines=2), so the attribute is what suppresses it and each attribute governs its own wrapper. The units suite in that neuter room is unchanged: units_rc=0, units_warning_lines=0, Rust cases passed: 876/876; isolated application cases: 57.",
+    "notes": "The seat's only caveat was the missing per-attribute neuter, now measured above. product_warning_lines counts rustc's own 'N warnings emitted' summary line as well; the docs record this.",
+    "seat": "MiniMax seat /tmp/mm-warn3.out: accept. Reader census it audited: 8 readers of historical_section (core/rrsi.rs:2416,2440,2458,2500,2531,2586,2599,2608) and 6 of require_worktree_root (core/rrsi.rs:3263,3301,3311,3323,3341 and core/harness.rs:2632), every one inside a #[cfg(test)] module (core/rrsi.rs:2165 mod checks, core/harness.rs:1842 mod checks). Product routes use the ungated inner functions: core/harness.rs:244 historical_section_checked, :480 and :861 require_recorded_worktree.",
+    "state": "closed",
+    "witness": "Room /tmp/wwarn2-M (git archive of b8b0e71 + these bytes, core/rrsi.rs digest 24464d557b74...): headless_rc=0, product_warning_lines=0, units_rc=0, units_warning_lines=0, Rust cases passed: 876/876; isolated application cases: 57, harness_rc=0, tools_rc=0, tools_warning_lines=0. Group leg in the same room (/tmp/wwarn2-group.log, harness sha abf021e16be3256da07094e1f712951716d618388291f4df339cbc53349489c0): rrsi_loop PASS (exit 0, 1s, 15 checks); summary: 1 pass, 0 fail, 0 unavailable of 71 groups; group_rc=0."
+  },
   "late_audit_self_rebuild_live_findings_2026_11_12T2045": {
     "already_superseded": [
       "70-group inventory is now 71 (census committed in c852ef7)",
