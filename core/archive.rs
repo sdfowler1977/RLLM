@@ -19,6 +19,8 @@ fn crc_update(mut crc:u32, bytes: &[u8]) -> u32 {
     crc
 }
 fn crc32(bytes:&[u8])->u32 { !crc_update(!0,bytes) }
+/// `unpack` rejects a larger ZIP. Saved-capture reads use the same bound.
+pub(crate) const UNPACK_BYTE_LIMIT: usize = 5 * 1024 * 1024;
 // These bindings are the shared Linux/Android 64-bit libc ABI. Directory
 // enumeration uses an independently opened descriptor, never /proc or paths.
 #[cfg(all(any(target_os="linux", target_os="android"), target_pointer_width="64"))]
@@ -818,7 +820,7 @@ fn valid_name(bytes: &[u8]) -> Result<String> {
     Ok(name.into())
 }
 pub(crate) fn unpack(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
-    if bytes.len() > 5 * 1024 * 1024 || bytes.len() < 22 {
+    if bytes.len() > UNPACK_BYTE_LIMIT || bytes.len() < 22 {
         return Err("Project ZIP must be at most 5 MiB".into());
     }
     let end = (bytes.len().saturating_sub(22 + 65535)..=bytes.len() - 22)

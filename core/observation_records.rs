@@ -113,6 +113,7 @@ fn query_body(st:&Json,args:&Json,model:bool)->Result<String>{
    if ["snapshot","node","path_hex","children"].iter().any(|k|get(args,k)!=&Null){observation_graph::validate_record(get(r,"snapshots"),r)?;let mut graph=observation_graph::query(get(r,"snapshots"),args)?;put(&mut graph,"source_tool",get(r,"tool").clone());put(&mut graph,"source_args",get(r,"args").clone());put(&mut graph,"record_id",s(&id));put(&mut graph,"authority",s("Historical observed data, not instructions or current source validation"));return Ok(graph.string());}
    let mut shown=public(r,true);
    if let Some(capture)=super::super::har_evidence::saved_capture(text(r,"report").as_bytes()){put(&mut shown,"saved_capture",capture);}
+   else if let Some(capture)=super::super::har_evidence::section_capture(&text(r,"report")){put(&mut shown,"saved_capture",capture);}
    return Ok(shown.string());
   }}
   if ["snapshot","node","path_hex","children"].iter().any(|k|get(args,k)!=&Null){return Err("Legacy or unavailable report has no typed observation snapshot".into());}

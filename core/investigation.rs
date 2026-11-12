@@ -127,6 +127,13 @@ pub(super) fn inspect(p:&Path,source:&file_evidence::Source<'_>,cancelled:&impl 
     if [b"RIFF".as_slice(),b"RIFX",b"RF64",b"\0asm"].iter().any(|magic|data.starts_with(magic)) {
         structure.push('\n');structure.push_str(&super::binary_observation::analyze(&data,complete,after.len()));
     }
+    if matches!(p.extension().and_then(|v|v.to_str()),Some("har")|Some("saz")){
+        if cancelled(){return Err("Inspection cancelled".into());}
+        let (root,relative,access)=scope;
+        let capture=file_evidence::saved_file_capture(root,relative,access)?;
+        structure.push('\n');
+        structure.push_str(&super::super::har_evidence::file_section(&capture));
+    }
     let format=if data.starts_with(b"\x7fELF"){"ELF"}else if data.starts_with(b"MZ"){"DOS/PE candidate"}else if data.starts_with(b"dex\n"){"DEX"}else if data.starts_with(b"PK\x03\x04"){"ZIP"}else if data.starts_with(b"\0asm"){"WebAssembly"}else if data.starts_with(b"\x89PNG\r\n\x1a\n"){"PNG"}else if data.starts_with(b"%PDF-"){"PDF"}else if std::str::from_utf8(&data).is_ok(){"UTF-8 text"}else{"Unknown binary"};
     let mut counts=[0usize;256];for b in &data{counts[*b as usize]+=1;}
     let entropy=counts.iter().filter(|&&n|n>0).map(|&n|{let p=n as f64/data.len() as f64;-p*p.log2()}).sum::<f64>();
@@ -832,5 +839,257 @@ mod dotnet_inspect_checks {
         }
         let shown = inspect_kept("malformed-vs-cap", &malformed);
         assert_eq!(shown.matches("Refusal: CLR data directory entry 14 size 72 at RVA 0x2000 points outside the mapped file.\n").count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod capture_file_checks {
+    use super::*;
+
+    struct Rm(std::path::PathBuf);
+    impl Drop for Rm {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xedb88320u32 & 0u32.wrapping_sub(crc & 1));
+            }
+        }
+        !crc
+    }
+
+    fn push_u16(out: &mut Vec<u8>, value: u16) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_u32(out: &mut Vec<u8>, value: u32) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    /// Stored ZIP. Local and central DOS time is 0x8120 so header byte 0x81 is present.
+    fn zip(members: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut locals = Vec::new();
+        let mut index = Vec::new();
+        for (name, data) in members {
+            let offset = locals.len() as u32;
+            let name_bytes = name.as_bytes();
+            push_u32(&mut locals, 0x04034b50);
+            push_u16(&mut locals, 20);
+            push_u16(&mut locals, 0);
+            push_u16(&mut locals, 0);
+            push_u16(&mut locals, 0x8120);
+            push_u16(&mut locals, 0);
+            push_u32(&mut locals, crc32(data));
+            push_u32(&mut locals, data.len() as u32);
+            push_u32(&mut locals, data.len() as u32);
+            push_u16(&mut locals, name_bytes.len() as u16);
+            push_u16(&mut locals, 0);
+            locals.extend_from_slice(name_bytes);
+            locals.extend_from_slice(data);
+            index.push(((*name).to_string(), data.to_vec(), offset));
+        }
+        let dir_at = locals.len();
+        let mut out = locals;
+        for (name, data, offset) in &index {
+            let name_bytes = name.as_bytes();
+            push_u32(&mut out, 0x02014b50);
+            push_u16(&mut out, 20);
+            push_u16(&mut out, 20);
+            push_u16(&mut out, 0);
+            push_u16(&mut out, 0);
+            push_u16(&mut out, 0x8120);
+            push_u16(&mut out, 0);
+            push_u32(&mut out, crc32(data));
+            push_u32(&mut out, data.len() as u32);
+            push_u32(&mut out, data.len() as u32);
+            push_u16(&mut out, name_bytes.len() as u16);
+            push_u16(&mut out, 0);
+            push_u16(&mut out, 0);
+            push_u16(&mut out, 0);
+            push_u16(&mut out, 0);
+            push_u32(&mut out, 0);
+            push_u32(&mut out, *offset);
+            out.extend_from_slice(name_bytes);
+        }
+        let dir_size = out.len() - dir_at;
+        let count = index.len() as u16;
+        push_u32(&mut out, 0x06054b50);
+        push_u16(&mut out, 0);
+        push_u16(&mut out, 0);
+        push_u16(&mut out, count);
+        push_u16(&mut out, count);
+        push_u32(&mut out, dir_size as u32);
+        push_u32(&mut out, dir_at as u32);
+        push_u16(&mut out, 0);
+        out
+    }
+
+    fn request(method: &str, url: &str) -> Vec<u8> {
+        format!("{method} {url} HTTP/1.1\r\nHost: example.test\r\n\r\n").into_bytes()
+    }
+
+    fn response(status: u16, mime: &str, body: &str) -> Vec<u8> {
+        format!("HTTP/1.1 {status} OK\r\nContent-Type: {mime}\r\n\r\n{body}").into_bytes()
+    }
+
+    fn session_archive() -> Vec<u8> {
+        let post = request("POST", "https://example.test/submit");
+        let created = response(201, "application/json", "{\"ok\":1}");
+        let get = request("GET", "https://example.test/item");
+        let page = response(200, "text/html", "hello");
+        zip(&[
+            ("index.dat", b"session"),
+            ("raw/2_c.txt", &post),
+            ("raw/2_s.txt", &created),
+            ("raw/10_c.txt", &get),
+            ("raw/10_s.txt", &page),
+        ])
+    }
+
+    fn workspace(label: &str) -> (Rm, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("rllm-capture-file-{label}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let root = dir.canonicalize().unwrap();
+        (Rm(dir), root)
+    }
+
+    fn access() -> operation::InspectionAccess {
+        super::super::super::execution::reset();
+        operation::InspectionAccess {
+            list: true,
+            read: true,
+            graph: false,
+            budget: 2 * 1024 * 1024,
+            root_identity: None,
+            cancellation_token: super::super::super::execution::cancellation_token(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(120),
+        }
+    }
+
+    fn inspect_file(root: &std::path::Path, name: &str) -> String {
+        inspect_scoped(root, &root.join(name), name, &access()).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    fn capture_section(shown: &str) -> Json {
+        let marker = "Saved capture file\n";
+        let at = shown.find(marker).unwrap_or_else(|| panic!("inspect did not publish a saved capture section:\n{shown}"));
+        let line = shown[at + marker.len()..].lines().next().unwrap_or("");
+        parse(line).unwrap_or_else(|error| panic!("saved capture section is not typed JSON: {error}: {line}"))
+    }
+
+    fn entry<'a>(capture: &'a Json, index: usize) -> &'a Json {
+        &capture.get("entries").unwrap().array().unwrap()[index]
+    }
+
+    fn assert_row(capture: &Json, at: usize, session: &str, method: &str, url: &str, status: &str, mime: &str, bytes: &str) {
+        let row = entry(capture, at);
+        assert_eq!(row.get("index").unwrap(), &Num(session.into()), "{row:?}");
+        assert_eq!(row.get("method").unwrap().text().unwrap(), method, "{row:?}");
+        assert_eq!(row.get("url").unwrap().text().unwrap(), url, "{row:?}");
+        assert_eq!(row.get("status").unwrap(), &Num(status.into()), "{row:?}");
+        assert_eq!(row.get("mime").unwrap().text().unwrap(), mime, "{row:?}");
+        assert_eq!(row.get("bytes").unwrap(), &Num(bytes.into()), "{row:?}");
+    }
+
+    fn retained(report: &str, path: &str) -> Json {
+        let args = obj(vec![("path", s(path))]);
+        let mut st = obj(vec![("approval_root", s("/ws")), ("approval_root_identity", s("ws-1"))]);
+        let record = obj(vec![
+            ("schema", Num("1".into())),
+            ("id", s("rec-file")),
+            ("recorded_at", s("1")),
+            ("tool", s("inspect")),
+            ("args", args.clone()),
+            ("workspace", s("/ws")),
+            ("workspace_identity", s("ws-1")),
+            ("policy", harness_rules::observation_binding(&st, "inspect", &args)),
+            ("chat", s("c")),
+            ("agent", s("a")),
+            ("task", s("t")),
+            ("mode", s("inspect")),
+            ("depth", Num("0".into())),
+            ("report", s(report)),
+        ]);
+        put(&mut st, "investigation_records", obj(vec![("schema", Num("1".into())), ("items", Arr(vec![record]))]));
+        let output = observation_records::query(&st, &obj(vec![("id", s("rec-file"))]), false).unwrap_or_else(|error| panic!("{error}"));
+        parse(&output).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    #[test]
+    fn inspect_reads_har_and_saz_files_into_typed_rows() {
+        // Fails if inspect never parses the workspace file, if SAZ bytes must be valid
+        // UTF-8, if session 10 is ordered before session 2, or if the observations
+        // route only recovers rows by treating the rendered report as the archive.
+        let (held, root) = workspace("rows");
+        let har = br#"{"log":{"version":"1.2","entries":[{"request":{"method":"GET","url":"https://example.test/item"},"response":{"status":200,"content":{"mimeType":"text/html","size":12}}}]}}"#;
+        fs::write(root.join("traffic.har"), har).unwrap();
+        let saz = session_archive();
+        assert!(std::str::from_utf8(&saz).is_err(), "archive fixture was valid UTF-8");
+        assert!(saz.len() > 12 && saz[11] >= 0x80, "local header time field has no byte >= 0x80");
+        fs::write(root.join("traffic.saz"), &saz).unwrap();
+        let har_shown = inspect_file(&root, "traffic.har");
+        let har_rows = capture_section(&har_shown);
+        assert_eq!(har_rows.get("refusal").unwrap(), &Null);
+        assert!(har_rows.get("caps").unwrap().array().unwrap().is_empty());
+        assert_eq!(har_rows.get("entries").unwrap().array().unwrap().len(), 1);
+        assert_row(&har_rows, 0, "0", "GET", "https://example.test/item", "200", "text/html", "12");
+        let har_kept = retained(&har_shown, "traffic.har");
+        assert_eq!(har_kept.get("saved_capture").unwrap(), &har_rows);
+        assert_eq!(har_kept.get("report").unwrap().text().unwrap(), har_shown);
+        let saz_shown = inspect_file(&root, "traffic.saz");
+        let saz_rows = capture_section(&saz_shown);
+        assert_eq!(saz_rows.get("refusal").unwrap(), &Null);
+        assert!(saz_rows.get("caps").unwrap().array().unwrap().is_empty());
+        assert_eq!(saz_rows.get("entries").unwrap().array().unwrap().len(), 2);
+        assert_row(&saz_rows, 0, "2", "POST", "https://example.test/submit", "201", "application/json", "8");
+        assert_row(&saz_rows, 1, "10", "GET", "https://example.test/item", "200", "text/html", "5");
+        assert_ne!(saz_shown.as_bytes(), saz.as_slice());
+        let saz_kept = retained(&saz_shown, "traffic.saz");
+        assert_eq!(saz_kept.get("saved_capture").unwrap(), &saz_rows);
+        assert_eq!(saz_kept.get("report").unwrap().text().unwrap(), saz_shown);
+        drop(held);
+    }
+
+    #[test]
+    fn inspect_names_a_non_capture_and_a_truncated_archive() {
+        // Fails if a non-capture file is a success with no refusal, or if a cut
+        // archive still yields rows or an unnamed error.
+        let (held, root) = workspace("refuse");
+        fs::write(root.join("notes.har"), b"hello from a plain file\n").unwrap();
+        let plain = capture_section(&inspect_file(&root, "notes.har"));
+        assert!(plain.get("entries").unwrap().array().unwrap().is_empty(), "{plain:?}");
+        assert_eq!(plain.get("refusal").unwrap().text().unwrap(), "Refusal: file is not a saved capture.");
+        let mut cut = session_archive();
+        cut.truncate(cut.len() - 20);
+        assert!(cut.starts_with(b"PK"));
+        fs::write(root.join("cut.saz"), &cut).unwrap();
+        let truncated = capture_section(&inspect_file(&root, "cut.saz"));
+        assert!(truncated.get("entries").unwrap().array().unwrap().is_empty(), "{truncated:?}");
+        assert_eq!(
+            truncated.get("refusal").unwrap().text().unwrap(),
+            "Refusal: saved capture archive directory is corrupt or truncated."
+        );
+        fs::write(root.join("notes.txt"), b"hello from a plain file\n").unwrap();
+        let ordinary = inspect_file(&root, "notes.txt");
+        assert!(!ordinary.contains("Saved capture file"), "{ordinary}");
+        assert!(!ordinary.contains("Refusal: file is not a saved capture."), "{ordinary}");
+        let big = root.join("big.saz");
+        fs::File::create(&big).unwrap().set_len(super::super::super::archive::UNPACK_BYTE_LIMIT as u64 + 1).unwrap();
+        let oversized = capture_section(&inspect_file(&root, "big.saz"));
+        assert!(oversized.get("entries").unwrap().array().unwrap().is_empty(), "{oversized:?}");
+        assert_eq!(oversized.get("refusal").unwrap().text().unwrap(), "Refusal: saved capture file exceeds the reader limit.");
+        let bad = [0xff, 0xfe, b'{'];
+        fs::write(root.join("bad.har"), bad).unwrap();
+        let unusable = capture_section(&inspect_file(&root, "bad.har"));
+        assert!(unusable.get("entries").unwrap().array().unwrap().is_empty(), "{unusable:?}");
+        assert_eq!(unusable.get("refusal").unwrap().text().unwrap(), "Refusal: saved capture JSON is unusable.");
+        drop(held);
     }
 }

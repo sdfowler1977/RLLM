@@ -19,6 +19,9 @@ const DIRECTORY: &str = "Refusal: saved capture archive directory is corrupt or 
 const NO_REQUESTS: &str = "Refusal: saved capture has no request members.";
 const NOT_SESSION: &str = "Refusal: saved capture is not a session archive.";
 const NOT_CAPTURE_ZIP: &str = "Refusal: archive is not a saved capture.";
+const NOT_FILE: &str = "Refusal: file is not a saved capture.";
+const FILE_LIMIT: &str = "Refusal: saved capture file exceeds the reader limit.";
+pub(super) const FILE_SECTION: &str = "Saved capture file\n";
 const MEMBER_CAP_REFUSAL: &str = "Refusal: saved-capture member cap.";
 const MEMBER_BYTE_REFUSAL: &str = "Refusal: saved-capture member byte cap.";
 const DAMAGED: &str = "Refusal: saved capture archive member is damaged.";
@@ -461,6 +464,50 @@ pub(super) fn saved_capture(bytes: &[u8]) -> Option<Json> {
         Read::Rows(capture) => Some(view(&capture.rows, &capture.caps, None, &capture.report)),
         Read::Refused(reason) => Some(view(&[], &[], Some(&reason), &reason)),
     }
+}
+
+fn refused(reason: &str) -> Json {
+    view(&[], &[], Some(reason), reason)
+}
+
+/// File bytes always produce a view. A document that is not a capture is a
+/// named refusal. The report-text route still returns `None` for that case.
+pub(super) fn file_capture(bytes: &[u8], complete: bool) -> Json {
+    match read(bytes, complete) {
+        Read::NotCapture => refused(NOT_FILE),
+        Read::Rows(capture) => view(&capture.rows, &capture.caps, None, &capture.report),
+        Read::Refused(reason) => refused(&reason),
+    }
+}
+
+pub(super) fn file_limit() -> Json {
+    refused(FILE_LIMIT)
+}
+
+pub(super) fn file_section(capture: &Json) -> String {
+    format!("{FILE_SECTION}{}", capture.string())
+}
+
+fn section_view(value: &Json) -> bool {
+    let Ok(entries) = value.get("entries").and_then(Json::array) else { return false };
+    let Ok(caps) = value.get("caps").and_then(Json::array) else { return false };
+    let Ok(refusal) = value.get("refusal") else { return false };
+    let Ok(report) = value.get("report") else { return false };
+    matches!(refusal, Null | Str(_))
+        && matches!(report, Str(_))
+        && caps.iter().all(|item| matches!(item, Str(_)))
+        && entries.iter().all(|row| {
+            ["index", "status", "bytes"].iter().all(|key| matches!(row.get(key), Ok(Num(_))))
+                && ["method", "url", "mime"].iter().all(|key| matches!(row.get(key), Ok(Str(_))))
+        })
+}
+
+/// The inspect display carries rows already parsed from file bytes.
+/// This does not parse the display as a capture document.
+pub(super) fn section_capture(report: &str) -> Option<Json> {
+    let line = report.split_once(FILE_SECTION)?.1.lines().next()?;
+    let value = parse(line).ok()?;
+    section_view(&value).then_some(value)
 }
 
 #[cfg(test)]

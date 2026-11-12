@@ -62,6 +62,26 @@ fn observe(root:&Path,args:&Json,access:&operation::InspectionAccess,tool:&str,s
  let node=obj(vec![("id",Num("0".into())),("path_hex",s(&hex(&held.path))),("path",s(&String::from_utf8_lossy(&held.path))),("kind",s("File")),("identity",held.identity.clone()),("coverage",s("Complete")),("sample",obj(vec![("offset",Num("0".into())),("length",Num(n.to_string())),("complete_file",Bool(true)),("sha256",s(&digest)),("method",s(METHOD))])),("format_candidates",Arr(vec![])),("notes",Arr(vec![s("Every byte was read; content bytes were not retained. This is not an atomic filesystem snapshot.")]))]);
  let graph=obj(vec![("schema",Num("1".into())),("kind",s("complete_file")),("selected_hex",s(&hex(&held.path))),("workspace_identity",reconstruction::identity(&held.handles[0].metadata().map_err(|e|e.to_string())?)),("coverage",s("Complete")),("sampled_bytes",Num(n.to_string())),("bytes_read",Num(n.to_string())),("nodes",Arr(vec![node])),("edges",Arr(vec![])),("notes",Arr(vec![]))]);validate_graph(&graph)?;g.check()?;Ok((format!("Complete selected-file observation: {}. Read all {n} bytes in 64 KiB chunks; SHA-256 {digest}. Held source/component identities and name bindings remained stable across the scan. No content bytes retained; no atomic snapshot or behavior claim.",selected),graph))}
 pub(super) fn inspect(root:&Path,args:&Json,access:&operation::InspectionAccess)->Result<String>{let(display,g)=observe(root,args,access,"inspect",&text(args,"path"))?;Ok(if access.graph{observation_graph::envelope(display,Ok(vec![g]),access.budget)}else{display})}
+/// Read one selected file through the same held scan as a complete-file observation.
+/// Bytes above the archive reader limit are not parsed as a capture.
+pub(super) fn saved_file_capture(root:&Path,relative:&str,access:&operation::InspectionAccess)->Result<Json>{
+    if !access.read{return Err("Complete-file observation requires current read permission".into());}
+    if access.budget<CHUNK+32768{return Err("Current response allowance cannot admit a 64 KiB complete-file buffer".into());}
+    let args=obj(vec![("path",s(relative))]);
+    let g=Guard::new("inspect",&args,access)?;
+    g.check()?;
+    let mut held=Held::open(root,normalize(relative)?,access)?;
+    let expected=u64_value(get(&held.identity,"size"))?;
+    if expected>super::super::archive::UNPACK_BYTE_LIMIT as u64{
+        g.check()?;
+        return Ok(super::super::har_evidence::file_limit());
+    }
+    let mut kept=Vec::new();
+    let (n,_digest)=held.scan(&g,|chunk|{kept.extend_from_slice(chunk);Ok(())})?;
+    if n!=expected||kept.len() as u64!=n{return Err("Selected file changed during saved-capture observation".into());}
+    g.check()?;
+    Ok(super::super::har_evidence::file_capture(&kept,true))
+}
 pub(super) fn compare(root:&Path,args:&Json,access:&operation::InspectionAccess)->Result<String>{let(a,ga)=observe(root,args,access,"compare",&text(args,"path"))?;let(b,gb)=observe(root,args,access,"compare",&text(args,"other"))?;let left=&array(&ga,"nodes")[0];let right=&array(&gb,"nodes")[0];let equal=get(get(left,"sample"),"length")==get(get(right,"sample"),"length")&&get(get(left,"sample"),"sha256")==get(get(right,"sample"),"sha256");let display=format!("Sequential independent complete-file observations, not an atomic pair. Lengths and SHA-256 {}. Digest equality is not byte-by-byte proof.\n{a}\n{b}",if equal{"match"}else{"differ"});Ok(if access.graph{observation_graph::envelope(display,Ok(vec![ga,gb]),access.budget)}else{display})}
 pub(super) fn validate_graph(g:&Json)->Result<()>{let fail=||"Malformed complete-file observation; textual record remains available".to_string();if super::super::mcp_schema::state_bytes(g)>16384||get(g,"schema")!=&Num("1".into())||text(g,"kind")!="complete_file"||text(g,"coverage")!="Complete"||get(g,"workspace_identity")==&Null||!observation_graph::valid_identity(get(g,"workspace_identity"))||!matches!(get(g,"notes"),Arr(a)if a.is_empty())||!matches!(get(g,"edges"),Arr(a)if a.is_empty()){return Err(fail());}let nodes=get(g,"nodes").array()?;if nodes.len()!=1{return Err(fail());}let n=&nodes[0];let raw=reconstruction::raw(&text(n,"path_hex"))?;let sample=get(n,"sample");let len=u64_value(get(sample,"length"))?;let hash=text(sample,"sha256");if get(n,"id")!=&Num("0".into())||text(g,"selected_hex")!=text(n,"path_hex")||text(n,"path")!=String::from_utf8_lossy(&raw)||text(n,"kind")!="File"||text(n,"coverage")!="Complete"||get(n,"identity")==&Null||!observation_graph::valid_identity(get(n,"identity"))||len>u64::MAX/8||len!=u64_value(get(get(n,"identity"),"size"))?||len!=u64_value(get(g,"sampled_bytes"))?||len!=u64_value(get(g,"bytes_read"))?||get(sample,"offset")!=&Num("0".into())||get(sample,"complete_file")!=&Bool(true)||text(sample,"method")!=METHOD||hash.len()!=64||!hash.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))||!matches!(get(n,"format_candidates"),Arr(a)if a.is_empty())||!matches!(get(n,"notes"),Arr(a)if a.len()<=4&&a.iter().all(|s|matches!(s,Str(t)if t.len()<=512))){return Err(fail());}Ok(())}
 pub(super) fn is_complete(node:&Json)->bool{text(get(node,"sample"),"method")==METHOD}
