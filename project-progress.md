@@ -445,3 +445,97 @@ state_sealing 16, capture_lifecycle 15, desktop_runtime 24, a2a 72, scene 90; sw
 67 pass / 0 fail / 4 unavailable / 0 absent**, with `verification/RESULTS.json` still
 `e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0` — byte-identical through batches 1–3, which is
 what proves eight legs were replaced rather than re-scored, and that an instrument change moved no verdict.
+
+## 2026-11-13 (early) — twin batch 5: eleven more legs native, one controller transport, and the printed-report contract
+
+
+**Eleven legs retired:** `flags_flow` (593), `voice_background` (871), `provider_evidence` (1164),
+`device_authorization` (1104), `delegation_visibility` (1380), `carry_flow` (519), `platform_resolution` (140),
+`response_fields` (407), `review_ownership` (622), `storage_etags` (546), `jobs` (953) — 8 299 lines of Rust replacing
+781 lines of Python. Python exposure in the index: **verification/ 50 files / 4407 lines → 39 / 3626**, tools/ stays
+2 / 191, **total 52 / 4598 → 41 / 3817**. Native twins **23 → 34**. `tools/package.rs` ceilings ratcheted with the
+census (tests pin `39` / `3626` exactly, and the refusal-message fixtures moved with them).
+
+**The shared helper did three jobs in this batch.** (1) `Controller::spawn_at(binary, root)` was added and
+`Controller::spawn` now delegates to it, after the `flags_flow` audit caught the twin carrying a 69-line private
+copy of the controller transport (`struct Published` + `impl` + `Drive`) whose only difference was launching
+`output/published-controller --jsonl` — the same framing the leg drives at `flags_flow.py:91`. The twin is 663 → 593
+lines and drives both subjects through one transport. (2) `Value::Obj` equality became **two-directional**: the old
+rule matched every pair of the left object somewhere on the right with equal lengths, so a repeated key could stand
+in for a different key (`{"a":1,"a":1}` == `{"a":1,"b":1}`). The existing helper test now pins that pair in both
+orders; deleting the reverse match makes it fail (7 passed, 1 failed), measured on the mutant. Both changes are
+proven inert on the delivered record: `output/harness sweep` with the new helper still writes
+`71 groups, 4248 checks / 67 pass, 0 fail, 4 unavailable, 0 absent` and `verification/RESULTS.json` stays
+`e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0`. (3) The third helper job was not inert — it
+repaired a red. `report_value` now composes `report_text` (pretty body + optional trailing newline) over
+`report_path`, and `report_value_printed` writes that text to the report file **and** prints the identical bytes,
+because two legs report on stdout instead of writing a file and the runner counts the printed object. Its twin test
+pins the printed byte form against the leg's own formatter (`json.dumps(body, indent=2)` plus `print()`'s newline),
+measured, so indent or newline drift goes red in the helper row rather than in a sweep.
+
+**Witness rows (two-column, one tree, twin vs the Python leg).** `voice_background`
+`b69a5ec32fbea0ed916d7cf00b94f8f1676ebf42480f98337621b4c74acaa27d` (52), `provider_evidence`
+`2646816090ad91ccf8e12e36a85ac3f1dd09a5ad4854a29a4db30a028f6894d6` (40), `device_authorization`
+`70736ae14a0e5232d142aa485acf47fedbd23db0839a3e22f9eee8171aee81e1` (92), `delegation_visibility`
+`c0840d6a07e275b0d9f6db76e48dae00a3dd33ab77e89f0a0b4c36a2c8733955` (94), `carry_flow`
+`13eb5eea8011e976323555ca3f36d5b449b1409f8725565e4f00c7334510d7f5` (23), `review_ownership`
+`33bd77bca0c9578a969683f928c5fefdc365b788d1946b6c3a8b7f1e8301a857` (28) — each byte-identical to the leg's report,
+each with a counted harness row. `flags_flow` `7217b0c500336f592a55149d583abb6dfed88a4eb4e995ade20700ac` (28) was
+certified before the transport dedup and re-witnessed after it; `platform_resolution` failed its first witness —
+`twin-report.json` ended at byte 794 where the leg writes a trailing newline (`json.dumps(result, indent=2)+'\n'`),
+and the twin spawned a headless controller the leg never starts — fixed by writing the body with
+`report_value(…, true)` and dropping the unused controller (140 lines, 0 warnings), then re-witnessed.
+
+**Audit seats read line by line; the accepted findings are in the bytes.** `platform_resolution`: report shape and
+an unnecessary subject spawn (fixed). `flags_flow`: the duplicated controller transport (fixed).
+`gateway_expectation` (queued next batch): a present-but-unparsable `Content-Length` became `0` where the leg's
+`int(...)` raises — now a panic, while a genuinely absent field keeps the leg's own `0` default. **Refuted against
+the legs:** `voice_background` (5), `device_authorization` (3), `delegation_visibility` (1), `jobs` (2 — the seat
+condemned mutants it proposed, e.g. twin:107 already compares `If-Match` bytes exactly like `jobs.py:47`),
+`review_ownership` (2 — it read `run(controller, root)`'s parameter as the project root; the caller binds the scratch
+directory, exactly as the leg's `root=pathlib.Path(tmp)`), `storage_etags` (3 — `only_original()` already pins
+`files=={b'/share/file.txt': b'old text'}` like `storage_etags.py:51`), `carry_flow` (3 — the leg's root is the
+scratch dir and its predicate is the same `effect.wire` substring test), `question_process` (1 — Python's
+`c.get('inquiry_id') != b` is True for a missing key, matching the twin's `None => true`), `request_fields`
+(1 — the seat's own text concludes the default cannot turn a failure into a pass). `response_fields` and
+`platform_resolution` audits returned full leg-order coverage tables with mutation analysis and accepted.
+`provider_evidence` needed three seats before one read the whole 1 164-line file; the two half-file seats produced
+11 findings that were artifacts of the split (helpers defined in the other half), all refuted against
+twin:1049-1164.
+
+**Gates, in order, on the committed bytes.** `bash tools/build-units.sh output/units` rc=0 and
+`python3 tools/checks.py --all-units output/units` rc=0 (878/878 cases, 57 isolated application cases).
+`bash tools/build-tools.sh output/tools` **rc=1** the first time: the package census test plants its corpus from
+the ceiling constants, so after the ceilings moved to 39 files / 3 626 lines the planted tree printed
+`verification files 39 lines 39 ceiling files 39 lines 3626` while the assertion still expected `files 50 lines 50`
+(`tools/package.rs:4152`). The expectation moved with the constants and the fixtures; the rerun
+(`/tmp/g8b-tools.log`) is rc=0 with `package-tests cases: 46` and every other tool row at executed == declared
+(alignment 2, readback 24, checkpoint 5, signature 5, apk 6, toolchain 10, gate 18, harness 27).
+`bash tools/build-verification.sh .` rc=0: 34 twins, 0 errors, 0 warnings, `twin helper tests: … cases: 8`.
+`bash tools/build-harness.sh` rc=0 (`output/harness` sha256
+`8619f171b8a9b5e5063e8cecb1ae4731f1dd83e62ececa0902eea58070999426`), `bash headless.sh` rc=0.
+
+**The sweep went red on a real contract, not on a check.** `response_fields FAIL (exit 0, 0s, absent checks)` and
+`delivered record left untouched: a group failed` — `summary: 66 pass, 1 fail, 4 unavailable, 1 absent of 71 groups,
+4203 checks` — while the same group counted 45 checks in single-group mode. The two legs named in
+`tools/harness.rs:1661` (`response_fields`, `chunk_fields`) print their report JSON and write no file, so the
+sweep counts and persists the printed bytes (`persist_printed_json`, `tools/harness.rs:1285-1293`); the twin
+printed a human summary line and wrote the file instead, so the sweep had no report text to count. The shared
+helper gained `report_value_printed` (one `report_text` for both columns) and the twin now calls it; the 9th
+helper test pins the printed byte form to `json.dumps(body, indent=2)` plus `print()`'s newline, measured from
+the leg's own formatter. Rebuild: `twin helper tests: … cases: 9`, 0 errors / 0 warnings.
+
+**Printed-group witness (`/tmp/witq17.log`), both columns the runner can read.** The twin's stdout and the leg's
+stdout are byte-identical at `160aedcfc972e80166eee4e7f2d34cb38c7ae96c24e6703ef22dd3b304b83928`; with the twin
+binary parked so the leg actually runs, the file the runner persists from the leg's stdout is byte-identical to
+the file the twin writes, same digest; the leg wrote no report file, as expected; `response_fields PASS
+(exit 0, 0s, 45 checks)`.
+
+**Final gates on these bytes.** `output/harness sweep` rc=0: `delivered record written: 71 groups, 4248 checks`,
+`summary: 67 pass, 0 fail, 4 unavailable, 0 absent of 71 groups, 4248 checks`, and `verification/RESULTS.json`
+still `e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0` — byte-identical through batches 1–5,
+which is what proves eleven legs were replaced rather than re-scored. A sweep run without sourcing
+`tooling/env.sh` printed 8 rows of `exit 101` (`CLIENT_JDK`/`CLIENT_NDK`/`CLIENT_RUST` unset) and left the record
+untouched: an instrument-use error, recorded here so it is not mistaken for a product red. Census after this
+batch: `verification/` 39 `.py` / 3 626 lines and 34 native twins, `tools/` 2 `.py` / 191 lines — 41 files /
+3 817 lines, against ceilings 39 / 3 626.

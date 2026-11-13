@@ -17,17 +17,23 @@ python3 verification/commands.py
 python3 verification/history_migration.py --previous-controller /path/to/prior-controller
 python3 verification/hosted_phases.py
 python3 verification/prompt_reference.py --previous-controller /path/to/prior-controller
-python3 verification/provider_evidence.py
-python3 verification/delegation_visibility.py
+output/verification/provider_evidence
+output/verification/delegation_visibility
 python3 verification/local_feedback.py
 python3 verification/network_feedback.py
 python3 verification/proposal_feedback.py
-python3 verification/review_ownership.py
+output/verification/review_ownership
 python3 verification/task_ownership.py
 output/verification/dav_listing
 output/verification/server_admission
 output/verification/http_framing
-python3 verification/platform_resolution.py
+output/verification/platform_resolution
+output/verification/flags_flow
+output/verification/voice_background
+output/verification/device_authorization
+output/verification/carry_flow
+output/verification/response_fields
+output/verification/storage_etags
 ```
 
 These owner-run groups exercise controlled provider/HTTP envelopes, actual shared-core routing and file workers, host sockets, retained records, native UI descriptions and guarded export/readback. Original assembled ELF/PE fixtures are compared with LLVM metadata and disassembly. Model visibility and delegation groups cover every provider format, exact/default selection, review identity, owned callback outcomes and parent-return retention. Provider-evidence groups cover automatic metadata receipts and refinement consumption.
@@ -42,7 +48,8 @@ Network-feedback checks follow current WebDAV HTTP, transport and parser failure
 
 The `http_framing` twin exercises real persistent loopback sockets through the shared response-framing API, including actual primary/child returns and WebDAV-to-model continuation. It covers coded response preservation, length/chunk/trailer boundaries, observed EOF, ownership and scoped resource/parser failures. The existing pure HTTP snapshot-framing cases run alongside network decoding cases.
 
-platform_resolution.py compiles and executes the production Java resolver/deadline binding using CLIENT_JDK. Controlled DNS lookup outcomes exercise occupied-slot admission, deadline expiry, lifecycle closure and recovery; hostname resolution then connects to real loopback sockets. Android call-site compilation uses SDK35.
+The `platform_resolution` twin compiles and executes the production Java resolver/deadline binding using CLIENT_JDK. Controlled DNS lookup outcomes exercise occupied-slot admission, deadline expiry, lifecycle closure and recovery; hostname resolution then connects to real loopback sockets. Android call-site compilation uses SDK35.
 
-Optional services: run media.py and jobs.py, plus the native twins `output/verification/services`,
-`output/verification/voice` and `output/verification/media_stream`. tools/checks.py includes these five groups alongside the original thirty. The current binary-flow compatibility group still requires the genuine revision-two controller; an unavailable comparator must be reported explicitly and never substituted with a current decoder or weakened reader fingerprint. Native microphone/playback and configured live service endpoints remain separate device acceptance.
+Optional services: run media.py, plus the native twins `output/verification/services`,
+`output/verification/voice`, `output/verification/media_stream` and `output/verification/jobs`.
+tools/checks.py includes these five groups alongside the original thirty. The current binary-flow compatibility group still requires the genuine revision-two controller; an unavailable comparator must be reported explicitly and never substituted with a current decoder or weakened reader fingerprint. Native microphone/playback and configured live service endpoints remain separate device acceptance.

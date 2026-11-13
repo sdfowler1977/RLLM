@@ -11,7 +11,7 @@
 //! their own wrappers.
 #![allow(dead_code)]
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 
 #[derive(Clone, Debug)]
@@ -33,9 +33,15 @@ impl PartialEq for Value {
             (Value::Str(left), Value::Str(right)) => left == right,
             (Value::Arr(left), Value::Arr(right)) => left == right,
             (Value::Obj(left), Value::Obj(right)) => {
+                // Both directions: a one-sided match lets a repeated key in one object
+                // stand in for a different key in the other, so `{"a":1,"a":1}` would
+                // compare equal to `{"a":1,"b":1}`.
                 left.len() == right.len()
                     && left.iter().all(|(key, value)| {
                         right.iter().any(|(other_key, other_value)| key == other_key && value == other_value)
+                    })
+                    && right.iter().all(|(key, value)| {
+                        left.iter().any(|(other_key, other_value)| key == other_key && value == other_value)
                     })
             }
             _ => false,
@@ -225,8 +231,14 @@ pub struct Controller {
 
 impl Controller {
     pub fn spawn(root: &str) -> Controller {
-        let binary = Path::new(root).join("output/headless/RLLM");
-        let mut child = Command::new(&binary)
+        Self::spawn_at(&Path::new(root).join("output/headless/RLLM"), root)
+    }
+
+    // The same JSONL operation protocol, at another controller binary: the published
+    // controller speaks the identical envelope framing, so a twin that drives both the
+    // current subject and the published one must not grow a second transport.
+    pub fn spawn_at(binary: &Path, root: &str) -> Controller {
+        let mut child = Command::new(binary)
             .arg("--jsonl")
             .current_dir(root)
             .stdin(Stdio::piped())
@@ -326,15 +338,34 @@ pub fn report(group: &str, passed: &[String], scope: &str) {
 // different report shape (a count instead of a name list, extra keys like
 // `http_requests`, a trailing newline) builds that body itself and writes it here.
 pub fn report_value(group: &str, body: &Value, trailing_newline: bool) {
+    std::fs::write(&report_path(group), report_text(body, trailing_newline))
+        .unwrap_or_else(|error| panic!("could not write {}: {error}", report_path(group).display()));
+}
+
+fn report_path(group: &str) -> PathBuf {
     let path = Path::new("output/checks").join(group_report_file(group));
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap_or_else(|error| panic!("could not create {}: {error}", parent.display()));
     }
+    path
+}
+
+fn report_text(body: &Value, trailing_newline: bool) -> String {
     let mut text = pretty(body);
     if trailing_newline {
         text.push('\n');
     }
-    std::fs::write(&path, text).unwrap_or_else(|error| panic!("could not write {}: {error}", path.display()));
+    text
+}
+
+// Some legs print their report instead of writing a file, and the runner counts
+// and persists those printed bytes. Their twins must print the same bytes they
+// write: a file alone is invisible to that path, which then reports the group as
+// having absent checks even though the group exited 0.
+pub fn report_value_printed(group: &str, body: &Value, trailing_newline: bool) {
+    let text = report_text(body, trailing_newline);
+    report_value(group, body, trailing_newline);
+    print!("{text}");
 }
 
 // A Python leg gets its scratch root from tempfile.mkdtemp, which reserves the
@@ -1185,6 +1216,12 @@ mod json_tests {
         let value = obj(vec![("b".into(), n("1")), ("a".into(), s("x"))]);
         assert_eq!(value.to_string(), "{\"b\":1,\"a\":\"x\"}");
         assert_eq!(value, Value::parse("{\"a\":\"x\",\"b\":1}"));
+        // A repeated key must not stand in for a different key on the other side.
+        let repeated = obj(vec![("a".into(), n("1")), ("a".into(), n("1"))]);
+        let other_key = obj(vec![("a".into(), n("1")), ("b".into(), n("1"))]);
+        assert_eq!(repeated, obj(vec![("a".into(), n("1")), ("a".into(), n("1"))]));
+        assert_ne!(repeated, other_key);
+        assert_ne!(other_key, repeated);
     }
 
     #[test]
@@ -1224,6 +1261,21 @@ mod json_tests {
     fn history_report_file_matches_the_runner() {
         assert_eq!(group_report_file("history"), "history-results.json");
         assert_eq!(group_report_file("state_sealing"), "state-sealing.json");
+    }
+
+    #[test]
+    fn printed_report_bytes_are_the_json_a_printing_leg_emits() {
+        // The legs that report on stdout emit json.dumps(body, indent=2) plus
+        // print()'s newline, and the runner counts and persists those printed
+        // bytes, so the indent style and trailing newline are part of the
+        // contract, not formatting.
+        let body = obj(vec![
+            ("passed".into(), Value::Arr(vec![s("a")])),
+            ("checks".into(), Value::Arr(vec![s("a")])),
+        ]);
+        let printed = report_text(&body, true);
+        assert_eq!(printed, "{\n  \"passed\": [\n    \"a\"\n  ],\n  \"checks\": [\n    \"a\"\n  ]\n}\n");
+        assert_eq!(report_text(&body, false), format!("{printed}").trim_end_matches('\n'));
     }
 }
 
