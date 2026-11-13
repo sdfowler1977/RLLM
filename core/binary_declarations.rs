@@ -79,7 +79,12 @@ pub(super) fn validate(v:&Json,total:u64,sampled:u64,coordinate:&str)->Result<()
  bit(get(v,"mapping_inventory_complete"))?;
  if coordinate=="PE RVA"&&(get(v,"classification_inventory_complete")!=&Null||get(get(v,"classifications"),"observed")!=&n(0)){return Err(fail());}
  for (name,limit) in [("mappings",97u64),("classifications",2048),("relocations",128),("cross_references",128)]{
-  let group=get(v,name);let observed=integer(get(group,"observed"))?;let kept=integer(get(group,"retained"))?;let omitted=integer(get(group,"omitted"))?;let rows=get(group,"rows").array()?;
+  let group=get(v,name);
+  // A capture published before typed cross-references omits the group and its
+  // completeness flag. Absence keeps that document readable. A present group,
+  // including an empty one from a current projection, is checked below.
+  if name=="cross_references"&&group==&Null{if get(v,"cross_reference_inventory_complete")!=&Null{return Err(fail());}continue;}
+  let observed=integer(get(group,"observed"))?;let kept=integer(get(group,"retained"))?;let omitted=integer(get(group,"omitted"))?;let rows=get(group,"rows").array()?;
   if observed>limit||kept!=rows.len()as u64||rows.len()>ROWS||kept>observed||omitted!=observed-kept{return Err(fail());}
   let mut previous=None;
   for row in rows{
@@ -174,6 +179,16 @@ pub(super) fn validate(v:&Json,total:u64,sampled:u64,coordinate:&str)->Result<()
   assert!(validate(&wide,0x100,0x100,"PE RVA").is_err());
   let elf=derive(&resolved,0x100,0x100,"ELF declared VA",4096,&||false).unwrap();let mut elf_wide=elf.clone();if let Obj(m)=&mut elf_wide{if let Some(Obj(g))=m.get_mut("cross_references"){if let Some(Arr(rows))=g.get_mut("rows"){put(&mut rows[0],"target",n(1u64<<32));}}}
   assert!(validate(&elf_wide,0x100,0x100,"ELF declared VA").is_ok());
+ }
+ #[test]fn historical_declaration_without_cross_reference_group_stays_readable(){
+  let observation=control_flow::Observation{regions:vec![region()],mappings_complete:true,..Default::default()};
+  let current=derive(&observation,0x100,0x100,"ELF declared VA",4096,&||false).unwrap();
+  assert_eq!(get(get(&current,"cross_references"),"observed"),&n(0));assert_eq!(get(get(&current,"cross_references"),"retained"),&n(0));assert_eq!(get(get(&current,"cross_references"),"omitted"),&n(0));
+  let mut historical=current.clone();if let Obj(m)=&mut historical{m.remove("cross_references");m.remove("cross_reference_inventory_complete");}
+  assert_eq!(get(&historical,"cross_references"),&Null);assert_eq!(get(&historical,"cross_reference_inventory_complete"),&Null);assert!(validate(&historical,0x100,0x100,"ELF declared VA").is_ok());
+  let mut substituted=historical.clone();if let Obj(m)=&mut substituted{if let Some(Obj(g))=m.get_mut("mappings"){if let Some(Arr(rows))=g.get_mut("rows"){put(&mut rows[0],"captured_file_bytes",n(0));}}}
+  assert_eq!(integer(get(&array(get(&historical,"mappings"),"rows")[0],"captured_file_bytes")).unwrap(),0x100);assert!(validate(&substituted,0x100,0x100,"ELF declared VA").is_err());
+  let mut claimed=historical.clone();put(&mut claimed,"cross_reference_inventory_complete",Bool(true));assert!(validate(&claimed,0x100,0x100,"ELF declared VA").is_err());
  }
  #[test]fn optional_metadata_and_its_note_cannot_displace_a_fitting_export(){
   let original=obj(vec![("structure",obj(vec![("nodes",Arr(vec![s(&"x".repeat(1024))])),("edges",Arr(vec![]))]))]);let cap=super::super::super::mcp_schema::state_bytes(&original);let mut extended=original.clone();if let Obj(m)=&mut extended{if let Some(structure)=m.get_mut("structure"){put(structure,"declarations",s(&"d".repeat(4096)));put(structure,"control_flow",s(&"f".repeat(4096)));}}trim_optional_export(&mut extended,cap);assert_eq!(extended,original);
