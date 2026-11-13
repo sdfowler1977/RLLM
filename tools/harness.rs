@@ -107,8 +107,12 @@ fn required_inputs(root: &Path, source: &str) -> Vec<Input> {
         }
     }
     for (flag, default, _) in INPUT_FLAGS {
+        // A script declares an argument; a native twin states its own requirement
+        // in the parse error it prints when the argument is missing. A twin that
+        // only mentions the flag guards the comparison itself and stays runnable.
         let declared = format!("add_argument('{flag}'");
-        if !source.contains(&declared) {
+        let native_required = source.contains(&format!("arguments are required: {flag}"));
+        if !source.contains(&declared) && !native_required {
             continue;
         }
         let detail = if default.is_empty() {
@@ -119,7 +123,11 @@ fn required_inputs(root: &Path, source: &str) -> Vec<Input> {
         let path = flag_path(root, flag).or_else(|| {
             (!default.is_empty()).then(|| root.join(default))
         });
-        let required = flag_required(source, flag, default);
+        let required = if source.contains(&declared) {
+            flag_required(source, flag, default)
+        } else {
+            native_required && !declares_optional_guard(source, flag)
+        };
         if required && !path.map(|path| path.exists()).unwrap_or(false) {
             inputs.push(Input { kind: "path", detail, present: false });
         }
@@ -2486,6 +2494,23 @@ mod checks {
         assert!(flow.get(1).is_some_and(|path| path.ends_with("output/pre-branch-controller")), "binary_flow flow default: {flow:?}");
         assert_eq!(flow.get(2).map(String::as_str), Some("--previous-auth-controller"), "binary_flow auth argument");
         assert!(flow.get(3).is_some_and(|path| path.ends_with("output/pre-auth-controller")), "binary_flow auth default: {flow:?}");
+    }
+
+    #[test]
+    fn a_native_group_that_names_its_required_reference_is_unavailable_without_it() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let native = "fn main(){match flag{--previous-controller=>{}}panic!(\"the following arguments are required: --previous-controller\");}";
+        let inputs = required_inputs(root, native);
+        assert!(inputs.iter().any(|input| input.kind == "path" && !input.present && input.detail.contains("--previous-controller reference at output/previous-controller")), "native required input: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
+        let guarded = "fn main(){let value=if seen{\"--previous-controller\"}else{\"\"};}";
+        assert!(!required_inputs(root, guarded).iter().any(|input| input.detail.contains("previous-controller")), "a native mention without the required-argument phrase stays runnable");
+        let guard_shaped = "fn main(){if !args.previous_controller{panic!(\"the following arguments are required: --previous-controller\");}}";
+        assert!(!required_inputs(root, guard_shaped).iter().any(|input| input.detail.contains("previous-controller")), "the optional-guard pattern, not the panic phrase, decides a guarded native reference");
+        assert!(declares_optional_guard(guard_shaped, "--previous-controller"), "the guard-shaped requirement is read as optional: a known limit of the lexical rule");
+        std::fs::create_dir_all(root.join("output")).unwrap();
+        std::fs::write(root.join("output/previous-controller"), b"controller").unwrap();
+        assert!(!required_inputs(root, native).iter().any(|input| !input.present && input.detail.contains("--previous-controller")), "the reference build satisfies the input");
     }
 
     #[test]
