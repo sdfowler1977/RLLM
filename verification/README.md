@@ -11,7 +11,7 @@ output/verification/history
 output/verification/a2a
 output/verification/acp
 output/verification/oauth
-python3 verification/binary_flow.py
+output/verification/binary_flow --previous-flow-controller /path/to/prior-controller --previous-auth-controller /path/to/prior-auth-controller
 output/verification/pe_declarations
 output/verification/commands
 python3 verification/history_migration.py --previous-controller /path/to/prior-controller

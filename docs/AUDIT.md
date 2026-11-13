@@ -898,7 +898,16 @@ deleted in this batch. Measured current census: `verification/` **5 `.py` files 
 (`apk_alignment.py`, `binary_flow.py`, `history_migration.py`, `turn_background.py` legs plus `live_web.py`),
 tracked-tree total **6 files / 629 lines** with `tools/package.py`; `tools/package.rs` pins
 `VERIFICATION_PY_FILE_CEILING = 5` / `VERIFICATION_PY_LINE_CEILING = 514`, and `tools/harness.rs` `HELPERS` is
-empty because no group needs a helper leg. Publication drift measured rather than assumed: the manifest's
+empty because no group needs a helper leg.
+**Corrected again by the batch that retires `binary_flow.py`:** that five-file list is now four — the 271-line
+`binary_flow.py` leg is deleted and its group runs as the native twin `verification/binary_flow.rs` →
+`output/verification/binary_flow` (the runner already preferred the twin: `tools/harness.rs` `group_command`
+runs `output/verification/<name>` when that binary exists and only falls back to `verification/<name>.py`).
+Measured census after the deletion: `verification/` **4 `.py` files / 243 lines** (`apk_alignment.py` 54,
+`turn_background.py` 75, `live_web.py` 71, `history_migration.py` 43), tracked-tree total **5 files / 358 lines**
+including `tools/package.py` (115 lines); `tools/package.rs` pins `VERIFICATION_PY_FILE_CEILING = 4` /
+`VERIFICATION_PY_LINE_CEILING = 243` and `project_python_census_counts_this_tree` prints
+`verification files 4 lines 243 ceiling files 4 lines 243`. Publication drift measured rather than assumed: the manifest's
 `files` list pins 281 paths (233 match / 42 drift / **6 absent**, the six being the deleted Python
 tools), while `build_inputs` pins 162 paths at 130 / 31 / 1 — the deletions did not add absent
 `build_inputs` rows, one row moved to drift because pinned tracked sources changed content.
@@ -1018,7 +1027,9 @@ needs the owner's signed companion APK. Python exposure is unchanged this window
 7,755 lines**, 71 of them under `verification/` (69 connected groups plus `live_web.py` and `transport.py`),
 zero `python3` references under `core/`.
 (Stale as of the leg-retirement batch: `transport.py` had zero importers and is deleted; the tracked-tree
-measurement on those bytes is **6 `.py` files / 629 lines**, 5 of them under `verification/` at 514 lines.)
+measurement on those bytes is **6 `.py` files / 629 lines**, 5 of them under `verification/` at 514 lines.
+One batch later `binary_flow.py` is gone too, leaving **5 tracked `.py` files / 358 lines**, 4 under
+`verification/` at 243 lines — see the census correction above.)
 Method held: each lane was verified on attributable bytes before commit — lane C3 in a room holding only its own
 file (581/581 + 55), lane B3 on the whole tree (597/597 + 55, built and gated by me, not by the lane) — and
 after all four landed the product was rebuilt and `commands`, `hosted_phases`, `provider_evidence` and

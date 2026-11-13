@@ -1308,3 +1308,24 @@ Two rows are reported as two-red mutants rather than one: `ZM-T8` proves both na
 The nesting boundary was measured rather than assumed: the parser reads 129 levels and refuses 130 with `invalid JSON (JSON nesting limit exceeded)`, while the leg's `json.loads` reads 500 — the same fail-closed direction as the duplicate-key and non-standard-float pins, with the test pinning both sides of the boundary so raising the limit is a red test rather than a silent widening.
 
 Helper tests went **34 → 44 declared and 44 executed**. The increment is test-only: every line before the file's first `#[cfg(test)]` is byte-identical between the accepted bytes and these, so nothing the eighth pass confirmed about reader behaviour could have moved — and the gate and both witnesses were re-run on these bytes anyway.
+
+### The binary_flow twin's own tests, one real fail-open, and the leg that retires
+
+The `verification/binary_flow.rs` audit accepted the twin but qualified it: C2 (the new tests had not been mutation-tested), C7 (`parse_int` diverged from the leg), C8 (the census retirement was not done, so the commit was not delivery-complete). C7 was a **real fail-open**, found while adjudicating and not before: the leg converts with python `int(v, 0)`, which raises on `int("09", 0)`, while `"09".parse::<i64>()` returns `Ok(9)` — the twin was reading a value the leg refuses. It now refuses a decimal token with a leading zero unless every digit is zero, sign-aware, mirroring the leg's base-0 rule.
+
+Six tests pin the twin's own parsers, and each was then turned red by a named mutant:
+
+| test | what it pins | mutant that turned it red |
+|---|---|---|
+| `a_decimal_with_a_leading_zero_is_refused_where_python_raises` | `09`/`-09`/`010` → none, `0`/`00`/`10` → value | `BF-A` — guard replaced with `true` (2 warnings, both the now-unused `digits`) |
+| `only_the_forms_the_legs_regex_can_capture_are_read` | `0x20`/`0X20` read, `0o17`/`0b101`/`1_0` refused | `BF-B` — accept a `0o` prefix the leg's regex cannot capture |
+| `a_pt_load_block_without_readable_labels_is_not_invented` | a second `PT_LOAD` with `Offset: n/a` yields **one** row | `BF-C` — pad the half-read row with zeros |
+| `an_image_base_field_without_a_number_is_none_not_zero` | an absent `ImageBase` stays `None` | `BF-D` — `.or(Some(0))` |
+| `the_pe_call_pair_comes_from_the_first_bl_line` | the pair comes from the first `bl 0x…` | `BF-E` — scan lines in reverse |
+| `a_non_utf8_archive_member_is_refused_naming_the_member` | a UTF-16 member panics naming `manifest` | `BF-F` — `String::from_utf8_lossy` instead of refusing |
+
+Battery baseline `50 passed; 0 failed`, 0 errors, 0 warnings; `BF-CONTROL` (an inert hex leading-zero trim) left all 50 green; `BASE-SHA` == `ALL-RESTORED` == `8f8e208ccfe0…`.
+
+Then the retirement the leg's audit asked for: `verification/binary_flow.py` (271 lines) is deleted and the group runs as the native twin. The runner already routes it — `tools/harness.rs` `group_command` executes `output/verification/<name>` when that binary exists and falls back to `verification/<name>.py` only otherwise — and the pair log on these bytes shows the twin starting **0** python processes while still reaching the leg's own check (`LEG rc=1` / `TWIN rc=101`, both `actual previous controller retains its original decoder meaning`). The group stays red in the sweep for the missing comparator revisions; retiring the leg did not change that verdict, it removed the interpreter that produced it.
+
+Census moved with the deletion, measured rather than asserted: `verification/` Python went **5 files / 514 lines → 4 files / 243 lines** (`apk_alignment.py` 54, `turn_background.py` 75, `live_web.py` 71, `history_migration.py` 43), tracked-tree **6/629 → 5/358**, and `tools/package.rs` ceilings moved `5/514 → 4/243` with every refusal sentence and the real-tree census test (`verification files 4 lines 243 ceiling files 4 lines 243`) re-pinned to the new numbers. `verification/README.md` now names the native command for that group, and the two stale census sentences in `docs/AUDIT.md` carry the correction inline.
