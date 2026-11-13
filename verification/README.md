@@ -9,8 +9,8 @@ python3 verification/drive_ownership.py
 python3 verification/question_process.py
 output/verification/history
 output/verification/a2a
-python3 verification/acp.py
-python3 verification/oauth.py
+output/verification/acp
+output/verification/oauth
 python3 verification/binary_flow.py
 python3 verification/pe_declarations.py
 python3 verification/commands.py
@@ -24,8 +24,8 @@ python3 verification/network_feedback.py
 python3 verification/proposal_feedback.py
 python3 verification/review_ownership.py
 python3 verification/task_ownership.py
-python3 verification/dav_listing.py
-python3 verification/server_admission.py
+output/verification/dav_listing
+output/verification/server_admission
 output/verification/http_framing
 python3 verification/platform_resolution.py
 ```
@@ -44,5 +44,5 @@ The `http_framing` twin exercises real persistent loopback sockets through the s
 
 platform_resolution.py compiles and executes the production Java resolver/deadline binding using CLIENT_JDK. Controlled DNS lookup outcomes exercise occupied-slot admission, deadline expiry, lifecycle closure and recovery; hostname resolution then connects to real loopback sockets. Android call-site compilation uses SDK35.
 
-Optional services: run services.py, media.py and jobs.py, plus the native twins `output/verification/voice` and
-`output/verification/media_stream`. tools/checks.py includes these five groups alongside the original thirty. The current binary-flow compatibility group still requires the genuine revision-two controller; an unavailable comparator must be reported explicitly and never substituted with a current decoder or weakened reader fingerprint. Native microphone/playback and configured live service endpoints remain separate device acceptance.
+Optional services: run media.py and jobs.py, plus the native twins `output/verification/services`,
+`output/verification/voice` and `output/verification/media_stream`. tools/checks.py includes these five groups alongside the original thirty. The current binary-flow compatibility group still requires the genuine revision-two controller; an unavailable comparator must be reported explicitly and never substituted with a current decoder or weakened reader fingerprint. Native microphone/playback and configured live service endpoints remain separate device acceptance.

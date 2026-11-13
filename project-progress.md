@@ -377,3 +377,71 @@ with `--test`, runs it single-threaded, and fails the gate unless the executed c
 72 / 61 / 34 / 90 checks; `verification/RESULTS.json` still
 `e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0` — byte-identical to the batch-1, batch-2 and
 consolidation records, which is what proves four legs were replaced rather than re-scored.
+
+## 2026-11-12 (late night) — twin batch 4: eight more legs native, and the runner learns to count a twin
+
+**Eight legs retired in one batch:** `verification/acp.rs` (555) replaces `acp.py` (81), `oauth.rs` (1797) replaces
+`oauth.py` (100), `services.rs` (801) replaces `services.py` (101), `dav_listing.rs` (583) replaces
+`dav_listing.py` (106), `server_admission.rs` (279) replaces `server_admission.py` (28), `state_sealing.rs` (207)
+replaces `state_sealing.py` (40), `desktop_runtime.rs` (328) replaces `desktop_runtime.py` (43),
+`capture_lifecycle.rs` (166) replaces `capture_lifecycle.py` (42). Python exposure in the index goes
+**verification/ 58 files / 4948 lines → 50 / 4407**, total **60 / 5139 → 52 / 4598**, with **23 native twins**.
+`tools/package.rs` pins moved by the ratchet (`50 / 4407`) and `tools/checks.py` needed no group-list edit — it
+pins its list against the harness's `GROUPS` constant and already prefers a compiled twin.
+
+**Each group certified by a two-column witness over one tree** (git-archive room; twin rc, leg rc, `cmp`
+byte-identical, both digests printed by the same instrument, then the per-group harness row for the count):
+`acp` `4715017b71654f06fb0afe0f9d0f1b9be13728d8408645154ac04816e5a5e659` (41), `oauth`
+`65aab67c91e0a06626722823ee167806ff9f0314b8f4d89b443ed95558f1af72` (121), `services`
+`0b93f1b8ce997f1d3a71c07f2a68ac1d6164e610b950ffaa4c2e5cb41c3ac164` (72), `dav_listing`
+`9f8b2b4a9cbf779b78c48a218405dee8dab4ba2866e02f67bcf824a28a735e2c` (46), `server_admission`
+`971ab53ca697db57795a80128185c5ebeef1bf26d8895dd7608ce93efdc2c1c3` (8), `state_sealing`
+`8bbd78de7e99bfa0af1953c3109344d15143652e55a86c2be705b48a546ef2dd` (16), `desktop_runtime`
+`3d699651eece754a2fd01eef8bc199150f4b17f71c2b55b9707ea5620366872b` (24), `capture_lifecycle`
+`90c04b8f12396a4faf34d622f0782ee03b73ee95140465af81bae024232da829` (15). `acp`, `oauth`, `services`,
+`desktop_runtime` and `capture_lifecycle` were then **re-witnessed after the accepted audit fixes and every digest
+stayed byte-identical** — the proof that the fixes changed fixture fidelity, not the verdict.
+
+**The runner could not count a twin at all, and the witness rows showed it.** `output/harness <group>` harvests a
+count from a stdout JSON object, a `"<N> <group> checks passed"` line, or a report file whose name is a string
+literal quoted in the group's *source*. A Python leg quotes its report path; a twin derives the filename from
+`verification/twin/mod.rs::group_report_file(group)`, so the name appears nowhere in its source and the rows read
+`services PASS (exit 0, 0s, unparsed checks)`, `COUNT UNPARSED: oauth` — in the same rooms where `cmp` proved the
+reports byte-identical. The sweep path never had this hole (it derives the path itself), which is why the record
+was right while the instrument was blind. Fix: `harvest` now passes `group_report_file(name)` into `file_measure`
+as a canonical name. A stricter variant — require `mtime >= run start` — was tried **and measured unusable**: this
+filesystem truncates modification times, so a file written *after* the run started still reads older than the
+start. That is what the harness's two-second window is for, and why provenance now comes from `clear_report`:
+the expected report file is deleted before the group runs, so its presence afterwards is the evidence, and a
+report left by an earlier run can no longer stand in for an execution that did not happen.
+
+**The audits found real gaps.** `capture_lifecycle` ran its Java subject with an unbounded `Command::output` while
+the leg bounds it `subprocess.run(timeout=15)`, and swallowed a `remove_dir_all` failure where the leg's
+`TemporaryDirectory` context manager lets a cleanup failure raise after the body — both fixed (15-second
+`try_wait` deadline with kill, cleanup failure panics). `acp` defaulted a missing `rawOutput` output where the leg
+raises `KeyError` and carried a private 55-line SHA-256; `oauth`'s fixture peer accepted an authorization request
+missing `code_challenge`/`state`/`redirect_uri`/`client_id` and defaulted them, counted connections instead of
+requests, and mapped an undecodable `%xx` escape to a NUL where `urllib` keeps it literal; `services` defaulted a
+missing effect host; `desktop_runtime` used an unbounded host wait against the leg's `timeout=180`, duplicated the
+helper's scratch reservation, and carried a dead `_duration`. **Refuted:** `services` findings that the twin reads
+the wrong peer (`Peer::pair` gives both fixture peers ONE shared request log, exactly like the leg's single
+`requests` list) and that the leg asserts a 503 first response; `oauth` findings calling the fixture's controlled
+model bodies "fabricated" (the leg's own peer answers from the same table); `acp` "extension values must be
+truthy" (the leg checks membership only); `desktop_runtime` "drops the inherited environment", "final non-empty
+stdout line", "truncates to fewer than 24 bytes". The harness instrument's own audit was refuted on two points:
+the `count_source` label it feared would move the delivered record does not exist in `commit_sweep`'s `SweepRow`
+serialization, and the mapping exceptions only newly *conflict* when two fresh reports genuinely disagree.
+
+**Gate on these bytes** (`/tmp/gate5.log`, `/tmp/gate6.log`): units `Rust cases passed: 878/878; isolated
+application cases: 57`; `build-tools` rc=0 with tool tests alignment 2, readback 24, checkpoint 5, signature 5,
+apk 6, toolchain 10, gate 18, package 46 and **harness 23 → 27** (the four new count-source tests);
+`build-verification` rc=0 with **23 twins, 0 errors 0 warnings** and `twin helper tests: … cases: 8`;
+`bash tools/build-harness.sh` rc=0 (`output/harness` sha256
+`8619f171b8a9b5e5063e8cecb1ae4731f1dd83e62ececa0902eea58070999426`) — that step had to be added to the gate chain,
+because `build-harness.sh` is what builds the runner and a chain that skips it re-measures with a stale binary: the
+first post-fix rows still read `unparsed checks` for exactly that reason; `bash headless.sh` rc=0; single-group
+rows on the fresh runner now counted: services 72, oauth 121, acp 41, dav_listing 46, server_admission 8,
+state_sealing 16, capture_lifecycle 15, desktop_runtime 24, a2a 72, scene 90; sweep **71 groups / 4248 checks,
+67 pass / 0 fail / 4 unavailable / 0 absent**, with `verification/RESULTS.json` still
+`e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0` — byte-identical through batches 1–3, which is
+what proves eight legs were replaced rather than re-scored, and that an instrument change moved no verdict.

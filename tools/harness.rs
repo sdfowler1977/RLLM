@@ -369,6 +369,7 @@ fn recorded(root: &Path) -> Option<(usize, usize)> {
 // integer count, an integer passed, or a passed/checks list. A group may also
 // write that object under output/checks. Those shapes have to agree. A missing
 // or disagreeing count stays unparsed so it cannot be stored as a silent zero.
+#[derive(Debug)]
 enum Counted {
     Absent,
     Value(usize),
@@ -741,10 +742,20 @@ fn same_count(found: &mut Counted, value: usize) -> bool {
     }
 }
 
-fn file_measure(root: &Path, source: &str, started: SystemTime) -> Counted {
+// The caller also passes the harness's own mapping for the group: a native twin
+// derives its report filename from the shared helper, so that name appears
+// nowhere in its source, and a leg that quotes no report would otherwise have no
+// file-side count source at all. The caller must have removed that file before
+// the group ran (`clear_report`), because a harness-derived name cannot be
+// attributed to this run by its timestamp alone: modification times are too coarse.
+fn file_measure(root: &Path, source: &str, canonical: &str, started: SystemTime) -> Counted {
     let mut found = Counted::Absent;
-    for name in quoted_json_names(source) {
-        let path = root.join("output/checks").join(name);
+    let mut names = quoted_json_names(source);
+    if !names.iter().any(|existing| existing == canonical) {
+        names.push(canonical.to_string());
+    }
+    for name in names {
+        let path = root.join("output/checks").join(&name);
         if !file_is_fresh(&path, started) {
             continue;
         }
@@ -759,6 +770,22 @@ fn file_measure(root: &Path, source: &str, started: SystemTime) -> Counted {
         }
     }
     found
+}
+
+// Presence after the run is the proof of execution, so the report this run is
+// expected to publish is removed before the run. Returns whether a report was
+// removed, which is how a leftover from an earlier run stops standing in for an
+// execution that never happened.
+fn clear_report(root: &Path, name: &str) -> bool {
+    let path = root.join("output/checks").join(group_report_file(name));
+    match std::fs::remove_file(&path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            eprintln!("{name}: could not remove stale {name} report: {error}");
+            false
+        }
+    }
 }
 
 fn combine_counts(stdout: Counted, file: Counted, line: Counted) -> (Option<usize>, &'static str) {
@@ -792,8 +819,8 @@ fn combine_counts(stdout: Counted, file: Counted, line: Counted) -> (Option<usiz
     (value, source)
 }
 
-fn harvest(root: &Path, source: &str, text: &str, started: SystemTime) -> (Option<usize>, &'static str) {
-    combine_counts(last_measure(text), file_measure(root, source, started), printed_line_count(text))
+fn harvest(root: &Path, name: &str, source: &str, text: &str, started: SystemTime) -> (Option<usize>, &'static str) {
+    combine_counts(last_measure(text), file_measure(root, source, &group_report_file(name), started), printed_line_count(text))
 }
 
 struct Row {
@@ -1833,10 +1860,13 @@ fn main() {
             });
             continue;
         }
+        // The count for a native twin comes from the report name the harness
+        // derives, so the stale report goes away before the group runs.
+        clear_report(&root, name);
         let started_at = SystemTime::now();
         let (code, text, elapsed) = run(&root, name, &arguments);
         std::fs::write(output.join(format!("{name}.log")), &text).ok();
-        let (checks, count_source) = harvest(&root, &source, &text, started_at);
+        let (checks, count_source) = harvest(&root, name, &source, &text, started_at);
         let verdict = if code == 0 { "pass" } else { "fail" };
         if code == 0 {
             passed += 1;
@@ -2149,6 +2179,59 @@ mod checks {
             };
             assert_eq!(group_report_file(name), expected, "report file diverges for {name}");
         }
+    }
+
+    #[test]
+    fn file_measure_counts_the_canonical_report_a_twin_never_names_in_its_source() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        let started = SystemTime::now();
+        std::fs::write(root.join("output/checks/acp.json"), r#"{"passed": ["a", "b", "c"]}"#).unwrap();
+        // The twin writes through the shared helper, so its source quotes no
+        // report name; only the harness's own mapping can find this file.
+        let counted = file_measure(root, "twin::report_value(\"acp\", &body, true);", "acp.json", started);
+        assert!(matches!(counted, Counted::Value(3)), "twin report not counted: {counted:?}");
+    }
+
+    #[test]
+    fn file_measure_refutes_a_canonical_report_disagreeing_with_a_quoted_one() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        let started = SystemTime::now();
+        std::fs::write(root.join("output/checks/history-results.json"), r#"{"count": 7}"#).unwrap();
+        std::fs::write(root.join("output/checks/leg-notes.json"), r#"{"count": 9}"#).unwrap();
+        let counted = file_measure(root, "\"leg-notes.json\"", "history-results.json", started);
+        assert!(matches!(counted, Counted::Conflict), "disagreeing count sources must conflict: {counted:?}");
+    }
+
+    #[test]
+    fn clear_report_takes_the_stale_canonical_report_out_of_the_count() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        std::fs::write(root.join("output/checks/history-results.json"), r#"{"count": 5}"#).unwrap();
+        assert!(clear_report(root, "history"), "stale report removed");
+        assert!(!clear_report(root, "history"), "nothing left to remove");
+        // A group that publishes nothing now has no file-side count at all,
+        // instead of inheriting the count of an earlier run.
+        let counted = file_measure(root, "\"history-results.json\"", "history-results.json", SystemTime::now());
+        assert!(matches!(counted, Counted::Absent), "leftover still counted: {counted:?}");
+    }
+
+    #[test]
+    fn harvest_counts_a_twin_from_the_report_file_alone() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        let started = SystemTime::now();
+        std::fs::write(root.join("output/checks/acp.json"), r#"{"passed": ["a", "b", "c"]}"#).unwrap();
+        // The witnessed defect: a twin quotes no report name and prints nothing,
+        // so the row used to read "acp PASS (exit 0, 0s, unparsed checks)".
+        let (checks, source) = harvest(root, "acp", "twin::report_value(\"acp\", &body, true);", "", started);
+        assert_eq!(checks, Some(3), "twin count harvested");
+        assert_eq!(source, "file", "count came from the published report");
     }
 
     #[test]
