@@ -32,7 +32,7 @@ const GROUPS: &[&str] = &[
 
 // Scripts under verification/ that are not runner groups. A file outside these
 // sets is an unwired check and stops the census.
-const HELPERS: &[&str] = &["transport"];
+const HELPERS: &[&str] = &[];
 const OPTIONAL: &[(&str, &str)] = &[("live_web", "requires --live: performs real public HTTPS searches")];
 
 const ENV_TOKENS: &[(&str, &str)] = &[

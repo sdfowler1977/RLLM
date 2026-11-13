@@ -8,7 +8,9 @@
 //! the same blocks in an RFC 1952 header plus CRC-32 and ISIZE. Decode is one
 //! inflater: stored blocks, fixed Huffman blocks, and dynamic Huffman blocks.
 //! `inflate_deflate` is the raw member; `inflate_zlib` and `gzip_decode` add
-//! their own wrappers.
+//! their own wrappers. ZIP read walks the central directory and inflates
+//! STORED members and raw DEFLATE members (32 KiB window). Every member read
+//! is checked against its CRC-32. `zip_write` emits STORED members only.
 #![allow(dead_code)]
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -883,15 +885,22 @@ pub fn inflate_zlib(bytes: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-pub fn inflate_deflate(bytes: &[u8]) -> Result<Vec<u8>, String> {
+fn inflate_deflate_consumed(bytes: &[u8]) -> Result<(Vec<u8>, usize), String> {
     if bytes.len() > ZLIB_LIMIT {
         return Err("deflate input limit".into());
     }
     let mut input = ZIn { bytes, index: 0, bit_buf: 0, bit_count: 0 };
     let mut out = Vec::new();
     inflate_blocks(&mut input, &mut out, 1 << 15)?;
+    // End-of-block may finish mid-byte. Those leftover bits are padding inside
+    // the last consumed byte, so the byte count is the cursor after alignment.
     input.align();
-    if input.index != input.bytes.len() {
+    Ok((out, input.index))
+}
+
+pub fn inflate_deflate(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let (out, consumed) = inflate_deflate_consumed(bytes)?;
+    if consumed != bytes.len() {
         return Err("trailing deflate data".into());
     }
     Ok(out)
@@ -1199,6 +1208,320 @@ fn inflate_blocks(input: &mut ZIn<'_>, out: &mut Vec<u8>, window: usize) -> Resu
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ZipEntry {
+    pub name: String,
+    pub data: Vec<u8>,
+}
+
+struct ZipMember {
+    name: String,
+    method: u16,
+    flags: u16,
+    crc: u32,
+    compressed_size: u64,
+    uncompressed_size: u64,
+    local_offset: u64,
+}
+
+pub fn zip_names(archive: &Path) -> Vec<String> {
+    let bytes = read_archive(archive);
+    catalog(&bytes).into_iter().map(|member| member.name).collect()
+}
+
+pub fn zip_read(archive: &Path, name: &str) -> Vec<u8> {
+    let bytes = read_archive(archive);
+    let members = catalog(&bytes);
+    // python zipfile resolves a duplicated name to the LAST entry it recorded, so a
+    // twin comparing against a python leg must read that same member.
+    let member = members
+        .iter()
+        .rev()
+        .find(|member| member.name == name)
+        .unwrap_or_else(|| panic!("ZIP member not found: {name}"));
+    read_member(&bytes, member)
+}
+
+pub fn zip_entries_of(archive: &Path) -> Vec<(String, Vec<u8>)> {
+    let bytes = read_archive(archive);
+    catalog(&bytes)
+        .iter()
+        .map(|member| ZipEntry { name: member.name.clone(), data: read_member(&bytes, member) })
+        .map(|entry| (entry.name, entry.data))
+        .collect()
+}
+
+pub fn zip_write(path: &Path, entries: &[(String, Vec<u8>)]) {
+    if entries.len() > u16::MAX as usize {
+        panic!("ZIP has too many members");
+    }
+    let mut body = Vec::new();
+    let mut central = Vec::new();
+    for (name, data) in entries {
+        let name_bytes = name.as_bytes();
+        if name_bytes.len() > u16::MAX as usize {
+            panic!("ZIP member name is too long");
+        }
+        if data.len() > u32::MAX as usize || body.len() > u32::MAX as usize {
+            panic!("ZIP member is too large");
+        }
+        let crc = crc32(data);
+        let size = data.len() as u32;
+        let offset = body.len() as u32;
+        let name_len = name_bytes.len() as u16;
+        body.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        body.extend_from_slice(&20u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&crc.to_le_bytes());
+        body.extend_from_slice(&size.to_le_bytes());
+        body.extend_from_slice(&size.to_le_bytes());
+        body.extend_from_slice(&name_len.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(name_bytes);
+        body.extend_from_slice(data);
+
+        central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        central.extend_from_slice(&20u16.to_le_bytes());
+        central.extend_from_slice(&20u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&crc.to_le_bytes());
+        central.extend_from_slice(&size.to_le_bytes());
+        central.extend_from_slice(&size.to_le_bytes());
+        central.extend_from_slice(&name_len.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&0u32.to_le_bytes());
+        central.extend_from_slice(&offset.to_le_bytes());
+        central.extend_from_slice(name_bytes);
+    }
+    if central.len() > u32::MAX as usize || body.len() > u32::MAX as usize {
+        panic!("ZIP member is too large");
+    }
+    let cd_offset = body.len() as u32;
+    let cd_size = central.len() as u32;
+    let count = entries.len() as u16;
+    body.extend_from_slice(&central);
+    body.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend_from_slice(&count.to_le_bytes());
+    body.extend_from_slice(&count.to_le_bytes());
+    body.extend_from_slice(&cd_size.to_le_bytes());
+    body.extend_from_slice(&cd_offset.to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes());
+    std::fs::write(path, &body).unwrap_or_else(|error| panic!("could not write {}: {error}", path.display()));
+}
+
+fn read_archive(path: &Path) -> Vec<u8> {
+    std::fs::read(path).unwrap_or_else(|error| panic!("could not read {}: {error}", path.display()))
+}
+
+fn catalog(bytes: &[u8]) -> Vec<ZipMember> {
+    let eocd = find_eocd(bytes);
+    let disk = u16_le(bytes, eocd + 4);
+    let disk_cd = u16_le(bytes, eocd + 6);
+    if disk != 0 || disk_cd != 0 {
+        panic!("multi-disk ZIP archives are not supported");
+    }
+    let entries = u16_le(bytes, eocd + 8) as u64;
+    let entries_total = u16_le(bytes, eocd + 10) as u64;
+    if entries != entries_total {
+        panic!("multi-disk ZIP archives are not supported");
+    }
+    let cd_size = u32_le(bytes, eocd + 12) as u64;
+    let cd_offset = u32_le(bytes, eocd + 16) as u64;
+    if entries == 0xffff || cd_size == 0xffff_ffff || cd_offset == 0xffff_ffff {
+        panic!("ZIP64 archives are not supported");
+    }
+    // The directory must end exactly where its own end record begins. A preamble that
+    // shifts every absolute offset is rejected, not silently re-derived from the footer.
+    if cd_offset.checked_add(cd_size) != Some(eocd as u64) {
+        panic!("corrupt ZIP archive: central directory does not end at the end-of-archive record");
+    }
+    let start = cd_offset;
+    let end = start + cd_size;
+    let mut cursor = start as usize;
+    let end = end as usize;
+    let mut members = Vec::new();
+    while cursor < end {
+        if cursor + 46 > end {
+            panic!("truncated ZIP archive: central directory header is cut off");
+        }
+        if bytes[cursor..cursor + 4] != [0x50, 0x4b, 0x01, 0x02] {
+            panic!("corrupt ZIP archive: bad central directory signature");
+        }
+        let flags = u16_le(bytes, cursor + 8);
+        let method = u16_le(bytes, cursor + 10);
+        let crc = u32_le(bytes, cursor + 16);
+        let compressed_size = u32_le(bytes, cursor + 20) as u64;
+        let uncompressed_size = u32_le(bytes, cursor + 24) as u64;
+        let name_len = u16_le(bytes, cursor + 28) as usize;
+        let extra_len = u16_le(bytes, cursor + 30) as usize;
+        let comment_len = u16_le(bytes, cursor + 32) as usize;
+        let local_offset = u32_le(bytes, cursor + 42) as u64;
+        if compressed_size == 0xffff_ffff || uncompressed_size == 0xffff_ffff || local_offset == 0xffff_ffff {
+            panic!("ZIP64 members are not supported");
+        }
+        let name_at = cursor + 46;
+        let comment_end = name_at
+            .checked_add(name_len)
+            .and_then(|value| value.checked_add(extra_len))
+            .and_then(|value| value.checked_add(comment_len))
+            .filter(|value| *value <= end)
+            .unwrap_or_else(|| panic!("truncated ZIP archive: central directory header is cut off"));
+        let name = decode_name(&bytes[name_at..name_at + name_len]);
+        members.push(ZipMember {
+            name,
+            method,
+            flags,
+            crc,
+            compressed_size,
+            uncompressed_size,
+            local_offset,
+        });
+        cursor = comment_end;
+    }
+    if cursor != end || members.len() as u64 != entries {
+        panic!("corrupt ZIP archive: central directory entry count does not match");
+    }
+    members
+}
+
+fn read_member(bytes: &[u8], member: &ZipMember) -> Vec<u8> {
+    if member.flags & 0x0041 != 0 {
+        panic!("corrupt ZIP member {}: encrypted members are not supported", member.name);
+    }
+    let offset = usize::try_from(member.local_offset)
+        .ok()
+        .filter(|offset| offset + 30 <= bytes.len())
+        .unwrap_or_else(|| panic!("truncated ZIP archive: local header for {} is cut off", member.name));
+    if bytes[offset..offset + 4] != [0x50, 0x4b, 0x03, 0x04] {
+        panic!("corrupt ZIP archive: bad local header signature for {}", member.name);
+    }
+    let name_len = u16_le(bytes, offset + 26) as usize;
+    let extra_len = u16_le(bytes, offset + 28) as usize;
+    let name_at = offset + 30;
+    let data_at = name_at
+        .checked_add(name_len)
+        .and_then(|value| value.checked_add(extra_len))
+        .filter(|value| *value <= bytes.len())
+        .unwrap_or_else(|| panic!("truncated ZIP archive: local header for {} is cut off", member.name));
+    let local_name = decode_name(&bytes[name_at..name_at + name_len]);
+    if local_name != member.name {
+        panic!(
+            "corrupt ZIP archive: local name {local_name} does not match directory name {}",
+            member.name
+        );
+    }
+    // The central directory is the inventory every consumer was built from, so a
+    // local header that disagrees with it is corruption rather than a second opinion.
+    let local_method = u16_le(bytes, offset + 8);
+    let local_crc = u32_le(bytes, offset + 14);
+    let local_compressed = u32_le(bytes, offset + 18);
+    let local_uncompressed = u32_le(bytes, offset + 22);
+    let local_flags = u16_le(bytes, offset + 6);
+    if local_flags != member.flags
+        || local_method != member.method
+        || local_crc != member.crc
+        || u64::from(local_compressed) != member.compressed_size
+        || u64::from(local_uncompressed) != member.uncompressed_size
+    {
+        panic!(
+            "corrupt ZIP member {}: local header disagrees with the central directory",
+            member.name
+        );
+    }
+    let data_end = (data_at as u64)
+        .checked_add(member.compressed_size)
+        .filter(|end| *end <= bytes.len() as u64)
+        .unwrap_or_else(|| panic!("truncated ZIP archive: member {} data is cut off", member.name));
+    let compressed = &bytes[data_at..data_end as usize];
+    let plain = match member.method {
+        0 => {
+            if member.compressed_size != member.uncompressed_size {
+                panic!("corrupt ZIP member {}: stored size does not match", member.name);
+            }
+            compressed.to_vec()
+        }
+        8 => {
+            let (plain, consumed) = inflate_deflate_consumed(compressed).unwrap_or_else(|error| {
+                panic!("corrupt ZIP member {}: deflate failed: {error}", member.name)
+            });
+            // A prefix that inflates to the declared plaintext is still corrupt
+            // when bytes inside the declared compressed extent were never read.
+            if consumed as u64 != member.compressed_size {
+                panic!("corrupt ZIP member {}: unconsumed compressed bytes", member.name);
+            }
+            plain
+        }
+        other => panic!("corrupt ZIP member {}: unsupported compression method {other}", member.name),
+    };
+    if plain.len() as u64 != member.uncompressed_size {
+        panic!("corrupt ZIP member {}: uncompressed size mismatch", member.name);
+    }
+    if crc32(&plain) != member.crc {
+        panic!("corrupt ZIP member {}: CRC-32 mismatch", member.name);
+    }
+    plain
+}
+
+fn find_eocd(bytes: &[u8]) -> usize {
+    const EOCD_LEN: usize = 22;
+    if bytes.len() < EOCD_LEN {
+        panic!("truncated ZIP archive: end of central directory not found");
+    }
+    let max_back = bytes.len().min(EOCD_LEN + 65535);
+    let start = bytes.len() - max_back;
+    let mut index = bytes.len() - EOCD_LEN;
+    loop {
+        if bytes[index..index + 4] == [0x50, 0x4b, 0x05, 0x06] {
+            let comment = u16::from_le_bytes([bytes[index + 20], bytes[index + 21]]) as usize;
+            if index + EOCD_LEN + comment == bytes.len() {
+                return index;
+            }
+        }
+        if index == start {
+            break;
+        }
+        index -= 1;
+    }
+    panic!("truncated ZIP archive: end of central directory not found");
+}
+
+fn decode_name(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => panic!("corrupt ZIP archive: member name is not UTF-8"),
+    }
+}
+
+fn u16_le(bytes: &[u8], offset: usize) -> u16 {
+    let slice = bytes.get(offset..offset + 2).unwrap_or_else(|| panic!("truncated ZIP archive"));
+    u16::from_le_bytes(slice.try_into().unwrap())
+}
+
+fn u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let slice = bytes.get(offset..offset + 4).unwrap_or_else(|| panic!("truncated ZIP archive"));
+    u32::from_le_bytes(slice.try_into().unwrap())
+}
+
+#[cfg(test)]
+fn panic_message(error: Box<dyn std::any::Any + Send>) -> String {
+    error
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| error.downcast_ref::<&str>().map(|text| (*text).to_string()))
+        .unwrap_or_else(|| "non-string panic".to_string())
+}
+
 #[cfg(test)]
 mod json_tests {
     use super::*;
@@ -1222,6 +1545,29 @@ mod json_tests {
         assert_eq!(repeated, obj(vec![("a".into(), n("1")), ("a".into(), n("1"))]));
         assert_ne!(repeated, other_key);
         assert_ne!(other_key, repeated);
+    }
+
+    #[test]
+    fn a_duplicate_object_field_panics_where_python_keeps_the_last() {
+        // `json.loads('{"a":1,"a":2}') == {"a": 2}`: the leg accepts a repeated
+        // key and keeps the last value. This parser refuses the document instead
+        // of choosing a side, so a manifest with a duplicated field goes red
+        // rather than being read with a value the leg never used.
+        let error = panic_message(
+            std::panic::catch_unwind(|| Value::parse("{\"a\":1,\"a\":2}")).unwrap_err(),
+        );
+        assert!(error.contains("duplicate JSON field"), "unexpected panic: {error}");
+    }
+
+    #[test]
+    fn non_standard_float_literals_that_the_leg_accepts_are_refused() {
+        // `json.loads('[NaN, Infinity, -Infinity]')` succeeds. A payload carrying
+        // one cannot be read as a number here, so it cannot silently become a
+        // comparison the leg never made.
+        for text in ["[NaN]", "[Infinity]", "[-Infinity]"] {
+            let error = panic_message(std::panic::catch_unwind(|| Value::parse(text)).unwrap_err());
+            assert!(error.contains("invalid"), "unexpected panic for {text}: {error}");
+        }
     }
 
     #[test]
@@ -1276,6 +1622,18 @@ mod json_tests {
         let printed = report_text(&body, true);
         assert_eq!(printed, "{\n  \"passed\": [\n    \"a\"\n  ],\n  \"checks\": [\n    \"a\"\n  ]\n}\n");
         assert_eq!(report_text(&body, false), format!("{printed}").trim_end_matches('\n'));
+    }
+
+    #[test]
+    fn nesting_past_the_parser_limit_is_refused_where_the_leg_parses() {
+        // The leg's json.loads reads 200 levels; this parser refuses at 130. The
+        // boundary is pinned on both sides so raising the limit is a red test and
+        // not a silent widening of what the instrument accepts.
+        let at_limit = "[".repeat(129) + &"]".repeat(129);
+        assert!(matches!(Value::parse(&at_limit), Value::Arr(_)));
+        let over_limit = "[".repeat(130) + &"]".repeat(130);
+        let error = panic_message(std::panic::catch_unwind(|| Value::parse(&over_limit)).unwrap_err());
+        assert!(error.contains("nesting limit"), "130 levels parsed anyway: {error}");
     }
 }
 
@@ -1332,5 +1690,669 @@ mod codec_tests {
         assert_eq!(gzip_decode(&hex("1f8b080000000000020303000000000000000000")).unwrap(), b"");
         assert_eq!(gzip_decode(&hex("1f8b08000000000002034b4c4a0600c241243503000000")).unwrap(), b"abc");
         assert_eq!(inflate_deflate(&hex("4b4c4a0600")).unwrap(), b"abc");
+    }
+}
+
+#[cfg(test)]
+mod zip_tests {
+    use super::*;
+
+    fn hex(text: &str) -> Vec<u8> {
+        (0..text.len() / 2)
+            .map(|index| u8::from_str_radix(&text[index * 2..index * 2 + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn temp_zip(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_else(|error| panic!("clock: {error}"))
+            .as_nanos();
+        std::env::temp_dir().join(format!("rllm-zip-{label}-{}-{nanos}.zip", std::process::id()))
+    }
+
+    // Test-only writer. Production `zip_write` emits STORED members. This one
+    // plants a raw DEFLATE payload so the reader is proved against literal bytes.
+    fn write_method_zip(path: &Path, entries: &[(&str, u16, &[u8], &[u8])]) {
+        let mut body = Vec::new();
+        let mut central = Vec::new();
+        for &(name, method, compressed, plain) in entries {
+            let name_bytes = name.as_bytes();
+            let crc = crc32(plain);
+            let offset = body.len() as u32;
+            let name_len = name_bytes.len() as u16;
+            body.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+            body.extend_from_slice(&20u16.to_le_bytes());
+            body.extend_from_slice(&0u16.to_le_bytes());
+            body.extend_from_slice(&method.to_le_bytes());
+            body.extend_from_slice(&0u16.to_le_bytes());
+            body.extend_from_slice(&0u16.to_le_bytes());
+            body.extend_from_slice(&crc.to_le_bytes());
+            body.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+            body.extend_from_slice(&(plain.len() as u32).to_le_bytes());
+            body.extend_from_slice(&name_len.to_le_bytes());
+            body.extend_from_slice(&0u16.to_le_bytes());
+            body.extend_from_slice(name_bytes);
+            body.extend_from_slice(compressed);
+
+            central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+            central.extend_from_slice(&20u16.to_le_bytes());
+            central.extend_from_slice(&20u16.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&method.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&crc.to_le_bytes());
+            central.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+            central.extend_from_slice(&(plain.len() as u32).to_le_bytes());
+            central.extend_from_slice(&name_len.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes());
+            central.extend_from_slice(&0u32.to_le_bytes());
+            central.extend_from_slice(&offset.to_le_bytes());
+            central.extend_from_slice(name_bytes);
+        }
+        let cd_offset = body.len() as u32;
+        let cd_size = central.len() as u32;
+        let count = entries.len() as u16;
+        body.extend_from_slice(&central);
+        body.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&count.to_le_bytes());
+        body.extend_from_slice(&count.to_le_bytes());
+        body.extend_from_slice(&cd_size.to_le_bytes());
+        body.extend_from_slice(&cd_offset.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn crc32_matches_the_published_vector() {
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn a_preamble_that_shifts_the_directory_is_rejected() {
+        let path = temp_zip("preamble");
+        zip_write(&path, &[("classes.dex".to_string(), b"payload".to_vec())]);
+        let raw = std::fs::read(&path).unwrap_or_else(|error| panic!("read: {error}"));
+        let mut shifted = b"SELFEXTRACT".to_vec();
+        shifted.extend_from_slice(&raw);
+        std::fs::write(&path, &shifted).unwrap_or_else(|error| panic!("write: {error}"));
+        let message = panic_message(std::panic::catch_unwind(|| zip_names(&path)).unwrap_err());
+        assert!(message.contains("central directory does not end"), "{message}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_member_extent_running_past_the_file_is_rejected() {
+        let path = temp_zip("cut-member");
+        zip_write(&path, &[("classes.dex".to_string(), b"payload".to_vec())]);
+        let mut raw = std::fs::read(&path).unwrap_or_else(|error| panic!("read: {error}"));
+        let grown = u32::try_from(raw.len() as u64 + 1000).unwrap_or_else(|error| panic!("size: {error}"));
+        raw[18..22].copy_from_slice(&grown.to_le_bytes());
+        raw[22..26].copy_from_slice(&grown.to_le_bytes());
+        let directory = (0..raw.len() - 4)
+            .find(|index| raw[*index..*index + 4] == [0x50, 0x4b, 0x01, 0x02])
+            .unwrap_or_else(|| panic!("no central directory"));
+        raw[directory + 20..directory + 24].copy_from_slice(&grown.to_le_bytes());
+        raw[directory + 24..directory + 28].copy_from_slice(&grown.to_le_bytes());
+        std::fs::write(&path, &raw).unwrap_or_else(|error| panic!("write: {error}"));
+        let message = panic_message(std::panic::catch_unwind(|| zip_read(&path, "classes.dex")).unwrap_err());
+        assert!(message.contains("data is cut off"), "{message}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn stored_zip_round_trips_empty_and_compressible_members() {
+        let path = temp_zip("stored");
+        let mut big = Vec::with_capacity(100 * 1024);
+        for index in 0..100 * 1024 {
+            big.push(b"abcdefghijklmnopqrstuvwxyz"[index % 26]);
+        }
+        zip_write(
+            &path,
+            &[
+                ("empty.txt".to_string(), Vec::new()),
+                ("repeat.txt".to_string(), big.clone()),
+                ("repeat.txt".to_string(), b"second".to_vec()),
+            ],
+        );
+        assert_eq!(
+            zip_names(&path),
+            vec!["empty.txt".to_string(), "repeat.txt".to_string(), "repeat.txt".to_string()]
+        );
+        assert_eq!(zip_read(&path, "empty.txt"), b"");
+        // The last duplicate wins, exactly as python's zipfile names-to-info table does.
+        assert_eq!(zip_read(&path, "repeat.txt"), b"second");
+        let entries = zip_entries_of(&path);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0], ("empty.txt".to_string(), Vec::new()));
+        assert_eq!(entries[1], ("repeat.txt".to_string(), big));
+        assert_eq!(entries[2].1, b"second");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn deflate_fixture_reads_embedded_fixed_and_dynamic_streams() {
+        // Raw DEFLATE (no zlib wrapper): empty fixed block, fixed "abc", and the
+        // dynamic block that inflates to 70_000 copies of 'x'.
+        let empty = hex("0300");
+        let abc = hex("4b4c4a0600");
+        let xs = hex(
+            "edc13101000000c2a0da8b6f094fa00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000080b701",
+        );
+        let xs_plain = vec![b'x'; 70_000];
+        assert_eq!(inflate_deflate(&empty).unwrap(), b"");
+        assert_eq!(inflate_deflate(&abc).unwrap(), b"abc");
+        assert_eq!(inflate_deflate(&xs).unwrap(), xs_plain);
+        let path = temp_zip("deflate");
+        write_method_zip(
+            &path,
+            &[
+                ("empty.bin", 8, &empty, b""),
+                ("abc.txt", 8, &abc, b"abc"),
+                ("xs.bin", 8, &xs, xs_plain.as_slice()),
+            ],
+        );
+        assert_eq!(zip_names(&path), vec!["empty.bin".to_string(), "abc.txt".to_string(), "xs.bin".to_string()]);
+        assert_eq!(zip_read(&path, "empty.bin"), b"");
+        assert_eq!(zip_read(&path, "abc.txt"), b"abc");
+        assert_eq!(zip_read(&path, "xs.bin"), xs_plain);
+        let entries = zip_entries_of(&path);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[2].1, xs_plain);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn local_compressed_size_only_drift_is_rejected() {
+        // Patching both size fields cannot show which branch fired, so the two
+        // size comparisons get separate fixtures.
+        let path = temp_zip("compressed-only.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        raw[18] = 4;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_read(&path, "payload")).unwrap_err());
+        assert!(
+            error.contains("local header disagrees with the central directory"),
+            "local compressed-size drift read anyway: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn local_uncompressed_size_only_drift_is_rejected() {
+        let path = temp_zip("uncompressed-only.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        raw[22] = 4;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_read(&path, "payload")).unwrap_err());
+        assert!(
+            error.contains("local header disagrees with the central directory"),
+            "local uncompressed-size drift read anyway: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn central_directory_entry_count_mismatch_is_rejected() {
+        // Both count fields move together, otherwise the multi-disk guard answers
+        // first and the count comparison is never reached.
+        let path = temp_zip("count.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let eocd = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x05, 0x06])
+            .unwrap();
+        raw[eocd + 8] = 3;
+        raw[eocd + 10] = 3;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_names(&path)).unwrap_err());
+        assert!(
+            error.contains("central directory entry count does not match"),
+            "entry count mismatch read anyway: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn central_directory_signature_is_rejected() {
+        let path = temp_zip("signature.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let directory = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x01, 0x02])
+            .unwrap();
+        raw[directory] = 0;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_names(&path)).unwrap_err());
+        assert!(
+            error.contains("bad central directory signature"),
+            "bad directory signature read anyway: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn central_directory_extent_overrun_is_rejected() {
+        // An extra field whose length runs past the end of the directory must not
+        // be treated as the rest of the archive.
+        let path = temp_zip("extent.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let directory = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x01, 0x02])
+            .unwrap();
+        raw[directory + 30] = 200;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_names(&path)).unwrap_err());
+        assert!(
+            error.contains("central directory header is cut off"),
+            "directory extent overrun read anyway: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn non_utf8_member_name_is_rejected() {
+        let path = temp_zip("utf8-name.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let directory = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x01, 0x02])
+            .unwrap();
+        raw[directory + 46] = 0xff;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_names(&path)).unwrap_err());
+        assert!(
+            error.contains("member name is not UTF-8"),
+            "non-UTF-8 name read anyway: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn encrypted_members_are_rejected_in_both_headers() {
+        // The bit is in both headers, so patching only one site would let a reader
+        // that trusts the directory read ciphertext as if it were plaintext.
+        let path = temp_zip("cipher.zip");
+        write_method_zip(&path, &[("secret", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let directory = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x01, 0x02])
+            .expect("central directory header");
+        raw[6] |= 0x01;
+        raw[directory + 8] |= 0x01;
+        std::fs::write(&path, &raw).unwrap();
+        for error in [
+            panic_message(std::panic::catch_unwind(|| zip_read(&path, "secret")).unwrap_err()),
+            panic_message(
+                std::panic::catch_unwind(|| zip_entries_of(&path)).unwrap_err(),
+            ),
+        ] {
+            assert!(
+                error.contains("encrypted members are not supported"),
+                "encrypted member read anyway: {error}"
+            );
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn data_descriptor_member_is_rejected() {
+        // A data-descriptor member keeps zero CRC and sizes in its local header, so
+        // the directory cross-check must refuse it instead of trusting the directory.
+        let path = temp_zip("descriptor.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        raw[6] |= 0x08;
+        for byte in &mut raw[14..26] {
+            *byte = 0;
+        }
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_read(&path, "payload")).unwrap_err());
+        assert!(
+            error.contains("local header disagrees with the central directory"),
+            "data descriptor read anyway: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn deflate_extent_with_bytes_after_the_stream_is_rejected() {
+        // Fixed-Huffman "abc". The declared extent keeps two bytes after the
+        // end-of-block byte, so the prefix still inflates and matches CRC and size.
+        let stream = hex("4b4c4a0600");
+        let mut extent = stream.clone();
+        extent.extend_from_slice(&[0xaa, 0xbb]);
+        let path = temp_zip("deflate-extra");
+        write_method_zip(&path, &[("abc.txt", 8, &extent, b"abc")]);
+        let caught = std::panic::catch_unwind(|| zip_read(&path, "abc.txt"));
+        let message = panic_message(caught.expect_err("trailing compressed bytes were accepted"));
+        assert!(message.contains("unconsumed compressed bytes"), "{message}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_same_deflate_member_without_trailing_bytes_reads() {
+        let stream = hex("4b4c4a0600");
+        let path = temp_zip("deflate-exact");
+        write_method_zip(&path, &[("abc.txt", 8, &stream, b"abc")]);
+        assert_eq!(zip_read(&path, "abc.txt"), b"abc");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn corrupt_member_fails_the_crc_check() {
+        let path = temp_zip("crc");
+        zip_write(&path, &[("classes.dex".to_string(), b"original payload".to_vec())]);
+        assert_eq!(zip_read(&path, "classes.dex"), b"original payload");
+        let mut raw = std::fs::read(&path).unwrap();
+        let at = raw
+            .windows(b"original payload".len())
+            .position(|window| window == b"original payload")
+            .unwrap();
+        raw[at] ^= 1;
+        std::fs::write(&path, &raw).unwrap();
+        let caught = std::panic::catch_unwind(|| zip_read(&path, "classes.dex"));
+        let message = panic_message(caught.expect_err("corrupt member was accepted"));
+        assert!(message.contains("CRC-32"), "{message}");
+        let caught_all = std::panic::catch_unwind(|| zip_entries_of(&path));
+        let message_all = panic_message(caught_all.expect_err("corrupt inventory was accepted"));
+        assert!(message_all.contains("CRC-32"), "{message_all}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn local_header_disagreeing_with_the_directory_is_rejected() {
+        let path = temp_zip("local-drift");
+        write_method_zip(&path, &[("a.txt", 0, b"payload", b"payload")]);
+        let mut raw = std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        raw[8] = 8;
+        std::fs::write(&path, &raw).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+        let message = panic_message(std::panic::catch_unwind(|| zip_read(&path, "a.txt")).unwrap_err());
+        assert!(message.contains("central directory"), "{message}");
+        let message = panic_message(std::panic::catch_unwind(|| zip_entries_of(&path)).unwrap_err());
+        assert!(message.contains("central directory"), "{message}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn local_header_crc_drift_is_rejected() {
+        let path = temp_zip("local-crc");
+        write_method_zip(&path, &[("a.txt", 0, b"payload", b"payload")]);
+        let mut raw = std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        raw[14] ^= 0xff;
+        std::fs::write(&path, &raw).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+        let message = panic_message(std::panic::catch_unwind(|| zip_read(&path, "a.txt")).unwrap_err());
+        assert!(message.contains("central directory"), "{message}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn local_compressed_size_drift_is_rejected() {
+        // The size branches of the cross-check are independent of the method and CRC
+        // branches, so each needs its own fixture.
+        let path = temp_zip("size.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        raw[18] = 4;
+        raw[22] = 4;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_read(&path, "payload")).unwrap_err());
+        assert!(
+            error.contains("local header disagrees with the central directory"),
+            "local size drift read anyway: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn local_name_drift_is_rejected() {
+        // Same length, different bytes: the member extent and the directory stay
+        // consistent, so only the name comparison can catch this.
+        let path = temp_zip("name.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        raw[30] = b'P';
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_read(&path, "payload")).unwrap_err());
+        assert!(error.contains("does not match directory name"), "local name drift read anyway: {error}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn local_flag_drift_is_rejected() {
+        // Encryption declared only in the local header is still an encrypted member;
+        // reading it as plaintext because the directory stayed clean is the fail-open
+        // this guard closes.
+        let path = temp_zip("flags.zip");
+        write_method_zip(&path, &[("secret", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        raw[6] |= 0x01;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_read(&path, "secret")).unwrap_err());
+        assert!(error.contains("local header disagrees with the central directory"), "local flag drift read anyway: {error}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn truncated_archive_is_rejected() {
+        let path = temp_zip("truncated");
+        zip_write(&path, &[("a.txt".to_string(), b"payload".to_vec())]);
+        let mut raw = std::fs::read(&path).unwrap();
+        raw.truncate(raw.len() / 2);
+        std::fs::write(&path, &raw).unwrap();
+        let caught = std::panic::catch_unwind(|| zip_names(&path));
+        let message = panic_message(caught.expect_err("truncated archive was accepted"));
+        assert!(message.contains("truncated ZIP archive"), "{message}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn package_apk_round_trips_stored_and_deflated_members() {
+        let mut found = Vec::new();
+        for root in [PathBuf::from("output"), PathBuf::from("/home/shawn/RLLM/output")] {
+            let Ok(entries) = std::fs::read_dir(&root) else { continue };
+            for entry in entries.flatten() {
+                let candidate = entry.path().join("package.apk");
+                if candidate.is_file() {
+                    found.push(candidate);
+                }
+            }
+            if !found.is_empty() {
+                break;
+            }
+        }
+        found.sort();
+        let apk = found.pop().unwrap_or_else(|| panic!("no package.apk under output"));
+        let names = zip_names(&apk);
+        assert_eq!(names.len(), 25, "{}", apk.display());
+        assert!(names.iter().any(|name| name == "classes.dex"));
+        assert!(names.iter().any(|name| name == "resources.arsc"));
+        let dex = zip_read(&apk, "classes.dex");
+        assert!(dex.starts_with(b"dex\n"), "classes.dex magic");
+        let entries = zip_entries_of(&apk);
+        assert_eq!(entries.len(), names.len());
+        assert_eq!(
+            entries.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
+            names.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert_eq!(entries.iter().find(|(name, _)| name == "classes.dex").unwrap().1, dex);
+        assert!(!entries.iter().find(|(name, _)| name == "resources.arsc").unwrap().1.is_empty());
+        assert!(entries.iter().any(|(name, data)| name.ends_with("libclient.so") && data.len() > 1_000_000));
+    }
+
+    #[test]
+    fn an_archive_starting_on_another_disk_is_refused() {
+        let path = temp_zip("disk.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let eocd = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x05, 0x06])
+            .unwrap();
+        raw[eocd + 4] = 1;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_names(&path)).unwrap_err());
+        assert!(
+            error.contains("multi-disk ZIP archives are not supported"),
+            "disk 1 read as disk 0: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_central_directory_on_another_disk_is_refused() {
+        let path = temp_zip("disk-cd.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let eocd = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x05, 0x06])
+            .unwrap();
+        raw[eocd + 6] = 1;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_names(&path)).unwrap_err());
+        assert!(
+            error.contains("multi-disk ZIP archives are not supported"),
+            "directory disk 1 read as disk 0: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn disagreeing_total_counts_are_refused_as_multi_disk() {
+        // The end record's two count fields must agree, or the archive spans disks.
+        // The entry-count fixture moves both together so this clause stays reachable.
+        let path = temp_zip("count-split.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let eocd = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x05, 0x06])
+            .unwrap();
+        raw[eocd + 8] = 2;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_names(&path)).unwrap_err());
+        assert!(error.contains("multi-disk"), "split counts read anyway: {error}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_zip64_end_record_sentinel_is_refused() {
+        let path = temp_zip("zip64-eocd.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let eocd = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x05, 0x06])
+            .unwrap();
+        raw[eocd + 12..eocd + 16].copy_from_slice(&u32::MAX.to_le_bytes());
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_names(&path)).unwrap_err());
+        assert!(error.contains("ZIP64 archives are not supported"), "ZIP64 size read anyway: {error}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_zip64_directory_member_sentinel_is_refused() {
+        let path = temp_zip("zip64-member.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let directory = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x01, 0x02])
+            .unwrap();
+        raw[directory + 20..directory + 24].copy_from_slice(&u32::MAX.to_le_bytes());
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_names(&path)).unwrap_err());
+        assert!(error.contains("ZIP64 members are not supported"), "ZIP64 member read anyway: {error}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_local_header_with_the_wrong_signature_is_refused() {
+        let path = temp_zip("local-signature.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        raw[0] = 0;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_read(&path, "payload")).unwrap_err());
+        assert!(
+            error.contains("bad local header signature for payload"),
+            "bad local signature read anyway: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_method_outside_the_reader_is_refused_in_both_headers() {
+        // Both method fields move, or the local-vs-directory cross-check answers
+        // first and the method arm is never reached.
+        let path = temp_zip("method.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let directory = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x01, 0x02])
+            .unwrap();
+        raw[8] = 12;
+        raw[directory + 10] = 12;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_read(&path, "payload")).unwrap_err());
+        assert!(error.contains("unsupported compression method 12"), "method 12 read anyway: {error}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_directory_name_drift_is_refused_against_the_local_header() {
+        // The mirror of local_name_drift_is_rejected: the inventory carries the
+        // drifted name, so the lookup succeeds and only the local header objects.
+        let path = temp_zip("directory-name.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let directory = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x01, 0x02])
+            .unwrap();
+        raw[directory + 46] = b'X';
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_read(&path, "Xayload")).unwrap_err());
+        assert!(
+            error.contains("local name payload does not match directory name Xayload"),
+            "drifted directory name read anyway: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_archive_without_an_end_record_is_refused() {
+        let path = temp_zip("no-eocd.zip");
+        write_method_zip(&path, &[("payload", 0, b"abc", b"abc")]);
+        let mut raw = std::fs::read(&path).unwrap();
+        let eocd = raw
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x05, 0x06])
+            .unwrap();
+        raw[eocd] = 0;
+        std::fs::write(&path, &raw).unwrap();
+        let error = panic_message(std::panic::catch_unwind(|| zip_names(&path)).unwrap_err());
+        assert!(
+            error.contains("end of central directory not found"),
+            "archive without an end record read anyway: {error}"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

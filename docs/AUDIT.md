@@ -891,7 +891,14 @@ with the saving: 106 lines of Python toolchain recovery became 2,211 lines of Ru
 and pinned-archive verification are now implemented instead of delegated to the interpreter.
 `verification/` row census, measured: 71 `.py` files = **69 group bodies + 2 shared modules**
 (`live_web.py`, `transport.py`), which are imported by group bodies and are not enumerated by either
-sanctioned runner — not orphan rows. Publication drift measured rather than assumed: the manifest's
+sanctioned runner — not orphan rows.
+**Corrected on the batch that retires the last leg helpers:** that `transport.py` clause was wrong — it had
+**zero importers** in `verification/`, `tools/` or `core/` (a 27-line helper leg, not a shared module), and it is
+deleted in this batch. Measured current census: `verification/` **5 `.py` files / 514 lines**
+(`apk_alignment.py`, `binary_flow.py`, `history_migration.py`, `turn_background.py` legs plus `live_web.py`),
+tracked-tree total **6 files / 629 lines** with `tools/package.py`; `tools/package.rs` pins
+`VERIFICATION_PY_FILE_CEILING = 5` / `VERIFICATION_PY_LINE_CEILING = 514`, and `tools/harness.rs` `HELPERS` is
+empty because no group needs a helper leg. Publication drift measured rather than assumed: the manifest's
 `files` list pins 281 paths (233 match / 42 drift / **6 absent**, the six being the deleted Python
 tools), while `build_inputs` pins 162 paths at 130 / 31 / 1 — the deletions did not add absent
 `build_inputs` rows, one row moved to drift because pinned tracked sources changed content.
@@ -1010,6 +1017,8 @@ Measured by me on this host: `build_inputs: pinned 162 match 129 drift 32 absent
 needs the owner's signed companion APK. Python exposure is unchanged this window: **73 tracked `.py` files /
 7,755 lines**, 71 of them under `verification/` (69 connected groups plus `live_web.py` and `transport.py`),
 zero `python3` references under `core/`.
+(Stale as of the leg-retirement batch: `transport.py` had zero importers and is deleted; the tracked-tree
+measurement on those bytes is **6 `.py` files / 629 lines**, 5 of them under `verification/` at 514 lines.)
 Method held: each lane was verified on attributable bytes before commit — lane C3 in a room holding only its own
 file (581/581 + 55), lane B3 on the whole tree (597/597 + 55, built and gated by me, not by the lane) — and
 after all four landed the product was rebuilt and `commands`, `hosted_phases`, `provider_evidence` and

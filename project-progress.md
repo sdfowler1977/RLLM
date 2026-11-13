@@ -1165,3 +1165,146 @@ itself an R-rule smell inside a Rust twin, so the repair being driven now is a r
 reader/writer (`zip_names`, `zip_read`, `zip_entries_of`, `zip_write`, `crc32`, with DEFLATE inflate) in
 `verification/twin/mod.rs`, and both twins off `python3` onto it.
 
+## 2026-11-13 (night shift two) — transport.py is gone, four more legs have native twins, and the ZIP reading left python
+
+The python census moved from **6 files / 541 lines to 5 files / 514 lines**: `verification/transport.py` (27 lines)
+is deleted and had zero importers anywhere in `verification/`, `tools/` or `core/`. `tools/package.rs` carries the new
+ceilings at all ten census sites and `tools/harness.rs` now has `const HELPERS: &[&str] = &[];`, so no group is declared
+through a helper leg. The move first went red — `output/tools/package-tests` panicked with
+`python_census: ... verification files 1 lines 1 ceiling files 7 lines 911` because the byte-bound refusal fixture still
+carried the old census sentence; that is the fixture catching a missed census site, and after the tenth site the suite is
+`46` cases green. Gate on these bytes: `bash tools/build-tools.sh output/tools` → `TOOLS-RC=0` (it ends by calling
+`tools/build-verification.sh`), twin helper tests `17` executed == `17` declared, and every native twin compiling together.
+
+`verification/twin/mod.rs` grew a pure-standard-library ZIP layer — `crc32`, zlib/deflate inflate, a STORED+DEFLATE
+reader (`catalog`/`read_member`/`zip_names`/`zip_entries_of`) and a STORED writer (`zip_write`). It was proved against
+`python zipfile` on the real 25-member unsigned Lab APK: per-member names, lengths and sha256 digests identical. The first
+audit of that layer rejected for a pass-conversion gap — a member whose *local* header lied about method, crc or sizes was
+read anyway — so `read_member` now rejects any local header that disagrees with the central directory. Its re-audit
+rejected twice more, and both findings were real: `zip_read` returned the *first* member of a duplicated name where
+`python zipfile` returns the *last*, and `catalog` silently re-derived every absolute offset from the footer instead of
+trusting the archive's own central-directory extent. `zip_read` now takes the last match and `catalog` refuses a
+directory that does not end at its own end record, with tests for duplicate resolution, the shifted-preamble case and a
+member extent that runs past the end of the file. Helper tests went 15 → 17 → 19 (executed == declared) and the APK's
+per-member digests stayed identical (`/tmp/zprobe-twin.txt` == `/tmp/zprobe-py.txt`, aggregate `b4e7616b1882…`).
+
+Four legs now have twins that were run against their legs:
+
+| group | result on the same bytes |
+|---|---|
+| `turn_background` | 28 checks, clean-room witness byte-identical on both channels (`269f3240961f…`, stdout identical), audit accept. The dex class-descriptor parse needed the real dexdump form — `: 'Lcom/local/client/TurnService;'` — so the terminator is `;'`, not `';`, and the leading `L` is stripped. |
+| `apk_alignment` | 11 checks, clean-room room with `TOOLS=1`: reports byte-identical (`36ff8454aa66…`) and the room's own row printed `apk_alignment PASS (exit 0, 4s, 11 checks)`. The twin's stdout is 1222 B against the leg's 1380 B and the entire difference is two `UserWarning: Duplicate name: AndroidManifest.xml` lines python's own zipfile emits inside the leg. Audit accept. |
+| `live_web` | both instruments run with `--live`: leg rc=0, twin rc=0, identical nine names in identical order, identical scope. The observation carries the identical URL and identical byte length 44629 but a different sha256, because the upstream body is not fetch-stable — three repeats of the leg's own curl gave `269630dcfd18…`, `2b81f57a07bd…`, `2b81f57a07bd…` — so byte-identical transport observations are unattainable for this leg. Audit accepted only after two real fixes: the agent settings must carry `subagents` as an index **list** and `model` as **string** indices (otherwise the controller publishes `children:[]` and the delegation is blocked before start), and the model payload text must use `json.dumps` default separators. |
+| `history_migration` | matched red: leg exits 1 with a traceback at `verification/history_migration.py:18`, twin exits 101 with `prior controller did not request approval` at `verification/history_migration.rs:141` — the same step, and neither writes a report. Revisions 1793395702/1793592809 are unrecoverable, so this leg cannot be made green by any reachable input. Audit accept. |
+
+`binary_flow` is still red, and honestly so: with `output/published-controller` substituted for the missing
+`output/pre-branch-controller`, the leg reaches `actual previous controller retains its original decoder meaning` while
+the twin stopped earlier at `review creates owned shared-engine worker`. That gap was a twin divergence, not a comparator
+artefact, and it is now closed: the twin reaches the same comparator step and fails there, so the leg's unreachable
+comparator is shown as a failure rather than hidden behind an earlier twin-only stop.
+
+### The ZIP layer's third repair, and what a full mutation battery found
+
+A third audit reject was also real: a DEFLATE member was accepted when the inflater stopped **short** of the declared
+`compressed_size`, so an archive could pass on an inflated prefix with unread bytes still inside the member's extent. The
+reader now takes `(plain, consumed)` from `inflate_deflate_consumed` and refuses any member whose consumed count differs
+from the declared extent.
+
+The fourth audit pass confirmed every claim it was asked about (M1–M11) and rejected on two points, and both were settled
+by measurement rather than argument:
+- it asserted that unsupported general-purpose flag semantics (a data descriptor) "may be accepted"; compiled against
+  these bytes, such a member is refused — `PROBE REJECTED: corrupt ZIP member payload: local header disagrees with the
+  central directory` — because a data descriptor zeroes the local CRC and sizes and the directory cross-check rejects it;
+- it found that the encrypted-member guard had **no test at all**: mutating `if member.flags & 0x0041 != 0` to
+  `if false` left the suite green at 21 cases. That is a coverage hole, so two tests were added —
+  `encrypted_members_are_rejected_in_both_headers` (the fixture sets the bit in the local **and** central header, so a
+  reader that trusts only the directory cannot read ciphertext) and `data_descriptor_member_is_rejected`, pinning the
+  measured rejection above. Helper tests are now **23 executed == 23 declared**.
+
+Then the module was put through a measured battery, each mutant one line and each restore byte-identical
+(`RESTORED-IDENTICAL` after every step, final sha256 `ce237199b54c…`, baseline `23 passed; 0 failed`, 0 warnings):
+
+| mutant | named test that went red |
+|---|---|
+| duplicate-name lookup loses `.rev()` | `stored_zip_round_trips_empty_and_compressible_members` |
+| DEFLATE consumption guard → `if false` | `deflate_extent_with_bytes_after_the_stream_is_rejected` |
+| flag guard → `if false` | `encrypted_members_are_rejected_in_both_headers` (the data-descriptor test stayed green — the cross-check refuses that archive independently) |
+| local-vs-directory guard → `if false && …` | `local_header_disagreeing_with_the_directory_is_rejected` |
+| central-directory extent → `if false && …` | `a_preamble_that_shifts_the_directory_is_rejected` |
+| **inert control**: writer's version field 20 → 45 | none — suite stayed green at 23 |
+| **over-tight control**: flag guard unconditional | 10 tests — the suite also covers the honest read path |
+
+The APK byte-exactness was re-measured after every change: the Rust probe recompiled against the final module bytes and
+`cmp` reported the 25-member tables identical to `python zipfile`'s (aggregate `b4e7616b1882…`).
+
+### Fifth pass: one more real fail-open, plus branch-level honesty
+
+The fifth audit pass confirmed M1–M13 and then found something the earlier passes had missed: the encryption check reads the
+**central directory's** flags, so an archive that sets the encryption bit only in the **local** header was read as plaintext.
+That is a genuine fail-open, and it is now closed by comparing the general-purpose flag word local-vs-directory
+(`let local_flags = u16_le(bytes, offset + 6); if local_flags != member.flags || …`), with
+`local_flag_drift_is_rejected` pinning it. The same pass listed guards with no test at all, so
+`local_name_drift_is_rejected` and `local_compressed_size_drift_is_rejected` were added — helper tests 23 → **26** — and a
+second battery was run one mutant at a time, every restore byte-identical:
+
+| mutant | result |
+|---|---|
+| CRC comparison → `if false && …` (the seat's own proposal) | `corrupt_member_fails_the_crc_check` red |
+| local **method** branch removed | `local_header_disagreeing_with_the_directory_is_rejected` red |
+| local **compressed-size** branch removed | suite still green — the same `||` disjunction still refuses through the other size branch |
+| **both** size branches removed | `local_compressed_size_drift_is_rejected` red (so the pair is collectively live, individually indistinguishable) |
+| local-name comparison removed | `local_name_drift_is_rejected` red |
+| local-flags branch removed | `local_flag_drift_is_rejected` red |
+| duplicate lookup / DEFLATE consumption / encrypted guard / directory extent | their named test red, one each |
+| inert control (writer version field) | all 26 green |
+| over-tight control (flag guard unconditional) | 13 red |
+
+The dex class-descriptor parse was tightened for the one divergence that pass named: the leg's character class `[^';]+`
+never accepts an apostrophe inside a descriptor, so the twin now refuses one instead of accepting `Turn'X` as a class name.
+`verification/turn_background.rs` also lost its two compiler warnings, so its room compiles at 0 warnings.
+
+Both twins were then **re-witnessed against the final module bytes**, because the module had changed since their first
+witnesses: `apk_alignment` (room `/tmp/witq2-apk_alignment`, `TOOLS=1`) compiled 0 errors/0 warnings and wrote a report
+byte-identical to the leg's (`36ff8454aa66…`), with the room's own harness row `apk_alignment PASS (exit 0, 5s, 11 checks)`;
+`turn_background` (room `/tmp/witq2-turn_background`) compiled **0 warnings** and was byte-identical on both channels
+(`269f3240961f…` report, stdout identical), row `turn_background PASS (exit 0, 0s, 28 checks)`. Gate on the final module:
+`GATE17-RC=0`, package suite 46 cases, `twin helper tests … cases: 26` with 26 declared.
+
+### Two python dependencies with different status
+
+A census of `Command::new("python…")` inside native code found three sites, and they are not the same case:
+
+| site | what it spawns | adjudication |
+|---|---|---|
+| `tools/harness.rs:1120` | `verification/<group>.py` | The runner running a python **leg** — the leg is python by definition, not a violation. |
+| `verification/binary_flow.rs:2455` | `python3 -c 'import zipfile…'` | **A real violation**, fixed: `read_zip_json` now uses `twin::zip_read` + `twin::Value::parse`. Measured with two synthetic baselines (one DEFLATE member, one STORED): the parsed manifest re-serialises to 302 bytes with sha256 `2778cd7c20be…` in both instruments, and the group still fails at the same check as its leg (`COMPILE rc=0 errors=0 warnings=0`, `TWIN rc=101` / `LEG rc=1`, both `actual previous controller retains its original decoder meaning`). The `--auth-baseline` branch is opt-in (`RLLM_AUTH_BASELINE`) and unset in the current sweep, so the probe rather than the group row is what exercises it. |
+| `verification/snapshot_identity.rs:436` | a 40-line `ssl`-based TLS fixture server | **Kept as python, deliberately.** That group already has no `.py` leg; the fixture exists only to be a TLS peer for the *production Android TLS block* running on the host JVM, and nothing in `core/` implements a TLS record layer (census: no `ClientHello`/`ServerHello`/`ChangeCipherSpec` anywhere), so a pure-std replacement would mean writing a TLS 1.2/1.3 server (RSA, AES-GCM, PRF, certificate chain) into the verification instrument — the `compatibility only` clause of the R-rule, not instrumentation written in the wrong language. Two delegated attempts to build exactly that both timed out without writing a byte, which is the size of the job, not an oversight. |
+
+### The eighth pass accepted the module and named its own remaining gaps
+
+The eighth audit of `verification/twin/mod.rs` accepted the bytes at sha256 `49cdb01a423ced…` with M1–M21 confirmed: the real-archive census (34 archives, every member table byte-identical to `python zipfile`), the `read_zip_json` transcripts at `cmp=IDENTICAL` for both DEFLATE and STORED, the matched red pair (`LEG rc=1` / `TWIN rc=101`, both naming `actual previous controller retains its original decoder meaning`, `python processes started by the twin = 0`), and the branch-level battery. It still listed guards it believed no fixture reaches — the local-header `PK\x03\x04` signature, the two EOCD disk fields, the unequal-total-count clause, the ZIP64 end-record and member sentinels, the unsupported-method arm, the "end of central directory not found" branch, and the reverse-direction name comparison — and it proposed the local-signature mutation itself.
+
+The test-quality seat that had rejected the same file on one finding ("No printed mutation turns either JSON test red") accepted the closure: `ZM-JSON-A` (duplicate-field guard → `if false && …`) turned `a_duplicate_object_field_panics_where_python_keeps_the_last` red, `ZM-JSON-B2` (a `Some(b'N' | b'I')` arm before the catch-all) turned `non_standard_float_literals_that_the_leg_accepts_are_refused` red, and the earlier `ZM-JSON-B` leg — still green — is kept as the measurement that `NaN`/`Infinity` never reach the lowercase-`n` arm at all. That pass named one more gap: the JSON nesting limit.
+
+### The increment that closes the named guard list
+
+Ten fixtures, one per named guard, each patching only the field that reaches its own guard:
+
+| fixture | field it patches | mutant | named reds |
+|---|---|---|---|
+| `an_archive_starting_on_another_disk_is_refused` | `eocd+4` (disk number) | `ZM-T2` — drop the `disk_cd` disjunct | that test only |
+| `a_central_directory_on_another_disk_is_refused` | `eocd+6` (directory disk) | `ZM-T1` — drop the `disk` disjunct | that test only |
+| `disagreeing_total_counts_are_refused_as_multi_disk` | `eocd+8` alone (not `+10`) | `ZM-T3` | that test only |
+| `a_zip64_end_record_sentinel_is_refused` | `eocd+12..16` = `0xffffffff` | `ZM-T4` | that test only |
+| `a_zip64_directory_member_sentinel_is_refused` | `directory+20..24` = `0xffffffff` | `ZM-T5` | that test only |
+| `a_local_header_with_the_wrong_signature_is_refused` | `raw[0] = 0` | `ZM-T6` — the seat's own proposed mutation, run verbatim | that test only |
+| `a_method_outside_the_reader_is_refused_in_both_headers` | method field in **both** headers = 12 | `ZM-T7` | that test only |
+| `a_directory_name_drift_is_refused_against_the_local_header` | `directory+46` = `X` | `ZM-T8` — drop the local-name comparison | this test **and** `local_name_drift_is_rejected` |
+| `an_archive_without_an_end_record_is_refused` | end-record signature byte = 0 | `ZM-T9` — scan returns a guessed offset | this test **and** `truncated_archive_is_rejected` |
+| `nesting_past_the_parser_limit_is_refused_where_the_leg_parses` | — | `ZM-T10` — limit 128 → 128 000 | that test only |
+
+Two rows are reported as two-red mutants rather than one: `ZM-T8` proves both name directions share a single guard, and `ZM-T9` shows the same EOCD scan is what makes the truncation refusal land. The inert control (`ZM-CONTROL`, scan bound 65535 → 65536) left all 44 green, and every restore was byte-identical at `a2e42166bca3…` (`BASE-SHA` == `ALL-RESTORED`), with the baseline at `44 passed; 0 failed` and 0 warnings.
+
+The nesting boundary was measured rather than assumed: the parser reads 129 levels and refuses 130 with `invalid JSON (JSON nesting limit exceeded)`, while the leg's `json.loads` reads 500 — the same fail-closed direction as the duplicate-key and non-standard-float pins, with the test pinning both sides of the boundary so raising the limit is a red test rather than a silent widening.
+
+Helper tests went **34 → 44 declared and 44 executed**. The increment is test-only: every line before the file's first `#[cfg(test)]` is byte-identical between the accepted bytes and these, so nothing the eighth pass confirmed about reader behaviour could have moved — and the gate and both witnesses were re-run on these bytes anyway.
