@@ -89,6 +89,23 @@
     ],
     "status": "committed"
   },
+  "delivered_record_republished_at_52f7dfe": {
+    "depends_on_keys": [
+      "hosted_phases_second_round_cost_tie_green",
+      "flow_groups_stored_capture_reader_green"
+    ],
+    "record": "sha256 before 0e4983d475ebb7113727052486e362d9e23293b0a67862a395e30d633dce0e45 (connected.total_executed 4215, groups_passed 67, from 0f9348e 2026-11-12T09:28:29-05:00); after e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0 (connected.total_executed 4248, groups_passed 67)",
+    "state": "green",
+    "sweep": "room state: HEAD 52f7dfe913a4607b5fa8342cdf17175873bd392a, dirty=0; headless_rc=0 product_warning_lines=0; harness_rc=0 harness_warning_lines=0; sweep_start 2026-11-13T00:33:04Z; sweep_rc=0; \"delivered record written: 71 groups, 4248 checks\"; \"summary: 67 pass, 0 fail, 4 unavailable, 0 absent of 71 groups, 4248 checks\"",
+    "unavailable_note": "all four are missing-input UNAVAILABLE rows, not failures: commit_sweep treats a row with code None as not failed, so the record publishes while the companion artifacts are absent. Two of them also need a companion APK that is not on this machine, which is the same owner-blocked signing custody that holds GAP5.",
+    "unavailable_rows": [
+      "binary_flow: missing path --previous-flow-controller reference at output/pre-branch-controller and --previous-auth-controller reference at output/pre-auth-controller",
+      "history_migration: missing path --previous-controller reference at output/previous-controller",
+      "apk_alignment: missing path companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json (not on this machine)",
+      "turn_background: same missing companion APK"
+    ],
+    "what": "verification/RESULTS.json rewritten by the connected sweep in the worktree (coordinator only), first republish since 0f9348e \u2014 117 commits of drift, during which the delivered record was not reproducible at HEAD"
+  },
   "delivered_record_shape_defects_measured": "verification/RESULTS.json at HEAD (sha 0e4983d475ebb711...) is the delivered record: connected.counts has 71 rows but checks has only 65 - desktop_runtime, permission_modes, rrsi_loop, self_rebuild, state_sealing, turn_background have a count and NO detail row. Four groups carry count 0 in three mutually inconsistent shapes: binary_flow (count 0, keys executed_checks/passed/reason/retained_compatibility/unavailable, 94 named passed rows), history_migration (count 0, keys: passed only, 7 names, no reason and no unavailable marker), apk_alignment (count 0, passed 8, checks 8, scope - no unavailability marker at all), turn_background (count 0, no detail row). Total connected count 4215. So at HEAD the delivered record cannot distinguish 'not executed, input missing' from 'executed, nothing passed' for 3 of the 4 zeros. Measured by reading the committed bytes, not by running anything.",
   "dotnet4_dead_consumer_finding": {
     "artifacts": [
@@ -694,10 +711,11 @@
     "control_neuter": "same room with core/harness.rs restored to 4309c84 bytes (sha256 5b549a5eb13114efdc1e4ad3cc89ca262dd5e9fc1426af32c211cf489280319d): hosted_phases rc=1 AssertionError: a higher second-round count that drops an earlier pass retains the first exact instructions. The repair is what turns the group green.",
     "first_red": "b8b0e71 Stop the loop scoring a STOP row as a trial and drop its measured costs (green parent f25665c; room bisect over 0f9348e..HEAD, cache /tmp/bisect-cache.tsv)",
     "mechanism": "Round 2 retained the probe because the replay dropped the first mask bit. acceptance_policy then compared the shorter probe (26) against the run-global incumbent cost (28) from b8b0e71, took the lower-cost arm, forced verdict accepted, and stored the probe as the composition. hosted_phases requires the first instructions and selected_score.passed == 1.",
-    "not_measured": "the unit-case mutation was attempted twice in /tmp/hpw and failed on a rustc link error (cannot find output/units.client.*.rcgu.o) because two units builds shared one out dir; needs a clean single-build room",
+    "not_measured": null,
     "repair": "core/harness.rs: acceptance_policy takes measure_cost; complete_refinement_round sets dropped_pass (first present, retain_probe, comparable(replay), preserves_checks(reference,probe), !preserves_checks(reference,replay), !check_gain(reference,probe)) and passes measure_cost=false for that shape, so no cost pair reaches improvement::acceptance and the score arm decides. evaluate_pool still passes measure_cost=true.",
     "state": "green",
     "unit_case": "application::harness::checks::higher_second_round_count_that_drops_a_pass_keeps_the_first_instructions (lane-measured neuter: dropped_mask 0b110 -> 0b111 makes it FAIL with left Second rewritten instructions. / right First verified instructions.)",
+    "unit_case_mutant_witness": "clean room /tmp/hpmut at a07fa22: base units build rc=0 zero warning lines and the case passes (test result: ok. 1 passed; 876 filtered out); with only dropped_mask 0b110 -> 0b111 (core/harness.rs 4a2903288147810e) the case goes FAILED, left \"Second rewritten instructions.\" right \"First verified instructions.\"; restoring the committed bytes makes it pass again",
     "witness": "room /tmp/hpw = git archive 4309c84 + this core/harness.rs (sha256 f59760e9a6616410910db4228dc03c66469865d2b6c905a901eebc17d7c4dfbe): headless_rc=0 product_warning_lines=0; harness_rc=0 harness_warning_lines=0; hosted_phases PASS (exit 0, 1s, 118 checks) - identical to the green baseline room /tmp/flowbase-06d1f6b which measured hosted_phases PASS (exit 0, 1s, 118 checks); output/checks/hosted-phases.json passed_len=118 and contains the previously failing name; rrsi_loop PASS (exit 0, 1s, 15 checks); field_flow still rc=1 with its own unrelated red, so nothing was masked; units_rc=0 with zero warning lines; python3 tools/checks.py --all-units output/units -> Rust cases passed: 877/876 baseline + this case; isolated application cases: 57"
   },
   "in_flight": [
