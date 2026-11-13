@@ -601,3 +601,79 @@ groups, 4248 checks`, and `verification/RESULTS.json` still
 `e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0` — byte-identical through batches 1-6, which is
 what proves seventeen legs were replaced rather than re-scored. The four UNAVAILABLE rows are the same four
 comparator-bound groups (binary_flow, history_migration, apk_alignment, turn_background); none was retired.
+
+## 2026-11-13 (midday) — the last Python runner in tools/ retires, and its invariants go native
+
+`tools/checks.py` (74 lines) is deleted. It was a cross-check between the Python unit-list document and the
+native gate, and its remaining roles were a pinned-filter drift check, byte-level format pins, a selected-case
+count pin and a Python-census ceiling. None of those needed Python: the delivered record
+`verification/RESULTS.json` and `verification/RESULTS-FORMAT.md` already state the same contract, so a
+retired cross-check is a stronger statement than its duplication.
+
+### Before deleting it, one instrument had to witness the other
+
+The two-column witness for `tools/checks.py --all-units` against `output/tools/gate output/units`, on a clean
+`git archive HEAD` room with symlinks to the source checkout, not `output/` or `.git`:
+
+```
+python3 tools/checks.py --all-units      rc=0  878/878 + 57 isolated
+output/tools/gate output/units           rc=0  878/878 + 57 isolated
+cmp output/checks/full-units.json        identical, sha256 cb2fd261dc385e7ffb3db408e76a922aa702f17d985fecf0e02ca793923c467c
+output/tools/gate --units output/units   rc=0  Selected cases: 310
+```
+
+The deleted row pinned those exact bytes, so the native gate had to produce them alone. It does: the same
+report path, the same digest, both exit codes 0. A lane report is never a witness — this was re-measured in
+the room after the deletion, not inferred from the tree.
+
+### What changed
+
+- `tools/gate.rs`: the pinned-filter drift check now compares the pin against the delivered record
+  (`pinned_filters_are_recorded_selected_unit_filters`), because `merge_pinned` unions the two lists and the
+  record is the surviving authority on which filters the project treats as selected-unit work. The byte pins
+  keep their golden expectations with an honest name (`selected_report_bytes_match_the_golden_document`) and a
+  comment that says they pin renderer escaping/key order/indentation/trailing newline, not a Python document.
+- `tools/harness.rs`: new test `delivered_record_selects_exactly_the_harness_group_list` gives the runner's old
+  two-sided group cross-check a native home — it compares the `counts` object's key order in the delivered
+  record against `GROUPS`, which is exactly what the deleted script asserted.
+- `tools/package.rs`, `tools/package.py`, `tools/build-units.sh`: census expectations now count one tools
+  Python file (`tools/package.py`, 115 lines) and one Python row; the new package test asserts that single
+  allowlist entry.
+- `docs/BUILD.md`, `verification/README.md`, the harness skill: the `checks.py` route is gone, and the measured
+  numbers are re-stated.
+
+### Gates, on the retirement itself
+
+Clean room `/tmp/room-retire` = `git archive HEAD` + these nine files + `rm tools/checks.py`:
+
+```
+build-tools.sh          rc=0  9 rows: alignment 2, readback 24, checkpoint 5, signature 5, apk 6,
+                               toolchain 10, gate 18, package 46, harness 28 (was 27)
+twin helper tests       cases: 9
+build-verification.sh   rc=0  51 twins, 0 compile failures
+build-harness.sh        rc=0
+units gate              rc=0  878/878, isolated 57, full-units.json sha cb2fd261…
+gate --units            rc=0  Selected cases: 310
+```
+
+`python3 tools/package.py` exits 1 with `FileNotFoundError: output/checks/apk.json` in this room. That is not a
+regression from this change: the identical failure was reproduced at HEAD bytes, with `tools/checks.py`
+present, in a separate room — `package.py` needs a signed candidate APK artifact that a bare room does not
+carry. It is recorded as a missing prerequisite, not a pass.
+
+### Audit disposition
+
+The seat audit read the diff and returned **ACCEPT-WITH-FINDINGS**:
+
+- **F2 (fixed natively):** deleting `checks.py` removed the only enforcement of "the runner's group list
+  equals the delivered record's group set". `tools/harness.rs` now asserts it; harness-tests went 27 → 28.
+- **F1, F3 (fixed in text):** the pinned-filter comment and the byte-pin test name both claimed they were
+  guarding the Python document. They were not, and are now named for what they actually pin.
+- **F4, F5 (accepted):** the record-vs-pin comparison is one-sided (`merge_pinned` unions), and the golden
+  bytes are renderer fixtures rather than a live cross-check. Both are consequences of retiring a duplicate
+  instrument, and are stated in place rather than papered over.
+
+`closure_ledger.json` gained `tools_checks_py_retired_2026_11_13` with this evidence, and the two older keys
+that cited `tools/checks.py` as live (`runner_inventory_python_ceiling_zero_slack_2026_11_13`,
+`verification_twin_batch1_five_legs_2026_11_12`) were corrected in place;
+`checks_py_roles_census_2026_11_13` records that the census was closed the same day it was taken.

@@ -52,4 +52,4 @@ The `platform_resolution` twin compiles and executes the production Java resolve
 
 Optional services: run the native twins `output/verification/media`, `output/verification/services`,
 `output/verification/voice`, `output/verification/media_stream` and `output/verification/jobs`.
-tools/checks.py includes these five groups alongside the original thirty. The current binary-flow compatibility group still requires the genuine revision-two controller; an unavailable comparator must be reported explicitly and never substituted with a current decoder or weakened reader fingerprint. Native microphone/playback and configured live service endpoints remain separate device acceptance.
+output/harness sweep includes these five groups alongside the original thirty. The current binary-flow compatibility group still requires the genuine revision-two controller; an unavailable comparator must be reported explicitly and never substituted with a current decoder or weakened reader fingerprint. Native microphone/playback and configured live service endpoints remain separate device acceptance.

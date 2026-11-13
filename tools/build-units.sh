@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the unit-test binary that the sanctioned runner measures:
-#   python3 tools/checks.py --all-units <the path this script prints>
+#   output/tools/gate output/units
 # A bare `rustc --test` summary is not the measurement; the runner's
 # "Rust cases passed: N/M; isolated application cases: K" line is.
 set -euo pipefail

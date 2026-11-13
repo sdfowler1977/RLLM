@@ -1065,7 +1065,7 @@ fn resolved_path(path: &Path) -> String {
         .to_string()
 }
 
-// Argument rules copied from the no-flag path in tools/checks.py.
+// The sweep's per-group argument rules, inherited from the retired Python runner.
 fn sweep_arguments(name: &str, root: &Path, opts: &SweepOpts) -> Vec<String> {
     let mut arguments = Vec::new();
     if name == "scene" {
@@ -1281,7 +1281,7 @@ fn sweep_run(root: &Path, name: &str, arguments: &[String], seconds: u64) -> (i3
 }
 
 // response_fields and chunk_fields print their JSON and do not write it.
-// checks.py persists that object; the sweep stores the printed bytes unchanged.
+// The group owns that object; the sweep stores the printed bytes unchanged.
 fn persist_printed_json(root: &Path, name: &str, stdout: &[u8]) -> Result<usize, String> {
     let counted = executed_count_of(&String::from_utf8_lossy(stdout)).map_err(|err| err.to_string())?;
     if !counted.passed_int || !counted.saw_checks {
@@ -2317,6 +2317,19 @@ mod checks {
         let (groups, total) = counts_in(&text).expect("counts");
         assert_eq!(groups, 71, "counts groups");
         assert_eq!(total, 70 * 3 + 2, "executed report did not change the other counts");
+    }
+
+    #[test]
+    fn delivered_record_selects_exactly_the_harness_group_list() {
+        // The retired Python runner cross-checked its own group list against GROUPS, so the
+        // two-sided equality needs a native home: the delivered record is the second source.
+        let path = project_root().join("verification/RESULTS.json");
+        let text = read(&path);
+        assert_eq!(
+            object_keys(json_object_after(&text, "counts")),
+            GROUPS.iter().copied().map(str::to_string).collect::<Vec<_>>(),
+            "delivered record groups differ from the harness GROUPS list"
+        );
     }
 
     #[test]

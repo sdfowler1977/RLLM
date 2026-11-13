@@ -2185,10 +2185,6 @@ struct ToolPython {
 
 const TOOL_PYTHON: &[ToolPython] = &[
     ToolPython {
-        name: "checks.py",
-        role: "full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep; native orchestration and record writing is harness sweep over the Python group scripts)",
-    },
-    ToolPython {
         name: "package.py",
         role: "publisher until a signed candidate is published with the native package binary",
     },
@@ -3099,7 +3095,7 @@ fn project_root() -> Result<PathBuf, String> {
     for start in starts {
         let mut dir = fs::canonicalize(&start).unwrap_or(start);
         loop {
-            if dir.join("tools/package.rs").is_file() && dir.join("tools/checks.py").is_file() {
+            if dir.join("tools/package.rs").is_file() && dir.join("tools/harness.rs").is_file() {
                 return Ok(dir);
             }
             if !dir.pop() {
@@ -3628,8 +3624,6 @@ const GROUPS: &[&str] = &[
         let names = report_pairs().into_iter().map(|(name, _)| name).collect::<Vec<_>>();
         let quoted = names.iter().map(|name| format!("\"{name}\"")).collect::<Vec<_>>().join(", ");
         fs::write(root.join("tools/harness.rs"), format!("const GROUPS: &[&str] = &[{quoted}];\n")).unwrap();
-        let py_quoted = names.iter().map(|name| format!("'{name}'")).collect::<Vec<_>>().join(",");
-        fs::write(root.join("tools/checks.py"), format!("names=[{py_quoted}]\n")).unwrap();
         fs::write(root.join("README.md"), "# RLLM\n\nOld paragraph.\n\nRLLM connects your Android device to models.\n").unwrap();
         fs::create_dir_all(root.join("docs")).unwrap();
         fs::write(root.join("docs/STATUS.md"), b"old status\n").unwrap();
@@ -4022,34 +4016,17 @@ const GROUPS: &[&str] = &[
             "refusing: tools/ Python tools/helper.py is outside the allowlist\nrefusing: tools/ Python tools/sub/checks.py is outside the allowlist",
             "{err}"
         );
-        assert!(census_line(&err).contains("tools files 3 lines 3"), "{err}");
-        assert!(census_line(&err).contains("checks.py (full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep; native orchestration and record writing is harness sweep over the Python group scripts))"), "{err}");
+        assert!(census_line(&err).contains("tools files 2 lines 2"), "{err}");
         assert!(census_line(&err).contains("package.py (publisher until a signed candidate is published with the native package binary)"), "{err}");
     }
 
     #[test]
-    fn checks_py_role_names_the_native_twin_and_refuses_a_python_only_label() {
-        let role = TOOL_PYTHON.iter().find(|item| item.name == "checks.py").unwrap().role;
-        let all_at = role.find("full-suite unit gate").unwrap();
-        let selected_at = role.find("selected-unit runner").unwrap();
-        let sweep_at = role.find("connected-group").unwrap();
-        assert!(all_at < selected_at && selected_at < sweep_at, "{role}");
-        assert!(!role[..all_at].contains("Python-only"), "{role}");
-        let all_units = &role[all_at..selected_at];
-        let selected = &role[selected_at..sweep_at];
-        let sweep = &role[sweep_at..];
-        assert!(all_units.contains("--all-units"), "{all_units}");
-        assert!(all_units.contains("native twin gate <units>"), "{all_units}");
-        assert!(!all_units.contains("Python-only"), "native-equivalent --all-units role is described as Python-only: {all_units}");
-        assert!(selected.contains("native twin gate --units"), "{selected}");
-        assert!(!selected.contains("--all-units"), "{selected}");
-        assert!(!selected.contains("Python-only"), "native-equivalent --units role is described as Python-only: {selected}");
-        assert!(sweep.contains("no-flag"), "{sweep}");
-        assert!(sweep.contains("harness sweep"), "{sweep}");
-        assert!(sweep.contains("native orchestration and record writing"), "{sweep}");
-        assert!(sweep.contains("Python group scripts"), "{sweep}");
-        assert!(!sweep.contains("native twin harness sweep"), "the no-flag sweep is orchestration over Python group scripts, not a native twin of those scripts: {sweep}");
-        assert!(!sweep.contains("Python-only"), "the no-flag connected-group sweep is still labeled Python-only: {sweep}");
+    fn package_py_is_the_only_allowlisted_tools_python() {
+        assert_eq!(TOOL_PYTHON.len(), 1);
+        assert_eq!(TOOL_PYTHON[0].name, "package.py");
+        assert_eq!(TOOL_PYTHON[0].role, "publisher until a signed candidate is published with the native package binary");
+        assert!(tool_python_allowed("tools/package.py"));
+        assert!(!tool_python_allowed("tools/helper.py"));
     }
 
     #[test]
@@ -4149,10 +4126,9 @@ const GROUPS: &[&str] = &[
         assert!(!report.contains("refusing:"), "{report}");
         assert!(line.contains("core files 0 lines 0"), "{line}");
         assert!(line.contains("platform files 0 lines 0"), "{line}");
-        assert!(line.contains("tools files 2 lines 2"), "{line}");
+        assert!(line.contains("tools files 1 lines 1"), "{line}");
         assert!(line.contains("verification files 22 lines 22 ceiling files 22 lines 2367"), "{line}");
         assert!(line.contains("elsewhere files 0 lines 0"), "{line}");
-        assert!(line.contains("checks.py (full-suite unit gate (--all-units, native twin gate <units>), selected-unit runner (--units, native twin gate --units), and connected-group runner (no-flag sweep; native orchestration and record writing is harness sweep over the Python group scripts))"), "{line}");
         assert!(line.contains("package.py (publisher until a signed candidate is published with the native package binary)"), "{line}");
     }
 
@@ -4166,7 +4142,7 @@ const GROUPS: &[&str] = &[
         let before = census_line(&first).to_string();
         assert!(before.contains("core files 0 lines 0"), "{before}");
         assert!(before.contains("platform files 0 lines 0"), "{before}");
-        assert!(before.contains("tools files 1 lines 1"), "{before}");
+        assert!(before.contains("tools files 0 lines 0"), "{before}");
         assert!(before.contains("verification files 0 lines 0 ceiling files 22 lines 2367"), "{before}");
         assert!(before.contains("elsewhere files 0 lines 0"), "{before}");
         plant(&root, "output/hidden.py", "print(1)\n");
@@ -4180,7 +4156,7 @@ const GROUPS: &[&str] = &[
         plant(&root, "tools/package.py", "# pending native publish\n");
         let second = publish(&root, &destination, false, true).unwrap();
         let after = census_line(&second);
-        assert!(after.contains("tools files 2 lines 2"), "{after}");
+        assert!(after.contains("tools files 1 lines 1"), "{after}");
         assert!(after.contains("verification files 1 lines 1"), "{after}");
         assert_ne!(before, after);
     }
@@ -4190,14 +4166,14 @@ const GROUPS: &[&str] = &[
         let root = project_root().unwrap();
         let files = collect_tree(&root).unwrap();
         assert!(files.iter().any(|path| path == "core/lib.rs"), "walk missed core/");
-        assert!(files.iter().any(|path| path == "tools/checks.py"), "walk missed tools/checks.py");
         assert!(files.iter().any(|path| path == "tools/package.py"), "walk missed tools/package.py");
+        assert!(files.iter().any(|path| path == "tools/harness.rs"), "walk missed tools/harness.rs");
         assert!(files.iter().any(|path| path.starts_with("verification/") && path.ends_with(".py")), "walk missed verification/");
         let line = enforce_python_census(&root, &files).unwrap();
         assert_eq!(VERIFICATION_PY_FILE_CEILING, 22);
         assert!(line.contains("core files 0 lines 0;"), "{line}");
         assert!(line.contains("platform files 0 lines 0;"), "{line}");
-        assert!(line.contains("tools files 2 lines 191 ["), "{line}");
+        assert!(line.contains("tools files 1 lines 115 ["), "{line}");
         assert!(line.contains("verification files 22 lines 2367 ceiling files 22 lines 2367;"), "{line}");
         assert_eq!(VERIFICATION_PY_LINE_CEILING, 2367);
         assert!(line.contains("elsewhere files 0 lines 0"), "{line}");

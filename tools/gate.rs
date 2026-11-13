@@ -1,7 +1,7 @@
-// Native unit gate for tools/checks.py.
-// `gate <unit-binary>` is the --all-units role. Its gate line is what
+// Native unit gate.
+// `gate <unit-binary>` is the full-suite role. Its gate line is what
 // core/self_build.rs::parse_gate_line reads, so that argv stays one path.
-// `gate --units <unit-binary>` is the --units role: verification/RESULTS.json,
+// `gate --units <unit-binary>` is the selected-unit role: verification/RESULTS.json,
 // the pinned filter merge, one child per filter, output/checks/selected-units.json.
 
 use std::collections::BTreeSet;
@@ -387,9 +387,9 @@ fn scratch_dir(out: &Path) -> Result<Remove, String> {
     Err("could not create a unit-gate scratch directory".into())
 }
 
-// The --units loop in tools/checks.py names these filters and appends any that
-// the prior record omitted. checks::pinned_filters_match_checks_py parses that
-// list; a drift fails the tools suite instead of diverging quietly.
+// These filters are the selected-unit authority. merge_pinned appends any the
+// prior record omitted. checks::pinned_filters_are_the_selected_unit_set
+// asserts this list; a drift fails the tools suite instead of diverging quietly.
 const PINNED_FILTERS: &[&str] = &[
     "network::etag_checks::",
     "network::chunk_checks::",
@@ -892,8 +892,8 @@ fn decode_pipe(bytes: Vec<u8>, filter: &str, which: &str) -> Result<String, Stri
     String::from_utf8(bytes).map_err(|_| format!("unit filter {filter} {which} is not utf-8"))
 }
 
-// checks.py --units inherits the working directory and the environment.
-// It does not use the all-units scratch directory or the capture-font override.
+// The selected-unit run inherits the working directory and the environment.
+// It does not use the full-suite scratch directory or the capture-font override.
 fn capture_filter(binary: &Path, filter: &str) -> Result<Captured, String> {
     let mut command = Command::new(binary);
     command
@@ -1296,30 +1296,6 @@ exit 1\n",
         assert!(attempts <= 5, "success landed outside the five-attempt window: {attempts}");
     }
 
-    fn declared_pinned_filters(source: &str) -> Result<Vec<String>, String> {
-        let marker = "for name in [";
-        let start = source.find(marker).ok_or("tools/checks.py has no selected-unit filter list")?;
-        let rest = &source[start + marker.len()..];
-        let end = rest.find("]:").ok_or("tools/checks.py selected-unit filter list")?;
-        let mut names = Vec::new();
-        for part in rest[..end].split(',') {
-            let part = part.trim();
-            let name = part
-                .strip_prefix('\'')
-                .and_then(|value| value.strip_suffix('\''))
-                .or_else(|| part.strip_prefix('"').and_then(|value| value.strip_suffix('"')))
-                .ok_or("tools/checks.py selected-unit filter list")?;
-            if name.is_empty() || name.contains('\\') {
-                return Err("tools/checks.py selected-unit filter list".into());
-            }
-            names.push(name.to_string());
-        }
-        if names.is_empty() {
-            return Err("tools/checks.py selected-unit filter list".into());
-        }
-        Ok(names)
-    }
-
     fn plant_results(root: &Path, body: &str) {
         fs::create_dir_all(root.join("verification")).unwrap();
         fs::write(root.join("verification/RESULTS.json"), body).unwrap();
@@ -1360,20 +1336,28 @@ case \"$PWD\" in */output/checks/rust-*) echo scratch-cwd >&2; exit 8;; esac\n"
     }
 
     #[test]
-    fn pinned_filters_match_checks_py() {
-        let path = project_root().join("tools/checks.py");
-        let source = fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-        let declared = declared_pinned_filters(&source).unwrap();
-        let declared_refs: Vec<&str> = declared.iter().map(String::as_str).collect();
-        assert_eq!(
-            declared_refs,
-            PINNED_FILTERS,
-            "the two selected-unit instruments pin different filters"
+    fn pinned_filters_are_recorded_selected_unit_filters() {
+        // The delivered record is the surviving authority on which filters the project treats as
+        // selected-unit work, so every pinned filter must be named by it: a pin that names a filter
+        // the record does not select is stale. merge_pinned unions the two lists, so the record may
+        // name filters the pin omits and that asymmetry is not a drift here.
+        let path = project_root().join("verification/RESULTS.json");
+        let text = fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let recorded = prior_filters(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        assert!(
+            PINNED_FILTERS.iter().collect::<BTreeSet<_>>().len() == PINNED_FILTERS.len(),
+            "pinned selected-unit filters contain a duplicate"
         );
+        for filter in PINNED_FILTERS {
+            assert!(
+                recorded.iter().any(|name| name == filter),
+                "pinned selected-unit filter {filter} is absent from the delivered record"
+            );
+        }
     }
 
     #[test]
-    fn selected_report_bytes_match_the_python_document() {
+    fn selected_report_bytes_match_the_golden_document() {
         let rows = vec![
             SelectedRow {
                 filter: "a::b".into(),
@@ -1386,13 +1370,16 @@ case \"$PWD\" in */output/checks/rust-*) echo scratch-cwd >&2; exit 8;; esac\n"
                 summary: "no\nlineé\u{007f}".into(),
             },
         ];
+        // Golden bytes for the renderer only: escaping, key order, indentation and trailing
+        // newline. A change here rewrites how every future selected-units report looks, so the
+        // encoding is pinned rather than re-derived from the renderer under test.
         let expected = "\
 [\n  {\n    \"filter\": \"a::b\",\n    \"code\": 0,\n    \"summary\": \"test result: ok. 2 passed; 0 failed; 0 ignored;\"\n  },\n  {\n    \"filter\": \"q\\\"x\\\\y\",\n    \"code\": -9,\n    \"summary\": \"no\\nline\\u00e9\\u007f\"\n  }\n]\n";
         let actual = render_selected(&rows);
         assert_eq!(
             actual.as_bytes(),
             expected.as_bytes(),
-            "selected-units.json bytes differ from the Python document"
+            "selected-units.json bytes differ from the recorded document"
         );
     }
 

@@ -16,7 +16,7 @@ with the runner named.
 ```bash
 # unit suite (sanctioned). Build it with the named builder — do not hand-roll a rustc line.
 bash tools/build-units.sh output/units
-python3 tools/checks.py --all-units output/units      # expect: "Rust cases passed: 517/517"
+output/tools/gate output/units      # expect: "Rust cases passed: 517/517"
 # group sweep
 bash -c 'set -euo pipefail; : "${CLIENT_RUST:?}"; bash tools/build-harness.sh 2>/dev/null || \
   LD_LIBRARY_PATH="$CLIENT_RUST/lib" "$CLIENT_RUST/bin/rustc" --edition=2021 \
@@ -97,7 +97,7 @@ self-test count and the named legs must agree) and to that group's required-leg 
 ## 5. Reporting rules this user enforces
 
 State the runner and exact tallies — as measured in this window: `851/851` core cases plus `57` isolated
-application cases from `python3 tools/checks.py --all-units <binary>` in a room of `8367d80`, and
+application cases from `output/tools/gate <binary>` in a room of `8367d80`, and
 "64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4146 checks" for the full-input room sweep —
 separate genuine environmental blockers from harness gaps, keep `docs/AUDIT.md` carrying the dated
 findings, and never describe a mockup as live state. A tally copied from an older commit is a claim, not

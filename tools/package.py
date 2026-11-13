@@ -20,9 +20,7 @@ else:
  unit_label='selected Rust cases'
 runs=read('output/checks/current-regression.json')
 # Match the current runner's exact ordered inventory, never a stale group count.
-import ast
-runner=ast.parse((root/'tools/checks.py').read_text())
-expected=next(ast.literal_eval(node.value) for node in runner.body if isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id=='names' for target in node.targets))
+expected=list(read('verification/RESULTS.json')['connected']['counts'])
 assert [value['name'] for value in runs]==expected,'Regression inventory differs from the current runner'
 assert len(set(expected))==len(expected),'Duplicate regression group'
 failed=[v for v in runs if v['code']!=0]
