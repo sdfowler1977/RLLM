@@ -730,3 +730,84 @@ fixtures in the same edit so they go red first: `publish_refuses_verification_py
 `publish_passes_compliant_python_census`, `publish_python_census_counts_move_when_a_file_is_added` and
 `project_python_census_counts_this_tree`. `verification/README.md` now runs the group as
 `output/verification/local_feedback`.
+
+## 2026-11-13 (late morning) — five owner-run legs go native in one batch, and the ceiling drops to 16 files / 1813 lines
+
+`storage_oauth`, `task_ownership`, `drive_ownership`, `credential_rotation` and `media_upload` now run as
+native twins. `verification/*.rs` is 57 files; the Python census falls from 21 files / 2296 lines to
+**16 files / 1813 lines** (483 leg lines removed: storage_oauth 145, credential_rotation 128,
+media_upload 102, task_ownership 61, drive_ownership 47).
+
+### The five witnesses, each a two-column run in its own `git archive HEAD` room
+
+| Group | Room | twin / leg exit | Canonical report (from `tools/harness.rs group_report_file`) | Runner row |
+|---|---|---|---|---|
+| storage_oauth (78) | `/tmp/witq94-storage_oauth` | 0 / 0 | `output/checks/storage_oauth.json` `b12988860a8b8fb9…` — `CMP: byte-identical` | `storage_oauth PASS (exit 0, 1s, 78 checks)` |
+| task_ownership (79) | `/tmp/witq93-task_ownership` | 0 / 0 | `output/checks/task-ownership.json` `a502cb557fcd82f4…` — byte-identical | `task_ownership PASS (exit 0, 0s, 79 checks)` |
+| credential_rotation (82) | `/tmp/witq90-credential_rotation` | 0 / 0 | `output/checks/credential_rotation.json` `1c6d73445479bb0f…` — byte-identical | `credential_rotation PASS (exit 0, 0s, 82 checks)` |
+| media_upload (65) | `/tmp/witq92-media_upload` | 0 / 0 | `output/checks/media_upload.json` `4893bc38a0030e0b…` — byte-identical | `media_upload PASS (exit 0, 7s, 65 checks)` |
+| drive_ownership (38) | `/tmp/witq89-drive_ownership` | 0 / 0 | `output/checks/drive-ownership.json` `5aee65e27b43d626…` — byte-identical | `drive_ownership PASS (exit 0, 0s, 38 checks)` |
+
+Every room starts `compile_rc=0 errors=0 warnings=0` and `harness_build_rc=0`, and each of the five twins
+also matches its leg on the **printed** channel (`cmp` of stdout against the leg's printed record), which
+the report-file comparison alone would not have caught.
+
+### What had to be found before that equality meant anything
+
+`credential_rotation` reached its real checks only after five measured defects were removed, each one
+found by instrumenting a scratch copy rather than by reading:
+
+- **PKCE alphabet.** The seat computed the S256 challenge with the standard base64 alphabet:
+  `proof=09ZRoQRgLMBgwNqKW0DYC+4TJJ5ns3PZgvBOcCHnOu4` against the peer's
+  `expected=09ZRoQRgLMBgwNqKW0DYC-4TJJ5ns3PZgvBOcCHnOu4`. The leg uses
+  `base64.urlsafe_b64encode(...).rstrip(b'=')`; the subject's notice moved from `"HTTP 400. Check server
+  address, credentials, model and permissions."` to `"Connection authorization saved in encrypted app
+  state; API-key credentials were retained"`.
+- **Doubled state path.** `tokens()` indexed `state → drive → <section> → oauth_tokens`; the panic text
+  carried the doubled key (`missing drive drive tokens`).
+- **Override in the wrong handler.** The malformed-grant override lived in the peer's `refresh_token`
+  grant branch, so the five `… malformed initial grant retains exact prior tokens` cases could never fail —
+  the authorization-code exchange never saw a malformed grant. The leg monkeypatches the shared `Peer.issue`,
+  which answers every grant route and registers nothing, so the override now lives in `issue()`.
+- **Empty replacement token.** `PeerState::replacement_access` was declared, never assigned
+  (`..PeerState::default()`), and used in the replacement body, so the peer answered `"access_token":""`
+  and the subject marked the rotation uncertain — failing `null omission retains prior refresh compatibility`.
+  The field is gone; the leg's literal `replacement-access` is used.
+- **Model payload wrapped one level too deep.** The peer answered `/model/chat` with
+  `{"chat":{"choices":[…]}}`; the leg selects the per-format value (`{…}[fmt]`), so the body is the bare
+  protocol payload. Measured subject reaction to the wrapper: `notice="Missing choices"`,
+  `notice_error=true`.
+
+Two more defects were report-channel, not behaviour, and both were invisible to a report-file comparison:
+`task_ownership` printed `79 task_ownership checks passed` where the leg prints its record plus a
+`"count": 79` key (5922 vs 5907 bytes), and `storage_oauth` printed nothing where the leg prints a
+*different* shape from what it writes (`dict(passed=names)`, 5201 bytes, against a written
+`{passed: 78, checks: […]}`, 5217 bytes). Both twins now carry the leg's printed channel byte for byte.
+
+### Audit disposition (every seat output read in full)
+
+`storage_oauth` — the seat's single finding ("invents default port 80") is disproved by the instrument the
+leg itself uses: `urlsplit('http://127.0.0.1/authorize').port` is `None` and
+`http.client.HTTPConnection('127.0.0.1', None).port` is `80` (`HTTPConnection.default_port == 80`).
+Behaviour kept, equivalence recorded in a comment; **accepted**.
+`credential_rotation`, `task_ownership`, `drive_ownership` — **accepted** by the seats with full coverage
+tables (82/79/38 rows), three mutations each, and pass-conversion censuses (32/33/9 rows) with nothing
+invented. I re-ran the `drive_ownership` mutation premise: the leg literal really is
+`'GET /share/second.txt '` with a trailing space, and the twin keeps it.
+`media_upload` — the seat **rejected** on a "renamed check label" (`bounded 1` vs `bounded 0`).
+Disproved from the leg's own byte target: its names are
+`bounded 3, 5, 8, 10, 12, 14, 16, 18, 20, 61` — that check lives inside `exchange()` and never runs at
+count 0 — and the twin's report is `cmp` byte-identical to that target, so no label differs. The seat's
+premise about the leg's append order is wrong; the twin is **accepted**.
+
+### Census
+
+`VERIFICATION_PY_FILE_CEILING` 21 → **16** and `VERIFICATION_PY_LINE_CEILING` 2296 → **1813**, with the
+planted fixtures moved in the same edit: `publish_refuses_verification_python_over_ceiling`
+(51 files vs ceiling 16), `publish_refuses_verification_python_lines_over_ceiling`
+(1814 vs 1813), `publish_passes_verification_python_lines_at_ceiling`,
+`publish_python_census_byte_bound_is_two_sided`, `publish_passes_compliant_python_census`
+(`verification files 16 lines 16 ceiling files 16 lines 1813`),
+`publish_python_census_counts_move_when_a_file_is_added` and `project_python_census_counts_this_tree`
+(`verification files 16 lines 1813 ceiling files 16 lines 1813;`). `verification/README.md` now runs
+`output/verification/drive_ownership` and `output/verification/task_ownership`.
