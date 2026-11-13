@@ -15,7 +15,7 @@ python3 verification/binary_flow.py
 output/verification/pe_declarations
 output/verification/commands
 python3 verification/history_migration.py --previous-controller /path/to/prior-controller
-python3 verification/hosted_phases.py
+output/verification/hosted_phases
 output/verification/prompt_reference --previous-controller /path/to/prior-controller
 output/verification/provider_evidence
 output/verification/delegation_visibility

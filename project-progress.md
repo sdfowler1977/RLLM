@@ -1101,3 +1101,67 @@ with mutation arms of its own.
 Census: **7 files / 911 lines** left in `verification/` (66 legs retired); the two ceilings and all twelve census
 fixtures in `tools/package.rs` moved to 7 / 911, and `verification/README.md` now names
 `output/verification/pe_declarations` and `output/verification/prompt_reference`.
+
+## 2026-11-13 (late night) — the largest reachable leg goes native, and a clean-room row that was the instrument's fault
+
+### The run log on the committed bytes (commit `6e124f3`, room `/tmp/room-g`)
+
+A `git archive HEAD` room with no `output/` and no `.git`, measured with the sanctioned instruments only.
+
+| Instrument | Result |
+|---|---|
+| census in the room | 7 Python legs / 911 lines, 66 twins compiled |
+| `bash headless.sh` | rc 0 |
+| `bash tools/build-tools.sh output/tools` | rc 0; executed == declared per tool: alignment 2, readback 24, checkpoint 5, signature 5, apk 6, toolchain 10, gate 18, package 46, harness 28; twin helper tests 9 |
+| `bash tools/build-units.sh output/units` | rc 0 |
+| `output/tools/gate output/units` | `Rust cases passed: 878/878; isolated application cases: 57` |
+| `output/tools/gate --units output/units` | `Selected cases: 310` |
+| `output/checks/full-units.json` | `cb2fd261dc385e7ffb3db408e76a922aa702f17d985fecf0e02ca793923c467c` — identical to the previous room, so the three retired legs moved no core byte |
+| `output/harness sweep` | `64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4146 checks` |
+
+The targeted row initially read **9 pass / 0 fail / 1 unavailable**, and the unavailable row was
+`product_flow UNAVAILABLE (not executed, missing: path output/published-controller reference build (the group
+opens this path itself))`. That is the room script's gap, not the product's: `rc-g.sh` never seeds
+`output/published-controller`, which `product_flow` opens by itself. Copying the reference build into the room
+and re-running the same ten groups gives **10 pass / 0 fail / 0 unavailable** (`product_flow PASS (exit 0, 0s,
+37 checks)`). Room scripts from here on seed that path before the targeted row.
+
+### hosted_phases: 370 Python lines, 118 checks
+
+`hosted_phases.py` was the largest leg still reachable on this machine. The lane's twin
+(`verification/hosted_phases.rs`, 2153 lines, sha `ebbe53a7…`) was witnessed in `/tmp/witq109-hosted_phases`
+(one `git archive HEAD` of `6e124f3`, twin copied in, python leg left in place): twin and leg both exit 0,
+`output/checks/hosted-phases.json` 8574 B sha `34ec526d3dfd…` on both instruments with **CMP-FILE
+byte-identical**, stdout 8713 B with **CMP-STDOUT byte-identical**, independent counts `passed=118`, and in the
+same room the runner row `hosted_phases PASS (exit 0, 1s, 118 checks)`.
+
+The audit (`/tmp/mm-audit-hosted_phases.out`, read in full) **accepted** it: all 118 leg checks mapped to twin
+predicates in leg order with nothing absent, merged, renamed or reordered; a real twin-red/leg-green mutation
+(twin line 121 `num_eq(…, "passed", 1)` → `0`, which the leg's own `Partial report REQUIRED-ALPHA.` input at
+leg lines 33–34 makes differ); a report-byte mutation on the scope string at twin line 7; an inert control that
+must stay green; and a 24-row pass-conversion census of the twin's helper arms, every one shown unable to turn
+a leg-failing case into a twin pass.
+
+The retirement itself was caught by the instrument, not by me: after the ceilings moved, the first
+`tools/build-tools.sh` run reported **45 passed / 1 failed**, `publish_python_census_byte_bound_is_two_sided`
+panicking at `package.rs:4098` because that fixture still pinned `ceiling files 7 lines 911` in the census
+sentence. Ten census sites had to move, not nine. With the tenth moved the package suite is 46/46 and the whole
+tool suite runs with executed == declared counts.
+
+Census: **6 files / 541 lines** left (67 legs retired): `binary_flow.py` 271, `turn_background.py` 75,
+`live_web.py` 71, `apk_alignment.py` 54, `history_migration.py` 43, and the shared
+`transport.py` 27 — which now has **zero importers**: `verification/*.py` no longer imports it, its protocol is
+native in `core/media_upload.rs` and `core/media_stream.rs`, and the only thing that keeps it off the runner's
+"undeclared script" list is `const HELPERS: &[&str] = &["transport"];` at `tools/harness.rs:35`. It goes next.
+
+New ground opened the same night: an **unsigned Lab APK** (`CLIENT_UNSIGNED=1 CLIENT_VERSION_CODE=1794569618
+bash package.sh` → `output/2026-11-13__11-33-43Z/RLLM-unsigned.apk`, build rc 0) makes `apk_alignment` (11
+checks) and `turn_background` (28 checks) runnable through `RLLM_CHECK_APK` without a keystore. Both twins
+compile; both first runs went red for their own reasons — `apk_alignment` parsed the whole publication manifest
+instead of the leg's `['signed_apk']` record, then hit the shared JSON parser's 8 MiB cap while round-tripping
+the whole APK member inventory as hex through `python3`; `turn_background` panicked with
+`archive listing was not a JSON array` at line 434. Both are shelling out to `python3` for ZIP work, which is
+itself an R-rule smell inside a Rust twin, so the repair being driven now is a real pure-std ZIP
+reader/writer (`zip_names`, `zip_read`, `zip_entries_of`, `zip_write`, `crc32`, with DEFLATE inflate) in
+`verification/twin/mod.rs`, and both twins off `python3` onto it.
+
