@@ -1797,6 +1797,44 @@ fn run(root: &Path, name: &str, arguments: &[String]) -> (i32, String, u64) {
     (status, text, elapsed)
 }
 
+// Verdict for one name passed to `harness <name>`. GROUPS run. A declared
+// helper or optional group is real but this route does not execute it. Anything
+// else is an unknown name and must not exit green.
+enum RequestedGroup {
+    Executable,
+    DeclaredNotExecutable { kind: &'static str, reason: &'static str },
+    Unknown,
+}
+
+fn classify_requested_group(name: &str) -> RequestedGroup {
+    if GROUPS.iter().any(|group| *group == name) {
+        return RequestedGroup::Executable;
+    }
+    if let Some((_, reason)) = OPTIONAL.iter().find(|(group, _)| *group == name) {
+        return RequestedGroup::DeclaredNotExecutable { kind: "optional group", reason: *reason };
+    }
+    if HELPERS.iter().any(|group| *group == name) {
+        return RequestedGroup::DeclaredNotExecutable { kind: "helper group", reason: "not a runner group" };
+    }
+    RequestedGroup::Unknown
+}
+
+fn requested_group_refusal(name: &str) -> Option<String> {
+    match classify_requested_group(name) {
+        RequestedGroup::Executable => None,
+        RequestedGroup::Unknown => Some(format!(
+            "unknown group {name} (not a runner group, a declared helper or a declared optional group)"
+        )),
+        RequestedGroup::DeclaredNotExecutable { kind, reason } => {
+            Some(format!("{name} NOT EXECUTED ({kind}: {reason})"))
+        }
+    }
+}
+
+fn requested_group_refusals(names: &[String]) -> Vec<String> {
+    names.iter().filter_map(|name| requested_group_refusal(name)).collect()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("sweep") {
@@ -1809,6 +1847,14 @@ fn main() {
             }
         };
         std::process::exit(code);
+    }
+    let refusals = requested_group_refusals(&args);
+    if !refusals.is_empty() {
+        for line in &refusals {
+            eprintln!("{line}");
+        }
+        eprintln!("{}", sweep_usage());
+        std::process::exit(2);
     }
     let root = project_root();
     let only = args;
@@ -2548,5 +2594,46 @@ mod checks {
         assert_eq!(count, 1, "printed json count");
         let written = std::fs::read(root.join("output/checks").join(group_report_file("response_fields"))).unwrap();
         assert_eq!(written, body, "persist_printed_json altered the printed bytes");
+    }
+
+    #[test]
+    fn unknown_group_is_refused_and_names_the_three_declared_categories() {
+        let line = requested_group_refusal("zzz_nogroup").unwrap_or_else(|| panic!("undeclared name zzz_nogroup was accepted"));
+        assert_eq!(line, "unknown group zzz_nogroup (not a runner group, a declared helper or a declared optional group)");
+        assert!(line.contains("runner group"), "{line}");
+        assert!(line.contains("declared helper"), "{line}");
+        assert!(line.contains("declared optional group"), "{line}");
+    }
+
+    #[test]
+    fn live_web_is_refused_with_the_optional_reason() {
+        let reason = OPTIONAL.iter().find(|(name, _)| *name == "live_web").map(|(_, reason)| *reason).unwrap_or_else(|| panic!("live_web missing from OPTIONAL"));
+        match classify_requested_group("live_web") {
+            RequestedGroup::DeclaredNotExecutable { kind, reason: got } => {
+                assert_eq!(kind, "optional group");
+                assert!(std::ptr::eq(got, reason), "reason must be the OPTIONAL string, not a second copy");
+                assert_eq!(got, reason);
+            }
+            RequestedGroup::Executable => panic!("live_web was accepted as executable"),
+            RequestedGroup::Unknown => panic!("live_web was treated as unknown"),
+        }
+        assert_eq!(
+            requested_group_refusal("live_web").as_deref(),
+            Some(format!("live_web NOT EXECUTED (optional group: {reason})")).as_deref()
+        );
+    }
+
+    #[test]
+    fn gateway_expectation_stays_executable() {
+        assert!(matches!(classify_requested_group("gateway_expectation"), RequestedGroup::Executable), "a runner group must stay executable");
+        assert!(requested_group_refusal("gateway_expectation").is_none(), "a runner group must not be refused");
+    }
+
+    #[test]
+    fn gateway_prefix_is_refused() {
+        assert!(!GROUPS.iter().any(|name| *name == "gateway"), "gateway itself must not be a runner group");
+        assert!(GROUPS.iter().any(|name| *name == "gateway_expectation" && name.starts_with("gateway") && *name != "gateway"));
+        let line = requested_group_refusal("gateway").unwrap_or_else(|| panic!("prefix gateway was accepted"));
+        assert_eq!(line, "unknown group gateway (not a runner group, a declared helper or a declared optional group)");
     }
 }
