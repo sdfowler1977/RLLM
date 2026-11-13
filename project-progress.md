@@ -840,3 +840,143 @@ groups_rc=0                    summary: 6 pass, 0 fail, 0 unavailable of 71 grou
 The ratcheted census fixtures and `project_python_census_counts_this_tree` both pass on those bytes, so the
 new 16 / 1813 ceilings are enforced by the same tool rows that measure the tree, and the delivered
 `full-units.json` digest is unchanged from the previous batch.
+
+## 2026-11-13 (evening) — `commands` and `query_feedback` go native, and the witness now compares the printed channel too
+
+Two more owner-run legs retired in one batch (`0c508c4`, `db330c8`). The witness instrument itself changed:
+`/tmp/twinwitness3.sh` is v2 plus `cmp w-twin.log w-py.log`, because five of the last six legs turned out to
+print a *different record* from the one they write. A twin that only matches the file it writes is no longer
+certified.
+
+| Group | Room | Twin / leg rc | Canonical report (runner-derived) | Independent counts | Printed channel |
+|---|---|---|---|---|---|
+| commands | `/tmp/witq96-commands` | 0 / 0 | `output/checks/commands.json` `39bf8226…` byte-identical | `passed=86` | byte-identical to the leg's stdout |
+| query_feedback | `/tmp/witq96-query_feedback` | 0 / 0 | `output/checks/query-feedback.json` `11a83f25…` byte-identical | `passed=74`, scope | byte-identical to the leg's stdout |
+
+Runner rows on the witnessed bytes: `commands PASS (exit 0, 0s, 86 checks)`,
+`query_feedback PASS (exit 0, 0s, 74 checks)`.
+
+### The two `commands` pass-conversions the audit caught
+
+The first audit of the grok-authored twin rejected it on two fabricated values, and both were real:
+
+- A non-string tool reply became `String::new()`. The leg compares the tool reply against the evidence text
+  directly, so a non-string reply fails there; the twin would have kept going. It now panics naming the check.
+- `stream_protocol` defaulted to `"chat"` for a missing or non-string protocol. The leg is **not uniform**
+  here — line 67 indexes `d['effect']['stream_protocol']` (a missing key is a KeyError) while line 69 writes
+  `follow.get('stream_protocol') or 'chat'`. One helper could not be faithful to both, so the twin now has two:
+  `effect_protocol` panics, `follow_protocol` keeps the default. A single "obviously right" default would have
+  papered over leg line 67 forever.
+
+The re-audit of the repaired bytes accepted: 86 checks present in leg order, both fixes cited against the leg
+lines they mirror, and no remaining arm that can turn a leg-failing case into a twin pass.
+
+`query_feedback` was accepted on its first audit: 28 leg `check` calls (74 executions) all present in order,
+the leg's four bare `assert`s mirrored as twin panics, and the two arms that look permissive — `wire_text`
+accepting an array wire, and the inquiry-id default — are each pre-empted by an earlier panic. Its report
+shape is the inverted one again: the file carries `{passed: [74 names], scope}` and stdout carries the same
+body plus `"count": 74`, so the twin builds two bodies.
+
+### Census ratchet
+
+`verification/` Python went 16 files / 1813 lines → 15 / 1741 (`commands.py`, 72 lines) → **14 files / 1682
+lines** (`query_feedback.py`, 59 lines), 59 legs retired and 59 twins in `verification/*.rs`. Every
+`tools/package.rs` ceiling fixture moved with it: the two-sided bound fixture
+(`verification files 1 lines 1 ceiling files 14 lines 1682`), the compliant-census fixture
+(`verification files 14 lines 14 ceiling files 14 lines 1682`), the over-ceiling refusals
+(`files 51 exceed the recorded ceiling 14`, `lines 1683 exceed the recorded ceiling 1682`), and
+`project_python_census_counts_this_tree` (`verification files 14 lines 1682 ceiling files 14 lines 1682;`).
+`verification/README.md` now runs `output/verification/commands`.
+
+### The run log on the committed bytes (commit `0c508c4`, room `/tmp/room-d`)
+
+A clean `git archive HEAD` extraction — no `output/`, no `.git`, `tooling/` symlinked from the host:
+
+```
+census files=15 lines=1741 twins=58
+headless_rc=0
+tools_rc=0                     twin helper tests: 9 cases
+units_build_rc=0
+gate_rc=0                      Rust cases passed: 878/878; isolated application cases: 57
+                               output/checks/full-units.json
+                               cb2fd261dc385e7ffb3db408e76a922aa702f17d985fecf0e02ca793923c467c
+gate_units_rc=0                Selected cases: 310
+verification_build_rc=0
+harness_build_rc=0
+output/harness commands storage_oauth task_ownership credential_rotation media_upload drive_ownership local_feedback
+groups_rc=0                    summary: 7 pass, 0 fail, 0 unavailable of 71 groups
+  commands           PASS (exit 0, 0s, 86 checks)
+  drive_ownership    PASS (exit 0, 0s, 38 checks)
+  local_feedback     PASS (exit 0, 0s, 29 checks)
+  task_ownership     PASS (exit 0, 0s, 79 checks)
+  storage_oauth      PASS (exit 0, 1s, 78 checks)
+  credential_rotation PASS (exit 0, 0s, 82 checks)
+  media_upload       PASS (exit 0, 7s, 65 checks)
+sweep_rc=0                     summary: 64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4146 checks
+```
+
+The 1682-line ceiling, the twelve moved census fixtures and `project_python_census_counts_this_tree` all
+measure the same tree the publisher publishes, and the delivered `full-units.json` digest is unchanged again.
+The seven `unavailable` groups are the device-dependent ones (installed Android surfaces); none is a native
+twin regression — no group reported `fail`, and the runner reported `0 absent`.
+
+### Two more in the same batch: `diagnostics` (31) and `workspace_navigation` (83) — commit `e768551`
+
+| Group | Room | Twin / leg rc | Canonical report | Printed channel | Runner row |
+|---|---|---|---|---|---|
+| diagnostics | `/tmp/witq99-diagnostics` | 0 / 0 | `output/checks/diagnostics.json` `14860aae…` byte-identical | byte-identical | `diagnostics PASS (exit 0, 0s, 31 checks)` |
+| workspace_navigation | `/tmp/witq98-workspace_navigation` | 0 / 0 | `output/checks/workspace-navigation.json` `0e198af6…` byte-identical | byte-identical (leg adds `count: 83`) | `workspace_navigation PASS (exit 0, 0s, 83 checks)` |
+
+The diagnostics audit **accepted** the twin and still caught something: its coverage row for leg line 52
+recorded the predicate as `result.to_string().contains("input.txt")`, where the leg evaluates
+`'input.txt' in result` on the reply's own string value. That is the same class as the `commands` finding
+(a non-string tool reply quietly becoming a string), so it was not waved through: the twin now requires
+`Value::Str` and panics naming the check otherwise, and the repaired bytes were rebuilt, re-run against both
+byte targets, re-witnessed (`witq99`) and re-audited (accept). An accepting audit is not a clean bill of
+health — its coverage table is evidence to read line by line.
+
+The `diagnostics` writer draft needed five signature repairs before it even compiled: a `fields` **array**
+indexed as an object (the leg uses `next(f['value'] for f in … if f['key']=='runs')`), an `Option<&Value>`
+vs `&Value` `matches!` arm, a missing second `get()` argument, two `.and_then(Value::str_)` fn-pointer arms,
+and `scratch_root()` used as a `Path`. `workspace_navigation` (83 checks, real loopback MCP peers plus the
+Android document callbacks) came out of its lane compiling and byte-exact on the first try.
+
+Census: 12 files / 1517 lines left in `verification/` (61 legs retired), ceilings and all fixtures moved.
+
+### The run log on the committed bytes (commit `e768551`, room `/tmp/room-e`)
+
+A clean `git archive HEAD` extraction — no `output/`, no `.git`, `tooling/` symlinked from the host:
+
+```
+census files=12 lines=1517 twins=61
+headless_rc=0
+tools_rc=0                     twin helper tests: 9 cases
+units_build_rc=0
+gate_rc=0                      Rust cases passed: 878/878; isolated application cases: 57
+                               output/checks/full-units.json
+                               cb2fd261dc385e7ffb3db408e76a922aa702f17d985fecf0e02ca793923c467c
+gate_units_rc=0                Selected cases: 310
+verification_build_rc=0
+harness_build_rc=0
+output/harness commands diagnostics workspace_navigation query_feedback storage_oauth task_ownership
+               credential_rotation media_upload drive_ownership local_feedback
+groups_rc=0                    summary: 10 pass, 0 fail, 0 unavailable of 71 groups
+  commands            PASS (exit 0, 0s, 86 checks)
+  diagnostics         PASS (exit 0, 0s, 31 checks)
+  workspace_navigation PASS (exit 0, 0s, 83 checks)
+  query_feedback      PASS (exit 0, 0s, 74 checks)
+  storage_oauth       PASS (exit 0, 1s, 78 checks)
+  task_ownership      PASS (exit 0, 0s, 79 checks)
+  credential_rotation PASS (exit 0, 0s, 82 checks)
+  media_upload        PASS (exit 0, 6s, 65 checks)
+  drive_ownership     PASS (exit 0, 0s, 38 checks)
+  local_feedback      PASS (exit 0, 0s, 29 checks)
+sweep_rc=0                     summary: 64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4146 checks
+```
+
+The census line is the publisher's own count of the tree it publishes: 12 Python files, 1517 lines, 61 native
+twins. The delivered `full-units.json` digest is byte-identical to the previous two rooms' (`cb2fd261…`), so
+the three commits in this batch moved no native product bytes — only verification legs and their ceilings.
+The runner's pre-run `recorded in verification/RESULTS.json: 71 groups, 4248 checks` line is a read of the
+stale manifest, not this sweep's verdict; the sweep's own row is the last line, and the seven `unavailable`
+groups are the device-dependent installed-Android surfaces, unchanged from room `d`.
