@@ -94,6 +94,49 @@ impl Value {
     }
 }
 
+// The Python legs wrote their reports with json.dumps(indent=2) and the delivered
+// record splices that text, so a twin's report has to be laid out the same way.
+fn write_pretty(value: &Value, depth: usize, out: &mut String) {
+    let pad = "  ".repeat(depth);
+    match value {
+        Value::Arr(items) if !items.is_empty() => {
+            out.push_str("[\n");
+            for (index, item) in items.iter().enumerate() {
+                out.push_str(&"  ".repeat(depth + 1));
+                write_pretty(item, depth + 1, out);
+                if index + 1 < items.len() {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push_str(&pad);
+            out.push(']');
+        }
+        Value::Obj(fields) if !fields.is_empty() => {
+            out.push_str("{\n");
+            for (index, (key, item)) in fields.iter().enumerate() {
+                out.push_str(&"  ".repeat(depth + 1));
+                out.push_str(&quote(key));
+                out.push_str(": ");
+                write_pretty(item, depth + 1, out);
+                if index + 1 < fields.len() {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push_str(&pad);
+            out.push('}');
+        }
+        other => out.push_str(&other.to_string()),
+    }
+}
+
+pub fn pretty(value: &Value) -> String {
+    let mut out = String::new();
+    write_pretty(value, 0, &mut out);
+    out
+}
+
 pub fn obj(fields: Vec<(String, Value)>) -> Value {
     Value::Obj(fields)
 }
@@ -255,7 +298,7 @@ pub fn report(group: &str, passed: &[String], scope: &str) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap_or_else(|error| panic!("could not create {}: {error}", parent.display()));
     }
-    std::fs::write(&path, body.to_string()).unwrap_or_else(|error| panic!("could not write {}: {error}", path.display()));
+    std::fs::write(&path, pretty(&body)).unwrap_or_else(|error| panic!("could not write {}: {error}", path.display()));
     println!("{} {} checks passed", passed.len(), group);
 }
 
