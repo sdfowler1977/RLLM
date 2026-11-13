@@ -171,7 +171,9 @@ record does not embed the subject APK identity, so the coverage is evidenced by 
 
 Because `apk_alignment` only validates payload alignment and identity — it does not discriminate the
 Android surface change — the continuity contract now has its own group inside the sanctioned sweep:
-`verification/turn_background.py` (**28 checks**), registered in `tools/harness.rs` `GROUPS`. It reads
+`verification/turn_background.rs` (**28 checks**, executed as `output/verification/turn_background` — the
+`turn_background.py` leg it originally ran as was retired on 2026-11-13, see the census correction below),
+registered in `tools/harness.rs` `GROUPS`. It reads
 `AndroidManifest.xml`, `Activity.java`, `TurnService.java` and the core's effect emitters, then reads the
 service declaration, the permission and service counts and the dex method sets back out of the packaged
 APK with `aapt2 dump xmltree` and `dexdump`. The serialized sweep that added it: **62 pass, 0 fail,
@@ -376,7 +378,8 @@ record delivers the signed APK as a **companion** file, and `release/` holds onl
 in the instruments, which invented a default path instead of reading the record:
 
 - `verification/apk_alignment.py:11` and `verification/turn_background.py:34` each resolved the subject with
-  `os.environ.get('RLLM_CHECK_APK', <release/RLLM.apk>)`.
+  `os.environ.get('RLLM_CHECK_APK', <release/RLLM.apk>)`. (Both legs were retired on 2026-11-13; the defect and
+  its fix are recorded here as history, and the resolution now lives in the native twins named below.)
 - The runner gated the same phantom at `tools/harness.rs:132`: with no `RLLM_CHECK_APK` it probed
   `release/RLLM.apk`, so a companion delivery could never satisfy availability, and a group run directly would
   have opened a nonexistent file.
@@ -907,7 +910,22 @@ Measured census after the deletion: `verification/` **4 `.py` files / 243 lines*
 `turn_background.py` 75, `live_web.py` 71, `history_migration.py` 43), tracked-tree total **5 files / 358 lines**
 including `tools/package.py` (115 lines); `tools/package.rs` pins `VERIFICATION_PY_FILE_CEILING = 4` /
 `VERIFICATION_PY_LINE_CEILING = 243` and `project_python_census_counts_this_tree` prints
-`verification files 4 lines 243 ceiling files 4 lines 243`. Publication drift measured rather than assumed: the manifest's
+`verification files 4 lines 243 ceiling files 4 lines 243`. **Corrected again by the batch that retires
+`apk_alignment.py` and `turn_background.py`:** those two legs are deleted, leaving `verification/` **2 `.py`
+files / 114 lines** (`history_migration.py` 43, `live_web.py` 71) and a tracked-tree total of **3 files / 229
+lines** with `tools/package.py` (115). `tools/package.rs` now pins `VERIFICATION_PY_FILE_CEILING = 2` /
+`VERIFICATION_PY_LINE_CEILING = 114` and the census prints
+`verification files 2 lines 114 ceiling files 2 lines 114`. Read against the runner's own inventory, **70 of
+the 71 names in `const GROUPS` have no `verification/<name>.py`**; the only wired group still able to fall
+back to a leg is `history_migration`, and `live_web.py` is not in `GROUPS` at all — it is the optional
+`--live` route, so its retirement needs a separate decision about that route. The deletions were gated on
+same-subject pair witnesses, not on the existence of a twin: with `RLLM_CHECK_APK` pointing at
+`output/2026-11-13__11-33-43Z/RLLM-unsigned.apk`, `apk_alignment` produced report
+`36ff8454aa662cb2bd6280738e00bf2759158de53c46a926b78685547816509b` from the leg and the same bytes from the
+twin, 11 checks / 11 passed both sides, the only stdout difference being the leg's own
+`UserWarning: Duplicate name: 'AndroidManifest.xml'` from `zipfile`; `turn_background` produced byte-identical
+reports **and** byte-identical stdout, 28 checks / 28 passed both sides. Publication drift stays measured, not
+assumed: the manifest's
 `files` list pins 281 paths (233 match / 42 drift / **6 absent**, the six being the deleted Python
 tools), while `build_inputs` pins 162 paths at 130 / 31 / 1 — the deletions did not add absent
 `build_inputs` rows, one row moved to drift because pinned tracked sources changed content.
@@ -2401,6 +2419,25 @@ list: the successor-journal refusals (`core/self_build.rs:1010`, `:1597-1608`, u
 `:4822`, `:4915`) have **no connected verification leg** — the phrase `successor journal` appears
 nowhere under `verification/` or `tools/`, so none of those four named refusals reaches the delivered
 record.
+
+### Open finding (2026-11-13): the runner exits 0 for a group name it will never run
+
+`output/harness <name>` selects groups by filtering `const GROUPS` at `tools/harness.rs:1829`, so a requested
+name that is not in `GROUPS` matches nothing: no per-group line is printed, no `output/checks/<name>.json` is
+written, and the process still prints `summary: 0 pass, 0 fail, 0 unavailable of 71 groups` and exits **0**.
+Measured on these bytes: `output/harness zzz_nogroup` rc=0, `ls output/checks/zzz_nogroup.json` absent;
+`output/harness live_web` rc=0 the same way although `live_web` is declared in `const OPTIONAL` (`:36`) and
+`--live` appears nowhere in the runner, so that group is unreachable through the runner today. The census
+already refuses undeclared **files** (`:325` `verification/{script}.py is not a runner group, a declared
+helper or a declared optional group`); the symmetric guard for requested **names** was never written. This
+matters because every run-log claim in this program is made through that command, and the finding itself came
+from a sub-agent's census that named `service_identity` as a red group — a name that does not exist anywhere
+in the tree (measured: not in `GROUPS`, no `verification/` file), which the runner had been happily accepting.
+Re-measured reds from the same census: `gateway_expectation PASS (exit 0, 0s, 26 checks)`,
+`rrsi_loop PASS (exit 0, 1s, 15 checks)`. Repair scope: refuse an undeclared name with exit 2 naming the three
+declared categories, and refuse a declared-but-not-executable name with the reason string already stored in
+`OPTIONAL`; every `GROUPS` path stays byte-identical. **Status: open** — the guard is a bounded lane, and it
+lands only with tests measured red on the pre-fix bytes and mutations each naming one red.
 
 ## Historical baseline audit (original text)
 

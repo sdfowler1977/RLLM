@@ -546,11 +546,52 @@ fn value_as_str(value: &Value) -> Option<&str> {
     }
 }
 
+/// Splits a JSON container into its contents and the text that follows its own
+/// closing bracket. Slicing off the document's last character instead reads past
+/// the end of any nested container that is not the final field, which is what
+/// made the delivered record unparseable here.
+fn json_container(text: &str) -> Option<(&str, &str)> {
+    let opener = *text.as_bytes().first()?;
+    if opener != b'{' && opener != b'[' {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, byte) in text.bytes().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&text[1..index], &text[index + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn parse_json(text: &str) -> Result<Value, String> {
     let trimmed = text.trim();
     if trimmed.starts_with('{') {
+        let Some(body) = json_container(trimmed).map(|(body, _)| body) else {
+            return Err("unterminated JSON object".to_string());
+        };
         let mut fields = Vec::new();
-        let mut rest = &trimmed[1..trimmed.len().saturating_sub(1)];
+        let mut rest = body;
         loop {
             rest = rest.trim_start();
             if rest.is_empty() {
@@ -572,8 +613,11 @@ fn parse_json(text: &str) -> Result<Value, String> {
         }
         Ok(Value::Obj(fields))
     } else if trimmed.starts_with('[') {
+        let Some(body) = json_container(trimmed).map(|(body, _)| body) else {
+            return Err("unterminated JSON array".to_string());
+        };
         let mut items = Vec::new();
-        let mut rest = trimmed[1..trimmed.len().saturating_sub(1)].trim_start();
+        let mut rest = body.trim_start();
         loop {
             if rest.is_empty() {
                 break;
@@ -615,13 +659,18 @@ fn parse_json_string(text: &str) -> Result<(String, &str), String> {
 }
 
 fn parse_json_value(text: &str) -> Result<(Value, &str), String> {
-    if let Some(rest) = text.strip_prefix('"') {
-        let (value, rest) = parse_json_string(rest)?;
+    // The quote stays part of the input: parse_json_string is the scanner that
+    // reads it, so stripping it here made every string value fail to parse.
+    if text.starts_with('"') {
+        let (value, rest) = parse_json_string(text)?;
         return Ok((Value::Str(value), rest));
     }
     if text.starts_with('{') {
+        let Some((body, remainder)) = json_container(text) else {
+            return Err("unterminated JSON object".to_string());
+        };
         let mut fields = Vec::new();
-        let mut rest = text[1..text.len().saturating_sub(1)].trim_start();
+        let mut rest = body.trim_start();
         loop {
             if rest.is_empty() {
                 break;
@@ -640,11 +689,14 @@ fn parse_json_value(text: &str) -> Result<(Value, &str), String> {
             }
             break;
         }
-        return Ok((Value::Obj(fields), rest));
+        return Ok((Value::Obj(fields), remainder));
     }
     if text.starts_with('[') {
+        let Some((body, remainder)) = json_container(text) else {
+            return Err("unterminated JSON array".to_string());
+        };
         let mut items = Vec::new();
-        let mut rest = text[1..text.len().saturating_sub(1)].trim_start();
+        let mut rest = body.trim_start();
         loop {
             if rest.is_empty() {
                 break;
@@ -658,7 +710,7 @@ fn parse_json_value(text: &str) -> Result<(Value, &str), String> {
             }
             break;
         }
-        return Ok((Value::Arr(items), rest));
+        return Ok((Value::Arr(items), remainder));
     }
     if let Some(rest) = text.strip_prefix("true") {
         return Ok((Value::Bool(true), rest));
@@ -692,6 +744,46 @@ fn absolute(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_nested_container_ends_at_its_own_closer() {
+        let record = parse_json(
+            r#"{"signed_apk":{"path":"out/x.apk","location":"companion"},"files":[{"name":"a"},{"name":"b"}],"after":"kept"}"#
+        )
+        .expect("a nested record must parse");
+        assert_eq!(
+            record.get("after").and_then(value_as_str),
+            Some("kept"),
+            "a field that follows a nested container was swallowed: {}",
+            record.to_string()
+        );
+        assert_eq!(
+            record
+                .get("signed_apk")
+                .and_then(|value| value.get("location"))
+                .and_then(value_as_str),
+            Some("companion"),
+            "the nested object's own fields"
+        );
+        let Value::Arr(items) = record.get("files").expect("files array") else {
+            panic!("files is not an array");
+        };
+        assert_eq!(items.len(), 2, "the nested array lost an item");
+    }
+
+    #[test]
+    fn the_delivered_record_parses_and_names_a_companion_apk() {
+        let text = read(&project_root(), "PUBLICATION-MANIFEST.json");
+        let record = parse_json(&text).unwrap_or_else(|error| panic!("the delivered record did not parse: {error}"));
+        let signed = record.get("signed_apk").expect("signed_apk section");
+        let path = signed.get("path").and_then(value_as_str).expect("signed_apk.path");
+        assert!(path.ends_with(".apk"), "signed_apk.path does not name an APK: {path}");
+        assert_eq!(
+            signed.get("location").and_then(value_as_str),
+            Some("companion"),
+            "the record's delivery location for the signed APK"
+        );
+    }
 
     const TURN_SERVICE: &str = "Class descriptor  : 'Lcom/local/client/TurnService;'
   Direct methods  -

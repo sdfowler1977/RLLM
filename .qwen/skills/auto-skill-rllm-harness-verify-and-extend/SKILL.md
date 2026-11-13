@@ -82,8 +82,9 @@ self-test count and the named legs must agree) and to that group's required-leg 
   `aarch64-` and `x86_64-linux-android`.
 - No keystore here and the signing cert digest is pinned per variant → use `CLIENT_UNSIGNED=1` as a
   pipeline proof, and say so.
-- `verification/apk_alignment.py` runs against `RLLM_CHECK_APK=<path>`; point it at a freshly built APK
-  whose sources match the tree.
+- `output/verification/apk_alignment` (the native twin; its `verification/apk_alignment.py` leg was retired
+  on 2026-11-13) runs against `RLLM_CHECK_APK=<path>`; point it at a freshly built APK whose sources match the
+  tree. Without that variable it refuses by naming the record's companion APK instead of inventing a path.
 - The reference-build groups need `output/{previous,pre-branch,pre-auth,published}-controller`; with no
   git history they are **unavailable**, not failures. Report them in a table.
 - Map each red row to the binary it actually opened before calling it a gap — the six non-green groups are
