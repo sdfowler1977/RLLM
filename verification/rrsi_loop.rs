@@ -7,7 +7,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use twin::{b64_encode, n, obj, s, Value};
 
-const SCOPE: &str = "Owner checks through the product JSON-lines route: refine copies approval_root onto task_run.workspace and records source_digest, the digest-named ledger chains revisions for that run and experience.jsonl seals the settled row, a second round reads a recorded rejection, resume rebuilds the ledger prompt and decision from those files alone, a tampered library entry is refused without a rewrite, and delegate or compact carries no workspace and does not run the pool. A resumed refine records propose budgets 4/4, 3/3 and 3/1, refuses a repeated skills hypothesis by the round 1 name, records noise floor 0 and decision cost not recorded when a round gains nothing, leaves two flat skills rounds unpruned, stores the accepted incumbent as the rllm-evolve worktree commit, and keeps the separate evaluation score off the held-out keys. A three-round refine records budgets 4, 3 and 2, a leakage refusal before scoring, noise floor 2, pruned skills, the evolve commit, and the four held-out keys. A stalled ledger refuses an already-tried component while an untried component is not refused. A flat memory shape is accepted for structural novelty while its cost is unknown. The next equal score, one byte shorter, is accepted because the cost fell. The same shape one byte longer is refused because the cost rose. A later refine task reads the earlier task's sealed experience entry out of experience.jsonl in its own propose prompt, keyed to the earlier task rather than to itself, and the same later task over a library that holds no sealed row shows no historical experience section at all.";
+const SCOPE: &str = "Owner checks through the product JSON-lines route: refine copies approval_root onto task_run.workspace and records source_digest, the digest-named ledger chains revisions for that run and experience.jsonl seals the settled row, a second round reads a recorded rejection, resume rebuilds the ledger prompt and decision from those files alone, a tampered library entry is refused without a rewrite, and delegate or compact carries no workspace and does not run the pool. A resumed refine records propose budgets 4/4, 3/3 and 3/1, refuses a repeated skills hypothesis by the round 1 name, records noise floor 0 and decision cost not recorded when a round gains nothing, leaves two flat skills rounds unpruned, stores the accepted incumbent as the rllm-evolve worktree commit, and keeps the separate evaluation score off the held-out keys. A three-round refine records budgets 4, 3 and 2, a leakage refusal before scoring, noise floor 2, pruned skills, the evolve commit, and the four held-out keys. A stalled ledger refuses an already-tried component while an untried component is not refused. A flat memory shape is accepted for structural novelty while its cost is unknown. The next equal score, one byte shorter, is accepted because the cost fell. The same shape one byte longer is refused because the cost rose. A later refine task reads the earlier task's sealed experience entry out of experience.jsonl in its own propose prompt, keyed to the earlier task rather than to itself, and the same later task over a library that holds no sealed row shows no historical experience section at all. The run also prints the values behind those claims — the annealed budget sentence quoted out of the wire of each of the six propose requests this group drives, labelled with the request it came from, the noise floor each ledger row of all three runs recorded, the pruned set the settled run reports and the absence the flat-skills run reports, the incumbent commit as the ledger row, the rllm-evolve ref and the worktree HEAD, the held-out task and verifier digests, and the sealed library row's key, revision and digests next to the empty library before it — and a final check certifies that this run's own log carries each of them on the line of the request or run that produced it.";
 
 const TASK: &str = "Write the bounded note.";
 const CHECKS: &str = "REQUIRED-ALPHA\nREQUIRED-BETA";
@@ -19,6 +19,7 @@ const SHAPE_CHECK: &str = "a flat memory shape is accepted for structural novelt
 const CROSS_TASK: &str = "Write the second bounded note.";
 const CROSS_CHECK: &str = "a later refine task reads the earlier task's sealed experience entry from the propose prompt";
 const EMPTY_CHECK: &str = "a refine task whose library holds no sealed row shows no historical experience section";
+const LOG_CHECK: &str = "the run log prints the annealed budgets, the evolve commit three ways, the noise floors, the pruned set, the held-out digests and the sealed library row";
 
 fn main() {
     let root = std::env::current_dir().unwrap_or_else(|error| panic!("cwd: {error}"));
@@ -517,6 +518,7 @@ fn run(product: &mut Product, room: &Path) -> Vec<String> {
     run_tamper(product, room, &default_root, &mut passed);
     keep(&mut passed, CROSS_CHECK, cross_read.ok());
     keep(&mut passed, EMPTY_CHECK, empty_read.ok());
+    keep(&mut passed, LOG_CHECK, printed_log_carries_values());
     passed
 }
 
@@ -875,6 +877,7 @@ fn cross_task_read(product: &mut Product, room: &Path, default_root: &Path, sett
         "section heading HISTORICAL EXPERIENCE names the earlier task key {earlier_key} and the current task key {own_key} is {} from that section",
         yes_no(names_own_key)
     );
+    print_library_row("earlier sealed library row", &earlier);
     CrossRead {
         rows: rows.len(),
         heading: at.is_some(),
@@ -917,6 +920,13 @@ fn empty_library_read(product: &mut Product, room: &Path, default_root: &Path) -
         yes_no(heading),
         rows.len()
     );
+    if rows.is_empty() {
+        print_library_row("library before a sealed row", &Value::Null);
+    } else {
+        for row in &rows {
+            print_library_row("library before a sealed row", row);
+        }
+    }
     EmptyRead {
         rows: rows.len(),
         heading,
@@ -934,6 +944,289 @@ fn yes_no(present: bool) -> &'static str {
     } else {
         "absent"
     }
+}
+
+/// One greppable line. The text is a value just read from a wire, a ledger
+/// row, or a git file. A newline in that value stays on this one line.
+fn evidence(body: &str) {
+    let flat: String = body
+        .chars()
+        .map(|ch| if ch == '\n' || ch == '\r' { ' ' } else { ch })
+        .collect();
+    println!("evidence {flat}");
+    PRINTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(flat);
+}
+
+/// The evidence lines this run printed. The log is what a reader of a run-log
+/// document sees, so the run certifies its own log instead of trusting that
+/// the prints happened.
+static PRINTED: std::sync::LazyLock<std::sync::Mutex<Vec<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+/// A lowercase hex value of exactly `width` characters.
+fn is_hex(value: &str, width: usize) -> bool {
+    value.len() == width
+        && value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+/// The value printed after `key` on this line, up to the next space.
+fn value_after<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let at = line.find(key)? + key.len();
+    line.get(at..)?.split_whitespace().next()
+}
+
+/// A printed commit line carries the same 40-hex commit three times: the ledger
+/// row's commit, the `rllm-evolve` ref, and the linked worktree's HEAD.
+fn printed_commit_triple(line: &str) -> bool {
+    let Some(at) = line.find(" ledger commit ") else {
+        return false;
+    };
+    let tokens: Vec<&str> = line[at + " ledger commit ".len()..].split_whitespace().collect();
+    tokens.len() >= 6
+        && is_hex(tokens[0], 40)
+        && tokens[1] == "refs/heads/rllm-evolve"
+        && tokens[2] == tokens[0]
+        && tokens[3] == "worktree"
+        && tokens[4] == "HEAD"
+        && tokens[5] == tokens[0]
+}
+
+fn printed_log_carries_values() -> bool {
+    let lines = PRINTED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // A label and its value share one printed line, so a budget value cannot be
+    // satisfied by a sentence the run printed for a different request.
+    let budget_rows = [
+        (
+            "anneal propose round 1 ",
+            "Edits remaining this round: 4. The annealed budget is 4.",
+        ),
+        (
+            "anneal propose round 2 ",
+            "Edits remaining this round: 3. The annealed budget is 3.",
+        ),
+        ("anneal resumed propose ", "Edits remaining this round: 1. The annealed budget is 3."),
+        (
+            "drive propose round 1 ",
+            "Edits remaining this round: 4. The annealed budget is 4.",
+        ),
+        (
+            "drive propose round 2 ",
+            "Edits remaining this round: 3. The annealed budget is 3.",
+        ),
+        (
+            "drive propose round 3 ",
+            "Edits remaining this round: 2. The annealed budget is 2.",
+        ),
+    ];
+    let has_budgets = budget_rows.iter().all(|(label, sentence)| {
+        lines
+            .iter()
+            .any(|line| line.contains(label) && line.contains(sentence))
+    });
+    let no_missing_budget = !lines
+        .iter()
+        .any(|line| line.contains("propose budget sentence is absent"));
+    let has_commit_triple = lines.iter().any(|line| printed_commit_triple(line));
+    let has_noise_floors = ["anneal ledger ", "quiet ledger ", "drive ledger "]
+        .iter()
+        .all(|label| lines.iter().any(|line| line.contains(label) && line.ends_with("noise_floor 0")))
+        && lines
+            .iter()
+            .any(|line| line.contains("drive ledger ") && line.contains("round 3") && line.ends_with("noise_floor 2"));
+    let has_pruned = lines
+        .iter()
+        .any(|line| line.contains("drive settled pruned_components [\"skills\"]"));
+    // The flat-skills arm claims no pruning, so its line has to say so rather
+    // than leave the word "absent" in the log unattributed.
+    let asserts_flat_pruned_absent = lines
+        .iter()
+        .any(|line| line.contains("flat skills settled pruned_components is absent"));
+    let asserts_empty_library = lines.iter().any(|line| {
+        line.contains("library before a sealed row key absent revision absent harness_digest absent run_digest absent")
+    });
+    let has_held_out = lines.iter().any(|line| {
+        line.contains("drive held-out ")
+            && line.contains("held_out_known true")
+            && value_after(line, "held_out_task_key ").is_some_and(|key| is_hex(key, 64))
+            && value_after(line, "held_out_verifier ").is_some_and(|key| is_hex(key, 64))
+    });
+    let has_library_row = lines.iter().any(|line| {
+        let Some(at) = line.find(" sealed library row ") else {
+            return false;
+        };
+        let rest = &line[at + " sealed library row ".len()..];
+        value_after(rest, "key ").is_some_and(|key| is_hex(key, 64))
+            && value_after(rest, "revision ").is_some_and(|value| is_hex(value, 64))
+            && value_after(rest, "harness_digest ").is_some_and(|value| is_hex(value, 64))
+            && value_after(rest, "run_digest ").is_some_and(|value| is_hex(value, 64))
+    });
+    // The separate evaluation and the in-round score are printed as one line so
+    // the log shows they are different measurements of the same round.
+    let has_separate_evaluation = lines.iter().any(|line| {
+        line.contains("separate evaluation base passed 1 separate evaluation candidate passed 0")
+            && line.contains("in-round score_after 1")
+    });
+    has_budgets
+        && no_missing_budget
+        && has_commit_triple
+        && has_noise_floors
+        && has_pruned
+        && asserts_flat_pruned_absent
+        && asserts_empty_library
+        && has_held_out
+        && has_library_row
+        && has_separate_evaluation
+}
+
+/// The budget sentence the product wrote on this request, through the period
+/// that closes the annealed budget. Anything short of that sentence is absent.
+fn budget_sentence(wire: &str) -> Option<String> {
+    const START: &str = "Edits remaining this round:";
+    const ANNEALED: &str = "The annealed budget is ";
+    let rest = &wire[wire.find(START)?..];
+    let number_at = rest.find(ANNEALED)? + ANNEALED.len();
+    let tail = rest.get(number_at..)?;
+    let split = tail.find(|ch: char| ch == '.' || ch == '\n' || ch == '\r').unwrap_or(tail.len());
+    if split == 0 {
+        return None;
+    }
+    let stop = number_at + split + usize::from(tail.as_bytes().get(split) == Some(&b'.'));
+    Some(rest[..stop].to_string())
+}
+
+fn print_budget(label: &str, wire: &str) {
+    match budget_sentence(wire) {
+        Some(sentence) => evidence(&format!("{label} {sentence}")),
+        None => evidence(&format!("{label} propose budget sentence is {}", yes_no(false))),
+    }
+}
+
+fn stored_word(row: &Value, key: &str) -> String {
+    match row.get(key) {
+        None | Some(Value::Null) => "absent".to_string(),
+        Some(Value::Str(text)) => text.clone(),
+        Some(Value::Bool(value)) => value.to_string(),
+        Some(Value::Num(token)) => token.clone(),
+        Some(other) => canonical(other),
+    }
+}
+
+fn file_text(path: &Path) -> String {
+    if !path.is_file() {
+        return "absent".to_string();
+    }
+    let text = read_text(path).trim().to_string();
+    if text.is_empty() {
+        "absent".to_string()
+    } else {
+        text
+    }
+}
+
+fn print_noise(label: &str, rows: &[Value]) {
+    let mut carried = 0usize;
+    for (index, row) in rows.iter().enumerate() {
+        if matches!(row.get("noise_floor"), None | Some(Value::Null)) {
+            continue;
+        }
+        carried += 1;
+        evidence(&format!(
+            "{label} row {index} round {} component {} noise_floor {}",
+            stored_word(row, "round"),
+            stored_word(row, "component"),
+            stored_word(row, "noise_floor"),
+        ));
+    }
+    if carried == 0 {
+        evidence(&format!("{label} noise_floor is {}", yes_no(false)));
+    }
+}
+
+fn print_pruned(label: &str, value: Option<&Value>) {
+    match value {
+        None | Some(Value::Null) => evidence(&format!("{label} pruned_components is {}", yes_no(false))),
+        Some(value) => evidence(&format!("{label} pruned_components {}", canonical(value))),
+    }
+}
+
+fn print_incumbent(label: &str, ledger_commit: &str, room: &Path, seed: &str) {
+    let evolve = file_text(&room.join(".git/refs/heads/rllm-evolve"));
+    let head = file_text(&room.join(".git/worktrees/c0/HEAD"));
+    let main = file_text(&room.join(".git/refs/heads/main"));
+    let planted = {
+        let text = seed.trim();
+        if text.is_empty() {
+            "absent".to_string()
+        } else {
+            text.to_string()
+        }
+    };
+    let equals = main != "absent" && planted != "absent" && main == planted;
+    evidence(&format!(
+        "{label} ledger commit {ledger_commit} refs/heads/rllm-evolve {evolve} worktree HEAD {head} refs/heads/main {main} planted seed {planted} main equals planted seed is {}",
+        yes_no(equals)
+    ));
+}
+
+fn evolve_commit(rows: &[Value]) -> String {
+    rows.iter()
+        .find(|row| row_string(row, "branch") == Some("rllm-evolve"))
+        .map(|row| stored_word(row, "commit"))
+        .unwrap_or_else(|| "absent".to_string())
+}
+
+fn passed_word(score: &Value) -> String {
+    match score {
+        Value::Null => "absent".to_string(),
+        other => stored_word(other, "passed"),
+    }
+}
+
+fn print_eval(label: &str, base: &Value, candidate: &Value, in_round: &Value) {
+    evidence(&format!(
+        "{label} separate evaluation base passed {} separate evaluation candidate passed {} in-round score_after {}",
+        passed_word(base),
+        passed_word(candidate),
+        stored_word(in_round, "score_after"),
+    ));
+}
+
+fn print_held_rows(label: &str, rows: &[Value]) {
+    const KEYS: [&str; 4] = ["held_out_known", "held_out_passed", "held_out_task_key", "held_out_verifier"];
+    let mut found = false;
+    for (index, row) in rows.iter().enumerate() {
+        let carries = KEYS.iter().any(|key| matches!(row.get(*key), Some(value) if !matches!(value, Value::Null)));
+        if !carries {
+            continue;
+        }
+        found = true;
+        let body = KEYS
+            .iter()
+            .map(|key| format!("{key} {}", stored_word(row, key)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        evidence(&format!(
+            "{label} row {index} round {} component {} {body}",
+            stored_word(row, "round"),
+            stored_word(row, "component"),
+        ));
+    }
+    if !found {
+        evidence(&format!(
+            "{label} held_out_known held_out_passed held_out_task_key held_out_verifier are {}",
+            yes_no(false)
+        ));
+    }
+}
+
+fn print_library_row(label: &str, row: &Value) {
+    evidence(&format!(
+        "{label} key {} revision {} harness_digest {} run_digest {}",
+        stored_word(row, "key"),
+        stored_word(row, "revision"),
+        stored_word(row, "harness_digest"),
+        stored_word(row, "run_digest"),
+    ));
 }
 
 fn run_recursion(product: &mut Product, room: &Path, default_root: &Path) -> Recursion {
@@ -955,11 +1248,13 @@ fn run_recursion(product: &mut Product, room: &Path, default_root: &Path) -> Rec
     );
     pending = reply(product, &pending, "baseline says nothing");
     let wire1 = effect_wire(&pending).to_string();
+    print_budget("anneal propose round 1", &wire1);
     pending = reply(product, &pending, "component: plugins\nhypothesis: keep the index\nindex body stays local");
     pending = reply(product, &pending, "PHRASE-ONE only");
     pending = reply(product, &pending, "component: skills\nhypothesis: flat one\nflat body one");
     pending = reply(product, &pending, "replay says nothing");
     let wire2 = effect_wire(&pending).to_string();
+    print_budget("anneal propose round 2", &wire2);
     pending = reply(product, &pending, "component: skills\nhypothesis: flat two\nflat body two");
     pending = reply(product, &pending, "still nothing");
     pending = reply(product, &pending, "component: skills\nhypothesis: flat three\nflat body three");
@@ -969,10 +1264,12 @@ fn run_recursion(product: &mut Product, room: &Path, default_root: &Path) -> Rec
     let rows = read_rows(&default_root.join(format!("{digest}.jsonl")));
     observed.digest = digest.clone();
     observed.rows = rows.iter().map(RowFacts::from).collect();
+    print_noise("anneal ledger", &rows);
     observed.raw_rows = rows;
     observed.wire1 = wire1.contains("Edits remaining this round: 4. The annealed budget is 4.") && !wire1.contains("Pruned:");
     observed.wire2 = wire2.contains("Edits remaining this round: 3. The annealed budget is 3.") && !wire2.contains("Pruned:");
     observed.pruned_run = settled.get("pruned_components").cloned();
+    print_pruned("flat skills settled", settled.get("pruned_components"));
 
     let prepared = settle_gap(product, room);
     let mut pending = event(
@@ -988,6 +1285,7 @@ fn run_recursion(product: &mut Product, room: &Path, default_root: &Path) -> Rec
     );
     pending = reply(product, &pending, "baseline again");
     let wire3 = effect_wire(&pending);
+    print_budget("anneal resumed propose", wire3);
     observed.wire3 = wire3.contains("Edits remaining this round: 1. The annealed budget is 3.");
     observed.wire3_pruned = wire3.contains("Pruned:");
     observed.resumed = state(&pending).get("task_run").and_then(|run| run.get("run_digest")).and_then(as_str).map(str::to_string);
@@ -1018,6 +1316,7 @@ fn run_recursion(product: &mut Product, room: &Path, default_root: &Path) -> Rec
     let quiet_digest = quiet.get("run_digest").and_then(as_str).unwrap_or("");
     observed.quiet_note = quiet.get("round_note").and_then(as_str).unwrap_or("").to_string();
     observed.quiet_rows = read_rows(&default_root.join(format!("{quiet_digest}.jsonl")));
+    print_noise("quiet ledger", &observed.quiet_rows);
 
     let prepared = settle_gap(product, room);
     let mut pending = event(
@@ -1080,6 +1379,8 @@ fn run_recursion(product: &mut Product, room: &Path, default_root: &Path) -> Rec
         ("eval_cand".into(), cand.get("passed").cloned().unwrap_or(Value::Null)),
     ]);
     observed.pool = pool;
+    print_incumbent("pool", &stored_word(&pool_row, "commit"), room, &seed);
+    print_eval("pool", &base, &cand, &pool_row);
 
     let prepared = settle_gap(product, room);
     let mut pending = event(
@@ -1099,22 +1400,28 @@ fn run_recursion(product: &mut Product, room: &Path, default_root: &Path) -> Rec
     );
     pending = reply(product, &pending, "baseline says nothing");
     pending = reply(product, &pending, "HELD-TOKEN is the separate answer");
-    observed.propose1 = effect_wire(&pending).contains("Edits remaining this round: 4. The annealed budget is 4.")
-        && !effect_wire(&pending).contains("Pruned:");
+    let drive_wire_1 = effect_wire(&pending).to_string();
+    print_budget("drive propose round 1", &drive_wire_1);
+    observed.propose1 = drive_wire_1.contains("Edits remaining this round: 4. The annealed budget is 4.")
+        && !drive_wire_1.contains("Pruned:");
     pending = reply(
         product,
         &pending,
         "candidates: 3\n{\"a\":\"\"}\n---\nCopy the task Drive three rounds. into the harness\n---\ncomponent: skills\nhypothesis: flat one\nflat body one",
     );
     pending = reply(product, &pending, "{\"a\":\"\",\"b\":\"\"}");
-    observed.propose2 = effect_wire(&pending).contains("Edits remaining this round: 3. The annealed budget is 3.")
-        && !effect_wire(&pending).contains("Pruned:");
+    let drive_wire_2 = effect_wire(&pending).to_string();
+    print_budget("drive propose round 2", &drive_wire_2);
+    observed.propose2 = drive_wire_2.contains("Edits remaining this round: 3. The annealed budget is 3.")
+        && !drive_wire_2.contains("Pruned:");
     pending = reply(product, &pending, "component: plugins\nhypothesis: raise the flag\nplugin body stays local");
     pending = reply(product, &pending, "{\"a\":\"\",\"b\":\"\"}");
     pending = reply(product, &pending, "component: skills\nhypothesis: flat two\nflat body two");
     pending = reply(product, &pending, "replay says nothing");
-    observed.propose3 = effect_wire(&pending).contains("Edits remaining this round: 2. The annealed budget is 2.")
-        && !effect_wire(&pending).contains("Pruned:");
+    let drive_wire_3 = effect_wire(&pending).to_string();
+    print_budget("drive propose round 3", &drive_wire_3);
+    observed.propose3 = drive_wire_3.contains("Edits remaining this round: 2. The annealed budget is 2.")
+        && !drive_wire_3.contains("Pruned:");
     pending = reply(product, &pending, "component: skills\nhypothesis: flat three\nround three body");
     pending = reply(product, &pending, "still nothing");
     pending = reply(product, &pending, "component: skills\nhypothesis: flat four\nround three composed");
@@ -1135,6 +1442,10 @@ fn run_recursion(product: &mut Product, room: &Path, default_root: &Path) -> Rec
     observed.harness = read_text_if_file(&room.join(".rllm-worktrees/c0/rllm-harness.txt"));
     observed.main = read_text_if_file(&room.join(".git/refs/heads/main")).trim().to_string();
     observed.seed = seed;
+    print_noise("drive ledger", &observed.drive_rows);
+    print_pruned("drive settled", reviewed.get("pruned_components"));
+    print_incumbent("drive", &evolve_commit(&observed.drive_rows), room, &observed.seed);
+    print_held_rows("drive held-out", &observed.drive_rows);
     settle_gap(product, room);
     observed
 }

@@ -637,3 +637,40 @@ these four JSONL verbs.
 | attempt 1 of `g1run4` | ran `git show HEAD:core/lib.rs` **inside** the room, which has no `.git` | the redirect truncated `core/lib.rs` to empty (sha256 `e3b0c442…`), and the driver died at Leg 2 |
 | attempt 2 of `g1run4` | wrote `> output/tools-build.log` in a room with no `output/` yet | `tools_rc=1`, `headless_rc=1`, `cp: cannot stat 'output/headless/RLLM'` — neither build had actually run |
 
+## The whole chain again, on the bytes this document is committed against — 2026-11-13T12:30Z, commit `1cbc272`
+
+Same seam, re-driven because the earlier whole-chain log was made at `57b063f`. Driver `/tmp/g1run5.py`
+(a copy of `/tmp/g1run4.py`, room and log paths renamed), transcript `/tmp/g1run5.log`, room
+`/tmp/g1run5-room`. A python driver is still the instrument here; the delivered verification of this seam is
+the native `self_rebuild` group, whose own run log on `d31ec6c` is recorded in
+`docs/RLLM-gap-status-2026-11-13.md` §Gap 1.
+
+```
+git -C /home/shawn/RLLM archive HEAD | tar -x -C /tmp/g1run5-room   # HEAD 1cbc272e5af75559…
+bash tools/build-tools.sh output/tools                              # tools_rc=0, warning lines 0
+bash headless.sh                                                    # headless_rc=0
+output/headless/RLLM.pre 13,096,584 bytes   output/tools/gate 4,731,768 bytes
+git -C /home/shawn/RLLM show HEAD:core/lib.rs > core/lib.rs          # sha 7463fcf335b2d88d… (from the repo, not the room)
+```
+
+The build prints **zero** `^warning:` lines now; the same room build at `57b063f` printed 46.
+
+| leg | what ran | what the product said |
+|---|---|---|
+| 1 | `self_fingerprint` on the pre-edit image over the pre-edit tree; then `self_echo` as the control | `binary_digest 832e2933…`, `files 351`, `source_digest 83707f67…`, `stale:false`; control → `{"error":"Unknown operation"}` — the verb does not exist in the image that is about to do the building |
+| 2 | one edit to `core/lib.rs` after the `self_handoff` arm (adds a `self_echo` arm) | 21,918 bytes, sha256 `1a487c17a1273030…` |
+| 3 | `self_journal` over a live pipe, `binary = previous_binary = RLLM.pre`, `successor_binary = RLLM`, `sanctioned:true`, `units: "output/units-run"` | 209.3 s → `builder_exit:0`, **`gate: {"cases":878,"green":true,"isolated":57,"passed":878}`**, `revision 27b2667eed0987b2…`, `parent ""`, `rollback_digest` = the pre-edit binary digest, `successor {argv:["./output/headless/RLLM"], pid 2529239, binary_digest ff301323…}`, `verdicts:["gate-green"]`, `recorded:true` |
+| 4 | `self_fingerprint` claiming the **pre-edit** `source_digest` | `stale:true`, `claimed_source_digest 83707f67…` against the tree's actual `f8a5908d…` — staleness is computed from the tree |
+| 5 | `self_handoff` with `review_confirmed:false` | `executed:false`, `successors:[]`, `successor_rows:0` — reload refuses without review, and the successor the builder had already started is not adopted |
+| 6 | `self_handoff` with `review_confirmed:true` (exec: the image is replaced, no reply expected), then the **same pipe** | `self_echo` → `{"canary":"successor-build"}`, a string that exists only in the post-edit build, then `self_fingerprint` → `binary_digest ff301323…`, `stale:false` |
+
+`output/self/journal.jsonl` holds the revision chain (`wc -l` 1 at this point: one recorded revision,
+`parent ""`), and `output/self/rollback` is the 13,096,584-byte pre-edit image the product saved for itself.
+
+What this re-run adds over the `57b063f` log: the gate row now reports **878 cases with 57 isolated** where the
+sections above record `{"cases":538,…,"isolated":55}` and `{"cases":541,…,"isolated":55}`, the room build is
+warning-free where that one printed 46 `^warning:` lines, and the whole sequence is on the bytes this document
+is committed against. What it still does not claim: the carried-`RLLM_SELF_JOB` route is
+not reachable from these four JSONL verbs, so "the same job" is the same live session, the same recorded
+chain and the same edited tree — unchanged from the section above.
+
