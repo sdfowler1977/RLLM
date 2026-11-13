@@ -811,3 +811,32 @@ planted fixtures moved in the same edit: `publish_refuses_verification_python_ov
 `publish_python_census_counts_move_when_a_file_is_added` and `project_python_census_counts_this_tree`
 (`verification files 16 lines 1813 ceiling files 16 lines 1813;`). `verification/README.md` now runs
 `output/verification/drive_ownership` and `output/verification/task_ownership`.
+
+### The run log on the committed bytes (commit `c535ccb`, room `/tmp/room-c`)
+
+A clean `git archive HEAD` extraction — no `output/`, no `.git`, `tooling/` symlinked from the host:
+
+```
+census files=16 lines=1813 twins=57
+headless_rc=0
+tools_rc=0                     twin helper tests: 9 cases
+units_build_rc=0
+gate_rc=0                      Rust cases passed: 878/878; isolated application cases: 57
+                               output/checks/full-units.json
+                               cb2fd261dc385e7ffb3db408e76a922aa702f17d985fecf0e02ca793923c467c
+gate_units_rc=0                Selected cases: 310
+verification_build_rc=0
+harness_build_rc=0
+output/harness storage_oauth task_ownership credential_rotation media_upload drive_ownership local_feedback
+groups_rc=0                    summary: 6 pass, 0 fail, 0 unavailable of 71 groups
+  storage_oauth      PASS (exit 0, 1s, 78 checks)
+  task_ownership     PASS (exit 0, 0s, 79 checks)
+  credential_rotation PASS (exit 0, 0s, 82 checks)
+  media_upload       PASS (exit 0, 6s, 65 checks)
+  drive_ownership    PASS (exit 0, 0s, 38 checks)
+  local_feedback     PASS (exit 0, 0s, 29 checks)
+```
+
+The ratcheted census fixtures and `project_python_census_counts_this_tree` both pass on those bytes, so the
+new 16 / 1813 ceilings are enforced by the same tool rows that measure the tree, and the delivered
+`full-units.json` digest is unchanged from the previous batch.
