@@ -793,7 +793,7 @@ fn png(seed: u8) -> String {
     let mut image = Vec::new();
     image.extend_from_slice(b"\x89PNG\r\n\x1a\n");
     image.extend_from_slice(&chunk(b"IHDR", &ihdr()));
-    image.extend_from_slice(&chunk(b"IDAT", &zlib_compress(&[0, seed, 0, 0])));
+    image.extend_from_slice(&chunk(b"IDAT", &twin::zlib_compress(&[0, seed, 0, 0])));
     image.extend_from_slice(&chunk(b"IEND", &[]));
     twin::b64_encode(&image)
 }
@@ -809,46 +809,7 @@ fn chunk(kind: &[u8], data: &[u8]) -> Vec<u8> {
     out.extend_from_slice(data);
     let mut crc_input = kind.to_vec();
     crc_input.extend_from_slice(data);
-    out.extend_from_slice(&crc32(&crc_input).to_be_bytes());
-    out
-}
-
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc = 0xffff_ffffu32;
-    for byte in data {
-        crc ^= *byte as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
-        }
-    }
-    !crc
-}
-
-fn zlib_compress(data: &[u8]) -> Vec<u8> {
-    let mut out = vec![0x78, 0x01];
-    let mut bit_buffer = 0u32;
-    let mut bit_count = 0u32;
-    for byte in data {
-        bit_buffer |= (*byte as u32) << bit_count;
-        bit_count += 8;
-        while bit_count >= 3 {
-            let code = (bit_buffer & 7) as u8;
-            bit_buffer >>= 3;
-            bit_count -= 3;
-            out.push(code);
-        }
-    }
-    if bit_count > 0 {
-        out.push((bit_buffer & 7) as u8);
-    }
-    let mut s1 = 1u32;
-    let mut s2 = 0u32;
-    for byte in data {
-        s1 = (s1 + *byte as u32) % 65521;
-        s2 = (s2 + s1) % 65521;
-    }
-    out.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
+    out.extend_from_slice(&twin::crc32(&crc_input).to_be_bytes());
     out
 }
 

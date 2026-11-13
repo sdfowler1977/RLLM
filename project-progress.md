@@ -292,3 +292,36 @@ readback 24, checkpoint 5, signature 5, alignment 2) against the 62/5391 pins; 1
 `scene` (90) and `snapshot_identity` (61) and `a2a` (72) in lanes, the codec consolidation across
 `mcp_history.rs`/`http_framing.rs`/`rrsi_loop.rs` in a lane of its own, and the remaining 62 legs behind the
 draft queue.
+
+## 2026-11-12 (late) — one codec implementation replaces three private copies
+
+The three twins that needed content codecs each wrote their own: SHA-256, SHA-1, CRC-32, Adler-32, stored
+DEFLATE, zlib, gzip and a full inflate. `verification/twin/mod.rs` now carries that code once
+(`sha256_bytes`, `sha256_digest`, `sha1_digest`, `crc32`, `adler32`, `deflate_stored`, `zlib_compress`,
+`gzip_store`, `zlib_decompress`, `inflate_zlib`, `inflate_deflate`, `inflate_block`, `inflate_blocks`,
+`gzip_decode`, `skip_gzip_text`) and the twins call it: `mcp_history.rs` 871 → 832 lines, `http_framing.rs`
+1248 → 1215, `rrsi_loop.rs` 2036 → 1602 — **506 duplicated lines removed**, helper 649 → 1246.
+
+**A consolidation is only behaviour-neutral if the digests say so.** Re-witnessed in a git-archive room over
+the staged files (`/tmp/rwu.log`): 11 twins built, 0 errors 0 warnings, and for all three groups twin rc=0 /
+leg rc=0 / `cmp` byte-identical with the report sha256 **unchanged** from the pre-consolidation twin
+(`19fb9294…` 21 checks, `d859d322…` 189, `c7f2df8a…` 15). The digest not moving is the proof; a report that
+still "passes with the right count" would not be.
+
+**Three audit seats, read line by line.** `mcp_history` accepted with no defect. `rrsi_loop`'s three findings
+were all refuted against the leg: the `round_note`→`notice` fallback is the leg's own line 246
+(`decision=proposed_run.get('round_note') or proposed['state'].get('notice') or ''`); accepting a missing
+`workspace` matches `compact_run.get('workspace')` (line 171) asserted by `compact_workspace in (None,'')`
+(line 180); and the error-tail `unwrap_or_default()` sits in the `Ok(0)` stdout-closed branch that panics
+either way, mirroring `rrsi_loop.py:112`. `http_framing`'s two findings are both **pre-existing at HEAD**
+(`py_bytes`, `finished_rx.try_recv().unwrap_or(Ok(()))`), so they are outside a commit whose whole claim is
+digest equality. `py_bytes` as a "duplicate helper" is refuted — it is defined once in the tree and two check
+names embed its Python-`repr` output byte-for-byte. The `try_recv` default is a real weakening (a server
+thread that dies before reporting reads as success) and is carried as a repair item.
+
+**Gate on these bytes:** tools tests unchanged in size (package 46, harness 23, gate 18, toolchain 10, apk 6,
+readback 24, checkpoint 5, signature 5, alignment 2) against the 62/5391 and 191 pins; 11 twins with 0 errors
+0 warnings; sweep **71 groups / 4248 checks, 67 pass / 0 fail / 4 unavailable / 0 absent**;
+`verification/RESULTS.json` still
+`e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0`. Python exposure is unchanged by this commit
+— it is a Rust-side dedup, not another leg retirement.

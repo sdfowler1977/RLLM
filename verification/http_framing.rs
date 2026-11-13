@@ -51,7 +51,7 @@ fn run(controller: &mut Controller, root: &str, passed: &mut Vec<String>) {
     let (actual, result) = persistent(controller, &raw, false, None, None, None).unwrap_or_else(|error| panic!("{name}: {error}"));
     keep_msg(passed, name, actual == raw && status_is(&result, 207), || exchange_detail(&actual, &raw, &result));
 
-    let body = gzip_store(b"<html><body>GZIP_FRAME</body></html>");
+    let body = twin::gzip_store(b"<html><body>GZIP_FRAME</body></html>");
     let raw = cat(&[b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: ", body.len().to_string().as_bytes(), b"\r\n\r\n", &body]);
     let name = "framing preserves coded response bytes";
     let (actual, _) = persistent(controller, &raw, false, None, None, None).unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -1194,39 +1194,6 @@ fn cat(parts: &[&[u8]]) -> Vec<u8> {
 
 fn port_of(listener: &TcpListener) -> u16 {
     listener.local_addr().unwrap_or_else(|error| panic!("address: {error}")).port()
-}
-
-fn gzip_store(input: &[u8]) -> Vec<u8> {
-    let mut out = vec![0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff];
-    let mut rest = input;
-    if rest.is_empty() {
-        out.extend_from_slice(&[0x01, 0x00, 0x00, 0xff, 0xff]);
-    }
-    while !rest.is_empty() {
-        let take = rest.len().min(65535);
-        let last = take == rest.len();
-        out.push(if last { 0x01 } else { 0x00 });
-        let size = take as u16;
-        out.extend_from_slice(&size.to_le_bytes());
-        out.extend_from_slice(&(!size).to_le_bytes());
-        out.extend_from_slice(&rest[..take]);
-        rest = &rest[take..];
-    }
-    out.extend_from_slice(&crc32(input).to_le_bytes());
-    out.extend_from_slice(&(input.len() as u32).to_le_bytes());
-    out
-}
-
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc = 0xffff_ffffu32;
-    for &byte in data {
-        crc ^= u32::from(byte);
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
-        }
-    }
-    !crc
 }
 
 struct Scratch(PathBuf);
