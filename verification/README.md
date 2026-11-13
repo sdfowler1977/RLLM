@@ -26,7 +26,7 @@ python3 verification/review_ownership.py
 python3 verification/task_ownership.py
 python3 verification/dav_listing.py
 python3 verification/server_admission.py
-python3 verification/http_framing.py
+output/verification/http_framing
 python3 verification/platform_resolution.py
 ```
 

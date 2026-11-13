@@ -183,3 +183,58 @@ and `rllm.password`, and the certificate digest stays `ba3d016e…` — no keyst
 
 Not claimed: signed-path behaviour (no signed APK on this host), device acceptance, and any `GAP2`/`GAP3`/
 `GAP4` capability beyond the run logs already in `docs/`.
+
+### 2026-11-12 — five connected verification legs went native (twin batch 1)
+
+`verification/mcp_history.py`, `http_framing.py`, `rrsi_loop.py`, `mcp_catalog.py` and `proposal_recovery.py`
+are deleted; each group now runs a native twin `verification/<name>.rs` that `tools/build-verification.sh`
+compiles and the runner prefers. Verification Python went **72 files / 8547 lines → 67 files / 7052 lines**, and
+both package ceilings moved with the deletion (`VERIFICATION_PY_FILE_CEILING` 72 → 67,
+`VERIFICATION_PY_LINE_CEILING` 8547 → 7052), including every census string pinned inside the package tests.
+
+**Each conversion is certified by a two-column witness, not by the lane that wrote it.** In one room built from
+`git archive HEAD` plus the twin, the retired Python leg and the twin ran side by side and their report files
+were byte-compared; then the runner ran the group (`/tmp/twinwitness5.sh`):
+
+    group                twin rc / py rc   shared report sha256                        runner row
+    mcp_history          0 / 0             19fb92949c89d92e…  mcp_history PASS (exit 0, 0s, 21 checks)
+    http_framing         0 / 0             d859d322aa37294d…  http_framing PASS (exit 0, 0s, 189 checks)
+    rrsi_loop            0 / 0             c7f2df8a38750090…  rrsi_loop PASS (exit 0, 1s, 15 checks)
+    mcp_catalog          0 / 0             f3fe2c46ef251824…  mcp_catalog PASS (exit 0, 0s, 30 checks)
+    proposal_recovery    0 / 0             cca9b25d5b1c25ac…  proposal_recovery PASS (exit 0, 8s, 249 checks)
+
+The five legs do **not** share one report shape — the delivered record splices each report verbatim, so a twin
+must reproduce its leg's exact JSON: `passed` as a number plus a `checks` list and a trailing newline for four
+of them, `passed` + `checks` + `requests` with **no** trailing newline for `mcp_catalog`. That is why
+`verification/twin/mod.rs` now carries one writer, `twin::report_value(group, body, trailing_newline)`, instead
+of five hand-rolled ones.
+
+**Audits ran and were read before the commit.** Five MiniMax audit seats each received the twin, its retired leg
+and the shared helper embedded in the packet. Three findings were real and are fixed in the shared helper rather
+than patched per-twin: scratch-directory uniqueness (`twin::create_scratch` reserves the name with `create_dir`
+and retries on collision, replacing five PID+nanos `create_dir_all` variants, and it panics instead of
+`unwrap_or(0)` on a pre-epoch clock), and report escaping (`quote()` now emits non-ASCII as UTF-16 code units
+like Python's `json.dumps(ensure_ascii=True)`, so `proposal_recovery`'s post-write `escape_report_ascii` pass is
+gone). Two findings were refuted with measurements: the `mcp_history` claim that stored-DEFLATE IDAT makes "the
+PNG fixture not the same subject input" — that leg never inflates the fixture, the PNG travels as a base64
+*string* and every predicate counts that string in an outbound wire (leg lines 115–193) — and the `rrsi_loop`
+claim that the duplicated sha/zlib codecs "duplicate shared `mod.rs` functionality": `mod.rs` exports no sha or
+zlib at all, so the real item is twin-to-twin duplication, which stays open as a consolidation lane. The
+`mcp_catalog` re-audit's one surviving finding is labelled non-pass-converting by the seat itself.
+
+**Behaviour-neutral repairs are provable here.** The five report sha256 values are unchanged by those helper
+repairs, and the sweep after the repairs wrote a delivered record whose sha256 stayed
+`e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0` — the same bytes as `HEAD`, i.e.
+**71 groups / 4248 checks, 67 pass, 0 fail, 4 unavailable, 0 absent**, with the five groups now running natively.
+
+**Gate on the committed bytes:** `Rust cases passed: 878/878; isolated application cases: 57`; tools tests the
+same size (alignment 2, readback 24, checkpoint 5, signature 5, apk 6, toolchain 10, gate 18, package 46,
+harness 23) with the 67/7052 pins; six twins compiled with 0 errors and 0 warnings.
+
+**Python exposure now:** `verification/` 67 files / 7052 lines, `tools/` 2 files / 189 lines (`checks.py`,
+`package.py`), `core/`+`platform/` 0 — **69 files / 7241 lines**. Next in the pipeline: `mcp_catalog_events`
+(lane claim, needs its witness), and `voice` (375), `self_rebuild` (9), `mcp_continuation` (32), `media_stream`
+(41), `scene` (90) in or out of Grok repair lanes; the MiniMax draft queue holds the rest, and none of it is
+claimed until it clears the same two-column bar. `tools/checks.py` retires when the runners point at
+`gate <units>`; `tools/package.py` retires only when a signed candidate is published — signing custody is still
+owner-blocked (`rllm.p12` + `rllm.password`, certificate digest `ba3d016e…`, no keystore gets minted).

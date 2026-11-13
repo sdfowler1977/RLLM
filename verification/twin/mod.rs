@@ -149,6 +149,10 @@ pub fn n(number: &str) -> Value {
     Value::Num(number.to_string())
 }
 
+pub fn b(flag: bool) -> Value {
+    Value::Bool(flag)
+}
+
 pub fn b64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
@@ -294,12 +298,46 @@ pub fn report(group: &str, passed: &[String], scope: &str) {
         ("passed".into(), Value::Arr(passed.iter().map(|name| s(name)).collect())),
         ("scope".into(), s(scope)),
     ]);
+    report_value(group, &body, false);
+    println!("{} {} checks passed", passed.len(), group);
+}
+
+// The delivered record splices this file's text verbatim, so a twin that needs a
+// different report shape (a count instead of a name list, extra keys like
+// `http_requests`, a trailing newline) builds that body itself and writes it here.
+pub fn report_value(group: &str, body: &Value, trailing_newline: bool) {
     let path = Path::new("output/checks").join(group_report_file(group));
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap_or_else(|error| panic!("could not create {}: {error}", parent.display()));
     }
-    std::fs::write(&path, pretty(&body)).unwrap_or_else(|error| panic!("could not write {}: {error}", path.display()));
-    println!("{} {} checks passed", passed.len(), group);
+    let mut text = pretty(body);
+    if trailing_newline {
+        text.push('\n');
+    }
+    std::fs::write(&path, text).unwrap_or_else(|error| panic!("could not write {}: {error}", path.display()));
+}
+
+// A Python leg gets its scratch root from tempfile.mkdtemp, which reserves the
+// directory name atomically. create_dir_all would silently share a name another
+// process already reserved, so reservation goes through create_dir and retries
+// on the collision.
+pub fn create_scratch(root: &Path, prefix: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_else(|error| panic!("system clock is before the unix epoch: {error}"))
+        .as_nanos();
+    let parent = root.join("output");
+    std::fs::create_dir_all(&parent)
+        .unwrap_or_else(|error| panic!("could not create {}: {error}", parent.display()));
+    for attempt in 0..64u32 {
+        let path = parent.join(format!("{prefix}-{}-{nanos}-{attempt}", std::process::id()));
+        match std::fs::create_dir(&path) {
+            Ok(()) => return path,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("could not create {}: {error}", path.display()),
+        }
+    }
+    panic!("could not reserve a unique scratch directory under {}", parent.display());
 }
 
 fn group_report_file(name: &str) -> String {
@@ -328,7 +366,23 @@ fn quote(text: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             ch if (ch as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", ch as u32)),
-            ch => out.push(ch),
+            ch if (ch as u32) <= 0x7f => out.push(ch),
+            // Python's json.dumps keeps ensure_ascii=True, so a report string's
+            // non-ASCII characters go out as UTF-16 code units; a non-BMP
+            // character becomes a surrogate pair.
+            ch => {
+                let code = ch as u32;
+                if code <= 0xffff {
+                    out.push_str(&format!("\\u{code:04x}"));
+                } else {
+                    let surrogate = code - 0x10000;
+                    out.push_str(&format!(
+                        "\\u{:04x}\\u{:04x}",
+                        0xd800 + (surrogate >> 10),
+                        0xdc00 + (surrogate & 0x3ff)
+                    ));
+                }
+            }
         }
     }
     out.push('"');
