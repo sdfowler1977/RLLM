@@ -50,7 +50,9 @@ names=['provider_process','network_drive','drive_ownership','question_process','
 runner=re.findall(r'"([a-z0-9_]+)"',(root/'tools'/'harness.rs').read_text().split('const GROUPS: &[&str] = &[',1)[1].split('];',1)[0])
 assert runner==names,(sorted(set(runner)^set(names)),'the two sanctioned runners enumerate different groups')
 def run(name):
- command=['python3',str(root/'verification'/f'{name}.py')]
+ # The harness prefers a compiled twin; this runner must not run a stale leg instead.
+ twin=root/'output/verification'/name
+ command=[str(twin)] if twin.is_file() else ['python3',str(root/'verification'/f'{name}.py')]
  if name=='scene'and args.previous_scene_controller:command+=['--previous-scene-controller',str(args.previous_scene_controller.resolve())]
  if name=='history_migration'or(name=='prompt_reference'and args.previous_controller.is_file()):command+=['--previous-controller',str(args.previous_controller.resolve())]
  if name=='binary_flow':command+=['--previous-flow-controller',str(args.previous_flow_controller.resolve()),'--previous-auth-controller',str(args.previous_auth_controller.resolve())]

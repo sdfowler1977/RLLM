@@ -238,3 +238,57 @@ harness 23) with the 67/7052 pins; six twins compiled with 0 errors and 0 warnin
 claimed until it clears the same two-column bar. `tools/checks.py` retires when the runners point at
 `gate <units>`; `tools/package.py` retires only when a signed candidate is published — signing custody is still
 owner-blocked (`rllm.p12` + `rllm.password`, certificate digest `ba3d016e…`, no keystore gets minted).
+
+### 2026-11-12 — five more legs went native (twin batch 2), and the second runner had to follow
+
+`verification/voice.py`, `mcp_continuation.py`, `self_rebuild.py`, `media_stream.py` and `mcp_catalog_events.py`
+are deleted in favour of native twins. Verification Python goes **67 files / 7052 lines → 62 files / 5391
+lines** (`VERIFICATION_PY_FILE_CEILING` 67 → 62, `VERIFICATION_PY_LINE_CEILING` 7052 → 5391).
+
+Witnessed the same way — one fresh `git archive HEAD` room per group, retired leg and twin side by side,
+byte-compared reports, then the runner (twin rc / leg rc / shared report sha256):
+
+    voice              0 / 0  ccc84d628647a859…  375 checks
+    mcp_continuation   0 / 0  c7b50e59177c69ce…   32 checks
+    self_rebuild       0 / 0  14450bc7ed0b22bc…    9 checks
+    media_stream       0 / 0  f21be55521dacbc3…   41 checks
+    mcp_catalog_events 0 / 0  0691744165d1b0d1…  145 checks (+ http_requests 193)
+
+Two things this batch measured rather than assumed:
+
+- **`self_rebuild` needs `output/tools/gate`.** In a room without `bash tools/build-tools.sh output/tools`,
+  the *Python* leg dies with `FileNotFoundError: … /output/tools/gate` and the runner records the group
+  `UNAVAILABLE`; the twin panicked for the same missing input. A witness that skipped the tools build would
+  have compared two failures.
+- **A report-shape defect can pass.** The `mcp_catalog_events` twin ran 145 checks and the runner printed
+  `PASS (exit 0, 0s, 145 checks)`, but its report was `twin::report`'s default `{passed:[names],scope}` while
+  the leg writes `{passed:int, checks:[145], http_requests:193}` plus a trailing newline. Only the byte compare
+  caught it; lane T fixed it and the re-witness came back byte-identical. Report file names are not simply the
+  dashed group name either — `voice`, `media_stream`, `scene`, `snapshot_identity`, `services`, `oauth`, `acp`
+  and others keep their stem unchanged.
+
+**Audit gate, five seats, read line by line.** `mcp_catalog_events` was accepted clean. Every other seat's
+substantive finding was refuted against the sources: `voice` "resumes `before_stop`, not `stopped['state']`" —
+`voice.py:38` resumes from `d['state']`, the pre-stop snapshot; `mcp_continuation` "`.any(route == "/child")` is
+weaker" — the leg's own conjunct is `'/child' in [route for route, _ in model_requests]` (line 228);
+`media_stream` "upload silently returns without `media_upload`" — the leg imports `transport.upload`, whose line
+5 is `if not e.get('media_upload'):return`; `media_stream` "`/created-file` is not POST" — the leg's route dict
+uses `method='POST' if response=='artifact_url' else 'GET'` (line 45) and that case is `response='binary'`.
+
+**The deletions exposed a second runner that could only run legs.** `tools/checks.py` built every connected
+group command as `python3 verification/<name>.py`, so after the deletions it would have re-run a stale leg or
+failed. It now prefers `output/verification/<name>` exactly as `tools/harness.rs` does. Its group list stays
+pinned against the runner's `GROUPS` list (`assert runner == names`), which is the check that keeps the two
+sanctioned runners enumerating the same 71 groups.
+
+**Gate on these bytes:** tools tests unchanged in size (package 46, harness 23, gate 18, toolchain 10, apk 6,
+readback 24, checkpoint 5, signature 5, alignment 2) against the 62/5391 pins; 11 twins compile with 0 errors
+0 warnings; sweep delivers **71 groups / 4248 checks, 67 pass / 0 fail / 4 unavailable / 0 absent** and
+`verification/RESULTS.json` stays byte-identical to the batch-1 record
+(`e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0`).
+
+**Python exposure now:** `verification/` 62 files / 5391 lines, `tools/` 2 files / 191 lines, `core/`+`platform/`
+0 — **64 files / 5582 lines**, down from 74 / 8736 when this route started. Still open in the pipeline:
+`scene` (90) and `snapshot_identity` (61) and `a2a` (72) in lanes, the codec consolidation across
+`mcp_history.rs`/`http_framing.rs`/`rrsi_loop.rs` in a lane of its own, and the remaining 62 legs behind the
+draft queue.
