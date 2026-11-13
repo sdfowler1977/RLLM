@@ -1,6 +1,6 @@
-//! Fingerprint, bounded rebuild plan, content-addressed revision journal, and re-exec.
-//! Reads and previews do not write or spawn. A journal append or successor exec runs
-//! only when the caller sets review_confirmed.
+//! Fingerprint, bounded rebuild plan, content-addressed revision journal, re-exec, and commit.
+//! Reads and previews do not write or spawn. A journal append, a git commit, or a successor
+//! exec runs only when the caller sets review_confirmed.
 use super::*;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -577,6 +577,12 @@ fn bounded_child(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     scrub_carried(&mut command);
+    if program == "git" {
+        command.env_remove("GIT_DIR");
+        command.env_remove("GIT_WORK_TREE");
+        command.env_remove("GIT_INDEX_FILE");
+        command.env_remove("GIT_NAMESPACE");
+    }
     let mut child = command.spawn().map_err(|error| format!("Cannot start {program}: {error}"))?;
     let group = ChildGroup(child.id() as i32);
     let mut stdout = child.stdout.take().ok_or("Child output is unavailable")?;
@@ -1070,6 +1076,335 @@ pub(crate) fn handoff(value: &Json) -> Result<Json> {
     command.args(&argv[1..]);
     let error = CommandExt::exec(&mut command);
     Err(format!("successor exec failed: {error}"))
+}
+
+fn hex_width(value: &str, width: usize) -> bool {
+    value.len() == width && value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+fn hex40(value: &str) -> bool {
+    hex_width(value, 40)
+}
+fn hex64(value: &str) -> bool {
+    hex_width(value, 64)
+}
+fn utf8_path(path: &Path) -> Result<String> {
+    path.to_str()
+        .filter(|text| !text.is_empty() && !text.contains('\0'))
+        .map(str::to_string)
+        .ok_or_else(|| "path is not UTF-8".into())
+}
+fn source_rel(path: &str, skip: &[String]) -> bool {
+    if path.is_empty() || path.len() > 1024 || path.contains('\0') || path.starts_with('/') {
+        return false;
+    }
+    if path.split('/').any(|part| part.is_empty() || part == "." || part == ".." || SKIP_DIRS.contains(&part)) {
+        return false;
+    }
+    !skip.iter().any(|item| item == path)
+}
+fn require_git_dir(root: &Path) -> Result<PathBuf> {
+    let git_dir = root.join(".git");
+    let present = match fs::symlink_metadata(&git_dir) {
+        Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => true,
+        _ => false,
+    };
+    let head = git_dir.join("HEAD");
+    let head_ok = match fs::symlink_metadata(&head) {
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => true,
+        _ => false,
+    };
+    if present && head_ok {
+        Ok(git_dir)
+    } else {
+        Err(format!("missing git repository {}", git_dir.display()))
+    }
+}
+fn read_head_commit(git_dir: &Path) -> Result<String> {
+    let head_text = fs::read_to_string(git_dir.join("HEAD")).map_err(|error| error.to_string())?;
+    let head_text = head_text.trim();
+    if let Some(name) = head_text.strip_prefix("ref: ") {
+        if name.is_empty() || name.contains('\0') || name.starts_with('/') || name.split('/').any(|part| part.is_empty() || part == "." || part == "..") {
+            return Err("git HEAD ref is outside the repository".into());
+        }
+        let ref_path = git_dir.join(name);
+        match fs::symlink_metadata(&ref_path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+            Err(error) => return Err(error.to_string()),
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
+                return Err("git HEAD ref is not a regular file".into());
+            }
+            Ok(_) => {}
+        }
+        let text = fs::read_to_string(&ref_path).map_err(|error| error.to_string())?;
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(String::new());
+        }
+        if !hex40(text) {
+            return Err("git HEAD is not a commit".into());
+        }
+        return Ok(text.to_string());
+    }
+    if hex40(head_text) {
+        return Ok(head_text.to_string());
+    }
+    Err("git HEAD is not a commit".into())
+}
+fn git_failure(args: &[String], output: &super::execution::BoundedOutput) -> String {
+    let mut detail = output.stderr.trim().to_string();
+    if detail.is_empty() {
+        detail = output.stdout.trim().to_string();
+    }
+    if detail.chars().count() > 240 {
+        detail = detail.chars().take(240).collect();
+    }
+    format!("git {} exited {:?}: {detail}", args.first().map(String::as_str).unwrap_or("git"), output.code)
+}
+fn git_command(root: &Path, git_dir: &Path, args: &[String]) -> Result<super::execution::BoundedOutput> {
+    let hooks = git_dir.join("rllm-empty-hooks");
+    fs::create_dir_all(&hooks).map_err(|error| error.to_string())?;
+    let mut full = vec![
+        "--git-dir".to_string(),
+        utf8_path(git_dir)?,
+        "--work-tree".to_string(),
+        utf8_path(root)?,
+        "-c".into(),
+        "safe.directory=*".into(),
+        "-c".into(),
+        "user.name=RLLM".into(),
+        "-c".into(),
+        "user.email=rllm@localhost".into(),
+        "-c".into(),
+        "commit.gpgsign=false".into(),
+        "-c".into(),
+        "core.autocrlf=false".into(),
+        "-c".into(),
+        format!("core.hooksPath={}", utf8_path(&hooks)?),
+    ];
+    full.extend(args.iter().cloned());
+    bounded_child(root, "git", &full, Duration::from_secs(15), &uncancelled)
+}
+fn git_ok(root: &Path, git_dir: &Path, args: &[String]) -> Result<super::execution::BoundedOutput> {
+    let output = git_command(root, git_dir, args)?;
+    if output.code != Some(0) {
+        return Err(git_failure(args, &output));
+    }
+    Ok(output)
+}
+fn head_commit_id(root: &Path, git_dir: &Path) -> Result<String> {
+    let output = git_ok(root, git_dir, &["rev-parse".to_string(), "HEAD".to_string()])?;
+    let digest = output.stdout.trim().to_string();
+    if !hex40(&digest) {
+        return Err("commit digest is not hexadecimal".into());
+    }
+    Ok(digest)
+}
+fn commit_parent_id(root: &Path, git_dir: &Path, commit: &str) -> Result<String> {
+    let output = git_command(
+        root,
+        git_dir,
+        &["rev-parse".to_string(), "-q".to_string(), "--verify".to_string(), format!("{commit}^")],
+    )?;
+    if output.code != Some(0) {
+        return Ok(String::new());
+    }
+    let parent = output.stdout.trim().to_string();
+    if !hex40(&parent) {
+        return Err("parent commit is not hexadecimal".into());
+    }
+    Ok(parent)
+}
+/// The room HEAD already records this revision and the tracked worktree matches it.
+/// The subject alone is not enough: an unrelated same-subject commit is refused unless
+/// its own tree carries exactly the source path set this room would commit.
+fn matching_commit(
+    root: &Path,
+    git_dir: &Path,
+    revision: &str,
+    paths: &[String],
+    skip: &[String],
+) -> Result<Option<String>> {
+    let listed = git_command(root, git_dir, &["log".to_string(), "-1".to_string(), "--format=%s".to_string()])?;
+    if listed.code != Some(0) || listed.stdout.trim() != format!("self-commit {revision}") {
+        return Ok(None);
+    }
+    let head = head_commit_id(root, git_dir)?;
+    if commit_tree_paths(root, git_dir, &head, skip)? != paths {
+        return Ok(None);
+    }
+    let diff = git_command(root, git_dir, &["diff".to_string(), "--quiet".to_string(), "HEAD".to_string()])?;
+    match diff.code {
+        Some(0) => Ok(Some(head)),
+        Some(1) => Ok(None),
+        _ => Err(git_failure(&["diff".to_string()], &diff)),
+    }
+}
+fn tracked_source_paths(root: &Path, git_dir: &Path, skip: &[String]) -> Result<Vec<String>> {
+    let output = git_ok(root, git_dir, &["ls-files".to_string(), "-z".to_string()])?;
+    let mut paths = Vec::new();
+    for path in output.stdout.split('\0') {
+        if path.is_empty() || !source_rel(path, skip) {
+            continue;
+        }
+        paths.push(path.to_string());
+    }
+    if paths.len() > 1024 {
+        return Err("tracked source tree exceeds 1024 paths".into());
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+fn commit_tree_paths(root: &Path, git_dir: &Path, commit: &str, skip: &[String]) -> Result<Vec<String>> {
+    let output = git_ok(
+        root,
+        git_dir,
+        &[
+            "ls-tree".to_string(),
+            "-r".to_string(),
+            "-z".to_string(),
+            "--name-only".to_string(),
+            commit.to_string(),
+        ],
+    )?;
+    let mut paths = Vec::new();
+    for path in output.stdout.split('\0') {
+        if path.is_empty() || !source_rel(path, skip) {
+            continue;
+        }
+        paths.push(path.to_string());
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+fn write_source_commit(
+    root: &Path,
+    git_dir: &Path,
+    revision: &str,
+    paths: &[String],
+    skip: &[String],
+) -> Result<String> {
+    if let Some(existing) = matching_commit(root, git_dir, revision, paths, skip)? {
+        return Ok(existing);
+    }
+    let mut add = vec!["add".to_string(), "--".to_string()];
+    add.extend(paths.iter().cloned());
+    git_ok(root, git_dir, &add)?;
+    let committed = git_command(
+        root,
+        git_dir,
+        &["commit".to_string(), "-m".to_string(), format!("self-commit {revision}")],
+    )?;
+    if committed.code == Some(0) {
+        return head_commit_id(root, git_dir);
+    }
+    if let Some(existing) = matching_commit(root, git_dir, revision, paths, skip)? {
+        return Ok(existing);
+    }
+    Err(git_failure(&["commit".to_string()], &committed))
+}
+fn journalled_revision(path: &Path, revision: &str) -> Result<Json> {
+    for line in journal_lines(path)? {
+        let Ok(value) = parse(&line) else {
+            continue;
+        };
+        if text(&value, "intent") == "self-commit" || text(&value, "revision") != revision {
+            continue;
+        }
+        let body = without_revision(&value)?;
+        if sha256(body.string().as_bytes()) != revision {
+            continue;
+        }
+        if !hex64(&text(&value, "source_digest")) || !hex64(&text(&value, "build_digest")) {
+            continue;
+        }
+        return Ok(value);
+    }
+    Err("revision is not a journalled revision of this room".into())
+}
+fn append_commit_intent(path: &Path, revision: &str, source_digest: &str, parent: &str) -> Result<()> {
+    let body = obj(vec![
+        ("schema", s("1")),
+        ("intent", s("self-commit")),
+        ("target", s(revision)),
+        ("source_digest", s(source_digest)),
+        ("parent", s(parent)),
+        ("review_confirmed", Bool(false)),
+    ]);
+    let digest = sha256(body.string().as_bytes());
+    let mut record = body;
+    put(&mut record, "revision", s(&digest));
+    append_record(path, &record.string())
+}
+fn commit_receipt(
+    commit: Option<&str>,
+    revision: &str,
+    parent_commit: &str,
+    source_digest: &str,
+    paths: &[String],
+    confirmed: bool,
+) -> Json {
+    let mut fields = vec![
+        ("revision", s(revision)),
+        ("parent_commit", s(parent_commit)),
+        ("source_digest", s(source_digest)),
+        ("committed_paths", Arr(paths.iter().map(|path| s(path)).collect())),
+        ("review_confirmed", Bool(confirmed)),
+    ];
+    if let Some(commit) = commit {
+        fields.push(("commit", s(commit)));
+    }
+    obj(fields)
+}
+
+/// Commit the room's tracked source tree for one journalled revision.
+/// `review_confirmed` false journals the intent and leaves every git ref untouched.
+/// A later permit for the same revision returns the commit already created for it.
+pub(crate) fn commit(value: &Json) -> Result<Json> {
+    only(value, &["root", "binary", "revision", "journal", "review_confirmed", "parent"])?;
+    let root = root_of(value)?;
+    let binary = resolve_file(&root, field(value, "binary")?)?;
+    let journal_rel = text(value, "journal");
+    relative(&journal_rel)?;
+    if journal_rel.is_empty() {
+        return Err("journal path is required".into());
+    }
+    let parent = text(value, "parent");
+    digest_text(&parent)?;
+    let revision = text(value, "revision");
+    if !hex64(&revision) {
+        return Err("revision is not a journalled revision of this room".into());
+    }
+    let journal_path = locate(&root, &journal_rel, false)?;
+    let record = journalled_revision(&journal_path, &revision)?;
+    if text(&record, "parent") != parent {
+        return Err("parent revision does not match the journalled revision".into());
+    }
+    let binary_digest = sha256(&read_regular(&binary, BINARY_MAX)?);
+    if text(&record, "build_digest") != binary_digest {
+        return Err("binary digest does not match the journalled revision".into());
+    }
+    let rollback = text(&record, "rollback");
+    let skip = skip_paths(&obj(vec![("journal", s(&journal_rel)), ("rollback", s(&rollback))]))?;
+    let (source_digest, _, _) = tree(&root, &skip)?;
+    if text(&record, "source_digest") != source_digest {
+        return Err("stale source digest".into());
+    }
+    let git_dir = require_git_dir(&root)?;
+    let parent_commit = read_head_commit(&git_dir)?;
+    if !flag(value, "review_confirmed") {
+        append_commit_intent(&journal_path, &revision, &source_digest, &parent)?;
+        return Ok(commit_receipt(None, &revision, &parent_commit, &source_digest, &[], false));
+    }
+    let paths = tracked_source_paths(&root, &git_dir, &skip)?;
+    if paths.is_empty() {
+        return Err("tracked source tree is empty".into());
+    }
+    let digest = write_source_commit(&root, &git_dir, &revision, &paths, &skip)?;
+    let parent_of = commit_parent_id(&root, &git_dir, &digest)?;
+    let listed = commit_tree_paths(&root, &git_dir, &digest, &skip)?;
+    Ok(commit_receipt(Some(&digest), &revision, &parent_of, &source_digest, &listed, true))
 }
 
 pub(crate) fn write_args(args: &Json) -> Json {

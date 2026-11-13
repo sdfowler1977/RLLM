@@ -441,6 +441,7 @@ fn operation(input: &str) -> Result<Json> {
         "self_plan" => self_build::plan(&v),
         "self_journal" => self_build::journal(&v),
         "self_handoff" => self_build::handoff(&v),
+        "self_commit" => self_build::commit(&v),
         _ => Err("Unknown operation".into()),
     }
 }

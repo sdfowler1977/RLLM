@@ -674,3 +674,223 @@ is committed against. What it still does not claim: the carried-`RLLM_SELF_JOB` 
 not reachable from these four JSONL verbs, so "the same job" is the same live session, the same recorded
 chain and the same edited tree — unchanged from the section above.
 
+## The commit leg on the product's own verb — 2026-11-13T15:4Z, a room of `065efd3` plus three working-tree files
+
+Three files are in the working tree and are not in `065efd3`: `core/lib.rs` (`+1` — the
+`"self_commit" => self_build::commit(&v)` dispatch arm at `:444`), `core/self_build.rs`
+(`+338/−3`, now 5,453 lines — the `commit` verb) and `verification/self_rebuild.rs` (`+1054/−11`,
+1,111 → 2,154 lines, `const NAMES: [&str; 9]` at `065efd3:29` becoming `[&str; 12]` at `:42`). The lane
+therefore gains **three** checks over the committed nine: the tenth (the review-confirmed re-exec leg),
+the eleventh, *"a review permit commits the journalled revision and the commit tree carries the edited
+source bytes"*, and the twelfth, *"a review permit refuses a same-revision decoy commit and commits the
+tracked source tree above it"*. The three working-tree files hash `f57d94d6284b15d765249ac0e4713ec59e8d62327f60e23800699a01868d8ae1`
+(`core/lib.rs`), `b3d08984df613689ab93c5785f503587cd2fb953b512540bee6c1bede07a38c5` (`core/self_build.rs`)
+and `ceb4748742f7aab9e1ac36faccee39971730a2d5fb1cf073eb13238d5608c24c` (`verification/self_rebuild.rs`);
+the per-file line counts come from `git diff --numstat HEAD -- core/lib.rs core/self_build.rs
+verification/self_rebuild.rs` = `1 0`, `338 3`, `1054 11`.
+
+### The lane, witnessed in a sanctioned room
+
+`/tmp/g31room.sh`: `git archive HEAD` of `065efd31121593ab51bd89a151dd5f7df4ae72c2` (recorded in
+`/tmp/g31room-out/commit.txt`), those three files copied over it (digests in
+`/tmp/g31room-out/overlay-shas.txt`), `tooling` symlinked, nothing else. In that room:
+`tools_rc=0 gates=18`, `headless_rc=0 warning_lines=0`, `twin_build_rc=0 twin_warnings=0`, `lane_rc=0`,
+report `count` 11, `failed` [], `passed` 11, transcript printing **`11 self-rebuild checks passed`**
+(`/tmp/g31room-out/self_rebuild.log`, 5,587 bytes). That room ran the lane bytes **before** the twelfth
+check existed — its overlay digests are `f57d94d6284b…`, `853bec52246f…`, `49f6bf130afcbd3a…`
+(`/tmp/g31room-out/overlay-shas.txt`) — so it is a historical witness of the 11-check bytes; the room that
+witnesses the bytes committed here is `/tmp/g42room`, below, whose group run reports 12.
+
+The eleventh check seeds a room repository with one commit, edits `src/edited.rs` to carry a marker,
+journals the revision, then calls `self_commit` twice — once with `review_confirmed:false`, once with the
+permit. Its evidence line is printed whole, and the conjuncts it enforces are: the unpermitted call
+returns no commit (`unpermitted_commit=absent`) and leaves every ref byte-equal (`refs_equal=true`,
+`ref_before` = `ref_after_unpermitted` = `930176cda6a2…`) while journaling a commit-intent record
+(`intent=true`); the permitted call returns a 40-hex commit whose parent is the pre-commit head, moves
+the room ref and `rev-parse HEAD` to exactly that commit, and reports exactly one committed path
+(`committed_paths=1 src/edited.rs`); the commit tree carries a `src` entry whose blob is what
+`git rev-parse <commit>:src/edited.rs` resolves to (`linked_blob` = `blob` = `608553fb43f5…`), that blob
+equals the edited source byte-for-byte and contains the marker (`marker_in_blob=true`,
+`blob_equals_edit=true`) while the parent blob does not (`marker_in_parent_blob=false`); and a second
+permitted call is idempotent (`second_commit` = `commit`, `second_same=true`, refs stable).
+
+### That check is falsifiable
+
+Battery `/tmp/srbatt.py`, base `49f6bf130afcbd3a1eb2bd797e6f8d1d5154d3ba018c1ed9dbe62afc66f47b9a` (the
+11-check lane bytes as they stood before the binding below — that base is *not* the sha256 of the file
+committed here, which is `ceb4748742f7…`): **ten arms, ten `-- landing … sha=` lines, zero
+SKIP**, the zero-change control `w0` printing `11 self-rebuild checks passed` at rc 0, and nine mutants
+red with the failure naming check 11 (`names-check11=yes` × 9). `w1` inverts `marker_in_blob`, `w2`
+inverts `blob_bytes == edited`, `w3` inverts `!marker_in_parent`, `w4` inverts the no-ref-movement
+conjunct, `w5` inverts `room_head == commit`, `w6` compares the committed path against `"src"`, `w7`
+inverts the idempotence conjunct, `w8` requires the parent to be the new commit, `w9` inverts the intent
+conjunct. Every arm compiled (`compile_rc=0 errs=0`) and the lane came back byte-identical
+(`RESTORE-SHA … unchanged=yes`).
+
+### The audit seat rejected the verb, so the idempotence rule was tightened
+
+Seat G1 (`/tmp/mm-grokdiff.out`, 7,720 bytes, read in full; packet `/tmp/mm-grokdiff.json`, 66,182
+bytes, sha `05a13208ebe4d8ad2ab4ee27589f8ada4b9590220aef61c6a15f36434b6d90e8`) confirmed the three limits
+already recorded as owed and found more.
+Three of its findings were defects rather than limits, all in one place: the idempotent path recognised
+an existing commit by its **subject** plus a clean tracked tree, so (a) a same-subject commit with a
+different tree was accepted, (b) the journal's `source_digest` was never bound to the commit's own tree,
+and (c) a *failed* `git commit` followed by that same subject test was returned as success.
+`matching_commit` now also requires the candidate commit's own tree to carry exactly the source path set
+this room would commit (the `commit_tree_paths(root, git_dir, &head, skip)? != paths` conjunct;
+`write_source_commit` threads `skip` into both its `matching_commit` calls, so the post-failure fallback
+is held to the same rule).
+
+What that witness falsifies is one conjunct, and only that one: the arm `p1` turns `!=` into `==` in the
+`commit_tree_paths(…) != paths` test (`core/self_build.rs:1232`), so it proves the **tree path set**
+binding is load-bearing. Of seat G1's three defects the conjunct closes the first — a same-subject commit
+carrying a different path set is no longer recognised — and reduces rather than eliminates the other two:
+a failed `git commit` is still returned as success when the post-failure `matching_commit` (`:1302`) finds
+a commit whose subject *and* path set match, and the journal's `source_digest` is still never bound to
+committed blob contents. No arm in that battery reaches the tree's *contents*, the staging set, or the
+journal record, so those stay limits, listed below.
+
+That conjunct is witnessed, not asserted — `/tmp/g36room.sh` re-witnessed the room on the fixed bytes and
+then mutated the **product**:
+
+```
+tools_rc=0 cases_lines=10 err_lines=0   headless_rc=0 warning_lines=0
+twin_build_rc=0 twin_warnings=0         lane_rc=0  (count 11, failed [], passed 11, scope 359)
+BASE core/self_build.rs sha b3d08984df613689…
+p0 control  rebuild_rc=0  lane_rc=0  11 passed  second_same=true
+p1 != → ==  sha 30faecc32fd29cc0  rebuild_rc=0  lane_rc=1
+            failed = ["a review permit commits the journalled revision and the commit tree carries the edited source bytes"]
+            second_same=false  second_error=git…
+restore     RESTORE-SHA b3d08984df613689… unchanged=yes
+p2 rebuild_rc=0  lane_rc=0  11 passed  second_same=true
+```
+
+Removing the binding does not merely change a sentence: it turns the delivered check red and makes the
+second permitted call return a different commit (`second_same=false`).
+
+### The twelfth check, and the guard it exists to exercise
+
+The twelfth check refuses a **same-revision decoy**. Its fixture (`decoy_commit` / `drive_decoy_commit` in
+`verification/self_rebuild.rs`) builds a room repository, `git add -f`s `notes/decoy.txt` and then deletes
+it from the worktree, and does the same for `output/decoy.bin` staged under `-f`, so the tracked path set
+is strictly larger than the head tree set while `git diff --quiet HEAD` still reports a clean tree; it
+then makes a decoy commit whose subject is exactly `self-commit {revision}` — the subject `matching_commit`
+searches for — and requires the permitted `self_commit` call to produce a commit that is **not** the decoy,
+whose `parent_commit` **is** the decoy, that becomes `head_after`, and whose committed blob bytes equal the
+edited source. The fixture is built so that the decoy satisfies the two tests `matching_commit` applies
+before the tree-path conjunct — the exact subject `self-commit {revision}` and a clean `git diff --quiet
+HEAD` — which is what makes the conjunct the discriminator. "Refuses" here is operational, not an error
+return: the verb declines to reuse the decoy as its idempotent answer and creates a successor commit whose
+parent is the decoy.
+
+That conjunct is measured load-bearing on these bytes in `/tmp/g42room.sh` — `git archive` of
+`065efd31121593ab51bd89a151dd5f7df4ae72c2` (`/tmp/g42room-out/commit.txt`), the three working-tree files
+copied over it (`/tmp/g42room-out/overlay-shas-before.txt` = `7463fcf335b2…` / `2f58da009458…` /
+`2a503b53069d…`, `/tmp/g42room-out/overlay-shas.txt` = `f57d94d6284b…` / `b3d08984df61…` /
+`ceb4748742f7…`), `tooling` symlinked, the tools built in the room so the group has `output/tools/gate`
+(`gates=18`), transcript `/tmp/g42room.out`:
+
+```
+tools_rc=0 gates=18    headless_rc=0 warning_lines=0    twin_build_rc=0 twin_warnings=0
+baseline_lane_rc=0     12 self-rebuild checks passed    "count": 12, "failed": [], "passed": 12
+                                     (/tmp/g42room-out/self_rebuild-baseline.log:18,34-37)
+guard anchor hits: 1   (`core/self_build.rs:1232`, the only occurrence)
+GUARD-mutant sha 0c83ad4d8262   (`if commit_tree_paths(…)? != paths` → `if false {`)
+PRODUCT-REBUILD[mut] rc=0 warning_lines=3
+GROUP[mut] rc=1        passed_line=[]   panicked=[]
+   fail_lines=['FAIL a review permit refuses a same-revision decoy commit and commits the tracked
+                source tree above it']        "count": 12   "failed": [ that one name ]
+INERT sha 8d0b4480f14e   (a comment line inserted above the same guard)
+GROUP[inert] rc=0        12 self-rebuild checks passed   "failed": []
+RESTORE-SHA b3d08984df613689… unchanged=True   PRODUCT-REBUILD[restored] rc=0 warning_lines=0
+REPO-EQUALS-ROOM True  (repo and room file both `ceb4748742f7…`)
+```
+
+(`/tmp/g42room.out:1-2,4,6,13-20,24,27-28,34-36,38-46`;
+`/tmp/g42room-out/self_rebuild-mut.log:17,34-37`;
+`/tmp/g42room-out/self_rebuild-inert.log:18,34-37`.) The mutant arm is the one the earlier battery could
+not run: it neuters the guard in an otherwise byte-identical file and exactly one check goes red, the
+failure naming the twelfth check, while the inert control — same guard, one comment line added above it —
+stays green at 12. So on **these bytes and this fixture**, disabling that guard makes the twelfth check
+fail. The `p1` arm above (`!=` → `==`, which reds the eleventh check) is a second mutation of the same
+guard on the earlier 11-check bytes, not an independent witness of a second mechanism; the isolation claim
+rests on the g42 pair, and it is bounded to this implementation and fixture — it does not show the guard is
+the only possible implementation, that the fixture covers every index/worktree/HEAD state, or that the
+binding reaches blob contents (the last stays a limitation below).
+
+That pair also answers the axis on which the earlier lane seat rejected the verb: seat L1
+(`/tmp/mm-lane1.out`, packet `/tmp/mm-lane1.json`) graded all five mechanism questions SUPPORTED with the
+guard and fixture lines quoted, yet its verdict was REJECT because "the twelfth check does not prove that
+the tree-path guard, rather than another mechanism, caused the decoy refusal". With only the guard removed
+and the file otherwise identical, that one check goes red; with an inert edit at the same place it does
+not. That is the guard-level isolation the seat asked for, for this check and this fixture; it is not a
+claim that no other mechanism could produce the same verdict.
+
+
+### Whole-tree gates: the 11-check increment broke nothing whole-tree, and one group was already dead
+
+Because a new product verb can break any group, the three files were gated over the whole tree in a
+second room (`/tmp/g32room.sh`, same archive, same three overlays): `headless_rc=0 warning_lines=0`,
+`verify_rc=0` (73 binaries under `output/verification` = 72 twins, one per `verification/*.rs`, plus
+`twin-helper-tests`; `twin helper tests … cases: 44`), `tools_rc=0` with ten `cases:` lines and no error
+line, `harness_build_rc=0`, and `output/harness sweep` → `sweep_rc=1`,
+`summary: 64 pass, 1 fail, 6 unavailable, 1 absent of 71 groups, 4156 checks`. That sweep ran the
+**11-check** lane bytes, so "broke nothing" below is a statement about those bytes. The 12-check bytes were
+not swept whole-tree: `/tmp/g42room` builds the tools, the
+product and that one twin and runs the `self_rebuild` group, so the whole-tree statement above is scoped to
+the 11-check bytes, and for the bytes committed here the claim is the group result quoted below (12 green)
+plus the two build verbs (`tools_rc=0 gates=18`, `headless_rc=0 warning_lines=0`).
+
+The one failure is **not** this increment, measured rather than assumed: `/tmp/g39room.sh` is a byte-copy
+room of the same commit with **nothing** overlaid (`room_has_git=no`; `/tmp/g39-verdicts.txt` holds its 71 per-group rows), and its sweep prints
+``64 pass, 1 fail, 6 unavailable, 1 absent of 71 groups, 4154 checks` (`/tmp/g39room/sweep.log:76`)`. Both rooms' sweep logs were then parsed to per-group rows (`name verdict check-count`) and
+joined by group name (`/tmp/join-g32-g39-now.txt`): 71 rows in each room, and **exactly one row differs** —
+`self_rebuild` at `('PASS','11')` in the lane room against `('PASS','9')` in the byte-copy room
+(`self_rebuild PASS (exit 0, 2s, 11 checks)` against ``self_rebuild PASS (exit 0, 1s, 9 checks)` (`/tmp/g39-verdicts.txt:55`)`) — which is also the whole of the
+4156/4154 check-count difference. A raw `diff` of the two verdict text files is not
+this join: `/tmp/g32-verdicts.txt` and `/tmp/g39-verdicts.txt` render the same verdicts in different
+columns, so the comparison is on normalized rows, not bytes. `history_migration` fails in both: `tools/harness.rs`
+passes `--previous-controller` to that group unconditionally (`:1078` in `065efd3`, `:1086` in the
+working tree) while no build verb produces `output/previous-controller`
+(`grep -rn previous-controller tools/*.sh headless.sh package.sh` = 0 hits; the only tracked writers of
+that path are the two test helpers inside `#[cfg(test)]` in `tools/harness.rs`) and the twin names the
+requirement itself (`verification/history_migration.rs:73`), so it panics spawning a path that does not
+exist (`verification/twin/mod.rs:249`); the delivered `verification/RESULTS.json` already carries 0
+checks for that group and lists it as unavailable, and that entry was republished at `0eb0cb1`
+(2026-11-12 19:38:45 -0500, *"Republish the connected record: 71 groups, 4248 checks, 67 pass, 0 fail"*),
+which is an ancestor of `54c1f1c` (2026-11-13 10:22:10 -0500) — the commit that landed the native twin now
+failing on it. That is an owed fix — supply the reference build or report the group
+*unavailable* — recorded in the ledger row rather than argued away. Neither room rewrote the delivered
+record, and for the reason the code states rather than one I invented: `commit_sweep` returns before
+`publish_sweep` when any row failed (`065efd3:tools/harness.rs:1616`), so both rooms printed
+`delivered record left untouched: a group failed`; the byte-copy room's record is unchanged at
+``1450f95863f9cc05b3c61e95ce7941d7f3154855`, the `065efd3` blob id of `verification/RESULTS.json`; `/tmp/g39room.out:38` prints `results_before` = `results_after` = `results_committed` = that value`. The same room shape with that row turned unavailable prints
+`delivered record written: 71 groups, 4156 checks` (`/tmp/g36room.sh`, `/tmp/g36sweep.log`), which is why
+the fix belongs to this lane.
+
+### What this does not claim
+
+The commit leg is witnessed; the re-exec-and-carry-on leg is not, so the chain stays a python-driver
+witness (§"The whole chain again, on the bytes this document is committed against", commit `1cbc272`)
+until the continuation leg lands. That absence is a census, not an assumption: `grep -rn carry_on
+--include='*.rs' core` = 0 hits, the `self_*` dispatch surface is `core/lib.rs:440-444` (five verbs,
+`self_fingerprint`, `self_plan`, `self_journal`, `self_handoff`, `self_commit`), none of which continues a
+round, and `core/self_build.rs` has no git-push verb — its only `fn push` is the output-buffer accumulator
+at `:518`, while `grep -rn '"push"' --include='*.rs' core` returns 3 hits, all
+`core/page_program.rs:197`, `:228`, `:247`, which are JS array-method dispatch. Seat G1's
+remaining findings are recorded as owed, not closed: the commit's parent comes from the repository's
+current HEAD while the request's `parent` is compared only against the journal record; between the
+source-digest check and `git add`/`git commit` a concurrent edit can move the tree (no lock, no index
+snapshot); the journalled commit-intent record is written on refusal but is not a prerequisite for the
+permitted call; `tracked_source_paths` is bounded at 1,024 paths with no bound on staged bytes; and ref
+handling covers symlinked `.git`/HEAD, malformed symbolic refs and non-regular ref files, but not
+packed-refs or every traversal a repository layout can express. A permitted commit stages **every** path `tracked_source_paths` returns —
+`core/self_build.rs:1292` is `add.extend(paths)`, and that set comes from `git ls-files -z` filtered by
+`source_rel` and capped at 1,024 paths (`:1242-1257`, refusal sentence `tracked source tree exceeds 1024
+paths`) — so the verb commits the whole eligible tracked source set, not only the file the job edited
+(check 11 reported `committed_paths=1` only because that room's eligible set was one file). And the
+journal's `source_digest` is recomputed from the **worktree** (`tree(&root, &skip)` at `:1390`, compared at
+`:1391`), while the accepted commit is bound only to that tree's **path names** (`commit_tree_paths` runs
+`git ls-tree -r -z --name-only`, `:1258-1280`) plus a clean `git diff --quiet HEAD` (`:1235`) — never to the
+committed blob contents, so a commit carrying the same paths with different bytes satisfies the conjunct.
+Nothing here claims a pushed or published commit.
