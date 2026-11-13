@@ -7,7 +7,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use twin::{b64_encode, n, obj, s, Value};
 
-const SCOPE: &str = "Owner checks through the product JSON-lines route: refine copies approval_root onto task_run.workspace and records source_digest, the digest-named ledger chains revisions for that run and experience.jsonl seals the settled row, a second round reads a recorded rejection, resume rebuilds the ledger prompt and decision from those files alone, a tampered library entry is refused without a rewrite, and delegate or compact carries no workspace and does not run the pool. A resumed refine records propose budgets 4/4, 3/3 and 3/1, refuses a repeated skills hypothesis by the round 1 name, records noise floor 0 and decision cost not recorded when a round gains nothing, leaves two flat skills rounds unpruned, stores the accepted incumbent as the rllm-evolve worktree commit, and keeps the separate evaluation score off the held-out keys. A three-round refine records budgets 4, 3 and 2, a leakage refusal before scoring, noise floor 2, pruned skills, the evolve commit, and the four held-out keys. A stalled ledger refuses an already-tried component while an untried component is not refused. A flat memory shape is accepted for structural novelty while its cost is unknown. The next equal score, one byte shorter, is accepted because the cost fell. The same shape one byte longer is refused because the cost rose.";
+const SCOPE: &str = "Owner checks through the product JSON-lines route: refine copies approval_root onto task_run.workspace and records source_digest, the digest-named ledger chains revisions for that run and experience.jsonl seals the settled row, a second round reads a recorded rejection, resume rebuilds the ledger prompt and decision from those files alone, a tampered library entry is refused without a rewrite, and delegate or compact carries no workspace and does not run the pool. A resumed refine records propose budgets 4/4, 3/3 and 3/1, refuses a repeated skills hypothesis by the round 1 name, records noise floor 0 and decision cost not recorded when a round gains nothing, leaves two flat skills rounds unpruned, stores the accepted incumbent as the rllm-evolve worktree commit, and keeps the separate evaluation score off the held-out keys. A three-round refine records budgets 4, 3 and 2, a leakage refusal before scoring, noise floor 2, pruned skills, the evolve commit, and the four held-out keys. A stalled ledger refuses an already-tried component while an untried component is not refused. A flat memory shape is accepted for structural novelty while its cost is unknown. The next equal score, one byte shorter, is accepted because the cost fell. The same shape one byte longer is refused because the cost rose. A later refine task reads the earlier task's sealed experience entry out of experience.jsonl in its own propose prompt, keyed to the earlier task rather than to itself, and the same later task over a library that holds no sealed row shows no historical experience section at all.";
 
 const TASK: &str = "Write the bounded note.";
 const CHECKS: &str = "REQUIRED-ALPHA\nREQUIRED-BETA";
@@ -16,6 +16,9 @@ const REJECTED: &str = "REJECTED-REVISION";
 const REFUSAL: &str = "refused because component prompt with that hypothesis was already rejected in round 1";
 const STALL_CHECK: &str = "a stalled ledger refuses an already-tried component and does not refuse one that was never tried";
 const SHAPE_CHECK: &str = "a flat memory shape is accepted for structural novelty, a shorter equal score is accepted for lower cost, and the same shape is refused when the cost rose";
+const CROSS_TASK: &str = "Write the second bounded note.";
+const CROSS_CHECK: &str = "a later refine task reads the earlier task's sealed experience entry from the propose prompt";
+const EMPTY_CHECK: &str = "a refine task whose library holds no sealed row shows no historical experience section";
 
 fn main() {
     let root = std::env::current_dir().unwrap_or_else(|error| panic!("cwd: {error}"));
@@ -62,6 +65,9 @@ fn run(product: &mut Product, room: &Path) -> Vec<String> {
     );
 
     event(product, Some(state(&held.after_entry)), "cancel", obj(vec![]), room);
+    // No run has reached a review yet, so the library holds no sealed row and
+    // the later task must be given no history at all.
+    let empty_read = empty_library_read(product, room, &default_root);
     let before = files_here(&default_root);
     let prepared = fresh(product, room);
     let delegated = event(product, Some(&prepared), "delegate", obj(vec![("task".into(), s("Read the notes."))]), room);
@@ -208,6 +214,10 @@ fn run(product: &mut Product, room: &Path) -> Vec<String> {
             && no_fixed_name
             && settled.get("phase").and_then(as_str) == Some("review"),
     );
+
+    // The settled row is on disk now, so a later task with a different task
+    // text must read that entry out of the library in its own propose prompt.
+    let cross_read = cross_task_read(product, room, &default_root, &held.settled);
 
     product.restart(room).unwrap_or_else(|error| panic!("could not restart product: {error}"));
     let settled = held.settled.clone();
@@ -505,6 +515,8 @@ fn run(product: &mut Product, room: &Path) -> Vec<String> {
     run_stall(product, room, &default_root, &mut passed);
     run_shape(product, room, &default_root, &mut passed);
     run_tamper(product, room, &default_root, &mut passed);
+    keep(&mut passed, CROSS_CHECK, cross_read.ok());
+    keep(&mut passed, EMPTY_CHECK, empty_read.ok());
     passed
 }
 
@@ -721,6 +733,207 @@ fn run_tamper(product: &mut Product, room: &Path, default_root: &Path, passed: &
         "a tampered library entry is refused and its bytes stay unchanged",
         refused && !adopted && before == after && std::fs::read(&library).unwrap() == tampered,
     );
+}
+
+/// The library key the product derives from a task text is the digest of the
+/// task bytes, so the twin computes the key a sealed record carries.
+fn task_key(task: &str) -> String {
+    twin::sha256_bytes(task.as_bytes())
+}
+
+/// The product renders a harness or a lesson clipped to 480 characters and
+/// marks the cut with a trailing ellipsis.
+fn clipped(value: &str) -> String {
+    let mut end = value.len().min(480);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = value[..end].to_string();
+    if end < value.len() {
+        out.push_str("...");
+    }
+    out
+}
+
+/// A rendered string reaches the wire inside a JSON string, so it appears
+/// either verbatim or in its JSON-escaped form.
+fn wire_has(wire: &str, text: &str) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    let quoted = json_string(text);
+    wire.contains(text) || wire.contains(&quoted[1..quoted.len() - 1])
+}
+
+/// The task keys a historical section names, in the order it names them.
+fn named_keys(section: &str) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    let mut rest = section;
+    while let Some(at) = rest.find("key ") {
+        rest = &rest[at + 4..];
+        if rest.len() < 64 || !rest.is_char_boundary(64) {
+            continue;
+        }
+        let candidate = &rest[..64];
+        if !candidate.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) {
+            continue;
+        }
+        if !keys.iter().any(|key| key == candidate) {
+            keys.push(candidate.to_string());
+        }
+        rest = &rest[64..];
+    }
+    keys
+}
+
+/// One refine task driven through the product JSON-lines route. The wire is
+/// the request the product sent to the model and the phase says where the run
+/// stood when it sent it.
+struct ProposeRun {
+    wire: String,
+    phase: String,
+}
+
+fn propose_run(product: &mut Product, room: &Path, task: &str, checks: &str) -> ProposeRun {
+    let prepared = fresh(product, room);
+    let mut pending = event(
+        product,
+        Some(&prepared),
+        "refine",
+        obj(vec![("task".into(), s(task)), ("response_checks".into(), s(checks))]),
+        room,
+    );
+    pending = reply(product, &pending, "Original reply.");
+    let run = field_or_empty(state(&pending), "task_run");
+    let phase = run.get("phase").and_then(as_str).unwrap_or("").to_string();
+    let wire = effect_wire(&pending).to_string();
+    let cancelled = event(product, Some(state(&pending)), "cancel", obj(vec![]), room);
+    if !is_nullish(state(&cancelled).get("task_run")) {
+        panic!("a later refine task left an active task behind");
+    }
+    ProposeRun { wire, phase }
+}
+
+/// What a later task's propose request carried out of the library.
+struct CrossRead {
+    rows: usize,
+    heading: bool,
+    relation_other: bool,
+    names_earlier_key: bool,
+    names_earlier_harness: bool,
+    names_earlier_lesson: bool,
+    names_own_key: bool,
+    keys: Vec<String>,
+    earlier_key: String,
+    own_key: String,
+    earlier_key_is_task_key: bool,
+    earlier_row_is_first_task: bool,
+    phase: String,
+    proposed: bool,
+}
+
+impl CrossRead {
+    fn ok(&self) -> bool {
+        self.rows >= 1
+            && self.heading
+            && self.relation_other
+            && self.earlier_key_is_task_key
+            && self.earlier_row_is_first_task
+            && self.names_earlier_key
+            && self.names_earlier_harness
+            && self.names_earlier_lesson
+            && !self.names_own_key
+            && !self.keys.iter().any(|key| key == &self.own_key)
+            && self.keys.contains(&self.earlier_key)
+            && self.phase == "propose"
+            && self.proposed
+    }
+}
+
+fn cross_task_read(product: &mut Product, room: &Path, default_root: &Path, settled: &Value) -> CrossRead {
+    let rows = read_rows(&default_root.join("experience.jsonl"));
+    let digest = settled.get("run_digest").and_then(as_str).unwrap_or("");
+    // The row the settled first task sealed, named by that run's digest.
+    let earlier = rows
+        .iter()
+        .find(|row| digest.len() == 64 && row.get("run_digest").and_then(as_str) == Some(digest))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let earlier_key = earlier.get("key").and_then(as_str).unwrap_or("").to_string();
+    let earlier_harness = earlier.get("harness").and_then(as_str).unwrap_or("").to_string();
+    let earlier_lesson = earlier.get("lesson").and_then(as_str).unwrap_or("").to_string();
+    let own_key = task_key(CROSS_TASK);
+    let run = propose_run(product, room, CROSS_TASK, CHECKS);
+    let at = run.wire.find("HISTORICAL EXPERIENCE");
+    let section = at.map(|at| &run.wire[at..]).unwrap_or("");
+    let keys = named_keys(section);
+    let names_own_key = wire_has(section, &own_key);
+    for key in &keys {
+        println!("section heading HISTORICAL EXPERIENCE names key {key}");
+    }
+    println!(
+        "section heading HISTORICAL EXPERIENCE names the earlier task key {earlier_key} and the current task key {own_key} is {} from that section",
+        yes_no(names_own_key)
+    );
+    CrossRead {
+        rows: rows.len(),
+        heading: at.is_some(),
+        relation_other: section.contains("indexed key is from another task"),
+        names_earlier_key: !earlier_key.is_empty() && wire_has(section, &earlier_key),
+        names_earlier_harness: !earlier_harness.is_empty() && wire_has(section, &clipped(&earlier_harness)),
+        names_earlier_lesson: !earlier_lesson.is_empty() && wire_has(section, &clipped(&earlier_lesson)),
+        names_own_key,
+        keys,
+        earlier_key_is_task_key: !earlier_key.is_empty() && earlier_key == task_key(TASK),
+        earlier_row_is_first_task: earlier.get("task").and_then(as_str) == Some(TASK),
+        earlier_key,
+        own_key,
+        phase: run.phase,
+        proposed: run.wire.contains("Propose improved agent instructions"),
+    }
+}
+
+/// What a later task's propose request carried when the library held nothing.
+struct EmptyRead {
+    rows: usize,
+    heading: bool,
+    harness_line: bool,
+    phase: String,
+    proposed: bool,
+}
+
+impl EmptyRead {
+    fn ok(&self) -> bool {
+        self.rows == 0 && !self.heading && !self.harness_line && self.phase == "propose" && self.proposed
+    }
+}
+
+fn empty_library_read(product: &mut Product, room: &Path, default_root: &Path) -> EmptyRead {
+    let rows = read_rows(&default_root.join("experience.jsonl"));
+    let run = propose_run(product, room, CROSS_TASK, CHECKS);
+    let heading = run.wire.contains("HISTORICAL EXPERIENCE");
+    println!(
+        "section heading HISTORICAL EXPERIENCE is {} in a propose wire over a library with {} sealed rows",
+        yes_no(heading),
+        rows.len()
+    );
+    EmptyRead {
+        rows: rows.len(),
+        heading,
+        harness_line: run.wire.contains("Adopted harness (historical)"),
+        phase: run.phase,
+        proposed: run.wire.contains("Propose improved agent instructions"),
+    }
+}
+
+/// A measured fact reads as a word, so a printed line never states the
+/// opposite of what the run showed.
+fn yes_no(present: bool) -> &'static str {
+    if present {
+        "present"
+    } else {
+        "absent"
+    }
 }
 
 fn run_recursion(product: &mut Product, room: &Path, default_root: &Path) -> Recursion {

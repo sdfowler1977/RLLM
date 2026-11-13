@@ -15,14 +15,18 @@ count interlock against the `#[test]` count in that source), the verification ru
 
 Commit under measurement: `a9e8f114` ("two python legs retired on byte-identical pairs, and the TLS peer that
 had to pass OpenSSL first"). Gate on it: `GATE22-TOOLS-RC=0` with package 46 / harness 28 cases and
-`twin helper tests … cases: 44`, `GATE22-VERIFY-RC=0`.
+`twin helper tests … cases: 44`, `GATE22-VERIFY-RC=0`. Amended the same day on `d31ec6c` after reading
+`docs/RRSI-LOOP-RUNLOG.md` and `docs/SELF-BUILD-RUNLOG.md`: the Gap 1 and Gap 2/3 rows below first said those
+run logs were "not on file", which is wrong — they are on file at older commits, and the correct statement is
+about which of them still describe these bytes.
 
 ## Gap 1 — rebuild and reload itself
 
 | row | status | evidence |
 |---|---|---|
 | the capability is wired | PRESENT | `output/harness self_rebuild` → `PASS (exit 0, 1s, 9 checks)`; `core/self_build.rs` is 5,118 lines |
-| a run log **on these bytes** | NOT MEASURED | run logs for the edit → build → test → commit → re-exec sequence are recorded in `closure_ledger.json` against older commits; none was re-run on `a9e8f114` |
+| the delivered group's run log on `d31ec6c` | PRESENT (measured today) | git-archive room `/tmp/room-gap1` of `d31ec6c` (no `.git`, only `history_migration.py` + `live_web.py` left in `verification/`), room's own `bash headless.sh` → `rc=0`, room-built tool suites, then `output/harness self_rebuild` → `PASS (exit 0, 1s, 9 checks)` with all nine check names captured, including `spawn records a successor pid that is a child of this product process`, `the next self-build reaps that successor and the pid is gone`, `an omitted job records the carried job as inherited`; transcript `/tmp/room-gap1-run.log` |
+| the whole edit → build → gate → commit → re-exec chain on `d31ec6c` | NOT MEASURED | the last full-chain log is `docs/SELF-BUILD-RUNLOG.md` §"The whole chain in one job, on committed bytes" at `57b063f` (2026-11-12); `core/self_build.rs` has not moved since, but that log is not on these bytes |
 
 ## Gap 2 — the thirteen RRSI features
 
@@ -44,21 +48,28 @@ unit-pinned at `:893`), the loop edits harness **components** rather than instru
 | 8 | cost-aware acceptance | PARTIAL | `incumbent_cost` (`:915`), `cost_change` in `EDIT_KEYS`; group asserts `a flat memory shape is accepted for structural novelty, a shorter equal score is accepted for lower cost, and the same shape is refused when the cost rose`. The literal `ΔC ≤ β0 + β1·ΔS` form was **NOT MEASURED** |
 | 9 | structural pruning | PRESENT | `PRUNE_WINDOW 3` (`:50`), `pruned_components` (`:885`); group asserts `pruned skills` and, as the negative arm, `two flat skills rounds leave the budget line unpruned` |
 | 10 | evolve / held-out / OOD split | PARTIAL | `SPLIT_KEYS` (`:73`), `known_leg` (`:283`) with `held_out_known/passed/task_key/verifier`, `validate_split` (`:313`); group asserts the four held-out keys and `the separate evaluation score 0 differs from the in-round score 1 and is not a held-out key`. An **OOD** scoring pass (a different benchmark) was **NOT MEASURED** |
-| 11 | parallel candidates; incumbent kept when none admissible | NOT MEASURED | `CANDIDATE_MAX 3` (`:101`), `WORKTREE_MAX 3`, `pool_status` (`:1561`) exist and `core/harness.rs` says a non-refine run "does not attempt the pool"; no group asserts a k-candidate pool deciding that no candidate is admissible |
+| 11 | parallel candidates; incumbent kept when none admissible | NOT MEASURED | `CANDIDATE_MAX 3` (`:101`), `WORKTREE_MAX 3`, `pool_status` (`:1561`). Route measured today: a refine reply that starts `candidates:` is parsed by `parse_pool` and handed to `evaluate_pool` at `core/harness.rs:710-711`; that function refuses a round carrying more than `CANDIDATE_MAX` (`:856-858`), refuses a probe/candidate count mismatch (`:859`), and on the recorded-worktree failure path stamps every pool row `admissible: false` and sets `incumbent_kept: true` with `round_note: "incumbent kept because no candidate was admissible"` (`:867-875`). The only group row about the pool is the **negative** one — `a non-refine run carries no workspace and does not attempt the pool` (`verification/rrsi_loop.rs:109`, asserting `!pool_text.contains("pool_status")`). No group ever drives a k-candidate pool to a decision |
 | 12 | git worktree candidates, incumbent is a commit | PRESENT | `require_recorded_worktree` on the `refine` path (`core/harness.rs:480`), `EVOLVE_BRANCH "rllm-evolve"` (`:103`), commit-in-slot (`:1997`); group asserts `the incumbent commit in .rllm-worktrees is the evolve tip` |
 | 13 | auditable, resumable run | PARTIAL | JSONL ledger + chain, `STOP_FILE`/`STOP_SENTENCE`/`STOP_SYMLINK` (`:106-111`), `resume_run` (`:1665`); group asserts `files alone rebuild the resumed phase and decision` and `a tampered library entry is refused and its bytes stay unchanged`. Proposer/analyst/critic prompts **as plain files** was **NOT MEASURED** |
 
-**Gap 2 proof owed:** the report wants a ≥3-round run log showing budget shrink, a rejected leaking candidate,
-a noise-floor decision, a pruned component, the incumbent as a worktree commit, and a held-out score. Every one
-of those six is asserted by `rrsi_loop` and named in its log — but the log names the values instead of printing
-them, so the artifact values themselves still have to be printed and the room run on committed bytes.
+**Gap 2 proof owed — corrected after reading `docs/RRSI-LOOP-RUNLOG.md`.** That committed document already
+carries the six-bar run log the report asks for — budgets 4/3/2 quoted out of the model request wire, the
+leaking candidate refused *before* scoring (row 1, hypothesis stored as a digest), the noise-floor decision
+(gain 1 inside floor 2), `pruned_components=["skills"]`, the incumbent as worktree commit
+`e28d8f177ed8c616df9c23003af4df7d2b174a72` with `main` unmoved, and the four held-out keys with their digests
+recomputed by the driver — all with values printed, made in a `git archive` room at commit `b8b0e71`
+(2026-11-12). What is owed is narrower than "no artifact on file": that log is **stale for these bytes** —
+`core/harness.rs` moved 45 lines and `core/rrsi.rs` 2 lines since `b8b0e71`, and the change is in the cost arm
+(`acceptance_policy` gained a `measure_cost` parameter, and a dropped-field tie now leaves the cost unmeasured),
+so the cost row of that log is no longer a witness. `rrsi_loop` now asserts all six bars as checks, but its log
+names the values instead of printing them, so the printable-value leg still has to be added.
 
 ## Gap 3 — Harness² two-level recursion
 
 | # | item | status | measured evidence |
 |---|---|---|---|
 | 1 | task-level contrastive PPC | NOT MEASURED | the propose→probe→compose route exists in `core/harness.rs`; I did not witness a contrast-composed successor |
-| 4 | **a later task reads the library the earlier task wrote** | IMPLEMENTED, NOT VERIFIED (repair in flight) | implemented: `core/harness.rs` `historical_experience` calls `rrsi::historical_section_checked(&root, &text(run,"task"), get(run,"library_index"))` and emits the `HISTORICAL EXPERIENCE` section. Measured absence of verification: `grep -rl "experience.jsonl|library_index|lesson_context" verification/` → only `rrsi_loop.rs` (sealing + tamper refusal) and `hosted_phases.rs` (the *different*, in-state lessons store). No group ever reads task t's entry from task t+1 |
+| 4 | **a later task reads the library the earlier task wrote** | PRESENT (product) as of this lane's group assertion; the earlier run log is stale for these bytes | witnessed at product level in `docs/RRSI-LOOP-RUNLOG.md` §Gap 3 at `b8b0e71`: two separate `output/headless/RLLM` processes, the second one's propose wire (9,799 bytes) carrying task t's `key 27c0edc8…`, `revision 665268c8…` and `harness_digest 65da7eef…` under `HISTORICAL EXPERIENCE`, and a third run under a different key shown the same entry as `indexed key is from another task`. Measured gap that this lane closes: no delivered group asserted it — `grep -rl "experience.jsonl|library_index|lesson_context" verification/` hit only sealing and tamper arms. `rrsi_loop` now carries `a later refine task reads the earlier task's sealed experience entry from the propose prompt` and `a refine task whose library holds no sealed row shows no historical experience section` |
 | 5 | eight editable components | PRESENT | `core/rrsi.rs:37` `const EDITABLE = ["system prompt", "guardrails", "memory", "tool guidance", "subagents", "skills", "scripts", "plugins"]` |
 | 2, 3, 6, 7, 8 | parallel invariant+domain candidates, sequential recursion, invariant/domain scoping, agentic selector over anonymised deliverables, resume with deliverables and reflection notes | NOT MEASURED | `pool_status`, `resume_run` and `CANDIDATE_MAX` exist; no witness of the k-candidate pool, the composition step, or an anonymised deliverable selector |
 
@@ -103,8 +114,10 @@ Measured on `a9e8f114`:
 
 ## What is actually left, ranked
 
-1. **Print and archive the Gap 2 and Gap 3 run logs on committed bytes** — the capabilities are there; the
-   proof artifacts are not yet on file. Gap 3 additionally needs the cross-task library assertion (in flight).
+1. **Re-make the Gap 2 and Gap 3 run logs on these bytes** — `docs/RRSI-LOOP-RUNLOG.md` holds both logs with
+   values printed, but at `b8b0e71`, and the cost arm has moved since. The `rrsi_loop` group also has to print
+   the artifact values (budget sentences, evolve commit, noise floor, held-out digests) so a room run of the
+   delivered group is itself the run log instead of a python driver in `/tmp`.
 2. **Gap 2 #11 and Gap 3 #2/#3** — the k-candidate pool and composition are the largest genuinely un-witnessed
    piece of the recursion story.
 3. **Gap 4 #2** — pseudocode is measurably absent; everything else in Gap 4 exists but the JS/.NET evidence has
