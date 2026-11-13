@@ -13,7 +13,7 @@ output/verification/acp
 output/verification/oauth
 python3 verification/binary_flow.py
 python3 verification/pe_declarations.py
-python3 verification/commands.py
+output/verification/commands
 python3 verification/history_migration.py --previous-controller /path/to/prior-controller
 python3 verification/hosted_phases.py
 python3 verification/prompt_reference.py --previous-controller /path/to/prior-controller
