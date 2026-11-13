@@ -118,3 +118,68 @@ Not claimed: signed-path behaviour (no signed APK exists anywhere under `output/
 this host), `readback.rs`/`checkpoint.rs` behavioural witnesses, device acceptance, any
 `GAP2`/`GAP3`/`GAP4` capability, or a record republish — the record still reads 69 groups /
 4,185 checks / sha256 `7250328b5385`, because no full sweep has been run while two lanes write.
+
+---
+
+## 2026-11-13 — the delivered record was 117 commits stale, and verification starts going native
+
+Commits this window: `a07fa22` (hosted_phases scoring repair) → `52f7dfe` (stored-capture reader repair)
+→ `0eb0cb1` (republished record + ledger) → `6962fda` (`history` becomes a Rust twin) → `c7c670b`
+(a twin's report is byte-identical to the leg it replaces).
+
+**The record was not reproducible.** At `4309c84` the sweep printed `63 pass, 4 fail, 4 unavailable,
+4 absent of 71 groups, 4028 checks` and `commit_sweep` refuses the whole record when any row fails, so
+`verification/RESULTS.json` had not been rewritten since `0f9348e` — 117 commits. Bisected in git-archive
+rooms: `FIRST_RED[flow]=b6457b0`, `FIRST_RED[hosted]=b8b0e71`. Both repaired, and the record republished:
+
+    delivered record written: 71 groups, 4248 checks
+    summary: 67 pass, 0 fail, 4 unavailable, 0 absent of 71 groups, 4248 checks
+
+The four UNAVAILABLE rows are missing companion artifacts (`output/pre-branch-controller`,
+`output/pre-auth-controller`, `output/previous-controller`, and the candidate APK
+`RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk`), not failures.
+
+**Unit anchor corrected: `Rust cases passed: 878/878; isolated application cases: 57`** — 876 at `4309c84`
+plus one case from each repair commit. A mid-window note pinned 877, one case short.
+
+**The R-rule debt in the verification tree is now reachable.** `tools/build-verification.sh` compiles each
+`verification/<name>.rs` crate root with `$CLIENT_RUST/bin/rustc` (no Cargo, no Python) into
+`output/verification/<name>`; the runner prefers that twin for both input derivation and execution, and
+falls back to `python3` only when no twin exists. `verification/twin/mod.rs` is the shared helper
+(`Controller` over `output/headless/RLLM --jsonl`, a `Value` type, `report`). `verification/history.py` is
+gone: verification Python went **73 files / 8570 lines → 72 files / 8547 lines**, and both package ceilings
+ratcheted with it (`VERIFICATION_PY_FILE_CEILING` 73 → 72, `VERIFICATION_PY_LINE_CEILING` 8570 → 8547).
+
+**Equivalence is measured, not asserted.** In one room (`/tmp/twincmp`) the retired Python leg and the
+native twin ran side by side:
+
+    python leg  rc=0  report sha 5d62f873ad5d875f… 472 bytes  "6 history checks passed"
+    native twin rc=0  report sha 5d62f873ad5d875f… 472 bytes  "6 history checks passed"
+    report bytes identical: True; counts 6/6; scope identical; order identical
+
+That witness is what forced `c7c670b`: the first twin wrote compact JSON, which reflowed that group's block
+in the delivered record. After the fix the record is **byte-identical across the conversion** — the sweep at
+`c7c670b` produced sha `e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0`, the same bytes
+committed at `0eb0cb1`.
+
+**Failure semantics survived the move.** With the twin source broken, the build fails and leaves no stale
+binary (`broken_build_rc=1 twin_present=no`), and the leg goes `history FAIL (exit 2 …)` rather than
+replaying an old pass; with the twin binary moved aside it goes `FAIL` plus `COUNT UNPARSED: history`; with
+a source removed the rebuild prunes its orphan binary. The runner census now also refuses an undeclared
+top-level twin (`CENSUS: verification/zz_scratch.rs is not a runner group…`). Tools tests stayed green and
+the same size: package 46, harness 23, gate 18, toolchain 10, apk 6, readback 24, checkpoint 5, signature 5,
+alignment 2.
+
+**`GAP5` status.** Python exposure measured at `c7c670b`: `verification/` 72 files / 8547 lines,
+`tools/` 2 files / 189 lines (`checks.py`, `package.py`), `core/`+`platform/` 0. Total **74 files /
+8736 lines**. Eight more legs are drafted as twins by MiniMax writer seats (all Python check names present
+in each draft): `mcp_catalog_events` (801 lines), `rrsi_loop` (518), `http_framing` (336), `self_rebuild`
+(329), `proposal_recovery` (246), `mcp_continuation` (237), `mcp_catalog` (190), `a2a` (167). The two
+largest drafted files are in Grok repair lanes (`/tmp/laneD`, `/tmp/laneE`) because the drafts never saw a
+compiler (60 and 65 type errors). **Nothing in that queue is claimed** until it compiles clean and clears
+the same two-column bar. `tools/checks.py` retires when the runners point at `gate <units>`; `tools/package.py`
+retires when a signed candidate is published, which is still owner-blocked: signing custody needs `rllm.p12`
+and `rllm.password`, and the certificate digest stays `ba3d016e…` — no keystore gets minted.
+
+Not claimed: signed-path behaviour (no signed APK on this host), device acceptance, and any `GAP2`/`GAP3`/
+`GAP4` capability beyond the run logs already in `docs/`.
