@@ -109,7 +109,7 @@ Selected or returned PNG/JPEG images up to 2 MiB can be attached to a reviewed d
 
 ## Validation scope
 
-`verification/services.py`, `media.py`, `jobs.py`, `voice.py`, `voice_interruption.py` and `media_stream.py` exercise the public shared core with actual local HTTP peers, real file bytes, large-file streaming, review/cancellation/ownership, scoped fallbacks and all four primary/child model formats. Model responses and microphone callbacks in these checks are controlled fixtures. They do not certify an installed microphone, speaker, decoder or a particular remote server. Those require current-device and endpoint acceptance.
+`verification/services.py`, the native twins `verification/media.rs` and `verification/voice_interruption.rs`, `jobs.py`, `voice.py` and `media_stream.py` exercise the public shared core with actual local HTTP peers, real file bytes, large-file streaming, review/cancellation/ownership, scoped fallbacks and all four primary/child model formats. Model responses and microphone callbacks in these checks are controlled fixtures. They do not certify an installed microphone, speaker, decoder or a particular remote server. Those require current-device and endpoint acceptance.
 
 File transfers use single-use input results and expiring request ownership. A changed file, stale callback, cancellation or overflow cannot adopt a prefix as a complete input. Upload interruption after possible send never automatically replays the request. Missing optional servers do not block ordinary text or local work.
 

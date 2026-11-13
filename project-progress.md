@@ -539,3 +539,65 @@ which is what proves eleven legs were replaced rather than re-scored. A sweep ru
 untouched: an instrument-use error, recorded here so it is not mistaken for a product red. Census after this
 batch: `verification/` 39 `.py` / 3 626 lines and 34 native twins, `tools/` 2 `.py` / 191 lines — 41 files /
 3 817 lines, against ceilings 39 / 3 626.
+
+## 2026-11-13 (morning) — twin batch 6: seventeen more legs native, and the witness becomes two-column
+
+**What went native.** Seventeen connected legs were replaced by native twins and their Python deleted with
+`git rm`: gateway_expectation 422, question_process 603, request_fields 579, voice_interruption 1 105, media 965,
+proposal_feedback 950, network_feedback 928, document_providers 530, storage_owner 1 212, provider_process 670,
+chunk_fields 485, permission_modes 686, field_flow 515, storage_auth 761, audio_route 212, device_shortcut 444,
+voice_settings 1 029 — **12 096 lines of Rust against 1 259 lines of Python**. `package.rs` ceilings moved with
+them: `VERIFICATION_PY_FILE_CEILING 39 -> 22`, `VERIFICATION_PY_LINE_CEILING 3626 -> 2367`, with the planted
+corpora and refusal sentences in the same edit. Census after: `verification/` 22 `.py` / 2 367 lines (including
+the shared `verification/transport.py`, still imported by seven legs) and **51 native twins**; `tools/` 2 `.py` /
+191 lines — 24 files / 2 558 lines.
+
+**The witness standard, because an `ls -t` pass proves nothing.** Every group is certified in a fresh
+`git archive HEAD` room by `/tmp/twinwitness2.sh`, which derives the compared report path from the runner's own
+`tools/harness.rs:862-875 group_report_file` mapping — never file recency — and logs both instruments' exit codes,
+both artifact sets (`twin_files=… | all=…`, `py_files=…`) and both report digests before `cmp`. Passes 44, 46-48,
+50, 52-57 are clean under that instrument; the older passes it replaced are flagged in the table. Final certified
+set (group, checks, report sha256, pass): provider_process 60 `2681e47a…` 34; storage_auth 55 `1240b49b…` 42;
+gateway_expectation 26 `931298af…` 50; request_fields 55 `6510cbda…` 38; device_shortcut 240 `926a0b06…` 39;
+question_process 19 `f1d2a5b6…` 57; network_feedback 41 `a1e2fcfb…` 47; voice_interruption 104 `a638a8ee…` 54;
+proposal_feedback 36 `ac8e6a4f…` 46; field_flow 37 `1891092a…` 41; media 33 `0652284c…` 56; chunk_fields 163
+`f2a92580…` 28; permission_modes 27 `e766f33e…` 29; audio_route 23 `b6299737…` 32; document_providers 51
+`a877bf7f…` 52; storage_owner 43 `5ef1f183…` 53; voice_settings 81 `d4f2b280…` 55. Each row is byte-identical
+between the twin and the leg, and each twin wrote exactly the canonical report and nothing else.
+
+**What measurement found that reading did not.** `voice_settings` hung (pass 36 `twin_rc=124`, no canonical
+report): `/proc` showed the child blocked in `anon_pipe_read` while its sockets sat established with empty
+queues — the twin never ran `verification/transport.py`'s protocol (upload-read loop, per-8192 stream feeds,
+finish with `eof`, both cancels) on the still-open socket, and it invented the `network_result` inputs instead of
+the leg's `dict(reply, purpose=…)`. Three more real defects fell out of the same loop: three events used
+`peer.root()` (`.`) instead of the one scratch root the subject keys pending results to; the model-format
+fixtures nested their bodies under the format name, so the subject answered `Missing choices`; and the peer
+echoed the `/speak` request body instead of a WAV, which `core/media.rs:51` rejects
+("Artifact container differs from configured kind"). `question_process` invented a `Value::Null` plan where the
+leg's `old_plan=c['plan']` raises — hardened to a panic, and the report digest did not move
+(`f1d2a5b6…` at 19 checks before and after).
+
+**Audit gate.** Eight MiniMax seats ran the full four-block check (coverage / mutations / pass-conversion census /
+verdict) and the coordinator read every one, adjudicating each finding against the leg bytes. Accepted and
+refuted-with-citations: storage_owner seat 1 rejected two arms for "accepting an absent field", but
+`get(k).is_some_and(|v| !truthy(v))` is FALSE when the key is absent, so the twin panics exactly where
+`not listed['state']['profiles']` raises `KeyError`; seat 2 re-derived both arms and accepted. question_process
+seat 3 rejected `twin:170` for "fabricating `evidence_empty = true`" — that is its own mutation, not the code
+(`matches!(…, Some(Arr(items)) if items.is_empty())`), and its census row for the same line reads "No".
+`gateway_expectation`, `storage_auth`, `voice_interruption` each had one permissive arm hardened (`eof()` accepts
+only a zero-byte read, `as_state` panics instead of substituting, `purpose` goes through `require_clone`), each
+followed by a fresh canonical witness.
+
+**Gates, in order, on these bytes.** `bash tools/build-units.sh output/units` rc=0 and
+`python3 tools/checks.py --all-units output/units` rc=0 — `Rust cases passed: 878/878; isolated application
+cases: 57`. `bash tools/build-tools.sh output/tools` was **rc=1 the first time**: the census byte-bound fixture
+still expected `verification files 1 lines 1 ceiling files 39 lines 3626` (`tools/package.rs:4120`); the
+expectation moved with the constants and the rerun is rc=0 with all nine rows at executed == declared
+(alignment 2, readback 24, checkpoint 5, signature 5, apk 6, toolchain 10, gate 18, package 46, harness 27).
+`bash tools/build-verification.sh .` rc=0: 51 twins, 0 errors, 0 warnings, `twin helper tests: … cases: 9`.
+`bash tools/build-harness.sh` rc=0, `bash headless.sh` rc=0. `output/harness sweep` rc=0:
+`delivered record written: 71 groups, 4248 checks`, `summary: 67 pass, 0 fail, 4 unavailable, 0 absent of 71
+groups, 4248 checks`, and `verification/RESULTS.json` still
+`e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0` — byte-identical through batches 1-6, which is
+what proves seventeen legs were replaced rather than re-scored. The four UNAVAILABLE rows are the same four
+comparator-bound groups (binary_flow, history_migration, apk_alignment, turn_background); none was retired.

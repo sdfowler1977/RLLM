@@ -3,10 +3,10 @@
 Build the shared host controller with `bash headless.sh` using the tool locations in docs/BUILD.md. `bash tools/build-harness.sh` also compiles every native verification twin in `verification/*.rs` into `output/verification/`, and the runner prefers that twin over a Python leg of the same name. Run the connected groups from the project root:
 
 ```bash
-python3 verification/provider_process.py
+output/verification/provider_process
 python3 verification/network_drive.py
 python3 verification/drive_ownership.py
-python3 verification/question_process.py
+output/verification/question_process
 output/verification/history
 output/verification/a2a
 output/verification/acp
@@ -20,8 +20,8 @@ python3 verification/prompt_reference.py --previous-controller /path/to/prior-co
 output/verification/provider_evidence
 output/verification/delegation_visibility
 python3 verification/local_feedback.py
-python3 verification/network_feedback.py
-python3 verification/proposal_feedback.py
+output/verification/network_feedback
+output/verification/proposal_feedback
 output/verification/review_ownership
 python3 verification/task_ownership.py
 output/verification/dav_listing
@@ -50,6 +50,6 @@ The `http_framing` twin exercises real persistent loopback sockets through the s
 
 The `platform_resolution` twin compiles and executes the production Java resolver/deadline binding using CLIENT_JDK. Controlled DNS lookup outcomes exercise occupied-slot admission, deadline expiry, lifecycle closure and recovery; hostname resolution then connects to real loopback sockets. Android call-site compilation uses SDK35.
 
-Optional services: run media.py, plus the native twins `output/verification/services`,
+Optional services: run the native twins `output/verification/media`, `output/verification/services`,
 `output/verification/voice`, `output/verification/media_stream` and `output/verification/jobs`.
 tools/checks.py includes these five groups alongside the original thirty. The current binary-flow compatibility group still requires the genuine revision-two controller; an unavailable comparator must be reported explicitly and never substituted with a current decoder or weakened reader fingerprint. Native microphone/playback and configured live service endpoints remain separate device acceptance.
