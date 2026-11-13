@@ -1019,3 +1019,85 @@ compares the parsed number, not two `Value`s.
 
 Census: 10 files / 1228 lines left in `verification/` (63 legs retired); the two ceilings and all census
 fixtures in `tools/package.rs` moved to 10 / 1228.
+
+### The run log on the committed bytes (commit `569a28e`, room `/tmp/room-f`)
+
+```
+census files=10 lines=1228 twins=63
+bash headless.sh                   headless_rc=0
+bash tools/build-units.sh          units_build_rc=0
+bash tools/build-tools.sh          tools_rc=0
+output/tools/gate output/units     gate_rc=0    Rust cases passed: 878/878; isolated application cases: 57
+                                                 cb2fd261dc385e7ffb3db408e76a922aa702f17d985fecf0e02ca793923c467c  output/checks/full-units.json
+output/tools/gate --units          gate_units_rc=0    Selected cases: 310
+bash tools/build-verification.sh   verification_build_rc=0    63 twins
+bash tools/build-harness.sh        harness_build_rc=0
+output/harness network_drive drive_ownership commands local_feedback query_feedback
+               workspace_navigation mcp_images storage_oauth credential_rotation diagnostics
+groups_rc=0                    summary: 10 pass, 0 fail, 0 unavailable of 71 groups
+  network_drive        PASS (exit 0, 0s, 46 checks)
+  drive_ownership      PASS (exit 0, 0s, 38 checks)
+  commands             PASS (exit 0, 0s, 86 checks)
+  local_feedback       PASS (exit 0, 0s, 29 checks)
+  query_feedback       PASS (exit 0, 0s, 74 checks)
+  workspace_navigation PASS (exit 0, 0s, 83 checks)
+  mcp_images           PASS (exit 0, 0s, 42 checks)
+  storage_oauth        PASS (exit 0, 1s, 78 checks)
+  credential_rotation  PASS (exit 0, 0s, 82 checks)
+  diagnostics          PASS (exit 0, 0s, 31 checks)
+output/harness sweep               sweep_rc=0    summary: 64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4146 checks
+```
+
+The two groups that went native in `569a28e` — `mcp_images` (42) and `network_drive` (46) — were both served by
+native twins from `output/verification/` in this room, and the sweep row is unchanged from rooms `d` and `e`
+(`64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4146 checks`) with the same delivered
+`full-units.json` digest `cb2fd261…`. That is what retiring a leg must look like: identical group rows and
+identical product bytes, only now the group is a binary.
+
+## 2026-11-13 (night) — three more legs go native, and an audit that was half right still stops a twin
+
+| Group | Room | Twin / leg rc | Canonical report | Printed channel | Runner row |
+|---|---|---|---|---|---|
+| product_flow | `/tmp/witq106-product_flow` | 0 / 0 | `output/checks/product-flow.json` (3273 B) byte-identical, twin sha `d426e259…` | byte-identical (3288 B) | `product_flow PASS` in the same room |
+| prompt_reference | `/tmp/wit-prompt_reference` (witq107, after repair) | 0 / 0 | `output/checks/prompt-reference.json` byte-identical | byte-identical (3837 B) | `prompt_reference PASS (exit 0, 0s, 52 checks)` |
+| pe_declarations | `/tmp/witq108-pe_declarations` | 0 / 0 | `output/checks/pe-declarations.json` `ac3759bd…` (3800 B) byte-identical | byte-identical (3815 B) | `pe_declarations PASS (exit 0, 2s, 43 checks)` |
+
+`prompt_reference` is the case worth writing down, because the audit and the witness disagreed and both were
+right about different things.
+
+- The first audit **rejected** the draft on two counts: it printed a hardcoded-looking `52` and it "collected
+  only 48 checks"; and it fabricated `request_bytes` as an empty array while omitting the leg's
+  `if args.previous_controller:` branch. The count claim was **contradicted by the witness** — the leg run the
+  way `tools/harness.rs` runs it here (no `output/previous-controller` file, so no flag) emits **52** names in
+  both channels, `request_bytes: []`, and the twin was byte-identical to it. The second claim was **correct and
+  fatal**: the twin accepted no `--previous-controller` at all, so the runner's documented invocation
+  (`verification/README.md`, and `sweep_arguments` at `tools/harness.rs:1078`, which passes the flag exactly
+  when that controller file exists) would have had the twin report an empty comparison it never performed.
+  "A leg-failing case can pass the twin" is the standard that decides, not the seat's arithmetic.
+- The repair implements the branch as the leg has it: spawn the prior controller at the same scratch root, send
+  the same draft per protocol, record `{protocol, previous_request_bytes, current_request_bytes}` from the two
+  actual request wires, assert `current < previous * 0.7`, then cancel — in the leg's slot, between the fifth and
+  sixth check of each protocol, so the name order is the leg's. The expected-count self-check became 52/56
+  instead of a bare 52.
+- The branch was then **made red on purpose**, on both instruments, with the current binary as the "prior"
+  controller: leg `rc=1 AssertionError: chat actual read-only request is substantially smaller`, twin
+  `rc=101 panicked … chat actual read-only request is substantially smaller`. A threshold mutant (`0.7 → 1.7`,
+  scratch copy only, then deleted) turns green with 56 names and measured rows — `chat 4718/4718`,
+  `local 4692/4692`, `messages 4699/4699`, `content 4678/4678` — so the numbers are the controller's own wire
+  lengths, not constants. Re-witnessed byte-identical, then re-audited: **accept**, 56/56 coverage, and the seat
+  independently confirmed the count guard is twin-stronger rather than a fabrication.
+
+`pe_declarations` (132 Python lines, 43 checks) is the heaviest twin in the tree: it drives the real NDK
+toolchain — `clang`, `lld-link`, `llvm-readobj` — to build and re-poison an original assembled/linked PE/COFF
+fixture with DIR64 base relocations, then runs typed declaration, callback, export/readback, clean-room
+implement/verify/refusal, and saved-capture (`.har`/`.saz`, member/section/file-size caps) rows against it. The
+first draft of this leg (a MiniMax seat from an earlier round) was a 152-line stub whose `sha256_hex` returned
+`"00000000…"`; it was thrown out rather than repaired, and the lane's 1813-line port replaced it. The audit
+accepted it with a 43-row coverage table and no pass-conversion arm.
+
+`product_flow` (147 Python lines, 37 checks) came out of its lane byte-exact on both channels and was accepted
+with mutation arms of its own.
+
+Census: **7 files / 911 lines** left in `verification/` (66 legs retired); the two ceilings and all twelve census
+fixtures in `tools/package.rs` moved to 7 / 911, and `verification/README.md` now names
+`output/verification/pe_declarations` and `output/verification/prompt_reference`.
