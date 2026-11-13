@@ -19,7 +19,7 @@ python3 verification/hosted_phases.py
 python3 verification/prompt_reference.py --previous-controller /path/to/prior-controller
 output/verification/provider_evidence
 output/verification/delegation_visibility
-python3 verification/local_feedback.py
+output/verification/local_feedback
 output/verification/network_feedback
 output/verification/proposal_feedback
 output/verification/review_ownership

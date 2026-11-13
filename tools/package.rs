@@ -2191,12 +2191,12 @@ const TOOL_PYTHON: &[ToolPython] = &[
 ];
 
 // Both ceilings are the measured verification/ totals after every Python leg
-// that a native twin replaced was deleted (51 legs so far, 22 files and 2367
+// that a native twin replaced was deleted (52 legs so far, 21 files and 2296
 // lines left, including the shared verification/transport.py peer helper). A
 // larger file count or line count refuses; a smaller count still passes. The
 // ceilings move down with every retired leg, never up.
-const VERIFICATION_PY_FILE_CEILING: usize = 22;
-const VERIFICATION_PY_LINE_CEILING: usize = 2367;
+const VERIFICATION_PY_FILE_CEILING: usize = 21;
+const VERIFICATION_PY_LINE_CEILING: usize = 2296;
 // A ceiling refusal names at most this many verification files, largest line
 // count first. The rest of the count stays in the ceiling sentence.
 const VERIFICATION_PY_LARGEST_SHOWN: usize = 8;
@@ -4032,7 +4032,7 @@ const GROUPS: &[&str] = &[
     #[test]
     fn publish_refuses_verification_python_over_ceiling() {
         let (_dir, root) = fixture();
-        assert_eq!(VERIFICATION_PY_FILE_CEILING, 22);
+        assert_eq!(VERIFICATION_PY_FILE_CEILING, 21);
         assert_eq!(VERIFICATION_PY_LARGEST_SHOWN, 8);
         for index in 0..51 {
             let body = if index == 50 { "pass\npass\npass\n" } else { "pass\n" };
@@ -4040,27 +4040,27 @@ const GROUPS: &[&str] = &[
         }
         assert_publish_refuses(
             &root,
-            "refusing: verification/ Python files 51 exceed the recorded ceiling 22\nrefusing: verification/ Python largest 8 of 51: verification/debt50.py lines 3, verification/debt0.py lines 1, verification/debt1.py lines 1, verification/debt10.py lines 1, verification/debt11.py lines 1, verification/debt12.py lines 1, verification/debt13.py lines 1, verification/debt14.py lines 1",
+            "refusing: verification/ Python files 51 exceed the recorded ceiling 21\nrefusing: verification/ Python largest 8 of 51: verification/debt50.py lines 3, verification/debt0.py lines 1, verification/debt1.py lines 1, verification/debt10.py lines 1, verification/debt11.py lines 1, verification/debt12.py lines 1, verification/debt13.py lines 1, verification/debt14.py lines 1",
         );
     }
 
     #[test]
     fn publish_refuses_verification_python_lines_over_ceiling() {
         let (_dir, root) = fixture();
-        assert_eq!(VERIFICATION_PY_LINE_CEILING, 2367);
+        assert_eq!(VERIFICATION_PY_LINE_CEILING, 2296);
         plant(&root, "verification/a.py", "pass\n");
         plant(&root, "verification/z.py", &newline_body(VERIFICATION_PY_LINE_CEILING));
-        assert_eq!(python_line_count(b"pass\n") + python_line_count(newline_body(VERIFICATION_PY_LINE_CEILING).as_bytes()), 2368);
+        assert_eq!(python_line_count(b"pass\n") + python_line_count(newline_body(VERIFICATION_PY_LINE_CEILING).as_bytes()), 2297);
         assert_publish_refuses(
             &root,
-            "refusing: verification/ Python lines 2368 exceed the recorded ceiling 2367\nrefusing: verification/ Python largest 2 of 2: verification/z.py lines 2367, verification/a.py lines 1",
+            "refusing: verification/ Python lines 2297 exceed the recorded ceiling 2296\nrefusing: verification/ Python largest 2 of 2: verification/z.py lines 2296, verification/a.py lines 1",
         );
     }
 
     #[test]
     fn publish_passes_verification_python_lines_at_ceiling() {
         let (_dir, root) = fixture();
-        assert_eq!(VERIFICATION_PY_LINE_CEILING, 2367);
+        assert_eq!(VERIFICATION_PY_LINE_CEILING, 2296);
         let body = newline_body(VERIFICATION_PY_LINE_CEILING);
         plant(&root, "verification/debt.py", &body);
         assert_eq!(python_line_count(body.as_bytes()), VERIFICATION_PY_LINE_CEILING);
@@ -4095,7 +4095,7 @@ const GROUPS: &[&str] = &[
         let at_destination = at_root.join("destination");
         let report = publish(&at_root, &at_destination, false, true).unwrap();
         let line = census_line(&report);
-        assert!(line.contains("verification files 1 lines 1 ceiling files 22 lines 2367"), "{line}");
+        assert!(line.contains("verification files 1 lines 1 ceiling files 21 lines 2296"), "{line}");
         assert!(line.contains("core files 0 lines 0"), "{line}");
         assert!(!report.contains("refusing:"), "{report}");
         assert_eq!(fs::read_dir(&at_destination).unwrap().count(), 0, "at-bound twin wrote an artifact");
@@ -4127,7 +4127,7 @@ const GROUPS: &[&str] = &[
         assert!(line.contains("core files 0 lines 0"), "{line}");
         assert!(line.contains("platform files 0 lines 0"), "{line}");
         assert!(line.contains("tools files 1 lines 1"), "{line}");
-        assert!(line.contains("verification files 22 lines 22 ceiling files 22 lines 2367"), "{line}");
+        assert!(line.contains("verification files 21 lines 21 ceiling files 21 lines 2296"), "{line}");
         assert!(line.contains("elsewhere files 0 lines 0"), "{line}");
         assert!(line.contains("package.py (publisher until a signed candidate is published with the native package binary)"), "{line}");
     }
@@ -4143,7 +4143,7 @@ const GROUPS: &[&str] = &[
         assert!(before.contains("core files 0 lines 0"), "{before}");
         assert!(before.contains("platform files 0 lines 0"), "{before}");
         assert!(before.contains("tools files 0 lines 0"), "{before}");
-        assert!(before.contains("verification files 0 lines 0 ceiling files 22 lines 2367"), "{before}");
+        assert!(before.contains("verification files 0 lines 0 ceiling files 21 lines 2296"), "{before}");
         assert!(before.contains("elsewhere files 0 lines 0"), "{before}");
         plant(&root, "output/hidden.py", "print(1)\n");
         plant(&root, "tooling/helper.py", "print(1)\n");
@@ -4170,12 +4170,12 @@ const GROUPS: &[&str] = &[
         assert!(files.iter().any(|path| path == "tools/harness.rs"), "walk missed tools/harness.rs");
         assert!(files.iter().any(|path| path.starts_with("verification/") && path.ends_with(".py")), "walk missed verification/");
         let line = enforce_python_census(&root, &files).unwrap();
-        assert_eq!(VERIFICATION_PY_FILE_CEILING, 22);
+        assert_eq!(VERIFICATION_PY_FILE_CEILING, 21);
         assert!(line.contains("core files 0 lines 0;"), "{line}");
         assert!(line.contains("platform files 0 lines 0;"), "{line}");
         assert!(line.contains("tools files 1 lines 115 ["), "{line}");
-        assert!(line.contains("verification files 22 lines 2367 ceiling files 22 lines 2367;"), "{line}");
-        assert_eq!(VERIFICATION_PY_LINE_CEILING, 2367);
+        assert!(line.contains("verification files 21 lines 2296 ceiling files 21 lines 2296;"), "{line}");
+        assert_eq!(VERIFICATION_PY_LINE_CEILING, 2296);
         assert!(line.contains("elsewhere files 0 lines 0"), "{line}");
         println!("{line}");
     }

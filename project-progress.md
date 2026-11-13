@@ -677,3 +677,56 @@ The seat audit read the diff and returned **ACCEPT-WITH-FINDINGS**:
 that cited `tools/checks.py` as live (`runner_inventory_python_ceiling_zero_slack_2026_11_13`,
 `verification_twin_batch1_five_legs_2026_11_12`) were corrected in place;
 `checks_py_roles_census_2026_11_13` records that the census was closed the same day it was taken.
+
+## 2026-11-13 (afternoon) — twin batch 7 opens with `local_feedback`, and the ceiling moves again
+
+`verification/local_feedback.py` (71 lines, 29 checks) is replaced by `verification/local_feedback.rs`
+(852 lines). It is the first leg of batch 7, so it is committed on its own witness rather than waiting for
+the batch.
+
+### The witness, and what it took to earn it
+
+Two-column witness in a clean `git archive HEAD` room (`/tmp/wit84-local_feedback`):
+
+```
+compile_rc=0 errors=0 warnings=0        twin_rc=0        py_rc=0
+output/checks/local-feedback.json      twin 59af1fafd5399747e10b5737b8c223299efaec325455fe2ef8ff25e9af2ccff0
+                                        leg  59af1fafd5399747e10b5737b8c223299efaec325455fe2ef8ff25e9af2ccff0
+CMP: byte-identical
+harness_build_rc=0   local_feedback PASS (exit 0, 0s, 29 checks)
+```
+
+Three divergences had to be found before that equality meant anything, and each is now a rule in the packets
+this batch sends out:
+
+- `x['effect'] is None` in the leg means a **present** JSON null. `x.get("effect").is_none()` is false for
+  that, so nine sites became `matches!(x.get("effect"), Some(Value::Null))`. The failing twin check was
+  `consumed worker callback is inert on replay`, and an instrumented room copy proved the subject emits
+  `"effect": null` with `state_equal=true`.
+- The leg's nested setter indexes into **arrays** (`st['agents'][0]['tools']`). The twin's helper recursed on
+  a string key and treated arrays as objects, looping forever on `["0", rest[0]]` and then panicking
+  `expected object`. The rewrite adds a `Value::Arr` arm that indexes by `key.parse::<usize>()`.
+- The cancellation check fed the **post**-cancel reply into the failure callback. The leg fails the
+  pre-cancellation `copy.deepcopy` snapshot, so the twin keeps that snapshot and compares against it — the
+  twin had been testing a different, already-revoked callback.
+
+The report shape also differs from the helper default: this leg writes `json.dumps(...) + '\n'`, so the twin
+builds its own `{passed: [...], scope}` body and calls `twin::report_value("local_feedback", &body, true)`
+instead of `twin::report`, which writes without the trailing newline.
+
+### Audit disposition
+
+The seat audit read the leg, the twin and the helper block and returned **ACCEPT**: a 29-row coverage table
+(leg check → twin line → evaluated predicate, no merge/rename/reorder), three mutations — one twin-value
+change that turns the twin red while the leg stays green, one report-byte change, and one inert control that
+must stay green — and a pass-conversion census with no site that invents a value the subject did not produce.
+
+### Census
+
+`VERIFICATION_PY_FILE_CEILING` 22 → 21 and `VERIFICATION_PY_LINE_CEILING` 2367 → 2296, with the planted
+fixtures in the same edit so they go red first: `publish_refuses_verification_python_over_ceiling`,
+`publish_refuses_verification_python_lines_over_ceiling` (2297 vs 2296),
+`publish_passes_verification_python_lines_at_ceiling`, `publish_python_census_byte_bound_is_two_sided`,
+`publish_passes_compliant_python_census`, `publish_python_census_counts_move_when_a_file_is_added` and
+`project_python_census_counts_this_tree`. `verification/README.md` now runs the group as
+`output/verification/local_feedback`.
