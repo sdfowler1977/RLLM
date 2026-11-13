@@ -255,3 +255,72 @@ bash tools/build-harness.sh output/harness   # harness_build_rc=0, harness_build
 output/harness rrsi_loop                     # rrsi_loop PASS (exit 0, 1s, 15 checks)
                                              # summary: 1 pass, 0 fail, 0 unavailable of 71 groups
 ```
+
+## Gap 2 again, on the bytes this document is committed against — 2026-11-13T13:14Z, commit `095dc334`
+
+The sections above at `b8b0e71` were made by a python driver in `/tmp` because the delivered group printed
+nothing. This one is made **by the delivered group itself**: every value below is a line the group printed to
+its own stdout, which `output/harness` copied into `output/checks/rrsi_loop.log`. No driver re-read an artifact
+to quote it here.
+
+### The room
+
+`git archive` of `095dc3343be6982094dc2e8a5a0db8926d8b9631` into `/tmp/g23room` (no `.git`, no `output/`, only
+`history_migration.py` and `live_web.py` left in `verification/`), `ln -s /home/shawn/RLLM/tooling` for the
+client toolchain, then in the room: `bash headless.sh` → **`headless_rc=0`, 0 warning lines**;
+`bash tools/build-verification.sh .` → **`verify_rc=0`**, `twins=72`, `twin helper tests … cases: 44`;
+`bash tools/build-harness.sh` → **`harness_build_rc=0`** (the only verb that produces the room's
+`output/harness` — my first attempt at this room ran without it and the runner died with
+`output/harness: No such file or directory`, `runner_rc=127`, which is a missing input in my instrument, not a
+product failure); then `output/harness rrsi_loop` → **`rrsi_loop PASS (exit 0, 1s, 18 checks)`**,
+`output/checks/rrsi-loop.json` → `count 18, failed []`, `checks` carrying all 18 names, `scope` 2,277 characters.
+Artifacts kept: `/tmp/g23room-out/rrsi_loop.log` (5,903 bytes), `/tmp/g23room-out/rrsi-loop.json` (5,782 bytes),
+`/tmp/g23room-out/runner.log`.
+
+### The six bars, as this run printed them
+
+| bar the gap report asks for | the value the group printed, verbatim |
+|---|---|
+| annealed edit budget, round by round | `evidence anneal propose round 1 Edits remaining this round: 4. The annealed budget is 4.` → `anneal propose round 2 … 3. … is 3.` → `drive propose round 1/2/3` with `4.` / `3.` / `2.`, and the resumed request `anneal resumed propose Edits remaining this round: 1. The annealed budget is 3.` |
+| leakage critic before scoring | the arm this run passes is the check `a re-proposed skills hypothesis is refused by name for round 1`; the drive run's round-1 rows print `noise_floor 0` (`drive ledger row 0 round 1 component prompt noise_floor 0`, `row 2 round 1 component skills noise_floor 0`). The group does not print the leak arm's per-row score fields, so the value-level leak evidence stays the `b8b0e71` section above (hypothesis stored as a digest, refusal recorded before scoring) |
+| noise-adjusted floor | `drive ledger row 0 round 1 component prompt noise_floor 0`, `row 2 round 1 component skills noise_floor 0`, then `row 3 round 2 … noise_floor 2`, `row 4 round 2 component plugins noise_floor 2`, `row 5 round 3 component skills noise_floor 2`; the anneal and quiet runs stayed at floor 0 throughout |
+| structural pruning | `evidence drive settled pruned_components ["skills"]`, with the negative arm printed too: `evidence flat skills settled pruned_components is absent` |
+| the incumbent as a git commit | `evidence drive ledger commit 868dce24c1df5f5640c4474e81e19f8b01cb9f30 refs/heads/rllm-evolve 868dce24c1df5f5640c4474e81e19f8b01cb9f30 worktree HEAD 868dce24c1df5f5640c4474e81e19f8b01cb9f30 refs/heads/main 65103240f6e7fc83f18720f836f0ba5a925e5bae planted seed 65103240f6e7fc83f18720f836f0ba5a925e5bae main equals planted seed is present` — the same three ways for the pool arm at `97b4a1b075ec451499212f41564954153bcbc0c7` |
+| held-out / separate evaluation | `evidence pool separate evaluation base passed 1 separate evaluation candidate passed 0 in-round score_after 1`, and five held-out rows, e.g. `drive held-out row 5 round 3 component skills held_out_known true held_out_passed 1 held_out_task_key 094e93491d4cd8c1887301862ab12fd3d975ab20088237196a6a68b9995a2bbb held_out_verifier 548b4612f8042dcde80994e965e86e4661b9f63b7a60c723a505c0864eed97a4` |
+
+Of the 18 names in the report, the fifteen that were already there at `b8b0e71` all still pass, and the three
+delivered since then are `a later refine task reads the earlier task's sealed experience entry from the propose
+prompt`, `a refine task whose library holds no sealed row shows no historical experience section`, and
+`the run log prints the annealed budgets, the evolve commit three ways, the noise floors, the pruned set, the
+held-out digests and the sealed library row` — the last one is what makes this log self-certifying: if any of
+those prints degrades to `absent`, the group goes red instead of quietly printing less.
+
+### What this run does not claim
+
+The pool arm printed its row decisions (`pool ledger commit …`, `pool separate evaluation …`) but the pool's
+per-candidate decisions are still not check targets, so they stay on the owed list. No OOD split is driven. The
+log check certifies that each printed line carries its label and expected value; it does not re-derive every
+printed value from a second copy of the artifact (see `project-progress.md`, "A print that says `absent` used to
+be green").
+
+## Gap 3 again on these bytes — same room, same run, 2026-11-13T13:14Z, commit `095dc334`
+
+The decisive bar of the gap report is *"task t+1 visibly reading the library entry written by task t"*. At
+`b8b0e71` that was witnessed by a driver comparing two product processes. Here it is inside the delivered
+group, and the library row is printed rather than quoted by a driver:
+
+```
+evidence library before a sealed row key absent revision absent harness_digest absent run_digest absent
+evidence earlier sealed library row key b19a20739a344697ec81bae2cb21d8c86d474eef70dfff0fcf971dc0cfc33a6a
+             revision 4fb634b436cc678dbcb917a3e453d73c817096a666f4a7f2acd71a6bd087c6fa
+             harness_digest 79a298286981294143558b1d13f30dbb8b1d64e9b6c643399bdc0bc7c6c89645
+             run_digest c8a52ebe2857fab0f3ff6a10da4c8fb63f458f963f1ccc7117d642de457d0926
+```
+
+The same run passes `a later refine task reads the earlier task's sealed experience entry from the propose
+prompt` — the task-t+1 propose wire carries task t's key, revision and harness digest under
+`HISTORICAL EXPERIENCE`, keyed to the earlier task — and `a refine task whose library holds no sealed row shows
+no historical experience section`, which is the negative arm that stops a vacuous pass. `a tampered library
+entry is refused and its bytes stay unchanged` covers the write side. What remains un-witnessed for Gap 3 is
+the layer the sealed-row vocabulary does not carry at all: deliverables, reflection notes, and
+invariant/domain scoping (`docs/RLLM-gap-status-2026-11-13.md`, Gap 3 row).

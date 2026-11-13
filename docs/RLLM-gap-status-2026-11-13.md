@@ -67,13 +67,20 @@ lines (each budget sentence quoted out of the request wire it came from and labe
 ledger row's noise floor for all three runs, the pruned set and the flat-run's absence, the incumbent commit as
 ledger row / `refs/heads/rllm-evolve` / worktree HEAD, the held-out task and verifier digests, the sealed
 library row next to the empty library) and its last check fails when a print degrades to `absent`.
+**Closed the same day at `095dc334`:** `docs/RRSI-LOOP-RUNLOG.md` now carries a Gap 2 section made **by the
+delivered group itself** in a `git archive` room of that commit — budgets 4/3/2 plus the resumed request's
+`Edits remaining this round: 1. The annealed budget is 3.`, per-row `noise_floor 0`/`2`, `pruned_components
+["skills"]` beside the flat run's asserted absence, the incumbent `868dce24c1df5f5640c4474e81e19f8b01cb9f30`
+printed as ledger row, `refs/heads/rllm-evolve` and worktree HEAD against `refs/heads/main` at the planted seed
+`65103240f6e7fc83f18720f836f0ba5a925e5bae`, and the held-out task/verifier digests — so the stale-cost-row
+objection no longer applies to these bytes, and no python driver was involved.
 
 ## Gap 3 — Harness² two-level recursion
 
 | # | item | status | measured evidence |
 |---|---|---|---|
 | 1 | task-level contrastive PPC | NOT MEASURED | the propose→probe→compose route exists in `core/harness.rs`; I did not witness a contrast-composed successor |
-| 4 | **a later task reads the library the earlier task wrote** | PRESENT (product) as of this lane's group assertion; the earlier run log is stale for these bytes | witnessed at product level in `docs/RRSI-LOOP-RUNLOG.md` §Gap 3 at `b8b0e71`: two separate `output/headless/RLLM` processes, the second one's propose wire (9,799 bytes) carrying task t's `key 27c0edc8…`, `revision 665268c8…` and `harness_digest 65da7eef…` under `HISTORICAL EXPERIENCE`, and a third run under a different key shown the same entry as `indexed key is from another task`. Measured gap that this lane closes: no delivered group asserted it — `grep -rl "experience.jsonl|library_index|lesson_context" verification/` hit only sealing and tamper arms. `rrsi_loop` now carries `a later refine task reads the earlier task's sealed experience entry from the propose prompt` and `a refine task whose library holds no sealed row shows no historical experience section` |
+| 4 | **a later task reads the library the earlier task wrote** | PRESENT — asserted by the delivered group, and the run log is now on these bytes (`095dc334`) | witnessed at product level in `docs/RRSI-LOOP-RUNLOG.md` §Gap 3 at `b8b0e71`: two separate `output/headless/RLLM` processes, the second one's propose wire (9,799 bytes) carrying task t's `key 27c0edc8…`, `revision 665268c8…` and `harness_digest 65da7eef…` under `HISTORICAL EXPERIENCE`, and a third run under a different key shown the same entry as `indexed key is from another task`. Measured gap that the read-back lane closed: no delivered group asserted it — `grep -rl "experience.jsonl|library_index|lesson_context" verification/` hit only sealing and tamper arms, and `rrsi_loop` now carries `a later refine task reads the earlier task's sealed experience entry from the propose prompt` and `a refine task whose library holds no sealed row shows no historical experience section`. On `095dc334` the room run prints the entry it is joining on — empty library first (`key absent revision absent harness_digest absent run_digest absent`), then `key b19a20739a344697ec81bae2cb21d8c86d474eef70dfff0fcf971dc0cfc33a6a revision 4fb634b436cc678dbcb917a3e453d73c817096a666f4a7f2acd71a6bd087c6fa harness_digest 79a298286981294143558b1d13f30dbb8b1d64e9b6c643399bdc0bc7c6c89645 run_digest c8a52ebe2857fab0f3ff6a10da4c8fb63f458f963f1ccc7117d642de457d0926` |
 | 5 | eight editable components | PRESENT | `core/rrsi.rs:37` `const EDITABLE = ["system prompt", "guardrails", "memory", "tool guidance", "subagents", "skills", "scripts", "plugins"]` |
 | 2, 3, 6, 7, 8 | parallel invariant+domain candidates, sequential recursion, invariant/domain scoping, agentic selector over anonymised deliverables, resume with deliverables and reflection notes | **the deliverable / scoping layer is ABSENT (measured absence, not "unwitnessed"); resume is PRESENT and asserted** | The row vocabulary decides it. The keys the product seals are `EDIT_KEYS` = `component, hypothesis, diff_digest, score_before, score_after, cost_before, cost_after, verdict, round, run_digest` (`core/rrsi.rs:58-69`), `POLICY_KEYS` = `edit_budget, noise_floor, cost_known, decision` (`:70`), and the optional `SPLIT_KEYS` = `pool_status, branch, commit, held_out_known, ood_known, evolve_passed, held_out_passed, ood_passed, evolve_task_key, held_out_task_key, ood_task_key, evolve_verifier, held_out_verifier, ood_verifier, harness_digest, evolve_shape, ood_shape, beta0, beta1, accept_reason` (`:73-91`). None of them carries a deliverable, reflection, invariant or domain-scope field. Lexically the same way: `grep -ril deliverable core/ verification/` → **0 files**, likewise `reflection`, `invariant`, `domain_scop`; the single `anonym` hit is `core/search.rs:243`, an attribution sentence about a search API. Resume is the implemented half — `resume_run` called at `core/harness.rs:283-285`, with `STOP_FILE`/`STOP_SENTENCE`/`STOP_SYMLINK` — asserted by the group as `files alone rebuild the resumed phase and decision`, but what is rebuilt is a phase and a decision, not deliverables and reflection notes. The k-candidate pool exists (`CANDIDATE_MAX 3`, per-row `pool_status`) with **no** invariant/domain roles on its rows |
 
@@ -118,13 +125,19 @@ Measured on `a9e8f114`:
 
 ## What is actually left, ranked
 
-1. **Re-make the Gap 2 and Gap 3 run logs on these bytes** — `docs/RRSI-LOOP-RUNLOG.md` holds both logs with
-   values printed, but at `b8b0e71`, and the cost arm has moved since. The printing half of that is now done:
-   the `rrsi_loop` group prints the artifact values itself (27 value lines on the current lane, each labelled
-   with the request or run it came from) and its own last check goes red when a print degrades to absent, so a
-   room run of the delivered group **is** the run log — only the room run itself is still owed.
-2. **Gap 2 #11 and Gap 3 #2/#3** — the k-candidate pool and composition are the largest genuinely un-witnessed
-   piece of the recursion story.
+0. **Closed today.** The Gap 2 and Gap 3 run logs now exist on the committed bytes and are made by the
+   delivered group itself, not by a driver: a `git archive` room of `095dc334` built its own product
+   (`headless_rc=0`, 0 warning lines), its own twins (`verify_rc=0`, 72 twins, `twin helper tests … cases: 44`)
+   and its own runner (`bash tools/build-harness.sh` → `harness_build_rc=0` — the only verb that produces
+   `output/harness`), then `output/harness rrsi_loop` → `PASS (exit 0, 1s, 18 checks)` with 27 printed value
+   lines, copied into `docs/RRSI-LOOP-RUNLOG.md` §§ "Gap 2 again…" and "Gap 3 again…".
+1. **Gap 2 #11 and Gap 3 #2/#3** — the k-candidate pool and composition are the largest genuinely un-witnessed
+   piece of the recursion story: `parse_pool` (`core/harness.rs:785-804`) and `evaluate_pool` (`:855-876`) are
+   driven by the group but no check targets their per-candidate decisions, the count/mismatch refusals, or the
+   `incumbent kept because no candidate was admissible` outcome.
+2. **Gap 1 whole chain on a native driver** — the chain is witnessed end to end (`docs/SELF-BUILD-RUNLOG.md`
+   §"The whole chain again…", made at `1cbc272`; `core/self_build.rs` is byte-identical since `57b063f`) but
+   through a python driver in `/tmp`, which is an R-rule deviation, not a delivery.
 3. **Gap 4 #2/#3/#4** — the AArch64 instruction IR exists and is wired into the control-flow report, but no
    group asserts its report text (`0` hits in `verification/`), structured pseudocode does not exist, and the
    JS/.NET evidence has no verification group; all three are uncertified rather than missing.
