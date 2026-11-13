@@ -8,7 +8,7 @@ python3 verification/network_drive.py
 python3 verification/drive_ownership.py
 python3 verification/question_process.py
 output/verification/history
-python3 verification/a2a.py
+output/verification/a2a
 python3 verification/acp.py
 python3 verification/oauth.py
 python3 verification/binary_flow.py

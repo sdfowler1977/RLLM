@@ -160,6 +160,19 @@ pub fn b(flag: bool) -> Value {
     Value::Bool(flag)
 }
 
+// Legs assert advertised fields with Python truthiness (`not cap['promptCapabilities']`).
+// A twin that compares against Null instead rejects the empty object the product emits.
+pub fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Num(text) => text.parse::<f64>().map(|number| number != 0.0).unwrap_or(true),
+        Value::Str(text) => !text.is_empty(),
+        Value::Arr(items) => !items.is_empty(),
+        Value::Obj(fields) => !fields.is_empty(),
+    }
+}
+
 pub fn b64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
@@ -1172,6 +1185,31 @@ mod json_tests {
         let value = obj(vec![("b".into(), n("1")), ("a".into(), s("x"))]);
         assert_eq!(value.to_string(), "{\"b\":1,\"a\":\"x\"}");
         assert_eq!(value, Value::parse("{\"a\":\"x\",\"b\":1}"));
+    }
+
+    #[test]
+    fn truthy_matches_the_falsy_values_the_legs_test() {
+        for value in [
+            Value::Null,
+            b(false),
+            n("0"),
+            n("0.0"),
+            s(""),
+            Value::Arr(vec![]),
+            obj(vec![]),
+        ] {
+            assert!(!truthy(&value), "expected falsy: {}", value.to_string());
+        }
+        for value in [
+            b(true),
+            n("2"),
+            n("-1"),
+            s("x"),
+            Value::Arr(vec![Value::Null]),
+            obj(vec![("prompt".into(), Value::Null)]),
+        ] {
+            assert!(truthy(&value), "expected truthy: {}", value.to_string());
+        }
     }
 
     #[test]

@@ -325,3 +325,55 @@ readback 24, checkpoint 5, signature 5, alignment 2) against the 62/5391 and 191
 `verification/RESULTS.json` still
 `e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0`. Python exposure is unchanged by this commit
 — it is a Rust-side dedup, not another leg retirement.
+
+## 2026-11-12 (night) — twin batch 3: four more legs native, and the helper's own tests get a build row
+
+`verification/scene.rs` (1763 lines) replaces `scene.py` (110), `a2a.rs` (1033) replaces `a2a.py` (167),
+`snapshot_identity.rs` (828) replaces `snapshot_identity.py` (87), `voice_session.rs` (298) replaces
+`voice_session.py` (79). The legs are deleted because the runner prefers the twin.
+
+**Python exposure: 62 files / 5391 lines → 58 / 4948 in `verification/`; `tools/` stays 2 / 191 and
+`core`+`platform` stay 0. Total 64 files / 5582 lines → 60 files / 5139 lines. Native twins 11 → 15.**
+
+**Each group certified by a two-column witness over one tree** (git-archive room; twin rc, leg rc, `cmp`
+byte-identical and both report digests printed by the same instrument): `scene`
+`01792939b338a96d16a65a9daa68304e85fcb8e3effb9fdfdda053e90b5e5c86` (90 checks), `a2a`
+`77e60a517c23876805295ae05d4c651956a1d02bc6b2fbb5d8ec9944c03d3e83`, `snapshot_identity`
+`5f26f895a81392de705a4594464c9f83b90f08a868a4b21f82f0b1ef555a0f2a`, `voice_session`
+`420f1a258ed008e91a8e881420387c01650ffde327928524223bfcff8ac1e6ea` (34). The `a2a` and `snapshot_identity`
+witness rows printed `COUNT UNPARSED`, so their counts come from this commit's sweep rows (72 and 61) and from
+the leg reports `cmp` matched — not from a lane's say-so. The scene `--previous-scene-controller` arm (4 extra
+checks) is implemented in the twin but is not what the delivered record runs.
+
+**The audits found real gaps.** `scene` was missing the previous-controller arm entirely and rolled its own
+scratch root (now `twin::create_scratch`). `a2a` carried a private `sha256`, a private `truthy` and libc
+`kill()` lines — now `twin::sha256_bytes`, `twin::truthy`, std `Child::kill`, keeping one libc `SIGTERM`
+because that is what the leg's `terminate()` sends; it also swallowed absent fields with defaults where the leg
+raises `KeyError`, and now panics. `voice_session` ran the Java subject through an unbounded
+`Command::output` while the leg bounds it with `subprocess.run(timeout=20)` — a hung subject would have hung
+the twin rather than failed it — so it now polls `try_wait` against a 20-second deadline. Refuted:
+`snapshot_identity` "subject substitution is weaker" (same marker/slice/replacen; the marker is at
+`Activity.java` 621/889/926 and both take the first), `scene` "single_again" / "hardcoded channel" / "child not
+reaped" (`std::try_wait` performs the wait), `a2a` "`unwrap_or_default` weakens output/compare" (both checks
+require containment, so `""` fails), `voice_session` "names/order differ" and "passed count fabricated"
+(byte-identical `cmp`; names zipped by index against the Java program's own emitted names). Two drafts also
+arrived **exactly one byte short** of their leg's report — a missing trailing newline — which a count check
+would have passed; only `cmp` caught it.
+
+**`twin::truthy` is new, and it came from a product-shape mistake.** The acp twin went red because it compared
+`promptCapabilities` against `Null`, while `core/acp.rs:55` advertises `{}` and `loadSession: false`; the leg
+asserts Python falsiness (`not cap['promptCapabilities']`). A twin that compares against `Null` rejects the
+empty object the product actually emits. The helper now reproduces Python truthiness over the shared `Value`
+type, with a unit test, and `a2a` uses it instead of its own copy.
+
+**A proof source with no build row never runs.** `verification/twin/mod.rs` had 8 `#[test]` cases and nothing
+compiled them — dead source that still read like proof. `tools/build-verification.sh` now compiles the module
+with `--test`, runs it single-threaded, and fails the gate unless the executed count equals the declared count
+(measured: `twin helper tests: … cases: 8`).
+
+**Gate on these bytes** (`/tmp/gate-batch3.log`): tools tests unchanged in size against the moved pins
+(verification 58 / 4948, tools 191); `build-verification` rc=0 with **15 twins, 0 errors 0 warnings**; sweep
+**71 groups / 4248 checks, 67 pass / 0 fail / 4 unavailable / 0 absent**, the four new rows PASS at
+72 / 61 / 34 / 90 checks; `verification/RESULTS.json` still
+`e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0` — byte-identical to the batch-1, batch-2 and
+consolidation records, which is what proves four legs were replaced rather than re-scored.
