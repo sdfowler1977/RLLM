@@ -891,7 +891,7 @@ fn evaluate_pool(st:&Json,run:&mut Json,candidates:&[String],probes:&[String])->
   if score==Null{score=obj(vec![("passed",Num("0".into())),("total",Num("0".into())),("strict",Bool(false))]);}
   if get(&score,"context")==&Null{put(&mut score,"context",get(&reference,"context").clone());}
   if get(&reference,"route")!=&Null&&get(&score,"route")==&Null{put(&mut score,"route",get(&reference,"route").clone());}
-  let policy=acceptance_policy(run,&reference,&score,reply,round);
+  let policy=acceptance_policy(run,&reference,&score,reply,round,true);
   let scored=judged_acceptance(run,&reference,&score,reply,&incumbent,number(&policy,"noise_floor") as u64,if get(&policy,"cost_before")==&Null{None}else{Some(number(&policy,"cost_before") as u64)},if get(&policy,"cost_after")==&Null{None}else{Some(number(&policy,"cost_after") as u64)},&records);
   let forced=text(&policy,"verdict");
   let admissible=forced!="rejected"&&(forced=="accepted"||boolean(&scored,"admit"));
@@ -968,7 +968,7 @@ fn judged_acceptance(run:&Json,reference:&Json,selected:&Json,reply:&str,prior:&
  // rejudge passes that same prefix, `records[0..i]`, when it judges row i.
  improvement::acceptance(reference,selected,floor,cost_before,cost_after,Some(improvement::CandidateShape{component:&component,hypothesis:&hypothesis,diff_digest:&diff}),records,improvement::COST_BETA0,improvement::COST_BETA1)
 }
-fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:&str,round:u64)->Json{
+fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:&str,round:u64,measure_cost:bool)->Json{
  let digest=refinement_digest(run);
  let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
  let (budget,remaining)=crate::rrsi::budget_for(&records,&digest,round);
@@ -977,7 +977,9 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
  // The incumbent length is the latest accepted row's measured cost_after, including
  // a row that itself had no earlier pair. new_len is this candidate's measured length.
  // Both sides present is a known pair, and acceptance sets cost_known.
- let costs=crate::rrsi::incumbent_cost(&records,&digest).map(|before|(before,new_len));
+ // `measure_cost` is false only for a probe that tied a dropped-field replay. That
+ // pair is not a cost comparison: the score arm decides it.
+ let costs=if measure_cost{crate::rrsi::incumbent_cost(&records,&digest).map(|before|(before,new_len))}else{None};
  let prior=incumbent_text(run);
  let decision=judged_acceptance(run,reference,selected,selected_text,&prior,floor,costs.map(|pair|pair.0),costs.map(|pair|pair.1),&records);
  let reason=text(&decision,"reason");
@@ -1247,6 +1249,11 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
    (false,false)=>fallback,
   }
  }else{fallback};
+ // The probe preserved the reference and the replay did not, but the probe added no
+ // passing check. Judging that shorter tie with the incumbent length takes the
+ // lower-cost arm and replaces the first instructions. Leave the measured length on
+ // the previous row. The score arm decides this tie.
+ let dropped_pass=first!=&Null && retain_probe && improvement::comparable(&reference,replay) && improvement::preserves_checks(&reference,probe) && !improvement::preserves_checks(&reference,replay) && !improvement::check_gain(&reference,probe);
  let selected=if retain_probe{probe.clone()}else{replay.clone()};
  let score_before=number(&reference,"passed");
  let replay_passed=number(replay,"passed");
@@ -1256,7 +1263,7 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
  let prior=if first==&Null{text(get(&run,"agent"),"instructions")}else{text(first,"instructions")};
  let round_index=round_index_of(&run) as usize;
  let selected_text=if retain_probe{candidate.clone()}else{composed.clone()};
- let policy=acceptance_policy(&mut run,&reference,&selected,&selected_text,round_index as u64);
+ let policy=acceptance_policy(&mut run,&reference,&selected,&selected_text,round_index as u64,!dropped_pass);
  let forced=text(&policy,"verdict");
  if retain_probe{
   let verified=get(&run,"candidate").clone();let revision=get(&run,"composition").clone();
@@ -2141,6 +2148,36 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
   assert_eq!(text(&row,"verdict"),"rejected");
   assert_eq!(text(&row,"decision"),"refused because the cost bound was exceeded for the gain 1");
   assert_eq!(get(&row,"cost_known"),&Bool(true));
+ }
+ #[test] fn higher_second_round_count_that_drops_a_pass_keeps_the_first_instructions(){
+  // Same shape as the hosted_phases field check. The probe ties the first mask and is
+  // shorter. The replay's count is higher and its mask drops the earlier bit.
+  // Substituting `dropped_mask` 0b110 with 0b111 makes the replay preserve that bit,
+  // the score arm admits the gain, and the composition assertion goes red.
+  let first_text="First verified instructions.";
+  let probe_text="Second field instructions.";
+  let replay_text="Second rewritten instructions.";
+  let dropped_mask:u8=0b110;
+  assert!(probe_text.len()<first_text.len()&&replay_text.len()>first_text.len());
+  let ledger=seed_edit("",1,"accepted",first_text.len() as u64,first_text,false);
+  let seeded=crate::rrsi::records_of(&ledger).unwrap();
+  assert_eq!(crate::rrsi::incumbent_cost(&seeded,POLICY_RUN),Some(first_text.len() as u64));
+  let first=obj(vec![("instructions",s(first_text)),("reply",s(r#"{"first":true}"#)),("score",marked(1,0b001,"same-route"))]);
+  let (mut st,run)=policy_run(2,marked(0,0,"same-route"),marked(1,0b001,"same-route"),marked(2,dropped_mask,"same-route"),replay_text,probe_text,first_text,&ledger,&[],first);
+  let settled=settled_run(&mut st,run);
+  assert_eq!(text(&settled,"composition"),first_text);
+  assert_ne!(text(&settled,"composition"),probe_text);
+  assert_eq!(number(get(&settled,"selected_score"),"passed"),1);
+  assert_eq!(number(get(&settled,"selected_score"),"passed_checks"),1);
+  assert_eq!(text(&settled,"round_note"),"The first round was retained because the second did not add passing checks while preserving earlier passes under comparable conditions.");
+  let row=last_edit(&settled);
+  assert_eq!(text(&row,"verdict"),"rejected");
+  assert_eq!(text(&row,"accept_reason"),"score");
+  assert_eq!(text(&row,"decision"),"cost not recorded");
+  assert_eq!(get(&row,"cost_known"),&Bool(false));
+  assert_eq!(number(&row,"score_before"),1);
+  assert_eq!(number(&row,"score_after"),1);
+  assert_ne!(text(&row,"hypothesis"),replay_text);
  }
  #[test] fn measured_incumbent_cost_admits_a_lower_cost(){
   let (ledger,short)=opened_measured_ledger();
