@@ -7,7 +7,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use twin::{b64_encode, n, obj, s, Value};
 
-const SCOPE: &str = "Owner checks through the product JSON-lines route: refine copies approval_root onto task_run.workspace and records source_digest, the digest-named ledger chains revisions for that run and experience.jsonl seals the settled row, a second round reads a recorded rejection, resume rebuilds the ledger prompt and decision from those files alone, a tampered library entry is refused without a rewrite, and delegate or compact carries no workspace and does not run the pool. A resumed refine records propose budgets 4/4, 3/3 and 3/1, refuses a repeated skills hypothesis by the round 1 name, records noise floor 0 and decision cost not recorded when a round gains nothing, leaves two flat skills rounds unpruned, stores the accepted incumbent as the rllm-evolve worktree commit, and keeps the separate evaluation score off the held-out keys. A three-round refine records budgets 4, 3 and 2, a leakage refusal before scoring, noise floor 2, pruned skills, the evolve commit, and the four held-out keys. A stalled ledger refuses an already-tried component while an untried component is not refused. A flat memory shape is accepted for structural novelty while its cost is unknown. The next equal score, one byte shorter, is accepted because the cost fell. The same shape one byte longer is refused because the cost rose. A later refine task reads the earlier task's sealed experience entry out of experience.jsonl in its own propose prompt, keyed to the earlier task rather than to itself, and the same later task over a library that holds no sealed row shows no historical experience section at all. The run also prints the values behind those claims — the annealed budget sentence quoted out of the wire of each of the six propose requests this group drives, labelled with the request it came from, the noise floor each ledger row of all three runs recorded, the pruned set the settled run reports and the absence the flat-skills run reports, the incumbent commit as the ledger row, the rllm-evolve ref and the worktree HEAD, the held-out task and verifier digests, and the sealed library row's key, revision and digests next to the empty library before it — and a final check certifies that this run's own log carries each of them on the line of the request or run that produced it.";
+const SCOPE: &str = "Owner checks through the product JSON-lines route: refine copies approval_root onto task_run.workspace and records source_digest, the digest-named ledger chains revisions for that run and experience.jsonl seals the settled row, a second round reads a recorded rejection, resume rebuilds the ledger prompt and decision from those files alone, a tampered library entry is refused without a rewrite, and delegate or compact carries no workspace and does not run the pool. A resumed refine records propose budgets 4/4, 3/3 and 3/1, refuses a repeated skills hypothesis by the round 1 name, records noise floor 0 and decision cost not recorded when a round gains nothing, leaves two flat skills rounds unpruned, stores the accepted incumbent as the rllm-evolve worktree commit, and keeps the separate evaluation score off the held-out keys. A three-round refine records budgets 4, 3 and 2, a leakage refusal before scoring, noise floor 2, pruned skills, the evolve commit, and the four held-out keys. A stalled ledger refuses an already-tried component while an untried component is not refused. A flat memory shape is accepted for structural novelty while its cost is unknown. The next equal score, one byte shorter, is accepted because the cost fell. The same shape one byte longer is refused because the cost rose. A three-candidate pool writes one ledger row per candidate into that run's own digest-named journal, and every one of those rows stamps the digest of the journal it was read from: the accepted candidate scores 0 then 1 and its commit is the rllm-evolve ref and the worktree HEAD, the leaking candidate is refused before scoring and carries no score fields at all, and the flat candidate is scored 0 then 0 under the score cause. The three slot worktrees that round leaves behind each hold one candidate: the slot's own git file is present, the slot HEAD equals the commit that candidate's row records, the three commits are distinct, and the slot's copy of the harness file is that candidate's body. A declared candidate count that does not match its blocks, and a count above three, are each refused by the product's own sentence, add no pool row to the ledger files the lane counts under the state root, leave no task run in the returned state, and reach no run digest either before the reply or in the state it returns. A pool whose three candidates are all refused keeps the incumbent: the composition stays byte-equal to the incumbent instructions, the round note says the incumbent was kept, the rllm-evolve ref and the room's own harness file do not move, the c0 candidate worktree's copy of that file is absent, equal to the room's own harness text, or equal to one of this run's three candidate bodies, and every row of that run carries a refusal status. A later refine task reads the earlier task's sealed experience entry out of experience.jsonl in its own propose prompt, keyed to the earlier task rather than to itself, and the same later task over a library that holds no sealed row shows no historical experience section at all. The run also prints the values behind those claims — the annealed budget sentence quoted out of the wire of each of the six propose requests this group drives, labelled with the request it came from, the noise floor each ledger row of all three runs recorded, the pruned set the settled run reports and the absence the flat-skills run reports, the incumbent commit as the ledger row, the rllm-evolve ref and the worktree HEAD, each pool candidate's decision row — its status, its score pair or the absence of one, its commit and the digest-named journal that carries it — each candidate's slot worktree — its row commit, its HEAD and whether that slot's git file is present — the pool journal's row count and how many of those rows stamp the journal they were read from, the refusal sentence each malformed pool reply drew out of the product next to the run digest it never reached, the held-out task and verifier digests, and the sealed library row's key, revision and digests next to the empty library before it — and a final check certifies that this run's own log carries the six budget sentences, the incumbent commit as ledger row, ref and worktree HEAD, the noise floors of all three runs, the pruned set and its flat-run absence, the held-out digests, the sealed library row and the empty library before it, each pool decision row's status and score pair or their absence, each slot line's row commit, HEAD and git-file presence, the pool journal's row count and stamped count, and both malformed-pool refusal sentences with the post-reply run digest they never reached, each on the line of the request or run that produced it.";
 
 const TASK: &str = "Write the bounded note.";
 const CHECKS: &str = "REQUIRED-ALPHA\nREQUIRED-BETA";
@@ -513,6 +513,35 @@ fn run(product: &mut Product, room: &Path) -> Vec<String> {
             && row_int(pool, "eval_cand") != row_int(pool, "after"),
     );
 
+    let pool_digest = recursion.drive_rows.iter().find_map(|row| row_string(row, "run_digest")).unwrap_or("");
+    let pool_ledger = if is_hex(pool_digest, 64) {
+        read_rows(&default_root.join(format!("{pool_digest}.jsonl")))
+    } else {
+        Vec::new()
+    };
+    let evolve_ref = file_text(&room.join(".git/refs/heads/rllm-evolve"));
+    let worktree_head = file_text(&room.join(".git/worktrees/c0/HEAD"));
+    print_pool_decisions(&pool_ledger, &evolve_ref, &pool_digest);
+    keep(
+        &mut passed,
+        "a three-candidate pool writes one ledger row per candidate and stamps each decision",
+        three_pool_decisions(&pool_ledger, &evolve_ref, &worktree_head, &pool_digest),
+    );
+    keep(
+        &mut passed,
+        "each candidate of the driven pool has its own worktree whose HEAD is that candidate's row commit and whose harness copy is that candidate's body",
+        pool_slot_worktrees(
+            room,
+            &pool_ledger,
+            &[
+                "{\"a\":\"\"}",
+                "Copy the task Drive three rounds. into the harness",
+                "component: skills\nhypothesis: flat one\nflat body one",
+            ],
+        ),
+    );
+
+    run_pool_bounds(product, room, &default_root, &mut passed);
     run_stall(product, room, &default_root, &mut passed);
     run_shape(product, room, &default_root, &mut passed);
     run_tamper(product, room, &default_root, &mut passed);
@@ -520,6 +549,317 @@ fn run(product: &mut Product, room: &Path) -> Vec<String> {
     keep(&mut passed, EMPTY_CHECK, empty_read.ok());
     keep(&mut passed, LOG_CHECK, printed_log_carries_values());
     passed
+}
+
+fn print_pool_decisions(rows: &[Value], evolve: &str, digest: &str) {
+    let mut found = 0usize;
+    for (index, row) in rows.iter().enumerate() {
+        if row.get("pool_status").and_then(as_str).is_none() {
+            continue;
+        }
+        found += 1;
+        evidence(&format!(
+            "pool decision row {index} pool_status {} score_before {} score_after {} commit {} verdict {} run_digest {} journal {digest} evolve {evolve}",
+            stored_word(row, "pool_status"),
+            stored_word(row, "score_before"),
+            stored_word(row, "score_after"),
+            stored_word(row, "commit"),
+            stored_word(row, "verdict"),
+            stored_word(row, "run_digest"),
+        ));
+    }
+    if found == 0 {
+        evidence("pool decision rows are absent");
+    }
+    let stamped = rows
+        .iter()
+        .filter(|row| {
+            row.get("pool_status").and_then(as_str).is_some()
+                && row_string(row, "run_digest") == Some(digest)
+        })
+        .count();
+    evidence(&format!(
+        "pool decision rows journal {} rows {found} stamped {stamped}",
+        if is_hex(digest, 64) { digest } else { "absent" },
+    ));
+}
+
+/// Each candidate of a pool is committed in its own slot worktree: core/rrsi.rs:1969
+/// commit_candidate takes the slot index, removes any stale slot, and writes that
+/// candidate's body into the slot's harness copy. The slots outlive the round, so after
+/// the driven run the three slot HEADs and harness texts are still on disk.
+fn pool_slot_worktrees(room: &Path, rows: &[Value], bodies: &[&str]) -> bool {
+    let pooled: Vec<&Value> = rows
+        .iter()
+        .filter(|row| row.get("pool_status").and_then(as_str).is_some() && row_int(row, "round") == Some(1))
+        .collect();
+    let mut ok = pooled.len() == bodies.len();
+    for (index, row) in pooled.iter().enumerate() {
+        let commit = row_string(row, "commit").unwrap_or("");
+        let head = file_text(&room.join(format!(".git/worktrees/c{index}/HEAD")));
+        let harness = file_text(&room.join(format!(".rllm-worktrees/c{index}/rllm-harness.txt")));
+        let slot_git = room.join(format!(".rllm-worktrees/c{index}/.git")).is_file();
+        evidence(&format!(
+            "pool slot c{index} row_commit {} worktree_head {} slot_git {} harness_text {harness}",
+            if is_hex(commit, 40) { commit } else { "absent" },
+            if is_hex(&head, 40) { head.as_str() } else { "absent" },
+            yes_no(slot_git),
+        ));
+        if !is_hex(&head, 40) || head != commit || harness != bodies[index] || !slot_git {
+            ok = false;
+        }
+    }
+    let commits: Vec<&str> = pooled.iter().filter_map(|row| row_string(row, "commit")).collect();
+    let distinct = commits.len() == bodies.len()
+        && commits.iter().enumerate().all(|(here, one)| {
+            commits.iter().skip(here + 1).all(|other| one != other)
+        });
+    ok && distinct
+}
+
+/// Round-1 rows of the driven three-candidate pool. The recorded-task refusal is
+/// written before scoring, so it has no score fields. The flat refusal is scored
+/// and stores 0 then 0 under `refused:the score did not rise`.
+fn three_pool_decisions(rows: &[Value], evolve: &str, head: &str, digest: &str) -> bool {
+    let pooled: Vec<&Value> = rows.iter().filter(|row| row.get("pool_status").and_then(as_str).is_some()).collect();
+    let admissible: Vec<&Value> = pooled
+        .iter()
+        .copied()
+        .filter(|row| row_string(row, "pool_status") == Some("admissible"))
+        .collect();
+    let recorded = pooled.iter().any(|row| {
+        row_string(row, "pool_status") == Some("refused:refused because the candidate contains a recorded task")
+            && row.get("score_before").is_none()
+            && row.get("score_after").is_none()
+            && row_string(row, "verdict") == Some("rejected")
+    });
+    let flat = pooled.iter().any(|row| {
+        row_string(row, "pool_status") == Some("refused:the score did not rise")
+            && row_int(row, "score_before") == Some(0)
+            && row_int(row, "score_after") == Some(0)
+            && row_string(row, "verdict") == Some("rejected")
+    });
+    let commit = admissible.first().and_then(|row| row_string(row, "commit")).unwrap_or("");
+    pooled.len() == 3
+        && pooled.iter().all(|row| row_int(row, "round") == Some(1))
+        && is_hex(digest, 64)
+        && pooled.iter().all(|row| row_string(row, "run_digest") == Some(digest))
+        && admissible.len() == 1
+        && row_int(admissible[0], "score_before") == Some(0)
+        && row_int(admissible[0], "score_after") == Some(1)
+        && row_string(admissible[0], "verdict") == Some("accepted")
+        && is_hex(commit, 40)
+        && commit == evolve
+        && commit == head
+        && is_hex(evolve, 40)
+        && recorded
+        && flat
+        && pooled.iter().filter(|row| row_string(row, "pool_status").unwrap_or("").starts_with("refused:")).count() == 2
+}
+
+fn pool_marks(root: &Path) -> usize {
+    files_here(root)
+        .iter()
+        .map(|name| read_text(&root.join(name)).matches("\"pool_status\"").count())
+        .sum()
+}
+
+fn ledger_bytes(root: &Path) -> usize {
+    files_here(root)
+        .iter()
+        .filter(|name| name.ends_with(".jsonl"))
+        .map(|name| read_text(&root.join(name)).len())
+        .sum()
+}
+
+fn open_checked_propose(product: &mut Product, room: &Path, task: &str, checks: &str) -> Value {
+    let prepared = settle_gap(product, room);
+    let pending = event(
+        product,
+        Some(&prepared),
+        "refine",
+        obj(vec![
+            ("task".into(), s(task)),
+            ("response_checks".into(), s(checks)),
+            ("refinement_rounds".into(), s("1")),
+        ]),
+        room,
+    );
+    reply(product, &pending, "baseline says nothing")
+}
+
+fn incumbent_instructions(run: &Value) -> String {
+    if let Some(text) = run.get("first_refinement").and_then(|first| first.get("instructions")).and_then(as_str) {
+        if !text.is_empty() {
+            return text.to_string();
+        }
+    }
+    run.get("agent").and_then(|agent| agent.get("instructions")).and_then(as_str).unwrap_or("").to_string()
+}
+
+fn pool_parse_refusal(
+    product: &mut Product,
+    room: &Path,
+    default_root: &Path,
+    task: &str,
+    checks: &str,
+    reply_text: &str,
+    refusal: &str,
+) -> bool {
+    let pending = open_checked_propose(product, room, task, checks);
+    let run = field_or_empty(state(&pending), "task_run");
+    let phase = row_string(&run, "phase").unwrap_or("").to_string();
+    let digest = row_string(&run, "run_digest").unwrap_or("").to_string();
+    let ledger = if is_hex(&digest, 64) {
+        default_root.join(format!("{digest}.jsonl"))
+    } else {
+        PathBuf::new()
+    };
+    let before = if ledger.as_os_str().is_empty() { String::new() } else { read_text(&ledger) };
+    let marks_before = pool_marks(default_root);
+    let bytes_before = ledger_bytes(default_root);
+    let answered = reply(product, &pending, reply_text);
+    let answered_state = state(&answered);
+    let notice = answered_state.get("notice").and_then(as_str).unwrap_or("").to_string();
+    let after = if ledger.as_os_str().is_empty() { String::new() } else { read_text(&ledger) };
+    let marks_after = pool_marks(default_root);
+    let bytes_after = ledger_bytes(default_root);
+    let rows = if ledger.as_os_str().is_empty() { Vec::new() } else { read_rows(&ledger) };
+    // A parse refusal returns before a run digest or a ledger row exists, so the
+    // proof is that every digest-named ledger under the default root is unchanged.
+    let no_rows = before == after
+        && !after.contains("pool_status")
+        && rows.iter().all(|row| row.get("pool_status").is_none())
+        && marks_after == marks_before
+        && bytes_after == bytes_before;
+    // The refusal aborts the run, so the state keeps no task run either. That is what
+    // separates this reply from a pool that parses and goes on to write rows.
+    let run_kept = !is_nullish(answered_state.get("task_run"));
+    let post_digest = answered_state
+        .get("task_run")
+        .and_then(|task_run| task_run.get("run_digest"))
+        .and_then(as_str)
+        .unwrap_or("")
+        .to_string();
+    evidence(&format!(
+        "pool parse task {task} phase {phase} notice {notice} digest {} ledger bytes {bytes_before} to {bytes_after} marks {marks_before} to {marks_after} task_run {} post run_digest {}",
+        if is_hex(&digest, 64) { digest.as_str() } else { "absent" },
+        yes_no(run_kept),
+        if is_hex(&post_digest, 64) { post_digest.as_str() } else { "absent" },
+    ));
+    phase == "propose"
+        && notice == refusal
+        && no_rows
+        && !run_kept
+        && !is_hex(&digest, 64)
+        && !is_hex(&post_digest, 64)
+}
+
+fn pool_keeps_incumbent(product: &mut Product, room: &Path, default_root: &Path) -> bool {
+    let task = "Keep the incumbent.";
+    let checks = "NEED-THIS";
+    let pending = open_checked_propose(product, room, task, checks);
+    let run = field_or_empty(state(&pending), "task_run");
+    let phase = row_string(&run, "phase").unwrap_or("").to_string();
+    let incumbent = incumbent_instructions(&run);
+    let evolve_before = file_text(&room.join(".git/refs/heads/rllm-evolve"));
+    // Both copies are pinned: the room's own tree and the candidate worktree's checkout.
+    // A copy that is absent would make an equality claim unfailable, so its presence is asserted.
+    let harness_before = file_text(&room.join("rllm-harness.txt"));
+    let slot_harness_before = file_text(&room.join(".rllm-worktrees/c0/rllm-harness.txt"));
+    let separable = !incumbent.is_empty() && !incumbent.contains("\n---\n") && !incumbent.contains('\0');
+    let candidate_bodies = [
+        format!("Copy the task {task} into the harness"),
+        incumbent.clone(),
+        checks.to_string(),
+    ];
+    let pool = format!(
+        "candidates: 3\n{}\n---\n{}\n---\n{}",
+        candidate_bodies[0], candidate_bodies[1], candidate_bodies[2]
+    );
+    let answered = reply(product, &pending, &pool);
+    let answered_state = state(&answered);
+    let task_run = field_or_empty(answered_state, "task_run");
+    let review = field_or_empty(answered_state, "refinement_pending");
+    let settled = if row_string(&task_run, "round_note").is_some() { task_run } else { review };
+    let note = row_string(&settled, "round_note").unwrap_or("").to_string();
+    let composition = row_string(&settled, "composition").unwrap_or("").to_string();
+    let kept = settled.get("incumbent_kept").and_then(as_bool) == Some(true);
+    let digest = row_string(&settled, "run_digest").unwrap_or("").to_string();
+    let rows = if is_hex(&digest, 64) {
+        read_rows(&default_root.join(format!("{digest}.jsonl")))
+    } else {
+        Vec::new()
+    };
+    let statuses: Vec<&str> = rows.iter().filter_map(|row| row_string(row, "pool_status")).collect();
+    let all_refused = rows.len() == 3
+        && rows.iter().all(|row| row_string(row, "run_digest") == Some(digest.as_str()))
+        && statuses.len() == 3
+        && statuses.iter().all(|status| status.starts_with("refused:"));
+    let evolve_after = file_text(&room.join(".git/refs/heads/rllm-evolve"));
+    let harness_after = file_text(&room.join("rllm-harness.txt"));
+    let slot_harness_after = file_text(&room.join(".rllm-worktrees/c0/rllm-harness.txt"));
+    // Which slot last wrote that copy is product scheduling state, so the claim names one
+    // slot and three values: absent, the room's own harness text, or a body this run submitted.
+    let slot_is_scratch_state = slot_harness_after == "absent"
+        || slot_harness_after == harness_before
+        || candidate_bodies.iter().any(|body| *body == slot_harness_after);
+    let notice = answered_state.get("notice").and_then(as_str).unwrap_or("");
+    evidence(&format!(
+        "kept pool phase {phase} note {note} notice {notice} composition {composition} incumbent {incumbent} kept {} digest {} statuses {} evolve {evolve_before} to {evolve_after} harness {harness_before} to {harness_after} slot harness {slot_harness_before} to {slot_harness_after}",
+        yes_no(kept),
+        if is_hex(&digest, 64) { digest.as_str() } else { "absent" },
+        if statuses.is_empty() { "absent".to_string() } else { statuses.join(",") },
+    ));
+    phase == "propose"
+        && separable
+        && kept
+        && note == "incumbent kept because no candidate was admissible"
+        && composition == incumbent
+        && all_refused
+        && is_hex(&evolve_before, 40)
+        && evolve_after == evolve_before
+        && harness_before != "absent"
+        && harness_after == harness_before
+        && slot_is_scratch_state
+        && is_hex(&digest, 64)
+}
+
+fn run_pool_bounds(product: &mut Product, room: &Path, default_root: &Path, passed: &mut Vec<String>) {
+    let mismatch = pool_parse_refusal(
+        product,
+        room,
+        default_root,
+        "Count mismatch task.",
+        "MISMATCH-PHRASE",
+        "candidates: 2\nonly one block",
+        "candidate pool does not contain the declared candidates",
+    );
+    keep(
+        passed,
+        "a declared candidate count that does not match its blocks is refused by name and writes no pool rows",
+        mismatch,
+    );
+    let limited = pool_parse_refusal(
+        product,
+        room,
+        default_root,
+        "Count limit task.",
+        "LIMIT-PHRASE",
+        "candidates: 4\none\n---\ntwo\n---\nthree\n---\nfour",
+        "a round carries at most 3 candidates",
+    );
+    keep(
+        passed,
+        "a candidate count above three is refused by name and writes no pool rows",
+        limited,
+    );
+    let kept = pool_keeps_incumbent(product, room, default_root);
+    keep(
+        passed,
+        "a pool with no admissible candidate keeps the incumbent and the composition",
+        kept,
+    );
 }
 
 fn run_stall(product: &mut Product, room: &Path, default_root: &Path, passed: &mut Vec<String>) {
@@ -1066,6 +1406,37 @@ fn printed_log_carries_values() -> bool {
         line.contains("separate evaluation base passed 1 separate evaluation candidate passed 0")
             && line.contains("in-round score_after 1")
     });
+    let has_pool_decisions = [
+        "pool decision row 0 pool_status admissible score_before 0 score_after 1",
+        "pool decision row 1 pool_status refused:refused because the candidate contains a recorded task score_before absent score_after absent",
+        "pool decision row 2 pool_status refused:the score did not rise score_before 0 score_after 0",
+        "pool slot c0 row_commit",
+        "pool slot c1 row_commit",
+        "pool slot c2 row_commit",
+        "pool parse task Count mismatch task. phase propose notice candidate pool does not contain the declared candidates",
+        "pool parse task Count limit task. phase propose notice a round carries at most 3 candidates",
+        "kept pool phase propose note incumbent kept because no candidate was admissible",
+    ]
+    .iter()
+    .all(|needle| lines.iter().any(|line| line.contains(needle)))
+        && lines.iter().any(|line| {
+            line.contains("pool decision rows journal") && line.ends_with("rows 3 stamped 3")
+        })
+        && ["pool parse task Count mismatch task. ", "pool parse task Count limit task. "]
+            .iter()
+            .all(|label| {
+                lines.iter().any(|line| line.contains(label) && line.ends_with("post run_digest absent"))
+            })
+        && ["pool slot c0 ", "pool slot c1 ", "pool slot c2 "]
+            .iter()
+            .all(|label| {
+                lines.iter().any(|line| {
+                    line.contains(label)
+                        && value_after(line, "row_commit ").is_some_and(|commit| is_hex(commit, 40))
+                        && value_after(line, "worktree_head ").is_some_and(|head| is_hex(head, 40))
+                        && line.contains("slot_git present")
+                })
+            });
     has_budgets
         && no_missing_budget
         && has_commit_triple
@@ -1076,6 +1447,7 @@ fn printed_log_carries_values() -> bool {
         && has_held_out
         && has_library_row
         && has_separate_evaluation
+        && has_pool_decisions
 }
 
 /// The budget sentence the product wrote on this request, through the period

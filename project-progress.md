@@ -1459,3 +1459,68 @@ Three mutation batteries on three generations of the file, every arm landing ver
 The second audit seat returned **ACCEPT WITH NOTES** with four notes (F3 presence without attribution, F4 a vacuous `lines.len() >= 25` plus a twin-emitted constant substring, F5 an unattributed `absent` surviving on the flat-skills and empty-library lines, F6 the SCOPE sentence over-claiming "each propose request"). None were argued away: the budget conjunct is now a `(label, sentence)` pair that must share one printed line, the noise conjunct must find floor 0 on each of the three named runs *and* floor 2 on a drive row labelled round 3, the two absences are asserted rather than tolerated, the count conjunct is gone, `separate evaluation` must appear on the same line as the in-round score, and the SCOPE sentence now says what the code prints. Battery C is the proof each one bites. A third audit seat on the strengthened bytes returned **ACCEPT WITH NOTES** again, with two notes carried forward honestly: the log check certifies that each named line carries the expected value **with its own label**, but it is not a provenance certificate — it does not re-derive each printed value from a second, independently captured copy of the artifact, and `pruned_components ["skills"]` and the separate-evaluation pair remain twin-held expectations. The provenance rests on the printers reading live artifacts (request wires, the digest-named JSONL ledgers, `.git` refs and worktree HEAD, `experience.jsonl`) and on the three batteries reddening when those derivations are broken — not on the final check alone. That seat's second note was that the transcripts I supplied did not prove `verification/RESULTS.json` was untouched by the runner; the proof is a hash join, not a claim: worktree hash before and after the run equals the `HEAD` blob (`git hash-object verification/RESULTS.json` = `git rev-parse HEAD:verification/RESULTS.json`). Its third precision point — that the resumed row bound only the annealed tail, not the `Edits remaining this round: 1.` value that distinguishes 3/1 from 3/3 — became a real binding: all six budget rows now require the full wire sentence, arms `e1`/`e2` red naming the log check. Gates on the final lane bytes (sha `a9c3e82df860b1af5f7906372a26a5e7bacbe9f6cd08cf9b10c201347f37588e`): `bash tools/build-tools.sh output/tools` → **TOOLS-RC=0** with suites 2/24/5/5/6/10/18/46/32, 72 verification twins and `twin helper tests … cases: 44`; `bash tools/build-verification.sh .` on the pre-`e1/e2` lane → **VERIFY-RC=0**, 72 twins, 44 helper cases; `output/harness rrsi_loop` → **`PASS (exit 0, 1s, 18 checks)`** with 27 `evidence` lines in `output/checks/rrsi_loop.log`, and the runner left `verification/RESULTS.json` byte-identical — `git hash-object` before `1450f95863f9cc05b3c61e95ce7941d7f3154855`, after `1450f95863f9cc05b3c61e95ce7941d7f3154855`, `HEAD` blob `1450f95863f9cc05b3c61e95ce7941d7f3154855`, `untouched=yes`.
 
 Two more gap-document rows were corrected by measurement rather than rephrasing. **Gap 4 #2** said "pseudocode ABSENT" on a token grep: the token is absent, but `core/instruction.rs` (536 lines) decodes AArch64 words and `analyze` (`:329`) emits `AArch64 instruction IR, candidate blocks and local register data flow` with one `Statement{offset,address,word,block,mnemonic,text,path_facts}` per instruction (`:25`), wired into the product at `core/control_flow.rs:290`; the registered group `binary_flow` asserts instruction facts (`CBZ target and register retained`) over subjects it assembles with `aarch64-linux-android26-clang`, while `grep -rn "instruction IR\|candidate blocks\|data flow" verification/*.rs` → **0 hits**, so the IR text itself is uncertified. **Gap 3 #2/#3/#6/#7/#8** said "NOT MEASURED" for the deliverable/reflection/invariant/domain layer; the sealed row vocabulary settles it — `EDIT_KEYS` (`core/rrsi.rs:58-69`), `POLICY_KEYS` (`:70`) and `SPLIT_KEYS` (`:73-91`) carry no such field, and `deliverable`, `reflection`, `invariant`, `domain_scop` appear in **0** files under `core/` and `verification/`. That layer is absent, not un-witnessed; `resume_run` (called at `core/harness.rs:283-285`) is the implemented half and is asserted.
+
+### The k-candidate pool is now a check target, and the product contradicted two of my assumptions
+
+`verification/rrsi_loop.rs` had exactly one sentence about the candidate pool — the negative one, `a non-refine
+carries no workspace and does not attempt the pool`. The pool is now driven through the product JSON-lines route
+by five checks, with no product change, no python and no new file: one ledger row per candidate, each row
+stamping the digest of the journal it is read from; two malformed-count refusals carrying the product's own
+sentences; a fully refused pool keeping the incumbent byte-equal to its instructions; the three slot worktrees
+that round leaves behind holding one candidate each; and the group's own log check extended so it consumes that
+new evidence instead of merely allowing it. Group count 22 → 23, report `['checks', 'count', 'failed', 'passed', 'scope']` with `failed` empty.
+
+Three things I believed about the product were wrong, and measurement is what said so.
+
+1. **One harness surface, when there are two.** Audits 1 and 2 both accepted a claim about "the harness file".
+   The run log shows the room's own `rllm-harness.txt` staying `{"a":""}` through a fully refused pool while a
+   *candidate worktree* copy gets overwritten with a refused candidate's body — so "the harness did not move" was
+   unfailable on one path and false on the other. The claim now names one slot (`c0`) and three values.
+2. **An order-independent claim that was not.** The first two audits accepted a slot-copy conjunct pair; arms
+   `t1`/`t3`/`t4` showed which parts actually bite, and the pair was last-writer-wins coupling on product
+   scheduling state. Narrowed to one named slot and three named values.
+3. **A print that described a filename, not a join.** The journal summary used to print `joined present` from
+   `is_hex(digest, 64)`. It now counts rows whose own `run_digest` stamps that journal, which is what let arm
+   `v7` plant the run's own three-row journal under an all-zero digest name: the log then prints
+   `pool decision rows journal 0000000000000000000000000000000000000000000000000000000000000000 rows 3 stamped 0`
+   and the run goes red naming
+   `a three-candidate pool writes one ledger row per candidate and stamps each decision`.
+
+The per-candidate worktree clause of Gap 2 #12 went from "inferred from source comments" to observed. The run
+prints, from the committed bytes:
+
+```
+pool slot c0 row_commit c7a733ba7179e6098bd27cd3c38c67618e891452 worktree_head c7a733ba7179e6098bd27cd3c38c67618e891452 slot_git present harness_text {"a":""}
+pool slot c1 row_commit 234ee79ed76e2dafb17505f5ed9939665f844566 worktree_head 234ee79ed76e2dafb17505f5ed9939665f844566 slot_git present harness_text Copy the task Drive three rounds. into the harness
+pool slot c2 row_commit 3f29f439e712ae69212ea1f2cc22dee2dc361412 worktree_head 3f29f439e712ae69212ea1f2cc22dee2dc361412 slot_git present harness_text component: skills hypothesis: flat one flat body one
+```
+
+Three distinct commits, each slot HEAD equal to its row's commit, each slot's `rllm-harness.txt` equal to the
+candidate body submitted at that index. The product explains why that is the shape: `commit_candidate` at
+`core/rrsi.rs:1969` takes the slot index, removes any stale slot, adds a detached worktree at
+`slot_path` = `.rllm-worktrees/c{slot}`, and writes that candidate's body into the slot's harness copy;
+`core/harness.rs` calls `slots.keep()`, so the slots survive the round. What is *not* claimed: simultaneity
+during `evaluate_pool` (the commits are sequential), and candidate-to-row identity beyond commit and body
+binding — the product emits no candidate id. That is recorded in the ledger row rather than papered over.
+
+**Falsifiability.** Seven mutation batteries on six generations of this file — 58 arms, each landing verified by
+sha, file restored identically (`RESTORE-SHA == base` in all seven logs). Every intended arm went red naming its
+own check; two arms are recorded as non-certifying instead of counted as passes (`s2` green because the state
+root's first `.jsonl` at that point was that run's own journal; `s6` green because the flag it forced was a
+derived print), and two earlier arms skipped on ambiguous anchors (`q9`, `q14`) rather than certifying nothing
+silently.
+
+**Audits.** Five seats, all read in full: four ACCEPT WITH NOTES on successive byte sets, then ACCEPT with no
+notes on `c6994ce5b53e`. Their notes produced the three product corrections above, a redundant conjunct
+removed, a post-reply run-digest assertion added, and the SCOPE printed-values inventory rewritten to exactly the
+set the log check consumes.
+
+**Gate.** A git-archive room of `192d6aa` with these exact lane bytes overlaid — so the room carries the
+gate-relevant content of the commit, and grok's in-flight `verification/self_rebuild.rs` (not in this commit) is
+not in it: `headless_rc=0` with zero warning lines, `verify_rc=0` (72 twins,
+`twin helper tests … cases: 44`), `tools_rc=0`, `harness_build_rc=0`,
+`runner_rc=0` → `rrsi_loop PASS (exit 0, 2s, 23 checks)`; `yes` on `verification/RESULTS.json`. An earlier in-tree
+gate showed `tools_rc=1` from a *concurrent* writer's half-built `self_rebuild.rs`
+(`error[E0425]: cannot find function 'room_handoff' … self_rebuild.rs:100`); that red was not mine and was not
+argued away — it is recorded with its attribution in the ledger row, and the room transcript above is the
+whole-tree gate for these bytes.

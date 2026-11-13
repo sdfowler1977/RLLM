@@ -2075,5 +2075,158 @@
     "instrument_defect_found": "a room that runs only headless.sh and build-verification.sh has no runner: output/harness is produced only by tools/build-harness.sh (tools/build-tools.sh puts its harness at <out>/harness), so the first room attempt died with output/harness: No such file or directory and runner_rc=127. A missing input in my instrument, not a product failure; the room script now builds its own runner",
     "not_claimed": "the pool arm prints its decisions but pool decisions are not check targets yet; no OOD arm; the log check is not a provenance certificate",
     "document": "docs/RRSI-LOOP-RUNLOG.md sections \"Gap 2 again, on the bytes this document is committed against - 2026-11-13T13:14Z, commit 095dc334\" and \"Gap 3 again on these bytes\"; docs/RLLM-gap-status-2026-11-13.md ranked list item 0 marks the obligation closed"
+  },
+  "rrsi_loop_pool_decisions_2026_11_13": {
+    "bar": "Gap 2 items 11 and 12 in docs/RLLM-recursion-gap-report.md: 'Parallel candidate evaluation | If no candidate is admissible, the incumbent is kept' and 'Git worktree candidates | Each candidate lives in its own worktree. Acceptance fast-forwards an evolve branch, so the incumbent is always a commit', plus the proof bar 'A real run log for each gap, made on the committed bytes' and 'No stubs and no fake passes. A failure must show as a failure.'",
+    "defect_found_by_measurement": "Two assumptions died to measurement. (1) The lane author and audit seat 1 both assumed one harness surface; the run log shows the room's own rllm-harness.txt stays {\"a\":\"\"} through a fully refused pool while a candidate worktree copy is overwritten with a refused candidate's body, so 'the harness did not move' was unfailable on one path and false on the other. (2) The first two audits accepted a slot-copy claim that depended on which slot the product scheduled last; arms s3/s4/t1/t3/t4 showed which conjuncts actually bite, and the claim is now stated for one named slot (c0) and three named values. A third: the printed journal summary used to say 'joined present' off a filename that merely looked like a digest; arm v7 planted another run's journal at the joined path and the log now prints 'rows 3 stamped 0' while the check goes red.",
+    "increment": "verification/rrsi_loop.rs adds five connected checks to the delivered native group and extends the group's own run-log certification (no product change, no python, no new file): 'a three-candidate pool writes one ledger row per candidate and stamps each decision', 'a declared candidate count that does not match its blocks is refused by name and writes no pool rows', 'a candidate count above three is refused by name and writes no pool rows', 'a pool with no admissible candidate keeps the incumbent and the composition', 'each candidate of the driven pool has its own worktree whose HEAD is that candidate's row commit and whose harness copy is that candidate's body'.",
+    "product_grammar_witnessed": "core/harness.rs:785 parse_pool: first line must be 'candidates: <ascii digits>'; count 0 or > core/rrsi.rs:101 CANDIDATE_MAX=3 -> 'a round carries at most 3 candidates'; block split on the literal '\\n---\\n'; parts.len() != count -> 'candidate pool does not contain the declared candidates'; empty/NUL/>32768 part -> 'a pool candidate must be non-empty text within 32 KiB'. core/harness.rs:710 calls it from model_reply in phase propose|compose, so a refusal aborts the run through '?'. core/harness.rs:855 evaluate_pool -> per-candidate critic_against before scoring, commit_candidate per candidate, fast_forward_evolve for the winner, then core/harness.rs:956-960 sets composition=kept candidate or incumbent and incumbent_kept=adopted.is_none() with round_note 'incumbent kept because no candidate was admissible'. core/rrsi.rs:1561 pool_status -> 'admissible' or 'refused:'+cause. core/rrsi.rs:1969 commit_candidate(root,slot,body,base) removes any stale slot, adds a detached worktree at core/rrsi.rs:1888 slot_path (.rllm-worktrees/c{slot}) and writes that candidate's body into the slot's rllm-harness.txt; core/rrsi.rs:102 WORKTREE_MAX = 3 and core/rrsi.rs:101 CANDIDATE_MAX = 3; core/harness.rs calls slots.keep() so the three slots survive the round and are observable afterwards. core/rrsi.rs:1969 commit_candidate(root,slot,body,base) removes any stale slot, adds a detached worktree at core/rrsi.rs:1888 slot_path (.rllm-worktrees/c{slot}) and writes that candidate's body into the slot's rllm-harness.txt; core/rrsi.rs:102 WORKTREE_MAX = 3 and core/rrsi.rs:101 CANDIDATE_MAX = 3; core/harness.rs calls slots.keep() so the three slots survive the round and are observable afterwards. core/rrsi.rs:1969 commit_candidate(root,slot,body,base) removes any stale slot, adds a detached worktree at core/rrsi.rs:1888 slot_path (.rllm-worktrees/c{slot}) and writes that candidate's body into the slot's rllm-harness.txt; core/rrsi.rs:102 WORKTREE_MAX = 3 and core/rrsi.rs:101 CANDIDATE_MAX = 3; core/harness.rs calls slots.keep() so the three slots survive the round and are observable afterwards.",
+    "values_printed_in_the_run_log": [
+      "pool decision row 0 pool_status admissible score_before 0 score_after 1 commit <40hex> verdict accepted run_digest <64hex> journal <64hex> evolve <40hex>",
+      "pool decision row 1 pool_status refused:refused because the candidate contains a recorded task score_before absent score_after absent commit <40hex> verdict rejected run_digest <64hex> journal <64hex>",
+      "pool decision row 2 pool_status refused:the score did not rise score_before 0 score_after 0 commit <40hex> verdict rejected run_digest <64hex> journal <64hex>",
+      "pool decision rows journal <64hex> rows 3 stamped 3",
+      "pool slot c0 row_commit d43833376555eeb93dbdeb5dfb09e4487628d2e3 worktree_head d43833376555eeb93dbdeb5dfb09e4487628d2e3 slot_git present harness_text {\"a\":\"\"}",
+      "pool slot c1 row_commit ecca092951ed1e6b4114a3fee5097ac4fdbaabd7 worktree_head ecca092951ed1e6b4114a3fee5097ac4fdbaabd7 slot_git present harness_text Copy the task Drive three rounds. into the harness",
+      "pool slot c2 row_commit dc7d37d2a36df5bad91cb2abd99c30736e53a375 worktree_head dc7d37d2a36df5bad91cb2abd99c30736e53a375 slot_git present harness_text component: skills hypothesis: flat one flat body one",
+      "pool parse task Count mismatch task. phase propose notice candidate pool does not contain the declared candidates digest absent ledger bytes 25093 to 25093 marks 4 to 4 task_run absent post run_digest absent",
+      "pool parse task Count limit task. phase propose notice a round carries at most 3 candidates digest absent ledger bytes 25093 to 25093 marks 4 to 4 task_run absent post run_digest absent",
+      "kept pool phase propose note incumbent kept because no candidate was admissible composition INCUMBENT RULES incumbent INCUMBENT RULES kept present statuses refused:refused because the candidate contains a recorded task,refused:refused because the candidate adds no change to component prompt,refused:refused because the candidate contains a recorded expected value evolve <40hex> to <40hex> harness {\"a\":\"\"} to {\"a\":\"\"} slot harness {\"a\":\"\"} to Copy the task Keep the incumbent. into the harness"
+    ],
+    "assertions": "three_pool_decisions: exactly 3 round-1 pool rows in that run's own digest-named journal, every row stamping that digest, is_hex(journal digest,64), exactly one admissible with 0->1, verdict accepted and commit == .git/refs/heads/rllm-evolve == .git/worktrees/c0/HEAD, one leak refusal with NO score fields and verdict rejected, one 'the score did not rise' refusal with 0/0, exactly 2 refusals. pool_slot_worktrees: the round-1 pool rows number the three submitted bodies; for each slot index the slot's .rllm-worktrees/c{i}/.git is a file, .git/worktrees/c{i}/HEAD is 40 hex and equals that row's commit, that slot's rllm-harness.txt equals that candidate's body, and the three commits are pairwise distinct. pool_parse_refusal (both arms): pre-reply phase propose, notice == the product's exact refusal sentence read from THIS reply's state, the digest-named journal unchanged and pool-status-free, the root-wide pool_status mark count unchanged (4 to 4) and the root-wide ledger byte total unchanged (25093 to 25093), no task run in the returned state, no 64-hex run digest before the reply and none in the state the reply returns. pool_keeps_incumbent: three refused rows all stamping the arm's own run_digest, incumbent_kept true, round_note the product sentence, composition byte-equal to the incumbent instructions read back from product state, evolve ref 40 hex and unmoved, the room's own harness present and unmoved, the c0 slot copy absent, equal to the room's harness text, or equal to one of this run's candidate bodies. printed_log_carries_values additionally requires the three decision-row lines, the three slot lines with 40-hex row_commit and worktree_head and slot_git present, the journal summary ending 'rows 3 stamped 3', both parse lines ending 'post run_digest absent', and the incumbent-kept note.",
+    "batteries": {
+      "battery_1_p": {
+        "base_sha": "fd2d0799 (grok's lane as delivered)",
+        "arms": "p0-p6 (7 arms): each landed by sha and went red naming its intended check; RESTORE-SHA fd2d0799 unchanged=yes."
+      },
+      "battery_2_p": {
+        "base_sha": "a3984bdc (digest binding + prints + SCOPE)",
+        "arms": "9 arms on the strengthened bytes, all landed and red; RESTORE-SHA a3984bdc unchanged=yes."
+      },
+      "battery_3_q": {
+        "base_sha": "3d46e4a6c4f42e0b407eda7306856871368439ef33f3cb5b4c1540f7d5057537",
+        "control": "q0 green: 22 legs, '22 rrsi-loop checks passed', zero rustc warnings",
+        "arms": "q1-q16: 15 arms went red naming the intended check; q9 (SKIP, ambiguous anchor: the read_rows join shape appears twice) and q14 (SKIP, substring collision) certified nothing and are recorded as skips.",
+        "restore": "RESTORE-SHA 3d46e4a6 unchanged=yes"
+      },
+      "battery_4_r": {
+        "base_sha": "3d46e4a6",
+        "control": "green",
+        "arms": "r14 and r15 red naming the parse arms after newline-anchored edits; r9's replacement did not compile and certified nothing."
+      },
+      "battery_5_s": {
+        "base_sha": "da8a22b0",
+        "control": "s0 green: 22 legs, evidence 'pool decision rows joined present rows 3'",
+        "arms": [
+          "s1 plant that run's own three-row journal under an all-zero digest name and join it: RED naming 'a three-candidate pool writes one ledger row per candidate and stamps each decision', log still shows rows 3 -> the row stamps convict, not row presence",
+          "s3 slot copy presence inverted: RED naming the kept-incumbent check",
+          "s4 foreign slot body allowed: RED naming the kept-incumbent check",
+          "s5 'no_rows && !run_kept' flipped: RED naming the count-mismatch check"
+        ],
+        "non_certifying": [
+          "s2 (join the first .jsonl in the state root) stayed GREEN - at that point in the lane the first .jsonl was that run's own journal, so the arm discriminates nothing",
+          "s6 (force the printed joined flag) stayed GREEN - that flag was printed evidence only; seat 3 N5, fixed by deriving the stamp count from the rows"
+        ],
+        "restore": "RESTORE-SHA da8a22b08dea26db494d7661b17f84098d725c8f0a318e3eeb4a726df13ccadf unchanged=yes"
+      },
+      "battery_6_t": {
+        "base_sha": "15bc8ee8106feb8e186b7e9161c1a8565d7eef2bf4027c5e307ad245f09d09fb",
+        "control": "t0 green: 22 legs",
+        "arms": [
+          "t1 slot scratch-state claim replaced by an unreachable literal: RED naming the kept-incumbent check",
+          "t3 candidate-body disjunct negated: RED naming the kept-incumbent check",
+          "t5 room harness equality flipped: RED naming the kept-incumbent check",
+          "t6 room harness presence inverted: RED naming the kept-incumbent check"
+        ],
+        "non_certifying": [
+          "t2 (claim removed) stayed GREEN - by construction, the claim pins nothing else",
+          "t4 (base-text disjunct broken) stayed GREEN - the live disjunct in this run is the candidate-body one"
+        ],
+        "restore": "RESTORE-SHA 15bc8ee8106feb8e186b7e9161c1a8565d7eef2bf4027c5e307ad245f09d09fb unchanged=yes"
+      },
+      "battery_7_v": {
+        "base_sha": "c6994ce5b53eb4abdd638037adacfc08af91cd407f6096c3fd290a180302bc50",
+        "control": "v0 green: 23 legs, '23 rrsi-loop checks passed'",
+        "arms": [
+          "v1 slot HEAD/row-commit binding inverted: RED naming the slot-worktrees check",
+          "v2 slot body compared with the neighbour slot: RED naming the slot-worktrees check",
+          "v3 slot .git presence inverted: RED naming the slot-worktrees check",
+          "v4 duplicate commit injected into the commit set: RED naming the slot-worktrees check",
+          "v5 slot needle renamed to a nonexistent slot: RED naming the run-log certification check",
+          "v6 post-reply run-digest absence flipped: RED naming the count-mismatch check",
+          "v7 foreign journal joined: RED naming the three-candidate check with the log printing 'journal 0000... rows 3 stamped 0'"
+        ],
+        "restore": "RESTORE-SHA daa9f5a3426f2192ecebc5cd343b7ac4a670424fea5a7a4023a6b75b50a93f8c unchanged=yes"
+      }
+    },
+    "audit": "Audit seat 1 on the pre-strengthening bytes: ACCEPT WITH NOTES; F1 (pool rows not bound to the certified run) and F2 (unfailable harness conjunct) material, F3 (vacuous digest-dependent conjuncts), F6 (literal pins), F8 (battery gap), F9 (per-slot worktree clause still owed). Every one of those is dispositioned above: F1 closed with digest binding plus arms q7/q10/q12; F2 closed by the measurement that contradicted it; F3 closed by asserting digest absence and task-run absence with arms q8/q11; F6 recorded; F8 partially covered as recorded; F9 still owed.",
+    "not_claimed": [
+      "Simultaneity: the slot witness is the durable state the round leaves behind (three slot worktrees, three distinct commits). The product commits candidates sequentially (commit_candidate removes any stale slot first), so concurrent occupancy during evaluate_pool is not witnessed.",
+      "Candidate-to-row identity: rows are bound to the run by their own run_digest stamps and to candidates through their commit and the slot body equality; the product emits no candidate id, so a row's pool_status is not directly matched to a submitted body by an id field.",
+      "The refusal sentences, the kept note and the three candidate bodies are literal pins on product output, not values derived from the product at assertion time; the batteries show the pins are load-bearing.",
+      "The state-root scan (files_here/pool_marks/ledger_bytes) is non-recursive: 'no pool row' means no pool row in the state root's own files.",
+      "No claim that a human reviewed anything, and no claim that the whole repository gate is green beyond the room transcript recorded in this row's gate field.",
+      "Gap 2 item 12's clause is witnessed for a three-candidate pool only: CANDIDATE_MAX = 3 means no fourth candidate can be admissible, and slot dirs are discarded when RoundSlots drops instead of on a cap refusal."
+    ],
+    "gate": {
+      "room": "git-archive room of HEAD 192d6aa2f358b1c433dd6c52ebbcc892ec6db85e with this lane's committed bytes overlaid, so the room carries exactly the gate-relevant content of this commit (the ledger and progress documents in the commit are not gate inputs); room lane sha c6994ce5b53eb4abdd638037adacfc08af91cd407f6096c3fd290a180302bc50",
+      "headless_rc": "0",
+      "verify_rc": "0",
+      "tools_rc": "0",
+      "harness_build_rc": "0",
+      "runner_rc": "0",
+      "pass_line": "rrsi_loop PASS (exit 0, 2s, 23 checks)",
+      "results_unchanged": "yes",
+      "twins": 72,
+      "twin_helper_cases": 44,
+      "head": "192d6aa2f358b1c433dd6c52ebbcc892ec6db85e",
+      "note": "An earlier in-tree gate at gate28 showed tools_rc=1 because a concurrent writer had verification/self_rebuild.rs half-written (error[E0425] room_handoff at self_rebuild.rs:100). That file is not in this commit; the room transcript above is the whole-tree gate for these bytes."
+    },
+    "group_report": {
+      "count": 23,
+      "passed": [
+        "refine entry copies approval_root onto task_run.workspace and records source_digest",
+        "a non-refine run carries no workspace and does not attempt the pool",
+        "a second round decision changes when the ledger already rejected that component",
+        "the digest-named ledger chains each revision to this run and experience.jsonl seals the settled row",
+        "files alone rebuild the resumed phase and decision",
+        "three propose prompts anneal remaining edits from 4 to 3 to 1",
+        "three refinement rounds record budgets 4, 3 and 2, a leakage refusal, noise floor 2, pruned skills, the evolve commit, and held-out keys",
+        "a re-proposed skills hypothesis is refused by name for round 1",
+        "a round that gains nothing records noise floor 0 and decision cost not recorded",
+        "two flat skills rounds leave the budget line unpruned",
+        "the incumbent commit in .rllm-worktrees is the evolve tip",
+        "the separate evaluation score 0 differs from the in-round score 1 and is not a held-out key",
+        "a three-candidate pool writes one ledger row per candidate and stamps each decision",
+        "each candidate of the driven pool has its own worktree whose HEAD is that candidate's row commit and whose harness copy is that candidate's body",
+        "a declared candidate count that does not match its blocks is refused by name and writes no pool rows",
+        "a candidate count above three is refused by name and writes no pool rows",
+        "a pool with no admissible candidate keeps the incumbent and the composition",
+        "a stalled ledger refuses an already-tried component and does not refuse one that was never tried",
+        "a flat memory shape is accepted for structural novelty, a shorter equal score is accepted for lower cost, and the same shape is refused when the cost rose",
+        "a tampered library entry is refused and its bytes stay unchanged",
+        "a later refine task reads the earlier task's sealed experience entry from the propose prompt",
+        "a refine task whose library holds no sealed row shows no historical experience section",
+        "the run log prints the annealed budgets, the evolve commit three ways, the noise floors, the pruned set, the held-out digests and the sealed library row"
+      ],
+      "failed": [],
+      "scope_chars": 4692,
+      "pool_named_checks": [
+        "a non-refine run carries no workspace and does not attempt the pool",
+        "a three-candidate pool writes one ledger row per candidate and stamps each decision",
+        "each candidate of the driven pool has its own worktree whose HEAD is that candidate's row commit and whose harness copy is that candidate's body",
+        "a declared candidate count that does not match its blocks is refused by name and writes no pool rows",
+        "a candidate count above three is refused by name and writes no pool rows",
+        "a pool with no admissible candidate keeps the incumbent and the composition"
+      ]
+    },
+    "lane_sha": "c6994ce5b53eb4abdd638037adacfc08af91cd407f6096c3fd290a180302bc50",
+    "audits": {
+      "seat_1": "ACCEPT WITH NOTES on the first lane bytes: F1 pool rows unbound to the certified run, F2 unfailable harness conjunct, F3 vacuous digest-dependent conjuncts, F6 literal pins, F8 battery gap, F9 per-slot clause owed.",
+      "seat_2": "ACCEPT WITH NOTES on 3d46e4a6: N1 slot conjunct is last-writer-wins coupling, N2 cross-run substitution unexercised, N3 item-12 worktree clause, N4 inverted task_run label, N5 tools-gate attribution.",
+      "seat_3": "ACCEPT WITH NOTES on 15bc8ee8: N1 SCOPE over-claimed the slot universality, N2 row-to-candidate identity, N3 redundant conjunct, N4 'anywhere under the state root' wider than the non-recursive scan, N5 'joined present' printed a derived flag, N6 post-reply digest unchecked, N7 whole-tree tools gate not green, N8 per-slot isolation owed. Every one is dispositioned in the bytes or recorded as owed.",
+      "seat_4": "ACCEPT WITH NOTES on daa9f5a3 (v10): all seat-3 notes closed; three wording residuals - the worktree witness is durable post-round assignment rather than simultaneous occupancy, row-to-candidate identity remains structural, and the SCOPE 'each of them' log claim was broader than the certification. All three narrowed in the audited bytes.",
+      "seat_5": "ACCEPT (no notes) on the committed bytes c6994ce5: confirmed from the diff that only SCOPE text and one comment changed, that the SCOPE enumeration matches what printed_log_carries_values consumes, that the worktree sentence claims the durable post-round state and not simultaneity, and that the comment matches the disjunction. Its remaining items (simultaneity, candidate identity, a whole-tree tools-gate transcript) are recorded here as owed and delivered by the gate field below."
+    }
   }
 }
