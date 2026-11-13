@@ -41,3 +41,4 @@ for tool in alignment readback checkpoint signature apk toolchain gate package h
   fi
   printf 'tool tests: %s cases: %s\n' "$output/$tool-tests" "$cases"
 done
+bash "$project_dir/tools/build-verification.sh" "$project_dir"

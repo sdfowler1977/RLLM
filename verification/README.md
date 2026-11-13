@@ -1,13 +1,13 @@
 # Verification
 
-Build the shared host controller with `bash headless.sh` using the tool locations in docs/BUILD.md. Run the connected groups from the project root:
+Build the shared host controller with `bash headless.sh` using the tool locations in docs/BUILD.md. `bash tools/build-harness.sh` also compiles every native verification twin in `verification/*.rs` into `output/verification/`, and the runner prefers that twin over a Python leg of the same name. Run the connected groups from the project root:
 
 ```bash
 python3 verification/provider_process.py
 python3 verification/network_drive.py
 python3 verification/drive_ownership.py
 python3 verification/question_process.py
-python3 verification/history.py
+output/verification/history
 python3 verification/a2a.py
 python3 verification/acp.py
 python3 verification/oauth.py

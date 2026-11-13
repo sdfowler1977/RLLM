@@ -295,17 +295,25 @@ fn group_arguments(root: &Path, source: &str) -> (Vec<String>, Vec<String>) {
 fn census(root: &Path) -> Vec<String> {
     let mut problems = Vec::new();
     let mut scripts = BTreeSet::new();
+    let mut natives = BTreeSet::new();
     for entry in std::fs::read_dir(root.join("verification")).into_iter().flatten().flatten() {
         let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) == Some("py") {
-            if let Some(stem) = path.file_stem().and_then(|value| value.to_str()) {
+        let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        match path.extension().and_then(|value| value.to_str()) {
+            Some("py") => {
                 scripts.insert(stem.to_string());
             }
+            Some("rs") => {
+                natives.insert(stem.to_string());
+            }
+            _ => {}
         }
     }
     for name in GROUPS {
-        if !scripts.contains(*name) {
-            problems.push(format!("group {name} has no verification/{name}.py"));
+        if !scripts.contains(*name) && !natives.contains(*name) {
+            problems.push(format!("group {name} has no verification/{name}.py or verification/{name}.rs"));
         }
     }
     let declared: BTreeSet<String> = GROUPS.iter().map(|value| value.to_string())
@@ -315,6 +323,13 @@ fn census(root: &Path) -> Vec<String> {
     for script in &scripts {
         if !declared.contains(script) {
             problems.push(format!("verification/{script}.py is not a runner group, a declared helper or a declared optional group"));
+        }
+    }
+    // A top-level twin is built into a runnable group binary, so an undeclared
+    // one would sit in output/verification/ unaccounted for.
+    for native in &natives {
+        if !declared.contains(native) {
+            problems.push(format!("verification/{native}.rs is not a runner group, a declared helper or a declared optional group"));
         }
     }
     let duplicates: BTreeSet<&str> = GROUPS.iter().copied().collect();
@@ -1084,6 +1099,28 @@ fn python_group(root: &Path, name: &str, arguments: &[String]) -> Command {
     command
 }
 
+fn leg_source(root: &Path, name: &str) -> String {
+    let native = root.join(format!("verification/{name}.rs"));
+    if native.is_file() {
+        read(&native)
+    } else {
+        read(&root.join(format!("verification/{name}.py")))
+    }
+}
+
+// A built twin at output/verification/<name> is the group. The python3 script
+// remains the fallback when that binary is absent.
+fn group_command(root: &Path, name: &str, arguments: &[String]) -> Command {
+    let twin = root.join("output/verification").join(name);
+    if twin.is_file() {
+        let mut command = Command::new(&twin);
+        command.args(arguments).current_dir(root).process_group(0);
+        command
+    } else {
+        python_group(root, name, arguments)
+    }
+}
+
 // Signal the child's process group. process_group(0) made that group id the
 // child's pid, so grandchildren that inherited it die with the deadline.
 fn kill_child_group(child: &mut std::process::Child) {
@@ -1139,7 +1176,7 @@ fn poll_wait_ms(deadline: Instant) -> Option<i32> {
 fn sweep_run(root: &Path, name: &str, arguments: &[String], seconds: u64) -> (i32, Vec<u8>, u64) {
     let started = Instant::now();
     let drain_deadline = started + std::time::Duration::from_secs(seconds.saturating_add(5));
-    let spawned = python_group(root, name, arguments).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
+    let spawned = group_command(root, name, arguments).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
     let mut child = match spawned {
         Ok(child) => child,
         Err(error) => return (-1, format!("runner could not start the group: {error}").into_bytes(), 0),
@@ -1573,7 +1610,7 @@ fn project_root() -> PathBuf {
 }
 
 fn sweep_one(root: &Path, name: &'static str, opts: &SweepOpts, seconds: u64) -> SweepRow {
-    let source = read(&root.join(format!("verification/{name}.py")));
+    let source = leg_source(root, name);
     let missing: Vec<Input> = required_inputs(root, &source).into_iter().filter(|input| !input.present).collect();
     if !missing.is_empty() {
         println!("{}", unavailable_line(name, &missing));
@@ -1698,7 +1735,7 @@ fn run(root: &Path, name: &str, arguments: &[String]) -> (i32, String, u64) {
         Ok(file) => file,
         Err(error) => return (-1, format!("runner could not write the log: {error}"), 0),
     };
-    let spawned = python_group(root, name, arguments)
+    let spawned = group_command(root, name, arguments)
         .stdout(Stdio::from(file.try_clone().expect("log handle")))
         .stderr(Stdio::from(file))
         .spawn();
@@ -1766,8 +1803,7 @@ fn main() {
         if !only.is_empty() && !only.iter().any(|wanted| wanted == name) {
             continue;
         }
-        let script = root.join(format!("verification/{name}.py"));
-        let source = read(&script);
+        let source = leg_source(&root, name);
         let missing: Vec<Input> = required_inputs(&root, &source)
             .into_iter()
             .filter(|input| !input.present)

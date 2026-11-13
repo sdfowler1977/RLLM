@@ -15,3 +15,4 @@ LD_LIBRARY_PATH="$CLIENT_RUST/lib:${LD_LIBRARY_PATH:-}" \
   --remap-path-prefix "$project_dir=RLLM" -C opt-level=2 -C codegen-units=1 \
   -C linker-features=-lld "$project_dir/tools/harness.rs" -o "$output"
 printf 'runner: %s (run it from %s)\n' "$output" "$project_dir"
+bash "$project_dir/tools/build-verification.sh" "$project_dir"
