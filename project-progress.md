@@ -980,3 +980,42 @@ the three commits in this batch moved no native product bytes — only verificat
 The runner's pre-run `recorded in verification/RESULTS.json: 71 groups, 4248 checks` line is a read of the
 stale manifest, not this sweep's verdict; the sweep's own row is the last line, and the seven `unavailable`
 groups are the device-dependent installed-Android surfaces, unchanged from room `d`.
+
+## 2026-11-13 (late evening) — `mcp_images` and `network_drive` go native, and a draft that emitted 57 names for 46 checks is caught before it can lie
+
+| Group | Room | Twin / leg rc | Canonical report | Printed channel | Runner row |
+|---|---|---|---|---|---|
+| mcp_images | `/tmp/witq102-mcp_images` | 0 / 0 | `output/checks/mcp-images.json` `9af2b833…` byte-identical | byte-identical (`{passed:42, checks:[42 names], requests:12}` compact) | `mcp_images PASS (exit 0, 0s, 42 checks)` |
+| network_drive | `/tmp/witq103-network_drive` | 0 / 0 | `output/checks/network-results.json` `9b61a7a2…` (2895 B) byte-identical | byte-identical (`46 connected WebDAV checks passed`, 34 B) | `network_drive PASS (exit 0, 0s, 46 checks)` |
+
+`mcp_images` (172 Python lines, 42 checks, real loopback MCP peer, PNG/JPEG byte provenance, native preview
+readback and export) came out of its earlier lane already byte-exact on both channels; the witness only had to
+prove it in a clean room, and the audit accepted it with a full coverage table and no pass-conversion arm.
+
+`network_drive` (117 Python lines, 46 checks) is the opposite case: the writer seat's draft compiled and
+*printed*, but it was not a twin of the leg, and nothing short of reading it line by line would have shown
+that. Four separate defects, all found by reading the draft against the leg and then letting the twin run:
+
+- the push arithmetic was wrong. The leg appends **two** names per create label
+  (`manual create and actual readback comparison: <label>` then
+  `completed create rejects duplicate verification: <bytes>`); the draft appended three per label starting at
+  index 30, and pushed names at intermediate assertion sites elsewhere, so it emitted **57** names for a
+  46-name leg and reused names for the wrong assertions. Intermediate assertions are now `keep_assert`
+  (assert, don't name) and only leg-append sites push.
+- the duplicate-verification **step** was missing: the leg replays the readback reply against the acknowledged
+  effect (`reply(dict(state=verified['state'], effect=acknowledged['effect']), content, 200)`) and asserts the
+  state is unchanged with no new effect. Without that call, half the names in that block had no evidence.
+- the event `root` was the project root, not the leg's scratch directory, so the subject resolved its
+  file surface differently from the leg. The scratch path is now threaded through every `event`/`reply` call.
+- the draft cloned `st` for the agent-tools change instead of mutating it, so the last child block ran with
+  `tools='delegate,drive_list'` and produced `effect: null` where the leg asserts
+  `effect['purpose'] == 'model'`. The twin panicked on it (`missing purpose in null`) — a failure that shows
+  as a failure — and the fix was to mutate the same state the leg mutates.
+
+Two semantic arms were also tightened against the rules that cost earlier twins reds: `not refused['state'].get('remote')`
+is now `is_none_or(|rows| !twin::truthy(rows))` (absent, null, empty list or empty string all satisfy the leg),
+and `verified['state'].get('drive_creation') is None` accepts absent **or** present-null, and `limit >= len+256`
+compares the parsed number, not two `Value`s.
+
+Census: 10 files / 1228 lines left in `verification/` (63 legs retired); the two ceilings and all census
+fixtures in `tools/package.rs` moved to 10 / 1228.

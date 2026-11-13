@@ -4,7 +4,7 @@ Build the shared host controller with `bash headless.sh` using the tool location
 
 ```bash
 output/verification/provider_process
-python3 verification/network_drive.py
+output/verification/network_drive
 output/verification/drive_ownership
 output/verification/question_process
 output/verification/history
