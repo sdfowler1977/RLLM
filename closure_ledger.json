@@ -2488,7 +2488,9 @@
     "restored": "853ca6298cf8e3524dffc550fdf8aa743b88f947b37968e98236e5b9f284d987",
     "gate_on_mutant": "Rust cases passed: 897/898; isolated application cases: 58 (exit 1)",
     "named_case": "application::tool_format::tests::arg_form_unknown_name_is_catalog_unknown FAILED expected unknown, got Refused (exit 101)",
-    "note": "mutant digest equals the digest the lane reported for its own mutation i"
+    "note": "mutant digest equals the digest the lane reported for its own mutation i",
+    "gate_after_restore": "Rust cases passed: 898/898; isolated application cases: 58",
+    "case_after_restore": "application::tool_format::tests::arg_form_unknown_name_is_catalog_unknown ... ok (1 passed, 897 filtered out)"
   },
   "lane_e5_dispatched_2026_11_14": {
     "room": "/tmp/g88room",
@@ -2531,5 +2533,53 @@
         "permission_modes": 27
       }
     }
+  },
+  "lane_g3_seat_reject_2026_11_14": {
+    "verdict": "REJECT",
+    "packet": "/tmp/mm-packet47.json",
+    "output": "/tmp/mm-laneG47.out",
+    "prior_open": [
+      "F01",
+      "F02",
+      "F04",
+      "F07",
+      "F08",
+      "G01",
+      "G03",
+      "G04"
+    ],
+    "prior_closed_narrowly": [
+      "G17",
+      "G08"
+    ],
+    "blocking": [
+      "G03 accepted_roots answers the whole product set when any supplied URI is foreign",
+      "G3-08 64-owner FIFO eviction advertised without a witness",
+      "G01 the 401 credential sentence masks a framing error",
+      "G3-05 8199 admission bound unpinned on both sides",
+      "G3-12 \"added no verification check\" false against HEAD"
+    ],
+    "coordinator_measured_confirmations": {
+      "accepted_roots": "core/stream.rs:763, 33-item cap, `if foreign{return product.clone();}` after the loop - byte-exact as the seat quotes",
+      "eviction": "core/stream.rs:750 `if guard.order.len()>=64{...guard.order.remove(0);guard.rows.remove(&old);}`",
+      "admission_bound": "core/mcp_lifecycle.rs hunk: key.len()>8192 -> key.len()>8199, endpoint.len()>8192 unchanged; the only length case added asserts mcp_authorization(&\"a\".repeat(8192))",
+      "witness": "fresh room /tmp/g85room at HEAD: gate 885/885 base -> 903/903 patched (isolated 58); nine named cases pass in one --exact run; http_framing 192, mcp_catalog 38, mcp_catalog_events 148 with every check name passed in the group JSON; other four groups unchanged; RESULTS digest unchanged before and after"
+    }
+  },
+  "lane_g4_dispatched_2026_11_14": {
+    "room": "/tmp/g89room",
+    "base": "HEAD 6653059ad244 + /tmp/laneG3.patch (git apply rc 0)",
+    "card": "/tmp/laneG4-card.md",
+    "report": "/tmp/laneG4-report.md",
+    "log": "/tmp/laneG4.log",
+    "scope": [
+      "accepted_roots answers the intersection, with renamed cases",
+      "64-owner eviction and same-owner rebind witnessed, plus roots/list equals workspace::mcp_roots for that prepare",
+      "401 stops masking framing errors, one case per body shape",
+      "8199/8200 admission bound pinned in plan and stream_prepare",
+      "duplicate Content-Encoding shape table plus one comment reconciling the two duplicate-framing sentences",
+      "credential producer: normalise once or prove byte-identical output per route",
+      "count table against HEAD"
+    ]
   }
 }

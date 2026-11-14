@@ -529,3 +529,32 @@ Lane E5 was dispatched (`/tmp/g88room`, HEAD + the E4 bytes) to delete the dupli
 over the authority `known_tool` consults, pin the name-boundary cases the seat flagged (sentence dot,
 hyphen, slash), state the cost of refusing a structured tool-call body that also carries `id`, run its
 mutations on the sanctioned runner, and restate every count against both bases.
+
+
+## The MCP lane was witnessed at HEAD and rejected by its seat
+
+The same nine paths that lane G produced were applied to a fresh clone of current HEAD
+(`/tmp/g85room`, `git apply` exit 0, no fuzz) and measured there: the units gate goes `885/885` to
+`903/903` with `isolated application cases: 58`, the nine new unit cases pass in one `--exact`
+invocation, and the groups move `http_framing 189 -> 192`, `mcp_catalog 30 -> 38`,
+`mcp_catalog_events 145 -> 148` while the other four stay put. Every check name in the two MCP group
+reports passed, and `verification/RESULTS.json` stayed `e2f35542...` before the run and after it.
+
+The seat read the patch, the lane's report and that witness and returned `VERDICT: REJECT`
+(`/tmp/mm-laneG47.out`). Its blocking rows were then checked against the bytes, not accepted:
+
+- `core/stream.rs:763` really does end with `if foreign{return product.clone();}`, so one foreign
+  supplied URI makes the product answer with **every** root rather than the intersection. The lane's
+  three new cases pin that behaviour instead of correcting it.
+- `core/stream.rs:750` evicts the oldest owner at 64. Nothing inserts a 65th owner, so an owner can
+  silently lose its roots with no witness anywhere.
+- The admission bound is `key.len()>8199` in `core/mcp_lifecycle.rs` with `endpoint.len()>8192`
+  unchanged, and the only added length assertion is on `mcp_authorization`, a different function. An
+  advertised capability with no boundary case on either side.
+- The 401 path returns the credential sentence before the body is framed, so a framing error is hidden
+  from the model. The report says so honestly; honesty is not a fix.
+
+Lane G4 was dispatched (`/tmp/g89room`, HEAD + the lane G bytes) to answer the intersection rather
+than the whole root set, witness the eviction and same-owner rebind, stop the 401 from masking framing
+errors, pin the 8199/8200 boundary in both routes, reconcile the two duplicate-framing sentences, and
+either normalise the MCP credential once at the storage boundary or prove byte-identical output per route.
