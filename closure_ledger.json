@@ -2948,5 +2948,20 @@
     "consequence": "the published 2026-11-10 candidate cannot satisfy the turn_background group; the next signed candidate must declare the turn service that outlives focus, otherwise that group stays red once the probe stops declaring the companion absent",
     "also": "the two APK groups can only be counted in the delivered record by a deliberate main-tree sweep with RLLM_CHECK_APK set; a scratch-room sweep stores 0 for them (see delivered_record_stale_against_twins_2026_11_14)",
     "log": "/tmp/laneM-verify.log (APK-ENV lines)"
+  },
+  "sweep_with_a_failed_group_never_writes_the_record_2026_11_14": {
+    "status": "measured instrument rule - decides the record-refresh sequence",
+    "code": "tools/harness.rs commit_sweep (line 1684): if rows.iter().any(row_failed) { eprintln!(\"delivered record left untouched: a group failed\"); return false; } - finish_sweep (1684-1703) prints the summary afterwards and exits 1 when failed>0 or absent>0",
+    "measured": "lane M room sweep (companion present, patched probe, no RLLM_CHECK_APK): 'PATCHED-SWEEP apk_alignment FAIL (exit 101, 0s, absent checks)', 'PATCHED-SWEEP turn_background FAIL (exit 101, 0s, absent checks)', 'summary: 64 pass, 2 fail, 5 unavailable, 2 absent of 71 groups, 4160 checks'; the room's verification/RESULTS.json was byte-identical to the delivered record (digest e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0, mtime still the clone time 13:26:22) and its rows still carried the stale reason 'companion APK ... (not on this machine)' with http_framing 189 / total_executed 4248 while the sweep measured 4160",
+    "consequence": "the delivered record cannot be refreshed at all while any group fails. In the main tree, once lane M lands the two APK groups execute, so a sweep needs RLLM_CHECK_APK set AND a published candidate that declares the turn service that outlives focus (see published_candidate_missing_turn_service_2026_11_14); otherwise the refresh is refused by design",
+    "witness_note": "my own census log filter (grep -E 'summary:|FAIL|UNAVAILABLE|NOT EXECUTED|could not start') dropped the harness's 'delivered record left untouched: a group failed' line; a full-output sweep capture leg (/tmp/chain-Mcap.sh, /tmp/mcap-sweep-raw.log) was queued to print it verbatim",
+    "log": "/tmp/g104-fullcheck.log"
+  },
+  "mutation_leg_with_a_failed_build_silently_reuses_the_previous_binary_2026_11_14": {
+    "status": "witness-method defect found and fixed in the coordinator's own census",
+    "measured": "lane E6 mutation leg m5 substituted `for tool in [] as &[&str] {`; rustc refused it (E0605 invalid cast, mute6-build-m5.log), BUILD-RC=1, and the leg still printed `test result: ok. 19 passed; 0 failed` because output/up-mut was still the PREVIOUS mutant's binary. A green line from a mutant that never compiled",
+    "fix": "the follow-up script /tmp/mutE6b.sh aborts a leg when BUILD-RC is non-zero (prints BUILD-FAILED - leg void, no verdict counted, plus the rustc tail) and re-runs the anchor as `&[] as &[&str]`; the same guard is applied to the twins rebuild",
+    "also": "leg m4 (`embedded()` without the markup disjunct) built cleanly (BUILD-RC=0) and left all 19 unit cases green - recorded as a measured result, with the product-route legs re-run in m4b so the unit-only blind spot is closed",
+    "log": "/tmp/laneE6-mut.log /tmp/mute6-build-m5.log /tmp/laneE6-mut2.log"
   }
 }
