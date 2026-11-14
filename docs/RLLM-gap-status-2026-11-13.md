@@ -590,3 +590,79 @@ Lane B5 was dispatched (`/tmp/g90room`, HEAD + the B4 bytes) to pin all four bra
 `scope_distinguished` with one case each, make the twin say which fields actually separate its pair,
 run two mutations (`round` and `commit` clauses) that must each turn a named case red, and report every
 count against current HEAD.
+
+## Addendum 2026-11-14 — the Python-instrument retirement was witnessed at HEAD, and one seat finding survived
+
+Lane K2 deleted `verification/history_migration.py` (43 lines) and `verification/live_web.py` (71 lines) and
+edited the Rust twins, `tools/harness.rs`, `tools/package.rs`, `verification/README.md` and `docs/AUDIT.md`
+(`/tmp/laneK2.patch`, 47,320 B, digest `94266b63fdfb7bce`, 8 paths, 213+/211−). It applies on HEAD with
+`git apply --check` rc 0 (`/tmp/laneK2-verify.log`). Witnessed in `/tmp/g91room`:
+
+- `find verification tools -name '*.py'` on the patched tree prints exactly `tools/package.py`.
+- `docs/AUDIT.md` no longer sends an operator to a deleted file: `grep -c "python3 verification"` drops 4 → 3
+  and the three survivors concern `verification/turn_background.py` and generic `verification/<name>.py` prose.
+- Tool tests move `harness-tests cases: 37 → 43` (`package-tests 46`, `twin helper tests 44` unchanged).
+- Exit matrix, measured on both sides with `output/previous-controller` present (`/tmp/verifyK2b.sh`,
+  `/tmp/laneK2b-verify.log`): patched missing-twin arm `FAIL (exit -1, …)` +
+  `runner could not start the group: missing twin binary output/verification/history_migration`, process exit 1;
+  patched optional-group refusal exit 0; mixed request exit 2. At HEAD a FAIL row **already** exits 1 —
+  twin present gives `FAIL (exit 101, …)` from the twin's own panic at `verification/history_migration.rs:73`,
+  and a missing twin binary gives `FAIL (exit 2, …)` carrying `usage: history_migration.py …`, i.e. HEAD
+  silently execs the Python instrument as a fallback. The only exit-code change these bytes make is the
+  optional-group refusal, 2 → 0.
+- `verification/RESULTS.json` stayed `e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0`
+  through every leg.
+
+The seat (`/tmp/mm-laneK250.out`) returned `VERDICT: REJECT` and CLOSED four prior findings — K-01 exit
+wording, K-03 `docs/AUDIT.md` instructions, K-04 the partial-rebuild witness (a full `bash tools/build-tools.sh`
+was re-run and its counts reproduce at HEAD), K-07 README/`docs/AUDIT.md` agreement. It kept **K-02 open**:
+the parity tables are the lane's own reading, and the packet shows only diff hunks for the surviving twins.
+
+Settled by measurement rather than argument. Reading `git show HEAD:verification/history_migration.py` /
+`…live_web.py` against the patched twins with a line-based extractor that reports unparsed sites (zero):
+`history_migration` 7 Python call sites vs 7 Rust `check()` calls with identical name sets; `live_web` 9 vs 9,
+identical. So no check name was lost. What remains genuinely unproven is assertion fidelity and liveness: the
+Rust helper is `fn check(passed:&mut Vec<String>,name:&str,value:bool){ if !value { eprintln!("{name}");
+std::process::exit(1) } }` (`verification/live_web.rs:513`), so a false predicate aborts the twin instead of
+recording a failed row, and no packet in this lane shows any of those 16 checks made red.
+
+Also corrected: the lane named three of the six new harness cases; the measured delta is +6 (37 → 43), and its
+`requested_fail_row_exits_nonzero` pins pre-existing HEAD behaviour rather than changing it.
+
+Lane K3 was dispatched (`/tmp/g96room`, HEAD + the K2 bytes) to produce a per-check predicate table
+(Python line vs Rust line with `file:line`), 16 mutation legs — one per check — each with before/mutated/restored
+digests, the exact stderr check name and the exit code, to reproduce the `verification/debt.py` ceiling plant,
+and to state plainly that `tools/package.py` remains tracked and executed until a signed candidate is published
+with `output/tools/package`.
+
+## Addendum 2026-11-14 — the markup lane was witnessed at HEAD and rejected on three points
+
+Lane E5 classifies the tool-call markup the phone reported and names the closest catalog tool
+(`/tmp/laneE5.patch` = `/tmp/laneE5-prelim.patch`, `8d16a745d986bae9`, 5 paths, 1,017+/10−). Every published
+file hash matches a clean HEAD clone plus the patch: `core/harness.rs 874f6884246d2d6a`,
+`core/tool_format.rs 5203c6f2bbf7497d`, `core/application.rs 60c7f9d6046a2a72`,
+`verification/proposal_feedback.rs 91e3aadf2801985b`, `verification/proposal_recovery.rs 9a671e2acae3fad8`.
+Witnessed in `/tmp/g92room` (`/tmp/laneE5-verify.log`): HEAD `Rust cases passed: 885/885; isolated application
+cases: 58` → patched `902/902; 58` (+17 unit cases); the eight named `--exact` cases all pass
+(`8 passed; … 894 filtered out`); `proposal_feedback PASS (exit 0, 0s, 55 checks)` against a HEAD baseline of
+36; `proposal_recovery PASS (exit 0, 8s, 277 checks)` against 249; the delivered record digest unchanged.
+
+The previous seat's real finding is closed in these bytes: `grep -n CATALOG core/tool_format.rs` prints nothing,
+and `closest_names` ranks over `for tool in harness::TOOLS {` at `core/tool_format.rs:506` — the same array
+`known_tool` reads at `core/harness.rs:4`. One name list, one authority.
+
+The seat (`/tmp/mm-laneE551.out`) returned `VERDICT: REJECT` and closed E4-03, E4-07, E4-08, E4-09, E4-13
+while keeping **E4-01 open**: nothing pins the empty-name boundary or a catalog name that is a prefix of
+another. Measured here: `parse_named_args` returns `Err(())` only when `start==i`, and the patched
+`core/tool_format.rs` carries 19 `#[test]` functions (HEAD carries 2) — none of them an empty-name or
+prefix-name case. Two further blocking rows were settled by measurement in the coordinator's favour and in the
+lane's: the sibling-module declarations the seat could not see in the hunks are pre-existing at HEAD and
+unchanged by this patch (`#[path="harness.rs"] mod harness;` at `core/application.rs:2`,
+`#[path="tool_format.rs"] mod tool_format;` at `core/application.rs:21`, identical in the clean HEAD tree and in
+the patched room), and the seat is right that the notice text is phase-dependent, so "the classifier is wired"
+must not read as one unconditional phone sentence per `Markup` variant.
+
+Lane E6 was dispatched (`/tmp/g95room`, HEAD + the E5 bytes) to pin the empty-name and prefix-name cases, to
+cite those pre-existing declarations with their HEAD digests instead of implying the patch installed them, and
+to pin the delivered notice text for each route through the product's own paths, with the two group legs
+re-measured on both sides in its own room.

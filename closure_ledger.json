@@ -2600,5 +2600,122 @@
     "card": "/tmp/laneB5-card.md",
     "report": "/tmp/laneB5-report.md",
     "status": "waiting for a grok writer slot (five lanes live: J3 g84, K2 g83, L g87, E5 g88, G4 g89)"
+  },
+  "lane_k2_seat_reject_2026_11_14": {
+    "verdict": "REJECT",
+    "packet": "/tmp/mm-packet50.json",
+    "output": "/tmp/mm-laneK250.out",
+    "rules": "/tmp/mmA50.txt",
+    "facts": "/tmp/k2-seat-facts.txt",
+    "room": "/tmp/g91room",
+    "patch": "/tmp/laneK2.patch",
+    "patch_bytes": 47320,
+    "patch_sha16": "94266b63fdfb7bce",
+    "paths": 8,
+    "witness_logs": [
+      "/tmp/laneK2-verify.log",
+      "/tmp/laneK2b-verify.log"
+    ],
+    "witness": {
+      "apply_check_rc": 0,
+      "units_base": "885/885; isolated 58",
+      "harness_tests": "37 -> 43",
+      "package_tests": 46,
+      "twin_helper_tests": 44,
+      "py_files_after": "tools/package.py only",
+      "audit_md_python3_refs": "4 -> 3 (survivors are turn_background.py and generic prose)",
+      "results_json": "e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0"
+    },
+    "exit_matrix_measured_both_sides": {
+      "patched_missing_twin": "FAIL (exit -1) + missing twin binary -> process exit 1",
+      "patched_unavailable": "exit 0",
+      "patched_optional_refusal": "exit 0",
+      "patched_mixed": "exit 2",
+      "head_twin_present_empty_input": "FAIL (exit 101) from verification/history_migration.rs:73 panic -> exit 1",
+      "head_twin_absent_input_present": "FAIL (exit 2) with usage: history_migration.py -> exit 1 (HEAD execs python3 fallback)",
+      "head_optional_refusal": "exit 2",
+      "head_mixed": "exit 2",
+      "conclusion": "a FAIL row moving the process to exit 1 is pre-existing at HEAD; the only exit change is the optional-group refusal 2 -> 0"
+    },
+    "prior_findings": {
+      "K-01": "CLOSED",
+      "K-02": "OPEN",
+      "K-03": "CLOSED",
+      "K-04": "CLOSED",
+      "K-07": "CLOSED"
+    },
+    "open_finding": "K-02 assertion-body parity and per-check liveness unproven; packet holds only diff hunks for the surviving twins",
+    "coordinator_measurement_settling_names": {
+      "history_migration": "python 7 call sites vs rust 7 check() calls, name sets identical",
+      "live_web": "python 9 vs rust 9, name sets identical",
+      "classifier": "line-based, zero unparsed sites"
+    },
+    "liveness_shape": "verification/live_web.rs:513 fn check aborts the twin (eprintln name; exit 1) so no per-check red was shown",
+    "count_correction": "report named 3 of the 6 new harness cases; measured delta +6 (37 -> 43)",
+    "next": "lane K3, /tmp/g96room = HEAD + /tmp/laneK2.patch, card /tmp/laneK3-card.md, 16 per-check mutation legs + ceiling plant + package.py debt sentence",
+    "code_committed": false
+  },
+  "lane_e5_seat_reject_2026_11_14": {
+    "verdict": "REJECT",
+    "packet": "/tmp/mm-packet51.json",
+    "output": "/tmp/mm-laneE551.out",
+    "rules": "/tmp/mmA51.txt",
+    "facts": "/tmp/e5-seat-facts.txt",
+    "room": "/tmp/g92room",
+    "patch": "/tmp/laneE5.patch",
+    "patch_sha16": "8d16a745d986bae9",
+    "paths": 5,
+    "witness_log": "/tmp/laneE5-verify.log",
+    "witness": {
+      "apply_check_rc": 0,
+      "units_base": "885/885; isolated 58",
+      "units_patched": "902/902; isolated 58",
+      "unit_case_delta": 17,
+      "named_cases": "8 passed; 0 failed; 894 filtered out",
+      "proposal_feedback": "36 -> 55 checks PASS",
+      "proposal_recovery": "249 -> 277 checks PASS",
+      "twin_lines": 72,
+      "results_json": "e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0"
+    },
+    "provenance": "all five published file digests match a clean HEAD clone plus the patch (874f6884246d2d6a, 5203c6f2bbf7497d, 60c7f9d6046a2a72, 91e3aadf2801985b, 9a671e2acae3fad8)",
+    "prior_findings": {
+      "E4-01": "OPEN",
+      "E4-03": "CLOSED",
+      "E4-05": "CLOSED",
+      "E4-07": "CLOSED",
+      "E4-08": "CLOSED",
+      "E4-09": "CLOSED",
+      "E4-13": "CLOSED"
+    },
+    "blocking_new": [
+      "E5-01 empty-name and prefix-name cases missing",
+      "E5-03 quoted declarations absent from the hunks",
+      "E5-04 notice text is phase-dependent so one unconditional sentence is unsupported"
+    ],
+    "coordinator_measurement": {
+      "module_declarations": "core/application.rs:2 and :21 pre-existing at HEAD, byte-identical after the patch",
+      "catalog_dedup": "grep -n CATALOG core/tool_format.rs empty; closest_names loops harness::TOOLS at core/tool_format.rs:506",
+      "test_census": "patched core/tool_format.rs has 19 #[test] (HEAD 2), none empty-name or prefix-name"
+    },
+    "next": "lane E6, /tmp/g95room = HEAD + /tmp/laneE5.patch, card /tmp/laneE6-card.md",
+    "code_committed": false
+  },
+  "lane_k3_dispatched_2026_11_14": {
+    "room": "/tmp/g96room",
+    "base": "HEAD 64f90a3 + /tmp/laneK2.patch (git apply rc 0)",
+    "card": "/tmp/laneK3-card.md",
+    "writer_log": "/tmp/laneK3.log",
+    "report": "/tmp/laneK3-report.md",
+    "mission": "per-check predicate parity table for all 16 checks; 16 mutation legs with before/mutated/restored digests and the exact stderr check name; reproduce the verification/debt.py ceiling plant; re-measure both group legs and the units gate at HEAD; state tools/package.py debt plainly",
+    "seat_gap_being_closed": "K-02 (assertion fidelity + per-check liveness)"
+  },
+  "lane_e6_dispatched_2026_11_14": {
+    "room": "/tmp/g95room",
+    "base": "HEAD 64f90a3 + /tmp/laneE5.patch (git apply rc 0)",
+    "card": "/tmp/laneE6-card.md",
+    "writer_log": "/tmp/laneE6.log",
+    "report": "/tmp/laneE6-report.md",
+    "mission": "empty-name and prefix-name markup cases; cite core/application.rs:2/:21 as pre-existing HEAD declarations with digests; pin the phase-dependent notice per route through product routes; re-measure proposal_feedback and proposal_recovery on both sides in its own room",
+    "seat_gap_being_closed": "E5-01/E4-01, E5-03, E5-04, E5-05"
   }
 }
