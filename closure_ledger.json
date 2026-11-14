@@ -2457,5 +2457,11 @@
     "F03_F04_F05": "CORRECTED after measuring the committed bytes: the audit read the pre-lane-H package. F03 is closed on 689994a at source and packaged-byte level - begin admits a ticket before startForegroundService (dex sput-object live at 0023), finish nulls it before any instance exists (sput null at 0022), onStartCommand refuses a start whose ticket is not admitted (invoke-static openTicket at 0027/0033/0049/0069, stopSelf(int) at 0039). F05 is closed at source level - begin returns HELD/QUEUED/REFUSED, Activity.java:604 turns REFUSED into turnProtectionLost(), which posts the notice via dispatch(\"turn_protection\") at Activity.java:734. Neither is device-witnessed. F04 stays open: ownership was not moved out of the Activity.",
     "R15": "Advanced options and profile_advanced present in both libraries and at HEAD (core/harness.rs:337,:338,:435). Still open.",
     "decision": "The next test APK must be numbered above 1794275497 and must carry the MCP auth surface, because the installed build's capability cannot be recovered from this repository."
+  },
+  "web_read_403_user_agent_probe_2026_11_14": {
+    "measurement": "Coordinator live probes, 2026-11-14. curl HTTP/1.1 status only over six pages: bare head (no User-Agent, no Accept) vs patched head (User-Agent: RLLM web reader + Accept). en.wikipedia.org 403 -> 200 and www.reddit.com 403 -> 200; duckduckgo, arxiv, github 200/200; finance.yahoo.com 301/301. Isolation: UA-only clears both 403s, Accept-only does not (403).",
+    "exact_product_head": "At 1225caf core/network.rs builds GET <path> HTTP/1.1 / Host / Connection: close / Accept-Encoding: identity / Content-Length, and core/investigation.rs:195 adds no User-Agent and no Accept for web_read. Sending exactly that head over TLS to en.wikipedia.org:443 returned HTTP/1.1 403 Forbidden; the same head plus 'User-Agent: RLLM web reader' returned 200 OK.",
+    "meaning": "The lane J mechanism is real and the User-Agent line is the load-bearing half, not the Accept values. The owner's 403 is still not reproduced because their URL is unrecorded, so no causation is claimed for their page.",
+    "action": "Carried into the lane J3 audit packet as coordinator evidence. Any claim that Accept changes fixed the phone failure is unsupported by this probe."
   }
 }

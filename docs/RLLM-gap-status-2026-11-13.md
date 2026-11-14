@@ -479,3 +479,25 @@ The audit's provenance point is the one that changes the plan: the package the o
 any commit in this repository, so the next test build has to be numbered above `1794275497` **and** carry the
 MCP authentication surface that build already shows, or the upgrade silently drops a capability. That makes
 lane G a prerequisite for the test APK, not an optional improvement.
+
+### The 403 mechanism, measured on the live internet (coordinator probe, not a lane claim)
+
+Six public pages fetched with `curl --http1.1`, status line only: with a bare request head (no
+`User-Agent`, no `Accept`) `en.wikipedia.org/wiki/Nvidia` returns **403** and `www.reddit.com/r/rust/`
+returns **403**, while `duckduckgo.com`, `arxiv.org` and `github.com` return 200. Adding
+`User-Agent: RLLM web reader` plus the route's `Accept` turns both 403s into 200. Isolating the two
+headers: **UA alone clears it, Accept alone does not** (403 on both sites).
+
+Then the product's own head, byte for byte. At `1225caf` `network::wire` writes `GET <path> HTTP/1.1`,
+`Host: <host>:<port>`, `Connection: close`, `Accept-Encoding: identity`, `Content-Length: <n>` and then the
+caller's headers, and the `web_read` route (`core/investigation.rs:195`) supplies no `User-Agent` and no
+`Accept`. Sending exactly that over TLS to `en.wikipedia.org:443` gives
+
+```
+product-head-at-HEAD   HTTP/1.1 403 Forbidden
+same+User-Agent        HTTP/1.1 200 OK
+```
+
+So the mechanism the request-head lane is fixing is real, and the `User-Agent` line — not the `Accept`
+values — is what carries it. The owner's page is still not reproduced: their URL is unrecorded, so this is
+a measured mechanism, not a witnessed fix for their phone.
