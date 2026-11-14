@@ -2774,7 +2774,10 @@
     },
     "also": "three groups (field_flow, flags_flow, product_flow) print 0 executed checks in a scratch room while the record shows 37/28/37; they need a published-controller reference that the room does not build",
     "why_nothing_is_broken": "tools/gate.rs:926-928 reads RESULTS.json only for pinned selected-unit filters, so no gate consumes these totals; the witness rule freezes the record digest at e2f35542e44b5509, so lanes cannot refresh it",
-    "status": "OPEN decision - a deliberate record refresh must be its own measured step, not a side effect of a lane"
+    "status": "OPEN decision - a deliberate record refresh must be its own measured step, not a side effect of a lane",
+    "where": "the rows live at connected.counts.<group> in verification/RESULTS.json (measured: rrsi_loop 15, self_rebuild 9, field_flow 37, apk_alignment 0)",
+    "record_total_vs_measured": "the record's own line says 71 groups, 4248 checks, while a fresh-room sweep measures 4157; a lane quoted 4248 as if it were a run result",
+    "refresh_precondition": "the main tree holds output/published-controller, so field_flow/flags_flow/product_flow can run there; the two APK groups need the lane M probe repair first, so the refresh is one deliberate main-tree sweep after lane M lands, not a scratch-room sweep that would record 0 for five groups"
   },
   "lane_m_dispatched_2026_11_14": {
     "lane": "M (companion-APK probe in tools/harness.rs)",
@@ -2808,6 +2811,60 @@
     },
     "card_correction": "the card named three steps increment sites; a census of `\"steps\"` assignments at HEAD finds four - core/application.rs:1227, :1232, :3139 and core/delegation.rs:87 - so the mutation census runs all four plus an inert control leg (/tmp/mutL2.sh, /tmp/laneL2-mut.log)",
     "witness_defect_found": "the first mutation leg was void: the room still had the lane paths stashed (the census script's stash pop failed on a rewritten verification/RESULTS.json), so it built a BASE binary and printed '0 passed; 885 filtered out' for names that do not exist at HEAD; also its awk pattern /\\+1/ cannot match the spaced `steps + 1` at core/application.rs:3139. The room was repaired (git checkout of RESULTS.json, stash popped, room diff digest re-measured at 74750ee7e6ab110a) and the leg rewritten.",
-    "seat": "PENDING"
+    "seat": "REJECT - see lane_l_seat_reject_2026_11_14"
+  },
+  "lane_l_seat_reject_2026_11_14": {
+    "seat": "MiniMax-M3 audit seat, packet /tmp/mm-packet55.json (rules /tmp/mmA53.txt), verdict /tmp/mm-laneL55.out",
+    "verdict": "REJECT",
+    "kept_open": [
+      "L1 (high): the delivered case pins three of the four `steps` increment routes; the failed-operation arm at core/application.rs:1227 is unpinned, proven by a mutation that left all four cases green",
+      "L2 (medium): the same gap against the four-site census (the card named three sites)"
+    ],
+    "closed_by_measurement": [
+      "L3 end-to-end arithmetic (limit 4, steps 0-1-2, two slots left, next request admitted, fourth reaches 4, the next refused with the exact sentence)",
+      "L4 hosted-search exemption reaches answer_mode::native_started through the product send route, not a reimplementation",
+      "L5 both required mutation legs with before/mutated/restored digests and named reds, group-level reds at exit 101",
+      "L6 group coverage counts and every new check name reproduced",
+      "L7 the 71-group census 4157 to 4164 with zero lost checks",
+      "L8 every count relation sums",
+      "L9 rules: no Python, no new group, const GROUPS 71, four and eight untouched, record digest unchanged",
+      "L10 no over-claim about the owner's phone"
+    ],
+    "code_status": "NOT committed - the bytes stay in /tmp/g102room until the kept finding is closed",
+    "next": "lane L2 dispatched"
+  },
+  "lane_l2_dispatched_2026_11_14": {
+    "lane": "L2 (pin the charge on the failed-operation route)",
+    "room": "/tmp/g102room - fresh clone at e7bb2b6 with the lane L bytes applied (git apply, APPLY-RC=0)",
+    "card": "/tmp/laneL2-card.md",
+    "requires": [
+      "a named unit case through the product approval/execution route asserting steps before and after a FAILED approved operation, and that a second failure charges one more",
+      "two mutation legs at core/application.rs:1227 (+1 to +2 double charge, and no charge) each with a NAMED red and digest-proven restore",
+      "a group check in query_feedback or hosted_phases so the arithmetic is pinned end-to-end, with both group counts before and after",
+      "the unmodified-HEAD gate re-measured in the same room"
+    ],
+    "measured_facts_given_to_the_writer": {
+      "four_sites": [
+        "core/application.rs:1227",
+        "core/application.rs:1232",
+        "core/application.rs:3139",
+        "core/delegation.rs:87"
+      ],
+      "reds": {
+        "core/application.rs:1232": "each_executed_route_charges_one_slot FAILED at core/harness.rs:3889",
+        "core/application.rs:3139": "each_executed_route_charges_one_slot FAILED at :3895 and lookup_web_pair_spends_two_of_four_slots FAILED at :3921",
+        "core/delegation.rs:87": "each_executed_route_charges_one_slot FAILED at :3908",
+        "core/application.rs:1227": "all four cases stayed green"
+      }
+    }
+  },
+  "lane_k2_plant_leg_closed_2026_11_14": {
+    "what": "the ceiling plant the seat said the coordinator had not reproduced",
+    "log": "/tmp/laneK2c-mut.log (room /tmp/g91room, the K2 bytes, ceilings 0/0)",
+    "control": "all 14 Python-census cases pass; whole suite `46 passed; 0 failed`",
+    "plant": "printf 'x = 1\\n' > verification/debt.py, with no rebuild (the plant changes the measured tree, not the binary)",
+    "named_red": "checks::project_python_census_counts_this_tree :: test result: FAILED. 0 passed; 1 failed; 45 filtered out - the only red of the 14",
+    "restored": "all 14 green again and WHOLE-SUITE test result: ok. 46 passed; 0 failed; 0 filtered out; PY-COUNT-AFTER 1 (only tools/package.py)",
+    "note": "a first attempt was void: the extracted name kept the trailing colon from the --list row (`checks::project_python_census_counts_this_tree:`), so every run printed `0 passed; 46 filtered out`"
   }
 }

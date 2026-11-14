@@ -719,3 +719,39 @@ sha256 `86b7d74156a11dc6ee6d70866bb480e30b75bac57c3400878c86b9f205921c3d`. The p
 `tools/harness.rs:205-231` builds candidates from the repository root and from `output/`, never from the
 directory that actually holds it. If those groups start running and go red, that red is the result, not something
 to skip past.
+
+## The lookup-budget lane was rejected on a fourth route, and the census that proved it was the coordinator's
+
+The seat (`/tmp/mm-laneL55.out`) returned `VERDICT: REJECT` on the lookup-budget bytes and kept exactly one thing
+open, which the coordinator's own mutation census had already predicted. The card for that lane named three
+`steps` increment sites. A census of `"steps"` assignments at HEAD finds four: `core/application.rs:1227` (the
+`Err` arm of `synchronous_result` — an approved model-proposed operation that FAILED), `:1232` (its `Ok` arm),
+`:3139`, and `core/delegation.rs:87`. Changing each `+ 1` into `+ 2` in turn, rebuilding, and running the four
+delivered cases by full module path gave: `:1232` → `each_executed_route_charges_one_slot` FAILED at
+`core/harness.rs:3889` (`left: 2`, `right: 1`); `:3139` → that case FAILED at `:3895` and
+`lookup_web_pair_spends_two_of_four_slots` FAILED at `:3921`; `core/delegation.rs:87` → that case FAILED at
+`:3908`; and `:1227` → **every case stayed green**. A failed approved operation can therefore charge two slots, or
+none, and nothing in the delivered coverage notices. Everything else the seat was asked about closed: the
+end-to-end four-slot arithmetic, the hosted-search exemption reaching `answer_mode::native_started` through the
+product's own `send` route, both required mutation legs with digest-proven restores, the group counts, and the
+71-group census of `4157` → `4164` checks with nothing lost. The bytes are not committed. Lane L2
+(`/tmp/g102room`, card `/tmp/laneL2-card.md`) must pin that fourth route through the product's approval path,
+prove it goes red under both a double-charge and a no-charge mutation at `:1227`, and carry the same fact into a
+delivered group check.
+
+Two witness-instrument defects surfaced during this round and are recorded because they manufacture false
+verdicts. A test binary's `--list` rows end with `": test"`, so an extractor written as `grep -oE '[a-z0-9_:]+'`
+keeps a trailing colon on every path; a `--exact` filter given that name matches nothing and prints the
+deceptively green `0 passed; 46 filtered out` (this voided the first Python-ceiling plant leg and the first named
+case leg for the MCP-roots lane, which then ran its whole suite and reported 16 `application::checks::*` failures
+that only appear outside the sanctioned `output/tools/gate` runner). The fix is `sed 's/: test$//'` followed by a
+suffix match with an explicit `UNRESOLVED` sentinel and a `NAME-COUNT`/`RESOLVED-COUNT` line. A second witness
+defect was worse: a census script had `git stash pop` fail against a `verification/RESULTS.json` that its own
+sweep had rewritten, leaving the lane paths stashed, so the next leg built a **base** binary and printed
+`0 passed; 885 filtered out` for case names that do not exist at HEAD — a leg that measured nothing while looking
+like a red. `full-check2.sh` now checks the record out before popping.
+
+The Python-ceiling plant the previous seat said was unreproduced is now measured per case (`/tmp/laneK2c-mut.log`,
+the K2 bytes with ceilings at 0/0): planting `verification/debt.py` with no rebuild makes exactly one of the 14
+Python-census cases red — `checks::project_python_census_counts_this_tree` — and removing it returns the whole
+suite to `46 passed; 0 failed`, with `tools/package.py` the only Python file left in the measured paths.
