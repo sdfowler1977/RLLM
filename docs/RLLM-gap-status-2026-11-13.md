@@ -991,3 +991,57 @@ L5 verification/live_web.rs          f5f2b18aa7f53312… -> 2575ae961fe7bc5b… 
 run discriminate: planting one `.py` moves `checks::project_python_census_counts_this_tree` from
 `13 passed; 0 failed` to `12 passed; 1 failed`, and raising the ceiling `0 → 1` in `tools/package.rs`
 moves the suite to `39 passed; 7 failed`.
+
+## Lane E6 counted correctly once the tools and the product binary were rebuilt (14 Nov)
+
+The first leg set printed `MUT m1 GROUP proposal_feedback proposal_feedback PASS (exit 0, 0s, 36 checks)`.
+Thirty-six checks is exactly the count in the untouched `verification/RESULTS.json`, and no leg had
+rebuilt `output/tools/harness` or `output/headless/RLLM` after applying the lane: the group verdicts
+measured HEAD binaries. The corrected script `/tmp/mutE6c.sh` applies the lane, builds tools and twins
+and the product, prints `HEADLESS-RC` and the product binary digest per leg, and restores by digest.
+All six legs then print a digest, and the reds name checks:
+
+| leg | source digest | unit | product binary | groups |
+|---|---|---|---|---|
+| control | `f76921f845599ac9…` | `914/914`, `19 passed; 0 failed` | `a385761505965768…` | `PASS … 56 checks` / `PASS … 277 checks` |
+| m1 drop the closest-names suggestion from the unknown notice | `7b3147354493068f…` | 6 named reds, `13 passed; 6 failed` | `5af5db89b0237097…` | `proposal_feedback FAIL (exit 101 …)` at `:1237:9` naming `chat tool_call unknown markup notice names the closest catalog names`; `proposal_recovery FAIL` at `:2060:9` same name |
+| m2 refuse an unknown catalog name as an envelope instead of a format error | `f6e4503b2ba1734d…` | `refused_markup_stays_refused` red | `7d86967bfe63d1b9…` | `chat multiple markup calls is refused without execution` / `chat multiple markup stays refused` |
+| m3 classify an unknown catalog name as a proposal | `59581405df3b0fc9…` | `unknown_catalog_name_is_a_format_error_never_an_envelope` red | `60f6554009669eba…` | `chat unknown catalog tool is a format error and never an envelope` / `chat web.search is a format error and never an envelope` |
+| m4 keep only the literal `<tool_call>` test in the embedded predicate | `300bdd041249f524…` | `GATE Rust cases passed: 914/914`, `19 passed; 0 failed` | `0eeaf704986186ae…` | `PASS … 56 checks` / `PASS … 277 checks` |
+| m5 make the catalog authority empty inside `closest_names` | `d9593504b2e29b92…` | 6 named reds | `b47cc9d69a776f13…` | both groups red, naming `chat tool_call unknown markup notice names the closest catalog names` |
+| m6 empty the joined suggestion list | `263421926f4f1da5…` | 2 named reds, `17 passed; 2 failed` | `550358fe07e9882a…` | both groups red, same check names |
+
+The census ran clean in the same room (`E6CENSUS-RC=0`) and joined group by group:
+`proposal_feedback 36 -> 56` with `NEW n=20`, `proposal_recovery 249 -> 277` (that group's report
+writes `passed` as an integer, so only the count joins). Base leg first: `output/tools/harness-tests
+cases: 37`, `twin helper tests … cases: 44`, `BASE-HEADLESS a67f12c4d3b5ccbe…`; after restore
+`cases: 43`, `cases: 47` — those deltas belong to lanes K3/K4, not E6, whose patch touches neither
+file. `4160 + 20 (proposal_feedback) + 28 (proposal_recovery) = 4208`. In the room, `verification/RESULTS.json`
+is `e2f35542e44b5509…` before and after, and the sweep refuses to rewrite a record while
+`history_migration` fails.
+
+What the room state also settles: `/tmp/g105room` sits on branch `main` at `8cedff4` and holds lane
+K3's retirement as an uncommitted diff, so `git stash -u` reverts that lane's work and the base counts
+`36 / 249` come from that tree — the same counts independent clean rooms at `9a1608c` print. The room
+no longer holds lane E6's bytes (`core/tool_format.rs` there is `5537a738…`, not the mutated
+`f76921f8…`): the durable artifacts are `/tmp/laneE6.patch` (applies at HEAD) and the leg log.
+
+One mutant survives, and it is the reason the lane is not closed: m4 removes the `Markup::Proposal`
+disjunct of the added `embedded` predicate — `matches!(reply,r#"<tool_call>"#) ||
+matches!(markup(reply),Markup::Proposal(_))` becomes the literal test alone — the product binary
+digest changes, and every instrument stays green (`914/914`, `19 passed; 0 failed`, `56 checks`,
+`277 checks`). Lane E7 (`/tmp/laneE7-card.md`) adds the missing check and must show that exact
+mutant red.
+
+The third audit seat returned `VERDICT: REJECT` (`/tmp/mm-laneE660.out`). Its high finding is the
+surviving disjunct above, accepted. Its `F-14`/`F-15` claim that legs m5 and m6 printed no product
+digest is false: the log prints `MUT m5 HEADLESS b47cc9d69a776f13…` and
+`MUT m6 HEADLESS 550358fe07e9882a…` with the named group reds under each — my table in the packet was
+lossy, and the seat adjudicated the table instead of the log. Its claim that the notice texts come
+only from the writer's report is also refuted by primary bytes: the strings exist at HEAD
+(`core/application.rs:2643`, `core/provider_calls.rs:29`, `core/tool_format.rs:78`) and the patch pins
+them (`laneE6.patch:112,113,395,451,512,747-750,840`, including the tie notice
+`Closest catalog names: drive_create, drive_read`). The prefix case it called mis-paired asserts no
+catalog name is a prefix of another, pins `drive_r` -> `["drive_read"]` and `drive_creat` ->
+`["drive_create"]` with `read_at < create_at`, then pins the tie `drive_crea` against sorted order
+(`laneE6.patch:610-640`).
