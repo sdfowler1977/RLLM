@@ -819,3 +819,77 @@ signed candidate has to carry that service declaration, or the group stays red t
 stops declaring the companion absent. It also fixes the shape of the eventual record refresh — one
 deliberate main-tree sweep with `RLLM_CHECK_APK` set, after lane M and after a newly published signed
 candidate; a scratch-room sweep would store zeros for these groups.
+
+## Two instrument defects that retired witness rows of their own (14 Nov)
+
+Both are findings about the measuring instruments, not about the product. Each invalidated rows
+published earlier in this file; the rows are retired here rather than quietly kept, and both findings
+are recorded in `closure_ledger.json`.
+
+**A group verdict measures the product binary, so a mutation leg that does not rebuild it is
+vacuous.** The verification groups drive the product itself: `verification/rrsi_loop.rs:2967` and the
+`verification/proposal_*.rs` twins each spawn `output/headless/RLLM`. The mutation scripts rebuilt
+only the units binary and the twins. Lane B5 leg b6 (sealed key list loses `invariant_scope`) printed
+`GATE Rust cases passed: 875/907`, then `test result: FAILED. 1 passed; 11 failed`, then
+`GROUP rrsi_loop rrsi_loop PASS (exit 0, 3s, 34 checks)` — a green about bytes that never changed:
+that room's product binary was dated 13:30 while those legs ran 13:47-14:05, and no leg invoked
+`headless.sh`. The same vacuity made the E6 parser mutations print
+`proposal_feedback PASS (exit 0, 0s, 56 checks)` and `proposal_recovery PASS (exit 0, 8s, 277 checks)`.
+Every group row in those two mutation censuses is retired. Each leg now runs `bash headless.sh` and
+prints `HEADLESS-RC` and the binary digest beside the source digest, voiding its group rows when that
+build fails, and the corrected legs already read differently: E6 leg m1 (catalog-name ranking removed
+from the markup parser) goes red on the product route —
+
+```
+MUT m1 GROUP proposal_feedback proposal_feedback FAIL (exit 101, 0s, unparsed checks)
+MUT m1 GROUP proposal_feedback   proposal_feedback: thread 'main' panicked at RLLM/verification/proposal_feedback.rs:1237:9: | chat tool_call unknown markup notice names the closest catalog names | notice="Rejected tool proposal \"web.search\" because that name is not in the catalog. Closest catalog names: none. Nothing was executed."
+MUT m1 GROUP proposal_recovery proposal_recovery FAIL (exit 101, 8s, unparsed checks)
+```
+
+— where the vacuous leg printed two PASS rows. The unit reds in those legs were always valid; only the
+group verdicts were worthless, and the corrected rows name the check that failed, which is what makes
+the red mean the mutation.
+
+**A before/after census must rebuild the tools and the product binary at base, not only the twins.**
+`/tmp/full-check2.sh` restored the sources after `git stash push` but re-ran the sweep driver that had
+been built from the patch, so the lane-M base sweep reported the patched rows row-for-row identical
+(`64 pass, 2 fail, 5 unavailable, 2 absent of 71 groups, 4160 checks` twice) and the reconciliation the
+audit asked for was impossible. The script now runs `bash tools/build-tools.sh` and `bash headless.sh`
+after the stash and rebuilds both after the pop. The same disclosure applies to the E6 census
+(`/tmp/g101-fullcheck.log`, run before the fix): its twin counts are base-correct because the twins are
+rebuilt at base and the lane changes no `tools/` file, but its base sweep ran the patched product
+binary, so its rows are read as a check-name join, not as base verdicts.
+
+Re-measuring lane M on bytes each named by a digest (room `/tmp/g104room`, clean-HEAD runner
+`7c9731e9d7357a32` versus patched runner `e7bba69a9ba30cd1`, companion
+`APK/RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk`, 6,932,498 bytes,
+sha256 `86b7d74156a11dc6ee6d70866bb480e30b75bac57c3400878c86b9f205921c3d`) separates four conditions
+the earlier witness had collapsed into two:
+
+| `RLLM_CHECK_APK` | clean HEAD | patched probe |
+| --- | --- | --- |
+| unset | `apk_alignment UNAVAILABLE (not executed, missing: path companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json (not on this machine))`, and the same for `turn_background` | `apk_alignment FAIL (exit 101, 0s, unparsed checks)` panicking at `verification/apk_alignment.rs:186:5` and `turn_background` at `verification/turn_background.rs:586:5`, both with `refusing to invent an artifact: PUBLICATION-MANIFEST.json delivers … as a companion file that is not on this machine; set RLLM_CHECK_APK to the APK under test` |
+| set to the companion | `apk_alignment PASS (exit 0, 3s, 11 checks)`; `turn_background FAIL (exit 101)` panicking at `verification/turn_background.rs:396:9: the packaged application declares the turn service that outlives focus` | identical to the clean-HEAD row |
+
+So the sentence above — that the probe repair leaves "the unavailable-vs-failed split … intact" — was
+wrong, and this corrects it. The artifact is resolved **twice**: once by the sweep driver in
+`tools/harness.rs published_apk`, and again inside each twin, where
+`verification/apk_alignment.rs:172-185` and `verification/turn_background.rs:570-585` build their own
+candidate lists from the manifest path's basename only, never the directory the record names. With the
+file present at exactly the path the manifest names, the twins still print "is not on this machine" and
+execute zero checks. `RLLM_CHECK_APK` already worked at clean HEAD, so the lane's measured delta is the
+availability class only. The closing repair is one candidate rule in the shared module
+`verification/twin/mod.rs` — the module every twin compiles with `mod twin;`, whose unit tests are run
+by `tools/build-verification.sh` as `twin-helper-tests` — used by both twins and covered there; it is
+dispatched to a writer (`/tmp/laneM2b-card.md`, room `/tmp/g108room` carrying the companion APK).
+**Lane M is not committed until those two group legs execute real checks with `RLLM_CHECK_APK` unset.**
+
+The record rule was confirmed from both sides in the same room: the clean-HEAD sweep wrote
+`verification/RESULTS.json` (in that clone, to
+`db8477ee3830402831157ffbf1459995bea4ddee28cef07369baf851c5afe16b`, then reverted by the census
+script's own `git checkout -q -- verification/RESULTS.json`, leaving the room and the main tree both at
+`e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0`), while the patched sweep printed
+`delivered record left untouched: a group failed` and
+`summary: 65 pass, 1 fail, 5 unavailable, 1 absent of 71 groups, 4171 checks`. A sweep in which any
+group fails never writes the record; a clean sweep does. That is why the record refresh stays a
+deliberate main-tree action rather than a side effect of witnessing.
