@@ -3061,5 +3061,28 @@
     "why_it_matters": "The published companion is now resolved by one rule shared by the runner and the twins, the artifact probe executes real checks instead of reporting unavailable, and the remaining red is a product fact about the published candidate (it declares no turn service), not an instrument crash.",
     "consequence": "turn_background stays red at these bytes and is left red; a record refresh still needs a published candidate that declares the turn service.",
     "verified_by": "/tmp/laneM2b-mut.log"
+  },
+  "a_failed_approved_operation_charge_is_invisible_to_every_delivered_group_2026_11_14": {
+    "status": "open (lane L2); lane L3 dispatched",
+    "subject": "core/application.rs failed approved-operation arm; verification/query_feedback.rs, verification/hosted_phases.rs",
+    "measured": "Room /tmp/g106room, core/application.rs 12314c6261dba03f…. leg n1 removes the increment on the failed approved-operation arm, n2 charges two. Both go red at the unit level (`MUT n1 CASES test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 895 filtered out`, naming application::harness::checks::failed_approved_operation_consumes_one_slot; same for n2) and both leave the delivered groups GREEN: `MUT n1 GROUP hosted_phases hosted_phases PASS (exit 0, 1s, 123 checks)`, `MUT n1 GROUP query_feedback query_feedback PASS (exit 0, 0s, 78 checks)`, and the same two rows under n2 (/tmp/laneL2-mut.log).",
+    "why_it_matters": "The owner decision was to raise the lookup budget to four and fix the double charge. No check in the delivered 71-group census observes the failed arm's charge, so a regression there is unmeasured in every sweep. The existing group check lookup_failed_read drives a web_read transport failure, where the web-tool site has already charged a slot, so it never reaches this arm.",
+    "remedy": "Lane L3 card (/tmp/laneL3-card.md, room /tmp/g114room at HEAD 5453b8d with laneL2.patch applied, dispatched with builds): add group checks that pin steps 0 -> 1 -> 2 through approve-then-fail, pin admission below the four-operation bound and refusal at it, pin the budget sentence built at core/harness.rs:618, and show the n1 and +2 mutations going red by name with product-binary digests.",
+    "verified_by": "/tmp/laneL2-mut.log n1/n2 blocks; seat finding L2-5 (/tmp/mm-laneL266.out)"
+  },
+  "the_lookup_budget_bound_and_its_admission_decisions_are_wired_in_the_product_2026_11_14": {
+    "status": "closed by measurement (a packet gap, not a lane gap)",
+    "subject": "core/harness.rs:547,550,554,618 and their call sites",
+    "measured": "Read in /tmp/g104room (lane L2 bytes): core/harness.rs:547 `const LOOKUP_OPERATIONS: usize = 4;`; :550 `match answer_mode::current(st){Direct=>0, Lookup=>LOOKUP_OPERATIONS, _=>TURN_OPERATIONS}`; :554 `has_operation_room(st){number(st,\"steps\")<operation_limit(st)}`; :555 `can_request_operations`; :618 the sentence `The {n}-operation lookup budget is used. Return the best verified answer now.` Product call sites: core/application.rs:2607, :2609, :2684, :3096, core/delegation.rs:29 (slots_available), core/tool_format.rs:121. Boundary cases at core/harness.rs:3948-3954 assert steps 3 admitted and steps 4 refused in both lookup and turn modes.",
+    "why_it_matters": "The audit seat recorded U-2 (`the packet never quotes the check that compares steps against the four-operation bound`) because my facts paragraph omitted the citation; the site exists, is called from six product routes, and is boundary-tested, so the finding is a packet defect rather than a lane gap.",
+    "remedy": "Seat packets quote the enforcement site and its call sites verbatim before the seat is fired.",
+    "verified_by": "grep -rn has_operation_room|LOOKUP_OPERATIONS over /tmp/g104room/core/*.rs"
+  },
+  "the_k3_k4_seat_rejected_and_two_of_its_gaps_close_by_direct_measurement_2026_11_14": {
+    "status": "partly closed; K6 legs running",
+    "subject": "/tmp/mm-laneK467.out vs the K3+K4 stack",
+    "measured": "Seat verdict: `REJECT — The repaired history group is genuinely witnessed passing all seven checks and reproducing red under the planted defect, but the packet contains a contradicted 16-leg liveness claim, incomplete printed logs for several requested claims, an unprinted broader search assertion, and a still-red whole-tree route.` Two of its gaps close by direct measurement in /tmp/g109room at the K4 bytes: (a) `const GROUPS` entries counted from tools/harness.rs:19 — 71, with `history_migration` present, `live_web` absent, and the string `python_group` nowhere in tools/harness.rs; (b) a regex census for object accessors called with a numeric-string key over verification/**/*.rs, tools/*.rs and core/*.rs returns 0 matches at the K4 bytes (`NUMERIC-STRING-ACCESSOR-MATCHES 0`), the site lane K4 having replaced the only such call.",
+    "still_open": "K3's claim that all 16 mutated predicates print their check names is contradicted by its own report for legs 6 and 7; repeating that protocol at the K4 bytes and re-witnessing `live_web --live` transport on the final bytes are lane/coordinator legs, now running as /tmp/mutK6.sh (two predicate-inversion legs at the K4 bytes plus the retired Python instrument run at HEAD on the same reference). The whole-tree route at the K4 bytes stays rc=1 because prompt_reference fails at verification/prompt_reference.rs:566:9 — a separate recorded item.",
+    "verified_by": "/tmp/mm-laneK467.out; measurements above"
   }
 }

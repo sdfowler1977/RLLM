@@ -1104,3 +1104,33 @@ outlives focus`: `summary: 65 pass, 1 fail, 5 unavailable, 1 absent of 71 groups
 remaining red is a product fact about the published candidate, not an instrument crash, and it is left
 red. With `RLLM_CHECK_APK` set the direct run exits 0 and writes its report (`SET-DIRECT-RC=0`). The
 room's delivered record is unchanged throughout: `e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0`.
+
+## A failed approved operation charges a lookup slot that no delivered group watches (14 Nov)
+
+Lane L2's mutation legs in `/tmp/g106room` (`core/application.rs` `12314c6261dba03f…`, log
+`/tmp/laneL2-mut.log`) break the charge on the failed approved-operation arm in both directions:
+
+| leg | mutation | unit verdict | `hosted_phases` | `query_feedback` |
+|---|---|---|---|---|
+| n1 | increment removed on the failed arm | `FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 895 filtered out`, naming `application::harness::checks::failed_approved_operation_consumes_one_slot` | `PASS (exit 0, 1s, 123 checks)` | `PASS (exit 0, 0s, 78 checks)` |
+| n2 | arm charges two slots | same named red | `PASS (exit 0, 1s, 123 checks)` | `PASS (exit 0, 0s, 78 checks)` |
+| n3 | success-arm charge removed | named red `each_executed_route_charges_one_slot` | `PASS (exit 0, 1s, 123 checks)` | `PASS (exit 0, 0s, 78 checks)` |
+| n4 | web-tool charge removed (`core/application.rs:3141`) | `2 passed; 2 failed`, `left: 0` / `right: 1` | `FAIL (exit 101, 1s, unparsed checks)` at `verification/hosted_phases.rs:1816:9`, `eight actual reads suppress provider search at the existing allowance` | `FAIL (exit 101, 0s, unparsed checks)` at `verification/query_feedback.rs:1167:9`, `lookup web search spends one slot` |
+
+So the delivered census does watch the web-tool charge site (n4 turns both groups red by name), but it
+does not watch the failed approved-operation arm at all: n1 and n2 are unit-only. The group check that
+sounds closest, `lookup_failed_read`, drives a `web_read` transport failure, where the web-tool site has
+already charged a slot before the failure, so it never reaches the arm under test. Lane L3
+(`/tmp/laneL3-card.md`, room `/tmp/g114room` cut from `5453b8d` with `laneL2.patch` applied) adds the
+missing group checks and must show the n1 and +2 mutations going red by name.
+
+What the audit seat (`/tmp/mm-laneL266.out`, `VERDICT: REJECT`) could not see is in the product, and is
+now quoted rather than asserted: `core/harness.rs:547 const LOOKUP_OPERATIONS: usize = 4;`, `:550`
+returning that bound for lookup mode, `:554 has_operation_room(st){number(st,"steps") < operation_limit(st)}`,
+and the sentence built at `:618` — `The {n}-operation lookup budget is used. Return the best verified
+answer now.` The predicate is called from `core/application.rs:2607`, `:2609`, `:2684`, `:3096`,
+`core/delegation.rs:29` and `core/tool_format.rs:121`, and `core/harness.rs:3948-3954` assert the
+three-admitted / four-refused boundary in both lookup and turn modes. The seat's remaining gap that
+matters for the owner's "raise to four and fix the double charge" decision is the missing `+2` mutation
+of `core/application.rs:3141`; that leg is running (`/tmp/mutL2d.sh`) and its rows will be recorded when
+they land.
