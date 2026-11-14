@@ -501,3 +501,31 @@ same+User-Agent        HTTP/1.1 200 OK
 So the mechanism the request-head lane is fixing is real, and the `User-Agent` line — not the `Accept`
 values — is what carries it. The owner's page is still not reproduced: their URL is unrecorded, so this is
 a measured mechanism, not a witnessed fix for their phone.
+
+
+## Lane E4 was rejected by its seat, and measurement settled three of its findings
+
+The seat read the E4 patch, the lane's report and the coordinator's fresh-room witness at HEAD
+(`/tmp/mm-packet46.json`, verdict in `/tmp/mm-laneE46.out`) and returned `VERDICT: REJECT`. Its three
+prior findings came back CLOSED: F03 (the arg-form grammar now keeps the dot inside the token and the
+name is classified Unknown with a catalog suggestion), F06 (the exactly-two-fields rule is documented
+and pinned), F08 (two U+200B shapes are planted and asserted `Absent`). Every judgement cites a packet
+item, which is what makes the rejection usable.
+
+Three findings were then adjudicated by measurement rather than accepted:
+
+| finding | what measurement said |
+| --- | --- |
+| E4-13, a duplicated name list | CONFIRMED as a real duplicate. `core/tool_format.rs:9` `const CATALOG:&[&str]` holds 28 names; `core/harness.rs` `TOOLS` holds 28 names; the set difference is empty in both directions. `known_tool` is `core/harness.rs:4` and the suggestion ranking iterates the duplicate at `core/tool_format.rs:507`. Two lists that must agree is a drift risk in the product, so it is a repair item, not a note. |
+| E4-07, "That file was not edited" | CONFIRMED false against HEAD. The delivered patch adds `markup_shapes` to `verification/proposal_recovery.rs`, and that group measures 249 at HEAD and 277 with the patch. The sentence is true only of the round against the previous round's bytes. |
+| E4-09, mutations run on an unsanctioned binary | CLOSED by a coordinator leg on the sanctioned runner (`/tmp/laneE4-mut.log`). Removing the `.` from the name grammar at `core/tool_format.rs:419` gives file digest `4cdad67946f5a2d834a5da6990c2ef1ac847b6489730a397b8b7ae0dbb69e5d1` - the same digest the lane reported for its own mutation - and the sanctioned gate prints `Rust cases passed: 897/898; isolated application cases: 58` with exit 1, while `application::tool_format::tests::arg_form_unknown_name_is_catalog_unknown` fails with `expected unknown, got Refused` (exit 101). The restored file digest equals the delivered `853ca629...`. |
+
+The remaining high findings are wording findings about bases: the lane's `883 -> 892 -> 896` chain is a
+`1225caf` room, while the same patch on HEAD measures `885 -> 898` with `isolated application cases: 58`,
+and `core/application.rs` is `60c7f9d6...` at HEAD because HEAD already carries the committed turn-lease
+change in that file.
+
+Lane E5 was dispatched (`/tmp/g88room`, HEAD + the E4 bytes) to delete the duplicated name list and rank
+over the authority `known_tool` consults, pin the name-boundary cases the seat flagged (sentence dot,
+hyphen, slash), state the cost of refusing a structured tool-call body that also carries `id`, run its
+mutations on the sanctioned runner, and restate every count against both bases.

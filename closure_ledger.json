@@ -2463,5 +2463,73 @@
     "exact_product_head": "At 1225caf core/network.rs builds GET <path> HTTP/1.1 / Host / Connection: close / Accept-Encoding: identity / Content-Length, and core/investigation.rs:195 adds no User-Agent and no Accept for web_read. Sending exactly that head over TLS to en.wikipedia.org:443 returned HTTP/1.1 403 Forbidden; the same head plus 'User-Agent: RLLM web reader' returned 200 OK.",
     "meaning": "The lane J mechanism is real and the User-Agent line is the load-bearing half, not the Accept values. The owner's 403 is still not reproduced because their URL is unrecorded, so no causation is claimed for their page.",
     "action": "Carried into the lane J3 audit packet as coordinator evidence. Any claim that Accept changes fixed the phone failure is unsupported by this probe."
+  },
+  "lane_e4_seat_reject_2026_11_14": {
+    "verdict": "REJECT",
+    "packet": "/tmp/mm-packet46.json",
+    "output": "/tmp/mm-laneE46.out",
+    "prior_findings": {
+      "F03": "CLOSED",
+      "F06": "CLOSED",
+      "F08": "CLOSED"
+    },
+    "adjudicated_by_measurement": {
+      "E4-13": "CONFIRMED duplicate: core/tool_format.rs:9 CATALOG 28 names vs core/harness.rs TOOLS 28 names, empty set difference both directions; known_tool core/harness.rs:4; ranking iterates CATALOG core/tool_format.rs:507",
+      "E4-07": "CONFIRMED false at HEAD: patch adds markup_shapes to verification/proposal_recovery.rs; group 249 at HEAD -> 277 with patch",
+      "E4-05": "room-only chain 883->892->896; HEAD witness 885->898 isolated 58",
+      "E4-08": "core/application.rs is 60c7f9d6046a2a72ab5699bb41d149305b02e915461e6f7bbcc873142fff84fb at HEAD, not ae3615d6...; git apply needed no fuzz"
+    }
+  },
+  "lane_e4_sanctioned_mutation_2026_11_14": {
+    "log": "/tmp/laneE4-mut.log",
+    "file": "core/tool_format.rs:419",
+    "before": "853ca6298cf8e3524dffc550fdf8aa743b88f947b37968e98236e5b9f284d987",
+    "mutated": "4cdad67946f5a2d834a5da6990c2ef1ac847b6489730a397b8b7ae0dbb69e5d1",
+    "restored": "853ca6298cf8e3524dffc550fdf8aa743b88f947b37968e98236e5b9f284d987",
+    "gate_on_mutant": "Rust cases passed: 897/898; isolated application cases: 58 (exit 1)",
+    "named_case": "application::tool_format::tests::arg_form_unknown_name_is_catalog_unknown FAILED expected unknown, got Refused (exit 101)",
+    "note": "mutant digest equals the digest the lane reported for its own mutation i"
+  },
+  "lane_e5_dispatched_2026_11_14": {
+    "room": "/tmp/g88room",
+    "base": "HEAD 6653059ad244 + /tmp/laneE4.patch (git apply rc 0)",
+    "card": "/tmp/laneE5-card.md",
+    "report": "/tmp/laneE5-report.md",
+    "log": "/tmp/laneE5.log",
+    "scope": [
+      "remove duplicated CATALOG list, rank over the known_tool authority",
+      "pin name-boundary cases (sentence dot, hyphen, slash)",
+      "state the cost of refusing a JSON tool-call body carrying id",
+      "sanctioned-runner mutations",
+      "counts against both bases"
+    ]
+  },
+  "lookup_budget_lane_dispatched_2026_11_14": {
+    "room": "/tmp/g87room",
+    "base": "HEAD 6653059ad244, no prior lane bytes",
+    "card": "/tmp/laneL-card.md",
+    "report": "/tmp/laneL-report.md",
+    "log": "/tmp/laneL.log",
+    "why": "owner chose 'Raise to 4 + fix double-charge'; the 4 is committed at core/harness.rs:547, the double-charge half is unwitnessed",
+    "measured_at_HEAD": {
+      "LOOKUP_OPERATIONS": "core/harness.rs:547 = 4",
+      "TURN_OPERATIONS": "core/harness.rs:548 = 8",
+      "steps_increments": [
+        "core/application.rs:1232",
+        "core/application.rs:3139",
+        "core/delegation.rs:87"
+      ],
+      "steps_resets": [
+        "core/application.rs:2047",
+        "core/application.rs:2088"
+      ],
+      "group_baselines": {
+        "hosted_phases": 118,
+        "query_feedback": 74,
+        "local_feedback": 29,
+        "carry_flow": 23,
+        "permission_modes": 27
+      }
+    }
   }
 }
