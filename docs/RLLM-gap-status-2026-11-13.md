@@ -775,3 +775,47 @@ error that happens to begin with that text is replaced by the credential sentenc
 raw paste and the three emitted `Authorization` headers are byte-identical. Lane G5 (`/tmp/g103room`,
 `/tmp/laneG5-card.md`) was dispatched with exactly those items. This lane carries the MCP behaviour the owner
 called mandatory, so it is not skipped for speed.
+
+## The probe stopped lying about the companion APK, and that exposed a real defect in the published candidate
+
+Lane M (`/tmp/laneM2.patch`, one path `tools/harness.rs`, +88/−6, patch digest prefix `303f06a9aabb4907`)
+was witnessed in a fresh clone of HEAD (`/tmp/g104room`, `/tmp/laneM-verify.log`). At clean HEAD the
+prerequisite probe reported both APK groups as unavailable:
+
+```
+BEFORE-PROBE apk_alignment UNAVAILABLE (not executed, missing: path companion APK
+  RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json
+  (not on this machine); path output/headless/RLLM (bash headless.sh))
+```
+
+while that file is on this machine in `APK/` (6,932,498 B, sha256 `86b7d74156a11dc6…`) — the probe
+looked only at the project root and `output/*`. The patch adds the record-relative path, the bare name
+at the project root and `APK/<basename>`, keeps `RLLM_CHECK_APK` as an override, and reserves
+"(not on this machine)" for the case where no candidate exists. Counts moved `harness-tests 37 → 41`,
+`package-tests 46`, `twin helper tests 44`, units unchanged `895/895; isolated application cases: 61`,
+delivered record digest unchanged. The four added cases resolve to full module paths and pass
+(`4 passed; 0 failed; 37 filtered out`, 4+37 = 41 = the patched total). With the companion copied into
+the room, both groups now **execute and read FAIL (exit 101)** through their own subject panics that
+demand `RLLM_CHECK_APK` — the unavailable-vs-failed split is intact.
+
+The mutation census (`/tmp/mutM.sh`) removed one resolution candidate per leg and each leg went red on
+exactly the intended case, with `bash tools/build-tools.sh` itself exiting 1 and naming the case
+(`40 passed; 1 failed`); restores are byte-exact to the delivered digest `17de48b8feb144f3…` and the
+restored build prints `41 passed; 0 failed`.
+
+Then the leg that matters for the APK work. With the companion present **and** `RLLM_CHECK_APK` set to it:
+
+```
+APK-ENV apk_alignment PASS (exit 0, 3s, 11 checks)
+APK-ENV turn_background FAIL (exit 101, 0s, unparsed checks)
+APK-ENV   turn_background: thread 'main' panicked at RLLM/verification/turn_background.rs:396:9:
+  the packaged application declares the turn service that outlives focus
+```
+
+So `apk_alignment` executes 11 real checks and passes against the published candidate, while
+`turn_background` fails because **the 2026-11-10 candidate does not declare the turn service that
+outlives focus**. That is a product defect in the published candidate, not an instrument gap: the next
+signed candidate has to carry that service declaration, or the group stays red the moment the probe
+stops declaring the companion absent. It also fixes the shape of the eventual record refresh — one
+deliberate main-tree sweep with `RLLM_CHECK_APK` set, after lane M and after a newly published signed
+candidate; a scratch-room sweep would store zeros for these groups.

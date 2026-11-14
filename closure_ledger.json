@@ -2927,5 +2927,26 @@
     ],
     "code_status": "NOT committed",
     "next": "lane G5 dispatched (room /tmp/g103room, card /tmp/laneG5-card.md) with these five items and the coordinator's witness numbers"
+  },
+  "lane_m_witnessed_2026_11_14": {
+    "status": "witnessed, seat pending",
+    "lane": "M - group prerequisite probe (tools/harness.rs required_inputs/published_apk)",
+    "patch": "/tmp/laneM2.patch 5947 B sha256-prefix 303f06a9aabb4907; numstat tools/harness.rs +88/-6; patched file digest 17de48b8feb144f372f5f0183680f242c94a803fc34bdebcd4815715178ce88b; git apply --check on HEAD 7b9e9c3 OK",
+    "room": "/tmp/g104room fresh clone BASE-SHA dcd569795a90, tooling symlinked, APPLY-RC=0",
+    "defect_measured_at_head": "BEFORE-PROBE apk_alignment UNAVAILABLE and turn_background UNAVAILABLE, both citing 'companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json (not on this machine)' while the file is on this machine at APK/ (6932498 B, sha256 86b7d74156a11dc6ee6d70866bb480e30b75bac57c3400878c86b9f205921c3d)",
+    "instrument_counts": "tool tests harness-tests 37 -> 41, package-tests 46 unchanged, twin helper tests 44 unchanged; units unchanged 895/895; isolated application cases: 61; delivered record digest unchanged e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0",
+    "named_cases": "4 patch-added cases resolved to full module path and passed: 4 passed; 0 failed; 37 filtered out (4+37=41=patched total)",
+    "after_patch_probe": "both groups now execute and read FAIL (exit 101) via the twins' own panic demanding RLLM_CHECK_APK - the unavailable-vs-failed split is preserved",
+    "mutation_census": "/tmp/mutM.sh four anchors, each measured unique first; each leg red by exactly the intended case (3 passed; 1 failed; 37 filtered out) and bash tools/build-tools.sh itself exited 1 naming the case (40 passed; 1 failed); restores byte-exact to 17de48b8...; restored gate 41 passed; 0 failed",
+    "log": "/tmp/laneM-verify.log /tmp/laneM-mut.log /tmp/g104-fullcheck.log",
+    "not_yet_done": "seat (/tmp/mm-packet58.json) not yet run; nothing committed for this lane"
+  },
+  "published_candidate_missing_turn_service_2026_11_14": {
+    "status": "open product finding - blocks a green record refresh",
+    "measured": "with the companion APK present in the room AND RLLM_CHECK_APK set to it: apk_alignment PASS (exit 0, 3s, 11 checks); turn_background FAIL (exit 101) with the twin's own panic at verification/turn_background.rs:396 'the packaged application declares the turn service that outlives focus'",
+    "subject": "/home/shawn/RLLM/APK/RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk (the companion named by PUBLICATION-MANIFEST.json)",
+    "consequence": "the published 2026-11-10 candidate cannot satisfy the turn_background group; the next signed candidate must declare the turn service that outlives focus, otherwise that group stays red once the probe stops declaring the companion absent",
+    "also": "the two APK groups can only be counted in the delivered record by a deliberate main-tree sweep with RLLM_CHECK_APK set; a scratch-room sweep stores 0 for them (see delivered_record_stale_against_twins_2026_11_14)",
+    "log": "/tmp/laneM-verify.log (APK-ENV lines)"
   }
 }
