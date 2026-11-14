@@ -459,3 +459,23 @@ points a reader at the deleted files — `:896`, `:901`, `:910`, `:915`, `:920`,
 "Optional live verification is available as `python3 verification/live_web.py --live`" — a sentence that
 names a file the patch deletes. That reference is carried as an open item for the lane, not fixed under
 its hands.
+
+### The mailbox APK audit, adjudicated by measurement (`.qwen/Mailbox/RLLM__APK-Audit__2026-11-14__02-11-34Z.md`)
+
+The audit reviewed the uploaded package against the build already on the owner's phone. Its claims are
+artifact-level, so each one was re-measured here rather than accepted or waved away.
+
+| audit item | measured here | state |
+|---|---|---|
+| F01 version code goes backward (1794270238 vs the installed 1794275497) | The uploaded file is the one this tree built: `APK/RLLM__Lab-46e392e__2026-11-14__01-30-59Z.apk` sha256 `a0254af2048e91eee1dcbcc39b68b4b37e04971dac4830d3ff6a0f75e9eed4a0`, and `/tmp/g50-chain.log:225` prints `apk_rc=0` with `"version": 1794270238`. The installed package `b14f8139…` is not on this machine. | CONFIRMED — the release build must be numbered above every distributed build |
+| F02 MCP authentication diagnostics missing | `strings` on the package's arm64 and x86-64 `libclient.so`: `Invalid MCP bearer token format.` 0, `The endpoint rejected the bearer token RLLM sent.` 0, `MCP HTTP 401.` 0, `Server bearer token (required if the server uses authentication)` 0, and the older `Bearer token (optional)` 1. The same reads at HEAD in `core/`: 0, 0, 0, 0 and 1. So the package matches this tree — the capability is missing from *both*. | CONFIRMED as an open item, and it is in flight: lane G's patch introduces all four strings (10/4/3/3 occurrences) and changes the label |
+| V01 duplicate `Content-Encoding` repair may have been lost | Their named string `Duplicate content encoding` exists in **no commit of any ref here** (`git log --all -S` returns nothing), and neither does the MCP text above — the installed build was produced from bytes this repository never contained. But the behaviour they ask about is genuinely absent at HEAD: the buffered parser arms duplicate `transfer-encoding` (`Duplicate transfer encoding`) and duplicate `content-length` (`Duplicate response length`) and has no duplicate arm for `content-encoding` (`core/network.rs:420`-`:463`), so two `Content-Encoding` headers are accepted. Lane G adds `Duplicate buffered content encoding` with cases for a final head, an informational head, gzip on both the decoded and coded routes, and single-field passes that must still pass. | CONFIRMED as a HEAD defect; closed by lane G's behaviour, not by restoring their string |
+| R15 naming debt (`Advanced options`, `profile_advanced`) | Both present in the package's libraries (1 and 1) and at HEAD (1 and 4 in `core/`, at `core/harness.rs:337`, `:338`, `:435`). | OPEN, carried in the debt backlog |
+| F03 queued service start can wake a completed turn | Not addressed by `689994a`. The seat recorded no measured main-looper serialisation, and the audit's interleaving (`begin` queues, `finish` sees no `current`, `onStartCommand` then promotes) is exactly the gap. | OPEN — queued for the next Android lane |
+| F04 background execution still depends on Activity lifetime | `689994a` keeps `Activity.onDestroy → TurnService.finish` and `onTaskRemoved → stopSelf`; durable ownership was not moved. | OPEN as a scoping decision: either move ownership into a product-owned component or state the limit in the product |
+| F05 foreground-start failure silently swallowed | `689994a` routes a failed core lease through `turnProtectionLost` with a visible notice and refuses a start whose lease extra is absent, but the packaged `begin` RuntimeException handler and `onStartCommand`'s own catch still return no result to the task owner. | PARTLY closed — the visible-failure half for a lease failure is committed, the service-start refusal half is open |
+
+The audit's provenance point is the one that changes the plan: the package the owner runs cannot be bound to
+any commit in this repository, so the next test build has to be numbered above `1794275497` **and** carry the
+MCP authentication surface that build already shows, or the upgrade silently drops a capability. That makes
+lane G a prerequisite for the test APK, not an optional improvement.
