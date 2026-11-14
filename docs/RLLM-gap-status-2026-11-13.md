@@ -666,3 +666,56 @@ Lane E6 was dispatched (`/tmp/g95room`, HEAD + the E5 bytes) to pin the empty-na
 cite those pre-existing declarations with their HEAD digests instead of implying the patch installed them, and
 to pin the delivered notice text for each route through the product's own paths, with the two group legs
 re-measured on both sides in its own room.
+
+## The markup lane's bytes are committed, and the delivered record was found stale
+
+The web-request-identity lane (J3, `/tmp/laneJ3.patch`, 27,022 B, seven paths) was witnessed in a fresh clone of
+HEAD (`/tmp/g93room`, `/tmp/laneJ3-verify.log`): `885/885; isolated application cases: 58` → `895/895; isolated
+application cases: 61`, the eight named `--exact` cases passing (`8 passed; … 887 filtered out`),
+`http_framing PASS (exit 0, 0s, 192 checks)` against a HEAD baseline of 189, 72 twins built, and the delivered
+record digest unchanged. Because `core/network.rs` and `core/application.rs` sit under nearly every group, the
+same bytes were also run through the whole 71-group check on both sides (`/tmp/g93-fullcheck.log`):
+`64 pass, 0 fail, 7 unavailable, 0 absent … 4157 checks` before and `4160 checks` after, the only count change
+being `http_framing base=189 patched=192`, and **no check name disappeared in any group**. The same 7 groups read
+UNAVAILABLE on both sides, so the patch cannot have made them appear or vanish. The seat
+(`/tmp/mm-laneJ354.out`) returned `VERDICT: ACCEPT` with every carried finding closed, and the bytes are now
+HEAD: `48ad494 Send the owned User-Agent line and pin the Accept line each route writes` (7 files,
+311 insertions, 7 deletions). Before committing, every other lane patch (L, G4, B5, E5, K2) was re-applied on
+top of these bytes in `/tmp/stackchk` and still applied cleanly. Nothing in this record says the owner's phone
+web search now completes: the `HTTP 403` screenshot is a website's response to a request, and the live-internet
+leg is still unwitnessed.
+
+A measurement made while baseline-sweeping a scratch room found a defect in the instrument, not in a lane. The
+committed `verification/RESULTS.json` understates the twins committed beside it: `rrsi_loop` executes 23 checks
+in a fresh room but the record stores 15, and `self_rebuild` executes 12 against a recorded 9. Three more groups
+(`field_flow`, `flags_flow`, `product_flow`) print `0` executed checks in a scratch room while the record stores
+37/28/37, because their twins need a published-controller reference that a scratch room does not build. Nothing
+is broken by it — `tools/gate.rs:926-928` reads that record only for pinned selected-unit filters — but every
+total quoted from the record is understated, and the witness rule freezes its digest, so refreshing it has to be
+a deliberate measured step rather than a side effect of some lane.
+
+The lookup-budget lane (L, `/tmp/laneL.patch`, 18,483 B, `74750ee7e6ab110a`) was witnessed at HEAD
+(`/tmp/g94room`, `/tmp/laneL-verify.log`): `885/885` → `888/888`, the three new cases passing by full module path,
+`hosted_phases PASS (exit 0, 1s, 122 checks)` against 118 and `query_feedback PASS (exit 0, 0s, 77 checks)`
+against 74, record digest unchanged, and a 71-group census of `4157` → `4164` checks with those two groups the
+only movers and zero lost checks (`/tmp/g94-fullcheck.log`). The card's own census of `steps` increment sites was
+wrong by one: it named three, and a census of `"steps"` assignments at HEAD finds four —
+`core/application.rs:1227`, `:1232`, `:3139` and `core/delegation.rs:87` — so the double-charge mutation census
+runs all four plus an inert control leg. That census also exposed a witness defect worth recording: the first
+attempt ran in a room whose lane paths were still stashed, because the census script's `git stash pop` had failed
+against a `verification/RESULTS.json` the sweep had rewritten. It therefore built a **base** binary and printed
+`0 passed; 885 filtered out` for case names that do not exist at HEAD — a leg that measured nothing while looking
+like a red. The room was repaired (record checked out, stash popped, room diff digest re-measured at
+`74750ee7e6ab110a`), the awk pattern fixed so it matches the spaced `steps + 1`, and the leg re-run.
+
+Two instrument repairs are in flight on their own lanes. Lane K3 (`/tmp/g96room`) answers the one point the
+Python-retirement seat kept open — whether each of the 16 surviving `check()` calls asserts the same predicate as
+its deleted Python namesake and whether each can actually go red, given that the Rust helper
+(`verification/live_web.rs:513`) aborts the whole twin on a false predicate instead of recording a failed row.
+Lane M (`/tmp/g99room`) repairs the companion-APK probe: `apk_alignment` and `turn_background` read UNAVAILABLE
+with the wording `not on this machine`, yet this machine holds the exact file the publication manifest names —
+`APK/RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk`, 6,932,498 bytes,
+sha256 `86b7d74156a11dc6ee6d70866bb480e30b75bac57c3400878c86b9f205921c3d`. The probe at
+`tools/harness.rs:205-231` builds candidates from the repository root and from `output/`, never from the
+directory that actually holds it. If those groups start running and go red, that red is the result, not something
+to skip past.

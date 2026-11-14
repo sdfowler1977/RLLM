@@ -2717,5 +2717,97 @@
     "report": "/tmp/laneE6-report.md",
     "mission": "empty-name and prefix-name markup cases; cite core/application.rs:2/:21 as pre-existing HEAD declarations with digests; pin the phase-dependent notice per route through product routes; re-measure proposal_feedback and proposal_recovery on both sides in its own room",
     "seat_gap_being_closed": "E5-01/E4-01, E5-03, E5-04, E5-05"
+  },
+  "lane_j3_witnessed_2026_11_14": {
+    "lane": "J (web request identity: User-Agent + Accept lines)",
+    "room": "/tmp/g93room - fresh clone of HEAD 1225caf, tooling symlinked, /tmp/laneJ3.patch (27022 B) applied",
+    "patch": {
+      "bytes": 27022,
+      "paths": [
+        "core/application.rs",
+        "core/gateway.rs",
+        "core/investigation.rs",
+        "core/mcp_lifecycle.rs",
+        "core/network.rs",
+        "core/provider.rs",
+        "verification/http_framing.rs"
+      ]
+    },
+    "witness_log": "/tmp/laneJ3-verify.log",
+    "measured": {
+      "units_base": "Rust cases passed: 885/885; isolated application cases: 58",
+      "units_patched": "Rust cases passed: 895/895; isolated application cases: 61",
+      "named_cases": "8 passed; 0 failed; 0 measured; 887 filtered out",
+      "group": "http_framing PASS (exit 0, 0s, 192 checks) against a HEAD baseline of 189",
+      "twins": 72,
+      "delivered_record": "e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0 unchanged"
+    },
+    "census": {
+      "log": "/tmp/g93-fullcheck.log",
+      "base_sweep": "64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4157 checks",
+      "patched_sweep": "64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4160 checks",
+      "count_changes": [
+        "http_framing base=189 patched=192"
+      ],
+      "lost_checks": "none in any of the 71 groups",
+      "unavailable_note": "the same 7 groups read UNAVAILABLE on both sides (room-built published-controller references and the companion APK)"
+    },
+    "stack_check": "lane L, G4, B5, E5 and K2 patches all still apply on top of these bytes (measured in /tmp/stackchk)"
+  },
+  "lane_j3_seat_accept_2026_11_14": {
+    "seat": "MiniMax-M3 audit seat, packet /tmp/mm-packet54.json (rules /tmp/mmA49.txt), verdict /tmp/mm-laneJ354.out",
+    "verdict": "ACCEPT",
+    "carried_findings_closed": "every finding the previous seat kept is closed in these bytes; the seat cites the packet item behind each judgement",
+    "adjudication": "the coordinator's witness (message 5) reproduces every count the lane reports, including the 4157-to-4160 census with zero lost checks; nothing was accepted on prose alone"
+  },
+  "lane_j3_committed_2026_11_14": {
+    "commit": "48ad494 Send the owned User-Agent line and pin the Accept line each route writes",
+    "stat": "7 files, 311 insertions, 7 deletions",
+    "rule_note": "code committed alone; claim files are never staged with code, and .qwen/skill-curator.json is never staged",
+    "not_claimed": "no sentence in the lane report or this record says the owner's phone web search now completes; the 403 observed on the phone is a website response, and the live-internet leg is still not witnessed"
+  },
+  "delivered_record_stale_against_twins_2026_11_14": {
+    "finding": "the committed verification/RESULTS.json understates the twins that are committed next to it",
+    "measured": {
+      "rrsi_loop": "23 executed in a fresh room vs 15 recorded",
+      "self_rebuild": "12 executed vs 9 recorded"
+    },
+    "also": "three groups (field_flow, flags_flow, product_flow) print 0 executed checks in a scratch room while the record shows 37/28/37; they need a published-controller reference that the room does not build",
+    "why_nothing_is_broken": "tools/gate.rs:926-928 reads RESULTS.json only for pinned selected-unit filters, so no gate consumes these totals; the witness rule freezes the record digest at e2f35542e44b5509, so lanes cannot refresh it",
+    "status": "OPEN decision - a deliberate record refresh must be its own measured step, not a side effect of a lane"
+  },
+  "lane_m_dispatched_2026_11_14": {
+    "lane": "M (companion-APK probe in tools/harness.rs)",
+    "room": "/tmp/g99room (fresh clone at HEAD, no patch)",
+    "card": "/tmp/laneM-card.md",
+    "why": "apk_alignment and turn_background read UNAVAILABLE with the row 'missing: path companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json (not on this machine)' although this machine holds that exact file: APK/RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk, 6932498 bytes, sha256 86b7d74156a11dc6ee6d70866bb480e30b75bac57c3400878c86b9f205921c3d",
+    "measured_cause": "the companion probe at tools/harness.rs:205-231 builds candidates from the repository root and from each entry of output/, never from the directory that holds the companion",
+    "guard": "a group that starts running and goes RED is the expected outcome and must be reported as a red; the reader census in verification/apk_alignment.rs:41-49 is satisfiable at HEAD and must not be weakened"
+  },
+  "lane_l_witnessed_2026_11_14": {
+    "lane": "L (lookup budget: one executed operation spends one slot)",
+    "room": "/tmp/g94room - fresh clone of HEAD, /tmp/laneL.patch (18483 B, 74750ee7e6ab110a) applied",
+    "witness_log": "/tmp/laneL-verify.log",
+    "measured": {
+      "units_base": "Rust cases passed: 885/885; isolated application cases: 58",
+      "units_patched": "Rust cases passed: 888/888; isolated application cases: 58",
+      "named_cases": "3 passed; 0 failed; 0 measured; 885 filtered out; the three full module paths are application::harness::checks::each_executed_route_charges_one_slot, application::harness::checks::hosted_lookup_search_leaves_steps_unchanged, application::harness::checks::lookup_web_pair_spends_two_of_four_slots",
+      "groups": "hosted_phases PASS (exit 0, 1s, 122 checks) against 118; query_feedback PASS (exit 0, 0s, 77 checks) against 74",
+      "twins": 72,
+      "delivered_record": "e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0 unchanged"
+    },
+    "census": {
+      "log": "/tmp/g94-fullcheck.log",
+      "base_sweep": "64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4157 checks",
+      "patched_sweep": "64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4164 checks",
+      "count_changes": [
+        "hosted_phases base=118 patched=122",
+        "query_feedback base=74 patched=77"
+      ],
+      "lost_checks": "none in any of the 71 groups"
+    },
+    "card_correction": "the card named three steps increment sites; a census of `\"steps\"` assignments at HEAD finds four - core/application.rs:1227, :1232, :3139 and core/delegation.rs:87 - so the mutation census runs all four plus an inert control leg (/tmp/mutL2.sh, /tmp/laneL2-mut.log)",
+    "witness_defect_found": "the first mutation leg was void: the room still had the lane paths stashed (the census script's stash pop failed on a rewritten verification/RESULTS.json), so it built a BASE binary and printed '0 passed; 885 filtered out' for names that do not exist at HEAD; also its awk pattern /\\+1/ cannot match the spaced `steps + 1` at core/application.rs:3139. The room was repaired (git checkout of RESULTS.json, stash popped, room diff digest re-measured at 74750ee7e6ab110a) and the leg rewritten.",
+    "seat": "PENDING"
   }
 }
