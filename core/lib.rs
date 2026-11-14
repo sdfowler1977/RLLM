@@ -378,6 +378,37 @@ fn response(v: &Json) -> Result<Json> {
     Ok(s(&reply.text))
 }
 
+fn turn_lease(window: i64) -> i64 {
+    window.min(600000).max(30000)
+}
+fn turn_elapsed(elapsed_ms: i64) -> String {
+    let total = (elapsed_ms / 1000).max(0);
+    if total < 60 {
+        format!("{total}s")
+    } else {
+        format!("{}m {}s", total / 60, total % 60)
+    }
+}
+fn whole_ms(v: &Json, key: &str) -> Result<i64> {
+    let text = match v.get(key)? {
+        Num(text) | Str(text) => text.as_str(),
+        _ => return Err(format!("Invalid {key}")),
+    };
+    text.parse::<i64>().map_err(|_| format!("Invalid {key}"))
+}
+fn turn_clock(v: &Json) -> Result<Json> {
+    let mut fields = Vec::new();
+    if v.get("window_ms").is_ok() {
+        fields.push(("lease_ms", Num(turn_lease(whole_ms(v, "window_ms")?).to_string())));
+    }
+    if v.get("elapsed_ms").is_ok() {
+        fields.push(("text", s(&turn_elapsed(whole_ms(v, "elapsed_ms")?))));
+    }
+    if fields.is_empty() {
+        return Err("Turn clock needs a window or an elapsed time".into());
+    }
+    Ok(obj(fields))
+}
 fn operation(input: &str) -> Result<Json> {
     let v = parse(input)?;
     match field(&v, "op")? {
@@ -443,6 +474,7 @@ fn operation(input: &str) -> Result<Json> {
         "self_handoff" => self_build::handoff(&v),
         "self_commit" => self_build::commit(&v),
         "self_resume" => self_build::resume(&v),
+        "turn_clock" => turn_clock(&v),
         _ => Err("Unknown operation".into()),
     }
 }
@@ -550,6 +582,39 @@ mod checks {
         assert_eq!(
             envelope(r#"{"op":"validate","value":{"ready":true}}"#),
             r#"{"value":{"ready":true}}"#
+        );
+    }
+    #[test]
+    fn turn_clock_clamps_the_lease_and_formats_elapsed_time() {
+        let low = operation(r#"{"op":"turn_clock","window_ms":1,"elapsed_ms":0}"#).unwrap();
+        assert_eq!(low.get("lease_ms").unwrap(), &Num("30000".into()));
+        assert_eq!(low.get("text").unwrap().text().unwrap(), "0s");
+        let high = operation(r#"{"op":"turn_clock","window_ms":9000000,"elapsed_ms":125000}"#).unwrap();
+        assert_eq!(high.get("lease_ms").unwrap(), &Num("600000".into()));
+        assert_eq!(high.get("text").unwrap().text().unwrap(), "2m 5s");
+        let mid = operation(r#"{"op":"turn_clock","window_ms":120000,"elapsed_ms":59000}"#).unwrap();
+        assert_eq!(mid.get("lease_ms").unwrap(), &Num("120000".into()));
+        assert_eq!(mid.get("text").unwrap().text().unwrap(), "59s");
+        let minute = operation(r#"{"op":"turn_clock","elapsed_ms":60000}"#).unwrap();
+        assert_eq!(minute.get("text").unwrap().text().unwrap(), "1m 0s");
+        assert!(minute.get("lease_ms").is_err());
+        let edge = operation(r#"{"op":"turn_clock","window_ms":30000}"#).unwrap();
+        assert_eq!(edge.get("lease_ms").unwrap(), &Num("30000".into()));
+        let cap = operation(r#"{"op":"turn_clock","window_ms":600000}"#).unwrap();
+        assert_eq!(cap.get("lease_ms").unwrap(), &Num("600000".into()));
+        let over = operation(r#"{"op":"turn_clock","window_ms":600001}"#).unwrap();
+        assert_eq!(over.get("lease_ms").unwrap(), &Num("600000".into()));
+        assert_eq!(
+            operation(r#"{"op":"turn_clock","elapsed_ms":-1500}"#).unwrap().get("text").unwrap().text().unwrap(),
+            "0s"
+        );
+        assert_eq!(
+            operation(r#"{"op":"turn_clock"}"#).unwrap_err(),
+            "Turn clock needs a window or an elapsed time"
+        );
+        assert_eq!(
+            operation(r#"{"op":"turn_clock","window_ms":"no"}"#).unwrap_err(),
+            "Invalid window_ms"
         );
     }
     #[test]

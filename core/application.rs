@@ -1625,6 +1625,7 @@ fn event_inner(v: &Json) -> Result<Json> {
     let observation_format=boolean(get(&st,"operation_expected"),"observation_format");
     approval_rules::namespace(&mut st,&text(v,"root"));harness_rules::identity_refresh(&mut st);
     let requested_action = field(v, "action")?;
+    if requested_action=="turn_protection"{put(&mut st,"notice",s("Background protection was lost. The turn still runs."));put(&mut st,"notice_error",Bool(true));let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));}
     let action = if matches!(requested_action,"back"|"close")&&get(&st,"media_expected")!=&Null{"cancel"}else if matches!(requested_action,"approve_session"|"approve_always"|"approve_matching_rule"){"approve"}else{requested_action};
     let voice_callback=voice::callback(action);
     let oauth_callback=oauth::callback(action,inputs);
@@ -1842,7 +1843,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 let partial=text(inputs,"stream_text");
                 if boolean(&st,"busy") && text(&st,"request_chat")==text(&st,"active") && partial.len()<=1024*1024 {
                     throughput::observe(&mut st,inputs,Some(&partial));
-                    put(&mut st,"stream_text",s(&partial));put(&mut st,"notice",s("Receiving reply…"));
+                    put(&mut st,"stream_text",s(&partial));if !boolean(&st,"notice_error"){put(&mut st,"notice",s("Receiving reply…"));}
                 }
             },
             "rate_tick" => {throughput::observe(&mut st,inputs,None);},
@@ -4001,6 +4002,28 @@ mod checks {
         let state=get(&cancelled,"state");
         let late=event(&obj(vec![("state",state.clone()),("action",s("rate_tick")),("inputs",obj(vec![("model_ticket",s(&old_ticket)),("elapsed_ms",Num("5000".into())),("draft",s("stale"))]))])).unwrap();
         assert_eq!(get(&late,"state"),state);
+    }
+    #[test]
+    fn turn_protection_notice_keeps_the_running_model_turn() {
+        let sent=step(configured(),"send",obj(vec![("draft",s("hello"))]));
+        let ticket=text(get(&sent,"state"),"model_expected");
+        assert!(boolean(get(&sent,"state"),"busy"));
+        assert!(!ticket.is_empty());
+        let noted=step(get(&sent,"state").clone(),"turn_protection",Null);
+        let st=get(&noted,"state");
+        assert_eq!(text(st,"notice"),"Background protection was lost. The turn still runs.");
+        assert!(boolean(st,"notice_error"));
+        assert_eq!(text(st,"model_expected"),ticket);
+        assert!(boolean(st,"busy"));
+        assert!(get(&noted,"effect")==&Null);
+        assert_eq!(text(get(&noted,"ui"),"visible_status"),"Background protection was lost. The turn still runs.");
+        let progress=step(st.clone(),"model_progress",obj(vec![("stream_text",s("partial"))]));
+        let kept=get(&progress,"state");
+        assert_eq!(text(kept,"notice"),"Background protection was lost. The turn still runs.");
+        assert!(boolean(kept,"notice_error"));
+        assert_eq!(text(kept,"stream_text"),"partial");
+        assert_eq!(text(kept,"model_expected"),ticket);
+        assert!(boolean(kept,"busy"));
     }
     #[test]
     fn rate_history_is_scoped_and_ignores_provider_usage() {

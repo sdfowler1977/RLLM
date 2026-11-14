@@ -48,7 +48,7 @@ fn run(project: &Path, apk_argument: Option<&str>) -> Vec<String> {
     check(
         &mut passed,
         "the promotion is started from the model-effect path and asks once for reply permission",
-        activity.contains("turnActive=true;startRateClock(token,e.optString(\"model_ticket\"),started);TurnService.begin(this,e.optString(\"model_ticket\"),started,turnLease(e),\"Replying\");askReplyNotifications();"),
+        activity.contains("turnActive=true;startRateClock(token,e.optString(\"model_ticket\"),started);protectionNoted=false;try{if(TurnService.begin(this,e.optString(\"model_ticket\"),started,turnLease(e),\"Replying\")==TurnService.REFUSED)turnProtectionLost();}catch(Exception unavailable){turnProtectionLost();}askReplyNotifications();"),
     );
     check(
         &mut passed,
@@ -70,15 +70,29 @@ fn run(project: &Path, apk_argument: Option<&str>) -> Vec<String> {
     );
     check(
         &mut passed,
-        "the held window is clamped to the turn deadline in both the fresh and extended paths",
-        service.matches("Math.max(MIN_LEASE,Math.min(MAX_LEASE,window))").count() == 2
-            && service.contains("MIN_LEASE=30000L")
-            && service.contains("MAX_LEASE=600000L"),
+        "the held window is clamped once by the core turn clock for both the fresh and extended paths",
+        service.contains("lease=leaseOf(window);")
+            && service.contains("long next=leaseOf(window);")
+            && service.contains("static long leaseOf(long window)throws Exception")
+            && service.contains("\"turn_clock\"")
+            && service.contains("return value.getString(\"text\");")
+            && !service.contains("Math.max(MIN_LEASE")
+            && !service.contains("MIN_LEASE=")
+            && !service.contains("MAX_LEASE=")
+            && !service.contains("String seconds(")
+            && read(project, "core/lib.rs").contains("fn turn_lease(window: i64) -> i64 {\n    window.min(600000).max(30000)\n}")
+            && read(project, "core/lib.rs").contains("fn turn_elapsed(elapsed_ms: i64) -> String {"),
     );
     check(
         &mut passed,
-        "the promotion window comes from the turn request timeout rather than a fixed guess",
-        activity.contains("private long turnLease(JSONObject effect){return Math.max(30000L,Math.min(600000L,effect.optLong(\"timeout_ms\",120000L)));}"),
+        "a core miss supplies no lease and does not substitute the requested timeout",
+        activity.contains("private long turnLease(JSONObject effect)throws Exception{return TurnService.leaseOf(effect.optLong(\"timeout_ms\",120000L));}")
+            && activity.contains("catch(Exception unavailable){turnProtectionLost();}")
+            && !activity.contains("return requested")
+            && !activity.contains("Math.max(30000L,Math.min(600000L")
+            && service.contains("if(!intent.hasExtra(EXTRA_LEASE)){lost();if(openTicket(value))live=null;stop();return START_NOT_STICKY;}")
+            && !service.contains("getLongExtra(EXTRA_LEASE,120000L)")
+            && !service.contains("Math.max(MIN_LEASE"),
     );
 
     let lease_line = activity
@@ -89,13 +103,14 @@ fn run(project: &Path, apk_argument: Option<&str>) -> Vec<String> {
         .split('\n')
         .find(|line| line.contains("transportDeadline=command.optLong"))
         .unwrap_or("");
+    let clock = read(project, "core/lib.rs");
     check(
         &mut passed,
         "the promotion window and the request transport window share one default and one cap so the wake lock can neither outlive nor strand the turn",
         lease_line.contains("120000")
-            && lease_line.contains("600000")
             && transport_line.contains("120000")
-            && transport_line.contains("600000"),
+            && transport_line.contains("600000")
+            && clock.contains("window.min(600000).max(30000)"),
     );
 
     let mut core_paths = Vec::new();
@@ -138,8 +153,36 @@ fn run(project: &Path, apk_argument: Option<&str>) -> Vec<String> {
     check(
         &mut passed,
         "a chained model effect re-extends the live promotion instead of starting a second one",
-        service.contains("if(service!=null&&service.active){service.extend(ticket,started,lease,label);return;}")
-            && service.contains("if(active){extend(value,from,window,text);return START_NOT_STICKY;}"),
+        service.contains("if(service!=null&&service.active){live=new Ticket(ticket);try{service.extend(ticket,started,lease,label);return HELD;}catch(Exception refused){if(openTicket(ticket))live=null;service.stop();return REFUSED;}}")
+            && service.contains("if(active){try{extend(value,from,window,text);}catch(Exception refused){lost();if(openTicket(value))live=null;stop();}return START_NOT_STICKY;}"),
+    );
+    let refuse_at = service
+        .find("if(!openTicket(value)){if(!(active&&openTicket(ticket)))stopSelf(id);return START_NOT_STICKY;}")
+        .unwrap_or(usize::MAX);
+    let absent_at = service
+        .find("if(!intent.hasExtra(EXTRA_LEASE)){lost();if(openTicket(value))live=null;stop();return START_NOT_STICKY;}")
+        .unwrap_or(usize::MAX);
+    let promote_at = service
+        .find("startForeground(PROGRESS_ID,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);")
+        .unwrap_or(0);
+    let acquire_at = service
+        .find("wake.setReferenceCounted(false);wake.acquire(lease);")
+        .unwrap_or(0);
+    let extend_check = service
+        .find("if(!openTicket(value))throw new IllegalStateException(\"Turn ticket is not admitted\");")
+        .unwrap_or(usize::MAX);
+    let extend_acquire = service
+        .find("wake.acquire(next);")
+        .unwrap_or(0);
+    check(
+        &mut passed,
+        "a start that arrives after its ticket was retired never promotes or takes the wake lock",
+        service.contains("static void finish(){live=null;TurnService service=current;if(service!=null)service.stop();}")
+            && refuse_at < absent_at
+            && absent_at < promote_at
+            && refuse_at < acquire_at
+            && absent_at < acquire_at
+            && extend_check < extend_acquire,
     );
     check(
         &mut passed,
@@ -308,6 +351,9 @@ fn packaged_checks(
         "extend",
         "publish",
         "progress",
+        "openTicket",
+        "leaseOf",
+        "lost",
     ];
     check(
         passed,
@@ -323,6 +369,7 @@ fn packaged_checks(
         "publishReply",
         "publishPendingReply",
         "turnLease",
+        "turnProtectionLost",
         "askReplyNotifications",
         "refreshRateClock",
         "requestConversation",

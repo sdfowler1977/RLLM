@@ -56,6 +56,7 @@ public final class Activity extends android.app.Activity {
     // Background continuity: a model turn that has to survive the Activity losing focus.
     private volatile boolean turnActive;
     private boolean turnNotificationAsked;
+    private boolean protectionNoted;
     // A committed reply that is waiting for the platform to allow notifications.
     private String pendingReplyTitle="",pendingReplyBody="",pendingReplyChat="";
     // A conversation a published reply belongs to, waiting to be opened.
@@ -600,7 +601,7 @@ public final class Activity extends android.app.Activity {
         if(kind.equals("document")){documentTicket=e.getString("document_ticket");documentGeneration=generation;try{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,41);}catch(android.content.ActivityNotFoundException|SecurityException problem){String failedTicket=documentTicket;documentTicket="";dispatch("document_failure",new JSONObject().put("document_ticket",failedTicket).put("error",safe(problem)));}return;}
         if(kind.equals("network")&&e.optString("purpose").equals("project_file"))pendingImport=null;
         final int token=++generation;final long started=android.os.SystemClock.elapsedRealtime();
-        if(kind.equals("network")&&e.optString("purpose").equals("model")){turnActive=true;startRateClock(token,e.optString("model_ticket"),started);TurnService.begin(this,e.optString("model_ticket"),started,turnLease(e),"Replying");askReplyNotifications();}
+        if(kind.equals("network")&&e.optString("purpose").equals("model")){turnActive=true;startRateClock(token,e.optString("model_ticket"),started);protectionNoted=false;try{if(TurnService.begin(this,e.optString("model_ticket"),started,turnLease(e),"Replying")==TurnService.REFUSED)turnProtectionLost();}catch(Exception unavailable){turnProtectionLost();}askReplyNotifications();}
         try{workers.execute(()->{final boolean[] sending={false};final boolean[] streaming={false};final long[] metrics={0,-1,-1,-1};long snapshotHandle=0;boolean chunkedSnapshot=false;try{JSONObject work=e;String operation=kind;
             if(kind.equals("project_payload")){JSONObject stored=documentJobs.submit(()->transferStore.load(key())).get();if(stored==null||stored.has("cleared_ticket"))throw new IOException("Pending snapshot is missing or cleared");
                 chunkedSnapshot=stored.optInt("version")==2;
@@ -727,8 +728,10 @@ public final class Activity extends android.app.Activity {
         if(!(page.equals("chat")||page.equals("diagnostics")))return;
         try{dispatch("rate_tick",new JSONObject().put("model_ticket",rateTicket).put("elapsed_ms",android.os.SystemClock.elapsedRealtime()-rateStarted));}catch(JSONException e){fatal(safe(e));}
     }
-    /** The longest a turn may hold the process promotion, taken from the turn's own request timeout. */
-    private long turnLease(JSONObject effect){return Math.max(30000L,Math.min(600000L,effect.optLong("timeout_ms",120000L)));}
+    /** Core turn-clock lease for this request. A miss throws; the caller does not substitute a number. */
+    private long turnLease(JSONObject effect)throws Exception{return TurnService.leaseOf(effect.optLong("timeout_ms",120000L));}
+    /** The promotion was refused, or the core lease could not be read. The turn keeps running. */
+    void turnProtectionLost(){if(closed||protectionNoted)return;protectionNoted=true;rateHandler.post(()->{if(closed||state==null)return;try{dispatch("turn_protection");}catch(Throwable ignored){}});}
     /** Ask once for the notification permission that carries a reply to a backgrounded app. */
     private void askReplyNotifications(){
         if(turnNotificationAsked)return;
