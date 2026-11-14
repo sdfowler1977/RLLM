@@ -155,7 +155,7 @@ pub(crate) fn field_name(name: &str) -> bool {
 }
 pub(crate) fn transport_header(name: &str) -> bool {
     ["host", "connection", "content-length", "transfer-encoding", "accept-encoding",
-     "te", "trailer", "expect", "upgrade", "proxy-connection"].contains(&name.to_ascii_lowercase().as_str())
+     "te", "trailer", "expect", "upgrade", "proxy-connection", "user-agent"].contains(&name.to_ascii_lowercase().as_str())
 }
 pub fn credential_header(name:&str,prefix:&str,key:&str)->Result<(String,String)>{
     if name.len()>64||!field_name(name)||transport_header(name)||name.eq_ignore_ascii_case("content-type")
@@ -271,6 +271,8 @@ pub fn wire(
         }
         wire.push_str(&format!("{name}: {value}\r\n"));
     }
+    // The client owns User-Agent so every outbound request identifies this product and a caller cannot omit or replace it.
+    wire.push_str("User-Agent: RLLM web reader\r\n");
     wire.push_str("\r\n");
     wire.push_str(body);
     Ok(obj(vec![
@@ -855,7 +857,7 @@ mod field_checks {
     }
     #[test]
     fn transport_fields_never_enter_caller_headers() {
-        for name in ["Host", "Connection", "Content-Length", "Transfer-Encoding", "Accept-Encoding", "TE", "Trailer", "Expect", "Upgrade", "Proxy-Connection"] {
+        for name in ["Host", "Connection", "Content-Length", "Transfer-Encoding", "Accept-Encoding", "TE", "Trailer", "Expect", "Upgrade", "Proxy-Connection", "User-Agent"] {
             for name in [name.to_string(), name.to_ascii_uppercase(), name.to_ascii_lowercase()] {
                 assert!(credential_header(&name, "", "secret").is_err());
                 assert!(wire("https://peer.test", false, "POST", "body", vec![(&name, "x".into())]).is_err());
@@ -868,7 +870,23 @@ mod field_checks {
         assert!(wire("https://peer.test", false, "POST", "", vec![("X_Key", "a\r\nInjected: b".into())]).is_err());
         assert!(wire("https://peer.test", false, "POST", "", vec![("Content-Type", "application/json".into()), ("X_Key", "secret".into())]).is_ok());
         assert!(credential_header("Content-Type", "", "secret").is_err());
-        assert!(wire("https://peer.test", false, "GET", "", vec![]).is_ok());
+    }
+    #[test]
+    fn headerless_request_carries_exactly_one_owned_user_agent() {
+        let effect = wire("https://peer.test/docs", false, "GET", "", vec![]).unwrap();
+        let raw = field(&effect, "wire").unwrap();
+        assert_eq!(
+            raw,
+            "GET /docs HTTP/1.1\r\nHost: peer.test:443\r\nConnection: close\r\nAccept-Encoding: identity\r\nContent-Length: 0\r\nUser-Agent: RLLM web reader\r\n\r\n"
+        );
+        assert_eq!(raw.matches("\r\nUser-Agent:").count(), 1);
+    }
+    #[test]
+    fn caller_user_agent_is_an_invalid_http_header() {
+        for name in ["User-Agent", "user-agent", "USER-AGENT"] {
+            let err = wire("https://peer.test", false, "GET", "", vec![(name, "x".into())]).unwrap_err();
+            assert_eq!(err, "Invalid HTTP header", "{name}");
+        }
     }
 }
 

@@ -189,7 +189,7 @@ pub fn incoming(v: &Json) -> Result<Json> {
     ]))?
     .string();
     let authentication = super::provider::authorization(profile)?;
-    let mut headers = vec![("Content-Type", "application/json; charset=utf-8".into())];
+    let mut headers = vec![("Accept", "application/json".into()), ("Content-Type", "application/json; charset=utf-8".into())];
     if let Some((name, value)) = &authentication {
         headers.push((name.as_str(), value.clone()));
     }
@@ -401,6 +401,38 @@ mod checks {
                 assert!(field(&result, "reply").unwrap().starts_with("HTTP/1.1 417 Expectation Failed\r\n"));
             }
         }
+    }
+    #[test]
+    fn gateway_route_accepts_json() {
+        let body = r#"{"model":"manual-model","messages":[{"role":"user","content":"hello"}]}"#;
+        let header = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer secret\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let config = obj(vec![
+            ("token", s("secret")),
+            (
+                "profiles",
+                Arr(vec![obj(vec![
+                    ("name", s("Lab")),
+                    ("endpoint", s("http://127.0.0.1:9123/v1/chat/completions")),
+                    ("model", s("manual-model")),
+                    ("protocol", s("chat")),
+                    ("plain", Bool(true)),
+                ])]),
+            ),
+        ]);
+        let request = obj(vec![
+            ("config", config),
+            ("header", s(&header)),
+            ("body", s(body)),
+        ]);
+        let got = incoming(&request).unwrap_or_else(|error| panic!("{error}"));
+        let raw = text(got.get("upstream").unwrap_or_else(|_| panic!("{}", got.string())), "wire");
+        assert!(raw.contains("\r\nAccept: application/json\r\n"), "{raw}");
+        assert!(!raw.contains("text/event-stream"), "{raw}");
+        assert_eq!(raw.matches("\r\nAccept:").count(), 1, "{raw}");
+        assert!(raw.starts_with("POST /v1/chat/completions HTTP/1.1"), "{raw}");
     }
     #[test]
     fn preflight_retains_current_framing_bounds() {

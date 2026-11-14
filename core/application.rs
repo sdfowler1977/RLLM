@@ -786,7 +786,7 @@ fn hosted_continue_request(st:&mut Json,refreshed:bool)->Result<Json>{
  let mut body=get(&snapshot,"body").clone();let mut messages=array(&body,"messages");let content=get(get(st,"hosted_received"),"content").clone();super::hosted_search::blocks(&content)?;messages.push(obj(vec![("role",s("assistant")),("content",content)]));put(&mut body,"messages",Arr(messages));super::hosted_search::bound_body(&body)?;
  let bytes=number(&snapshot,"context_bytes").checked_add(get(get(st,"hosted_received"),"content").string().len()).ok_or("Hosted context size overflow")?;hosted_budget(&p,&body,bytes)?;
  if !refreshed{if let Some(effect)=oauth::model_refresh(st,number(&snapshot,"index"),true)?{return Ok(effect);}}
- let authentication=super::provider::authorization(&p)?;let mut headers=vec![("Content-Type","application/json; charset=utf-8".into()),("anthropic-version","2023-06-01".into())];if let Some((name,value))=&authentication{headers.push((name.as_str(),value.clone()));}
+ let authentication=super::provider::authorization(&p)?;let mut headers=vec![("Accept","application/json".into()),("Content-Type","application/json; charset=utf-8".into()),("anthropic-version","2023-06-01".into())];if let Some((name,value))=&authentication{headers.push((name.as_str(),value.clone()));}
  let endpoint=text(&snapshot,"endpoint");let mut effect=network::wire(&endpoint,boolean(&p,"plain"),"POST",&body.string(),headers)?;
  let mut next=st.clone();let mut saved=snapshot;let continuations=number(&saved,"continuations").saturating_add(1);put(&mut saved,"body",body);put(&mut saved,"context_bytes",Num(bytes.to_string()));put(&mut saved,"paused",Bool(false));put(&mut saved,"continuations",Num(continuations.to_string()));put(&mut next,"hosted_request",saved);put(&mut next,"hosted_received",Null);hosted_preflight(&next)?;
  let ticket=now();put(&mut effect,"purpose",s("model"));put(&mut effect,"model_ticket",s(&ticket));put(&mut effect,"stream",Bool(false));put(&mut effect,"stream_protocol",s("messages"));put(&mut effect,"limit",Num((super::hosted_search::MAX_BLOCK_BYTES+32768).to_string()));put(&mut next,"stream_text",Null);put(&mut next,"model_expected",s(&ticket));put(&mut next,"busy",Bool(true));put(&mut next,"dialog",Null);put(&mut next,"notice",s("Continuing provider-hosted search; waiting for a complete response…"));harness::attempt(&mut next,index,&endpoint);*st=next;Ok(effect)
@@ -900,7 +900,9 @@ fn model_request_at(st: &mut Json, index: usize, refreshed: bool) -> Result<Json
     if streaming && protocol!="content" {put(&mut body,"stream",Bool(true));}
     let body=body.string();
     let authentication = super::provider::authorization(&p)?;
-    let mut headers = vec![("Content-Type", "application/json; charset=utf-8".into())];
+    // A non-streaming call parses one JSON body, so only that call omits text/event-stream.
+    let accept = if streaming { "application/json, text/event-stream" } else { "application/json" };
+    let mut headers = vec![("Accept", accept.into()), ("Content-Type", "application/json; charset=utf-8".into())];
     if let Some((name, value)) = &authentication {
         headers.push((name.as_str(), value.clone()));
     }
@@ -3980,6 +3982,64 @@ mod checks {
             ])]),
         );
         st
+    }
+    #[test]
+    fn streaming_model_route_advertises_json_and_event_stream() {
+        let sent=step(configured(),"send",obj(vec![("draft",s("hello"))]));
+        let effect=get(&sent,"effect");
+        assert!(boolean(effect,"stream"), "{}", text(get(&sent,"state"),"notice"));
+        let raw=text(effect,"wire");
+        assert!(raw.contains("\"stream\":true"), "{raw}");
+        assert!(raw.contains("\r\nAccept: application/json, text/event-stream\r\n"), "{raw}");
+        assert_eq!(raw.matches("\r\nAccept:").count(), 1, "{raw}");
+        assert!(raw.contains("\r\nUser-Agent: RLLM web reader\r\n"), "{raw}");
+        assert_eq!(raw.matches("\r\nUser-Agent:").count(), 1, "{raw}");
+    }
+    #[test]
+    fn nonstreaming_model_route_advertises_json() {
+        let mut state=configured();
+        let mut profiles=array(&state,"profiles");
+        put(&mut profiles[0],"stream",Bool(false));
+        put(&mut state,"profiles",Arr(profiles));
+        let sent=step(state,"send",obj(vec![("draft",s("hello"))]));
+        let effect=get(&sent,"effect");
+        assert!(!boolean(effect,"stream"), "{}", text(get(&sent,"state"),"notice"));
+        let raw=text(effect,"wire");
+        assert!(raw.contains("\"stream\":false"), "{raw}");
+        assert!(raw.contains("\r\nAccept: application/json\r\n"), "{raw}");
+        assert!(!raw.contains("text/event-stream"), "{raw}");
+        assert_eq!(raw.matches("\r\nAccept:").count(), 1, "{raw}");
+    }
+    #[test]
+    fn hosted_continuation_accepts_json() {
+        let mut st=blank();
+        new_chat(&mut st).unwrap();
+        put(&mut st,"profiles",Arr(vec![obj(vec![
+            ("name",s("Controlled")),
+            ("endpoint",s("http://provider.test/anthropic/v1/messages")),
+            ("protocol",s("messages")),
+            ("model",s("controlled")),
+            ("plain",Bool(true)),
+            ("stream",Bool(false)),
+            ("hosted_search",s("messages_search_v1")),
+            ("tool_format",s("structured")),
+        ])]));
+        put(&mut st,"agents",Arr(vec![obj(vec![
+            ("name",s("General")),
+            ("tools",s("read,web_search,web_read")),
+        ])]));
+        let sent=step(st,"send",obj(vec![("draft",s("Use current provider search if needed."))]));
+        assert!(boolean(get(&sent,"state"),"request_hosted_search"), "{}", text(get(&sent,"state"),"notice"));
+        assert_eq!(text(get(&sent,"effect"),"purpose"),"model");
+        let body=r#"{"role":"assistant","content":[{"type":"text","text":"Provider paused."}],"stop_reason":"pause_turn"}"#;
+        let wire=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",body.len());
+        let paused=network_reply(&sent,&wire);
+        assert_eq!(text(get(&paused,"state"),"dialog"),"hosted_pause","{}",text(get(&paused,"state"),"notice"));
+        let continued=step(get(&paused,"state").clone(),"hosted_continue",Null);
+        let raw=text(get(&continued,"effect"),"wire");
+        assert!(raw.contains("\r\nAccept: application/json\r\n"), "{raw} {}", text(get(&continued,"state"),"notice"));
+        assert!(!raw.contains("text/event-stream"), "{raw}");
+        assert_eq!(raw.matches("\r\nAccept:").count(), 1, "{raw}");
     }
     #[test]
     fn live_rate_opens_analytics_without_losing_stream_or_draft() {

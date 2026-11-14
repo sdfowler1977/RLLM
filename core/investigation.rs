@@ -341,6 +341,80 @@ pub(super) fn byte_limit(text:&str,max:usize)->String{let mut n=text.len().min(m
         assert!(search_page("<title>CAPTCHA research at DuckDuckGo</title><p>How to verify you are human: quoted article</p>").unwrap().contains("quoted article"));assert!(search_page("{\"title\":\"Verify you are human\"}").is_ok());assert!(search_page("<html><head><title>Search</title></head><body><template><title>Verify you are human</title><form id='challenge-form' action='/anomaly.js'></form></template><svg><title>Verify you are human</title></svg></body></html>").is_ok());
     }
     #[test]fn remote_arguments_have_distinct_validation(){assert!(validate_remote(&obj(vec![("tool",s("web_read")),("args",obj(vec![("url",s("https://example.org/path"))]))])).unwrap());assert!(validate_remote(&obj(vec![("tool",s("web_read")),("args",obj(vec![("url",s("file:///secret"))]))])).is_err());assert!(validate_remote(&obj(vec![("tool",s("mcp")),("args",obj(vec![("name",s("inspect")),("arguments",s("bad"))]))])).is_err());}
+    #[test]
+    fn page_route_asks_for_html() {
+        let mut st=obj(vec![]);
+        let request=obj(vec![("tool",s("web_read")),("args",obj(vec![("url",s("https://example.org/path"))]))]);
+        let raw=text(&web_effect(&mut st,&request).unwrap(),"wire");
+        assert!(raw.starts_with("GET /path HTTP/1.1\r\n"), "{raw}");
+        assert!(raw.contains("\r\nAccept: text/html, application/json, text/plain\r\n"), "{raw}");
+        assert_eq!(raw.matches("\r\nAccept:").count(), 1, "{raw}");
+        assert!(raw.contains("\r\nUser-Agent: RLLM web reader\r\n"), "{raw}");
+        assert_eq!(raw.matches("\r\nUser-Agent:").count(), 1, "{raw}");
+    }
+    #[test]
+    fn local_listener_adopts_the_page_only_when_user_agent_is_present() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::mpsc;
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();
+        let port=listener.local_addr().unwrap().port();
+        let (tx,rx)=mpsc::channel();
+        std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut sock,_)=listener.accept().unwrap();
+                sock.set_read_timeout(Some(std::time::Duration::from_secs(2))).ok();
+                let mut buf=Vec::new();
+                let mut tmp=[0u8;2048];
+                loop {
+                    match sock.read(&mut tmp) {
+                        Ok(0)=>break,
+                        Ok(n)=>{buf.extend_from_slice(&tmp[..n]);if buf.windows(4).any(|w|w==b"\r\n\r\n"){break;}}
+                        Err(_)=>break,
+                    }
+                }
+                let head=String::from_utf8_lossy(&buf);
+                let identified=head.lines().any(|line|line.to_ascii_lowercase().starts_with("user-agent:"));
+                let body=if identified{"<p>LOCAL_PAGE_MARKER</p>"}else{"denied"};
+                let status=if identified{"200 OK"}else{"403 Forbidden"};
+                let response=format!("HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+                sock.write_all(response.as_bytes()).unwrap();
+                let _=tx.send(buf);
+            }
+        });
+        fn exchange(port:u16,request:&[u8])->Vec<u8>{
+            let mut sock=TcpStream::connect(("127.0.0.1",port)).unwrap();
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(2))).ok();
+            sock.write_all(request).unwrap();
+            let mut response=Vec::new();
+            sock.read_to_end(&mut response).unwrap();
+            response
+        }
+        let bare=format!("GET /owned-page HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nAccept-Encoding: identity\r\nContent-Length: 0\r\n\r\n");
+        let refused=exchange(port,bare.as_bytes());
+        assert!(refused.starts_with(b"HTTP/1.1 403 "), "{}", String::from_utf8_lossy(&refused));
+        let err=super::super::web_document::read(&refused,8*1024*1024,&Null).unwrap_err();
+        let (response_fault,diagnostic)=super::super::web_document::explain(err);
+        assert!(response_fault);
+        assert_eq!(super::super::web_operation::page_error(diagnostic),"Website returned HTTP 403; no page contents were accepted. This status concerns the requested website URL.");
+        let url=format!("http://127.0.0.1:{port}/owned-page");
+        let mut st=obj(vec![]);
+        let request=obj(vec![("tool",s("web_read")),("args",obj(vec![("url",s(&url))]))]);
+        let wire=text(&web_effect(&mut st,&request).unwrap(),"wire");
+        let adopted_bytes=exchange(port,wire.as_bytes());
+        assert!(adopted_bytes.starts_with(b"HTTP/1.1 200 "), "{}", String::from_utf8_lossy(&adopted_bytes));
+        let (code,adopted)=super::super::web_document::read(&adopted_bytes,8*1024*1024,&Null).unwrap();
+        assert_eq!(code,200);
+        assert!(adopted.contains("LOCAL_PAGE_MARKER"), "{adopted}");
+        let bare_received=rx.recv().unwrap();
+        let product_received=rx.recv().unwrap();
+        println!("LISTENER_BARE:{:?}", String::from_utf8(bare_received).unwrap());
+        println!("LISTENER_PRODUCT:{:?}", String::from_utf8(product_received.clone()).unwrap());
+        let product=String::from_utf8(product_received).unwrap();
+        assert_eq!(product, wire);
+        assert_eq!(product.matches("\r\nUser-Agent:").count(), 1);
+        assert!(product.contains("\r\nAccept: text/html, application/json, text/plain\r\n"));
+    }
 }
 
 #[cfg(test)] mod cancellation_scope_checks {

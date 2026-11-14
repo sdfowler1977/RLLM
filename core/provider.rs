@@ -160,7 +160,8 @@ pub fn probe(p: &Json) -> Result<Json> {
     };
     let prefix=endpoint.strip_suffix(suffix).ok_or("Custom API path has no standard model-list URL. Send a message to test generation.")?;
     let auth=authorization(p)?;
-    let headers=auth.iter().map(|(name,value)|(name.as_str(),value.clone())).collect();
+    let mut headers=vec![("Accept","application/json".into())];
+    if let Some((name,value))=&auth {headers.push((name.as_str(),value.clone()));}
     let mut effect=network::wire(&format!("{prefix}{replacement}"),p.get("plain")==Ok(&Bool(true)),"GET","",headers)?;
     if let Obj(fields)=&mut effect {fields.insert("kind".into(),s("network"));fields.insert("purpose".into(),s("connection_test"));}
     Ok(effect)
@@ -227,6 +228,21 @@ mod checks {
         }
         let n=normalized(&obj(vec![("protocol",s("local")),("endpoint",s("my-model-host:11434")),("model",s("m"))])).unwrap();
         assert_eq!(text(&n,"endpoint"),"http://my-model-host:11434/api/chat");
+    }
+    #[test]
+    fn provider_probe_accepts_json() {
+        let p = normalized(&obj(vec![
+            ("protocol", s("chat")),
+            ("endpoint", s("https://server.example/v1/chat/completions")),
+            ("model", s("custom")),
+        ]))
+        .unwrap();
+        let probed = probe(&p).unwrap();
+        let raw = text(&probed, "wire");
+        assert!(raw.contains("\r\nAccept: application/json\r\n"), "{raw}");
+        assert!(!raw.contains("text/event-stream"), "{raw}");
+        assert_eq!(raw.matches("\r\nAccept:").count(), 1, "{raw}");
+        assert!(raw.starts_with("GET /v1/models HTTP/1.1"), "{raw}");
     }
     #[test]
     fn custom_authentication() {

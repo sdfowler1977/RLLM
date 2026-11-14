@@ -45,6 +45,14 @@ pub(super) fn response(v:&Json)->Result<Json>{
 #[cfg(test)] mod checks{
  use super::*;
  fn context(request:&str)->Json{obj(vec![("endpoint",s("https://example.test/proxy/mcp?q=x")),("key",s("OLD")),("version",s("2025-06-18")),("request",s(request)),("request_binding",Num("1".into()))])}
+ #[test]fn mcp_route_asks_for_json(){
+  let planned=plan(&context("initialize"),"session",false).unwrap();
+  let raw=field(&planned.array().unwrap()[0],"wire").unwrap();
+  assert!(raw.contains("\r\nAccept: application/json, text/event-stream\r\n"), "{raw}");
+  assert_eq!(raw.matches("\r\nAccept:").count(), 1, "{raw}");
+  assert!(raw.contains("\r\nUser-Agent: RLLM web reader\r\n"), "{raw}");
+  assert_eq!(raw.matches("\r\nUser-Agent:").count(), 1, "{raw}");
+ }
  #[test]fn cancellation_direction_initialize_and_session_binding(){
   let p=plan(&context("tools/call"),"old-session",true).unwrap();let a=p.array().unwrap();assert_eq!(a.len(),2);let w=field(&a[0],"wire").unwrap();assert!(w.starts_with("POST /proxy/mcp?q=x ")&&w.contains("Bearer OLD")&&w.contains("Mcp-Session-Id: old-session")&&w.contains("notifications/cancelled"));assert!(!w.contains("\"id\":1"));assert!(field(&a[1],"wire").unwrap().starts_with("DELETE "));
   assert_eq!(plan(&context("initialize"),"s",true).unwrap().array().unwrap().len(),1);

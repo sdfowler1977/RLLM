@@ -548,6 +548,7 @@ fn run(controller: &mut Controller, root: &str, passed: &mut Vec<String>) {
     keep_msg(passed, name, status_is(&result, 200), || result.to_string());
 
     integration(controller, root, passed);
+    owned_request_lines(controller, root, passed);
 }
 
 fn integration(controller: &mut Controller, root: &str, passed: &mut Vec<String>) {
@@ -641,6 +642,101 @@ fn integration(controller: &mut Controller, root: &str, passed: &mut Vec<String>
     turn = model_response(controller, &turn, &primary, "The network file contains ACTUAL_PERSISTENT_NAS_FILE.", None, &root);
     let state = state_of(&turn);
     keep_msg(passed, "persistent NAS continuation settles without replay", required_falsy(state, "busy"), || state.to_string());
+}
+
+fn owned_request_lines(controller: &mut Controller, root: &str, passed: &mut Vec<String>) {
+    let scratch = Scratch::create(Path::new(root));
+    let root = scratch.path().to_string();
+    let sent = send_draft(controller, &root, None, "Read the documentation page.");
+    let fed = feed_proposal(controller, &root, &sent, r#"{"tool":"web_read","args":{"url":"https://example.org/owned-page"}}"#);
+    let page = follow_web(controller, &root, &fed);
+    let wire = response_wire(&page);
+    keep_msg(
+        passed,
+        "owned user agent appears once on a page request",
+        wire.matches("\r\nUser-Agent: RLLM web reader\r\n").count() == 1 && wire.matches("\r\nUser-Agent:").count() == 1,
+        || format!("{wire}\n{}", page.to_string()),
+    );
+    keep_msg(
+        passed,
+        "page request accept line is the product line",
+        wire.matches("\r\nAccept: text/html, application/json, text/plain\r\n").count() == 1 && wire.matches("\r\nAccept:").count() == 1,
+        || format!("{wire}\n{}", page.to_string()),
+    );
+    let search = send_draft(controller, &root, Some(obj(vec![
+        ("search_url".into(), s("https://search.example/find?q={query}")),
+        ("header".into(), s("User-Agent")),
+        ("key".into(), s("CallerAgent")),
+        ("prefix".into(), s("")),
+    ])), "Find the fixture topic.");
+    let searched = feed_proposal(controller, &root, &search, r#"{"tool":"web_search","args":{"query":"fixture topic"}}"#);
+    let refused = follow_web(controller, &root, &searched);
+    let notice = nested_str(event_body(&refused), &["state", "notice"]).unwrap_or("");
+    let err = error_text(&refused).unwrap_or_default();
+    let refused_wire = response_wire(&refused);
+    keep_msg(
+        passed,
+        "caller supplied user agent is refused",
+        (notice.contains("Invalid HTTP header") || err.contains("Invalid HTTP header")) && refused_wire.is_empty(),
+        || refused.to_string(),
+    );
+}
+
+fn send_draft(controller: &mut Controller, root: &str, web: Option<Value>, draft: &str) -> Value {
+    let resumed = product_event(controller, None, "resume", obj(vec![]), root);
+    let mut st = event_body(&resumed).get("state").cloned().unwrap_or_else(|| panic!("resume returned no state: {}", resumed.to_string()));
+    put(&mut st, "profiles", Value::Arr(vec![profile("Primary", "0", "http://127.0.0.1:9/v1/chat/completions")]));
+    if let Some(web) = web {
+        put(&mut st, "web", web);
+    }
+    product_event(controller, Some(&st), "send", obj(vec![("draft".into(), s(draft))]), root)
+}
+
+fn feed_proposal(controller: &mut Controller, root: &str, sent: &Value, content: &str) -> Value {
+    let turn = event_body(sent);
+    let state = turn.get("state").cloned().unwrap_or_else(|| panic!("send returned no state: {}", sent.to_string()));
+    let ticket = match state.get("model_expected") {
+        Some(Value::Str(text)) => text.clone(),
+        _ => panic!("send produced no model ticket: {}", sent.to_string()),
+    };
+    let body = chat_completion(content);
+    let mut bytes = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+    bytes.extend_from_slice(body.as_bytes());
+    product_event(controller, Some(&state), "network_result", obj(vec![
+        ("purpose".into(), s("model")),
+        ("model_ticket".into(), s(&ticket)),
+        ("data".into(), s(&b64_encode(&bytes))),
+    ]), root)
+}
+
+fn follow_web(controller: &mut Controller, root: &str, fed: &Value) -> Value {
+    let turn = event_body(fed);
+    if nested_str(turn, &["effect", "purpose"]) == Some("web_tool") {
+        return fed.clone();
+    }
+    if nested_str(turn, &["state", "dialog"]) == Some("approval") {
+        let state = turn.get("state").cloned().unwrap_or(Value::Null);
+        return product_event(controller, Some(&state), "approve", obj(vec![]), root);
+    }
+    fed.clone()
+}
+
+fn product_event(controller: &mut Controller, state: Option<&Value>, action: &str, inputs: Value, root: &str) -> Value {
+    controller.send(&obj(vec![
+        ("op".into(), s("event")),
+        ("state".into(), state.cloned().unwrap_or(Value::Null)),
+        ("action".into(), s(action)),
+        ("inputs".into(), inputs),
+        ("root".into(), s(root)),
+    ]))
+}
+
+fn event_body(reply: &Value) -> &Value {
+    reply.get("value").unwrap_or(reply)
+}
+
+fn response_wire(reply: &Value) -> String {
+    nested_str(event_body(reply), &["effect", "wire"]).unwrap_or("").to_string()
 }
 
 fn model_response(controller: &mut Controller, turn: &Value, listener: &TcpListener, text: &str, framing: Option<&str>, root: &str) -> Value {
