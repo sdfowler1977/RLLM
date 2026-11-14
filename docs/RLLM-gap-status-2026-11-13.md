@@ -558,3 +558,35 @@ Lane G4 was dispatched (`/tmp/g89room`, HEAD + the lane G bytes) to answer the i
 than the whole root set, witness the eviction and same-owner rebind, stop the 401 from masking framing
 errors, pin the 8199/8200 boundary in both routes, reconcile the two duplicate-framing sentences, and
 either normalise the MCP credential once at the storage boundary or prove byte-identical output per route.
+
+## Addendum 2026-11-14 — the candidate-pool scope lane was witnessed at HEAD and rejected by its seat
+
+Lane B4's bytes (`/tmp/laneB4.patch`, three paths, applies on current HEAD with the digests the lane
+reported) were witnessed in a fresh HEAD room (`/tmp/g86room`, `git apply` exit 0, no fuzz). The units
+gate goes `885/885` to `894/894` with `isolated application cases: 58` on both sides, the four named
+cases pass with their full module paths, `rrsi_loop` moves `23 checks` at HEAD to `PASS (exit 0, 3s,
+34 checks)`, the twin prints `34 rrsi-loop checks passed`, 72 twins build, and `verification/RESULTS.json`
+stayed `e2f35542...` before the leg and after it (`B4-VERIFY-RC=0`).
+
+The seat returned `VERDICT: REJECT` (`/tmp/mm-laneB48.out`) and its three blocking rows were then
+settled against the bytes:
+
+- `core/rrsi.rs:369 scope_distinguished` has four branches — hypothesis `:370`, `diff_digest` `:371`,
+  commit `:372`, round `:373`. The tests' fixture at `core/rrsi.rs:3858` builds every row through
+  `edit(... round 1 ...)`, so **no case can vary `round` at all**.
+- That was then proven by a sanctioned mutation rather than argued: deleting the `round` clause
+  (`346acb20... -> 67bf16e0...`) leaves the gate at `Rust cases passed: 894/894` and all four named
+  cases green (`/tmp/laneB4-mut.log`). An added product branch that cannot be made to fail is not
+  verified behaviour. The file was restored to the delivered digest `346acb20...`.
+- The twin check named "two candidates that share a scope and a hypothesis and differ by diff_digest
+  are both kept" is not a one-field witness: the same file asserts at `verification/rrsi_loop.rs:635-638`
+  that a driven pool's candidate commits are distinct, so the pair also differs by `commit`. The check
+  body only compares hypothesis, both scopes and `diff_digest`, so the name overstates what it pins.
+- The lane's own count sentences (`883 -> 892`, "34 before, 34 after") are measurements of its own
+  `1225caf` room, not of HEAD. The seat was right that they do not describe current HEAD, where the
+  deltas are +9 unit cases and +11 group checks.
+
+Lane B5 was dispatched (`/tmp/g90room`, HEAD + the B4 bytes) to pin all four branches of
+`scope_distinguished` with one case each, make the twin say which fields actually separate its pair,
+run two mutations (`round` and `commit` clauses) that must each turn a named case red, and report every
+count against current HEAD.

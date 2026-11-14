@@ -2581,5 +2581,24 @@
       "credential producer: normalise once or prove byte-identical output per route",
       "count table against HEAD"
     ]
+  },
+  "lane_b4_seat_reject_2026_11_14": {
+    "seat": "MiniMax-M3, rules /tmp/mmA48.txt (item 7 corrected before seating), facts /tmp/b4-seat-facts.txt M1-M8, packet /tmp/mm-packet48.json 93,088 B, output /tmp/mm-laneB48.out 9,707 B, MM-RC=0",
+    "verdict": "REJECT",
+    "blocking_rows": {
+      "F01": "verification/rrsi_loop.rs:shared_scope_kept check name and SCOPE text claim a pair that differs by diff_digest; measurement shows the product assigns each candidate its own commit, and the same file asserts at :635-638 that the pool commits are distinct, so the pair also differs by commit",
+      "F02": "core/rrsi.rs:369 scope_distinguished has four branches (hypothesis :370, diff_digest :371, commit :372, round :373); the fixture at core/rrsi.rs:3858 pools(hypothesis,diff,commit) fixes round=1 for every row, so no case can vary round",
+      "F04": "the round-differs branch has no unit case and no twin check"
+    },
+    "coordinator_mutation": "in /tmp/g86room, sanctioned runner: deleting the round clause at core/rrsi.rs:373 (346acb203b285cc6 -> 67bf16e00d141d3a) leaves `Rust cases passed: 894/894; isolated application cases: 58` and all four named cases green (`4 passed; 0 failed; 890 filtered out`); restored digest 346acb203b285cc6; log /tmp/laneB4-mut.log. The round branch cannot be made to fail.",
+    "witness": "units 885/885 base -> 894/894 patched (isolated 58 both), four named cases green, rrsi_loop PASS 34 checks vs HEAD 23, twin 34 checks, 72 twins, RESULTS e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0 unchanged, B4-VERIFY-RC=0",
+    "next": "lane B5 room /tmp/g90room at 3b29fed + /tmp/laneB4.patch, card /tmp/laneB5-card.md: four branch-pinning cases, honest twin wording, two mutations with named reds, counts against current HEAD"
+  },
+  "lane_b5_dispatched_2026_11_14": {
+    "room": "/tmp/g90room",
+    "base": "3b29fed + /tmp/laneB4.patch (705023320cd7c5c4, 346acb203b285cc6, 3a94595a2a2358d3)",
+    "card": "/tmp/laneB5-card.md",
+    "report": "/tmp/laneB5-report.md",
+    "status": "waiting for a grok writer slot (five lanes live: J3 g84, K2 g83, L g87, E5 g88, G4 g89)"
   }
 }
