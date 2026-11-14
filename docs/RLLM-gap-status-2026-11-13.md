@@ -1011,20 +1011,35 @@ All six legs then print a digest, and the reds name checks:
 | m5 make the catalog authority empty inside `closest_names` | `d9593504b2e29b92…` | 6 named reds | `b47cc9d69a776f13…` | both groups red, naming `chat tool_call unknown markup notice names the closest catalog names` |
 | m6 empty the joined suggestion list | `263421926f4f1da5…` | 2 named reds, `17 passed; 2 failed` | `550358fe07e9882a…` | both groups red, same check names |
 
-The census ran clean in the same room (`E6CENSUS-RC=0`) and joined group by group:
-`proposal_feedback 36 -> 56` with `NEW n=20`, `proposal_recovery 249 -> 277` (that group's report
-writes `passed` as an integer, so only the count joins). Base leg first: `output/tools/harness-tests
-cases: 37`, `twin helper tests … cases: 44`, `BASE-HEADLESS a67f12c4d3b5ccbe…`; after restore
-`cases: 43`, `cases: 47` — those deltas belong to lanes K3/K4, not E6, whose patch touches neither
-file. `4160 + 20 (proposal_feedback) + 28 (proposal_recovery) = 4208`. In the room, `verification/RESULTS.json`
-is `e2f35542e44b5509…` before and after, and the sweep refuses to rewrite a record while
-`history_migration` fails.
+The corrected census ran in `/tmp/g101room` (`/tmp/full-check2.sh /tmp/g101room` →
+`/tmp/g101-fullcheck2.log`, `FC-E6-RC=0`, 15:06:18 → 15:24:38). Patched first:
+`PATCHED-SWEEP summary: 64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4208 checks`. Then the
+base leg stashes the lane and rebuilds tools, twins and the product:
+`BASE-TOOLS tool tests: .../harness-tests cases: 37`,
+`BASE-TOOLS twin helper tests: .../twin-helper-tests cases: 44`,
+`BASE-HEADLESS a67f12c4d3b5ccbeac1ccb02bf04e60716e78e2b515e9f9304c61b718579b62a`, and
+`BASE-SWEEP summary: 64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4160 checks` — the seven
+UNAVAILABLE rows being `binary_flow`, `history_migration`, `field_flow`, `flags_flow`, `product_flow`,
+`apk_alignment`, `turn_background`. The join prints
+`JOIN groups base=71 patched=71 mainHead=71`, `COUNT proposal_feedback base=36 patched=56`,
+`COUNT proposal_recovery base=249 patched=277`, `NEW proposal_feedback n=20`.
+`4160 + 20 + 28 = 4208`. `proposal_recovery` reports `passed` as an integer, so only its count joins;
+the twenty new `proposal_feedback` names are enumerated by name
+(`/tmp/e6-census-join.txt` lists all forty-eight from the earlier attempt, which also shows
+`proposal_recovery: base=241 patched=277 NEW=28` — that join read a different room's tree, and the
+corrected census above is the one to quote). The room's own record is untouched by either sweep there:
+`RECORD-IN cbdd64f4c171a54138e4945f…` equals `RECORD-PATCHED`, and the base tree carries
+`RECORD-BASE db8477ee3830402831157ffb…`. The repository's delivered record is still
+`e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0`.
 
-What the room state also settles: `/tmp/g105room` sits on branch `main` at `8cedff4` and holds lane
-K3's retirement as an uncommitted diff, so `git stash -u` reverts that lane's work and the base counts
-`36 / 249` come from that tree — the same counts independent clean rooms at `9a1608c` print. The room
-no longer holds lane E6's bytes (`core/tool_format.rs` there is `5537a738…`, not the mutated
-`f76921f8…`): the durable artifacts are `/tmp/laneE6.patch` (applies at HEAD) and the leg log.
+Why the first attempt is not quotable: the legs and that first join ran in `/tmp/g105room`, which now
+reports `BRANCH=main` at `8cedff4` with lane K3's retirement as an uncommitted diff
+(`git diff --stat`: `docs/AUDIT.md`, `tools/harness.rs +187`, `tools/package.rs`, `verification/README.md`,
+`verification/history_migration.py -43`, `verification/history_migration.rs`,
+`verification/live_web.py -71`, `verification/live_web.rs`), and its `core/tool_format.rs` digest is
+`5537a738…`, not the `f76921f8…` the legs mutated. A room's `HEAD` is not the delivered `HEAD`, and a
+room can be re-pointed after its legs finish: the durable lane artifacts are `/tmp/laneE6.patch`
+(applies at HEAD) and `/tmp/laneE6-mut3.log`.
 
 One mutant survives, and it is the reason the lane is not closed: m4 removes the `Markup::Proposal`
 disjunct of the added `embedded` predicate — `matches!(reply,r#"<tool_call>"#) ||
@@ -1045,3 +1060,47 @@ them (`laneE6.patch:112,113,395,451,512,747-750,840`, including the tie notice
 catalog name is a prefix of another, pins `drive_r` -> `["drive_read"]` and `drive_creat` ->
 `["drive_create"]` with `read_at < create_at`, then pins the tie `drive_crea` against sorted order
 (`laneE6.patch:610-640`).
+
+## The two retired history assertions now execute, and the companion probe now runs (14 Nov)
+
+Coordinator witness `/tmp/laneK4-mut.log` (room `/tmp/g109room` at HEAD + lane K3 + lane K4, carrying
+`output/previous-controller` sha256 `f7388fb0e48f66f4…`). A direct run of the twin — the only route that
+runs one twin alone — exits 0 and writes a report: `DIRECT-CLEAN-RC=0 lines=13`, the report contains
+`"checks": [`, and its `passed` field is a list of seven names, including
+`migration refuses to bless altered receipt data` and `corrupt optional history does not block local
+operations`, the two assertions the retired `verification/history_migration.py` made. Through the
+runner: `output/harness sweep --previous-controller output/previous-controller` →
+`history_migration PASS (exit 0, 0s, 7 checks)`, `summary: 64 pass, 1 fail, 6 unavailable, 1 absent of 71 groups, 4115 checks`.
+Planting the recorded HEAD line back (`element_mut(field_mut(corrupted_case, "evidence"), 0)` →
+`field_mut(field_mut(corrupted_case, "evidence"), "0")`, one occurrence, `1e440c2cfa046e24…` →
+`40f8a052398ccd3d…`) reproduces the original failure exactly:
+`DIRECT-PLANTED-RC=101 lines=4` with
+`panicked at RLLM/verification/history_migration.rs:418:9: expected object`, and the sweep row
+`history_migration FAIL (exit 101, 0s, absent checks)`. Restored to `1e440c2cfa046e24…`.
+
+That sweep also exposes a red that no clean room ever sees: with the reference supplied,
+`prompt_reference FAIL (exit 101, 0s, absent checks)` panicking at
+`verification/prompt_reference.rs:566:9` — `chat actual read-only request is substantially smaller`.
+Without the artifact the same group is UNAVAILABLE, so supplying it converts an availability sentence
+into a failing assertion. The delivered census therefore neither runs nor fails that group.
+
+Coordinator witness `/tmp/laneM2b-mut.log` (room `/tmp/g108room`, lane M layer two: the companion-APK
+resolution rule moved into `verification/twin/mod.rs`, `tools/harness.rs` using the same order).
+`twin helper tests … cases: 49` green, with the five new cases resolved by full path
+(`recorded_directory_resolves_to_that_file_not_a_copy_elsewhere`,
+`bare_name_record_resolves_to_the_apk_directory`,
+`a_record_path_containing_parent_dir_is_not_joined_to_the_project_root`,
+`an_absent_companion_yields_none`, `root_candidate_precedes_apk_directory_when_both_exist`).
+Deleting the `APK/` candidate from the shared rule (`twin/mod.rs` → `e71d1b6c98db6b2e`) turns the twin
+suite red (`A TWINS-RC=101`) and a direct group run red with
+`refusing to invent an artifact: PUBLICATION-MANIFEST.json delivers RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk as a companion file that is not on this machine; set RLLM_CHECK_APK to the APK under test`
+at `verification/apk_alignment.rs:175:5`; swapping the project-root and `APK/` candidate order
+(`→ 77616615f868dad3`) is red too; both restore to `1b622968cd2c5394…` and the suite is green again.
+With `RLLM_CHECK_APK` unset the whole-tree sweep at those bytes prints
+`apk_alignment PASS (exit 0, 4s, 11 checks)` — forty-one sixty plus eleven live checks instead of an
+unavailable row — while `turn_background FAIL (exit 101, 0s, absent checks)` panics at
+`verification/turn_background.rs:396:9`, `the packaged application declares the turn service that
+outlives focus`: `summary: 65 pass, 1 fail, 5 unavailable, 1 absent of 71 groups, 4171 checks`. The
+remaining red is a product fact about the published candidate, not an instrument crash, and it is left
+red. With `RLLM_CHECK_APK` set the direct run exits 0 and writes its report (`SET-DIRECT-RC=0`). The
+room's delivered record is unchanged throughout: `e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0`.
