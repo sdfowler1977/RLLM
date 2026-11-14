@@ -1,4 +1,4 @@
-//! Fingerprint, bounded rebuild plan, content-addressed revision journal, re-exec, and commit.
+//! Fingerprint, bounded rebuild plan, content-addressed revision journal, re-exec, commit, and resume.
 //! Reads and previews do not write or spawn. A journal append, a git commit, or a successor
 //! exec runs only when the caller sets review_confirmed.
 use super::*;
@@ -1405,6 +1405,64 @@ pub(crate) fn commit(value: &Json) -> Result<Json> {
     let parent_of = commit_parent_id(&root, &git_dir, &digest)?;
     let listed = commit_tree_paths(&root, &git_dir, &digest, &skip)?;
     Ok(commit_receipt(Some(&digest), &revision, &parent_of, &source_digest, &listed, true))
+}
+
+/// Resume one journalled revision this room has already committed, then re-exec its binary.
+/// `review_confirmed` false returns the commit receipt and leaves the process in place.
+/// The journal row, the commit parent, and the commit tree are the checks `commit` uses.
+/// The successor chain is the witness `handoff` reads, so a tampered, truncated, replaced,
+/// or rolled-back companion returns that witness's sentence and does not exec.
+pub(crate) fn resume(value: &Json) -> Result<Json> {
+    only(value, &["root", "binary", "args", "revision", "journal", "review_confirmed", "parent"])?;
+    let root = root_of(value)?;
+    let binary = resolve_file(&root, field(value, "binary")?)?;
+    let journal_rel = text(value, "journal");
+    relative(&journal_rel)?;
+    if journal_rel.is_empty() {
+        return Err("journal path is required".into());
+    }
+    let parent = text(value, "parent");
+    digest_text(&parent)?;
+    let revision = text(value, "revision");
+    if !hex64(&revision) {
+        return Err("revision is not a journalled revision of this room".into());
+    }
+    let journal_path = locate(&root, &journal_rel, false)?;
+    let record = journalled_revision(&journal_path, &revision)?;
+    if text(&record, "parent") != parent {
+        return Err("parent revision does not match the journalled revision".into());
+    }
+    let binary_digest = sha256(&read_regular(&binary, BINARY_MAX)?);
+    if text(&record, "build_digest") != binary_digest {
+        return Err("binary digest does not match the journalled revision".into());
+    }
+    let rollback = text(&record, "rollback");
+    let skip = skip_paths(&obj(vec![("journal", s(&journal_rel)), ("rollback", s(&rollback))]))?;
+    let (source_digest, _, _) = tree(&root, &skip)?;
+    if text(&record, "source_digest") != source_digest {
+        return Err("stale source digest".into());
+    }
+    let git_dir = require_git_dir(&root)?;
+    let paths = tracked_source_paths(&root, &git_dir, &skip)?;
+    if paths.is_empty() {
+        return Err("tracked source tree is empty".into());
+    }
+    let Some(digest) = matching_commit(&root, &git_dir, &revision, &paths, &skip)? else {
+        return Err("revision is not the committed head of this room".into());
+    };
+    let parent_of = commit_parent_id(&root, &git_dir, &digest)?;
+    let listed = commit_tree_paths(&root, &git_dir, &digest, &skip)?;
+    if listed != paths {
+        return Err("revision is not the committed head of this room".into());
+    }
+    successor_witness(&root, value)?;
+    if !flag(value, "review_confirmed") {
+        return Ok(commit_receipt(Some(&digest), &revision, &parent_of, &source_digest, &listed, false));
+    }
+    let mut command = Command::new(&binary);
+    command.args(strings(value, "args")?);
+    let error = CommandExt::exec(&mut command);
+    Err(format!("successor exec failed: {error}"))
 }
 
 pub(crate) fn write_args(args: &Json) -> Json {
@@ -5449,5 +5507,272 @@ mv "$tmp" "$1.done"
             "O_NOFOLLOW followed a symlink directory"
         );
         assert!(sync_mark_directory(&real).is_ok(), "a real directory did not sync");
+    }
+
+    fn git_room(root: &Path, args: &[&str]) {
+        let mut full = vec![
+            "-c",
+            "safe.directory=*",
+            "-c",
+            "user.name=RLLM",
+            "-c",
+            "user.email=rllm@localhost",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.autocrlf=false",
+        ];
+        let hooks = root.join(".git/rllm-empty-hooks");
+        if hooks.is_dir() {
+            full.push("-c");
+            full.push("core.hooksPath=.git/rllm-empty-hooks");
+        }
+        full.extend(args);
+        let output = Command::new("git")
+            .args(&full)
+            .current_dir(root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_NAMESPACE")
+            .output()
+            .unwrap_or_else(|error| panic!("git {} failed to start: {error}", args.join(" ")));
+        assert!(
+            output.status.success(),
+            "git {} exited {:?}\n{}",
+            args.join(" "),
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    fn prepare_committed(root: &Path) -> (String, String) {
+        write(&root.join("src/lib.rs"), b"fn marker() {}\n");
+        write(&root.join("notes/base.txt"), b"base\n");
+        executable(&root.join("bin"), b"#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$2\"\n");
+        let root_text = root.to_str().unwrap();
+        let binary = root.join("bin").to_str().unwrap().to_string();
+        let recorded = journal(&obj(vec![
+            ("root", s(root_text)),
+            ("binary", s(&binary)),
+            ("previous_binary", s(&binary)),
+            ("journal", s("self/journal.jsonl")),
+            ("rollback", s("self/rollback")),
+            ("parent", s("")),
+            ("gate_output", s("Rust cases passed: 1/1; isolated application cases: 1")),
+            ("review_confirmed", Bool(true)),
+        ]))
+        .unwrap_or_else(|error| panic!("journal: {error}"));
+        assert_eq!(get(&recorded, "recorded"), &Bool(true));
+        let revision = text(&recorded, "revision");
+        git_room(root, &["init", "-b", "main"]);
+        fs::create_dir_all(root.join(".git/rllm-empty-hooks")).unwrap();
+        git_room(root, &["add", "--", "notes/base.txt"]);
+        git_room(root, &["commit", "-m", "base", "--", "notes/base.txt"]);
+        git_room(root, &["add", "--", "src/lib.rs"]);
+        let committed = commit(&obj(vec![
+            ("root", s(root_text)),
+            ("binary", s(&binary)),
+            ("revision", s(&revision)),
+            ("journal", s("self/journal.jsonl")),
+            ("parent", s("")),
+            ("review_confirmed", Bool(true)),
+        ]))
+        .unwrap_or_else(|error| panic!("commit: {error}"));
+        let digest = text(&committed, "commit");
+        assert!(hex40(&digest), "{digest}");
+        assert_eq!(text(&committed, "revision"), revision);
+        (revision, digest)
+    }
+    fn resume_request(root: &Path, revision: &str, confirmed: bool) -> Json {
+        obj(vec![
+            ("root", s(root.to_str().unwrap())),
+            ("binary", s(root.join("bin").to_str().unwrap())),
+            ("revision", s(revision)),
+            ("journal", s("self/journal.jsonl")),
+            ("parent", s("")),
+            ("review_confirmed", Bool(confirmed)),
+        ])
+    }
+    fn link_closed_successor(root: &Path) {
+        let witness = successor_journal_path(&root.join("self/journal.jsonl"));
+        append_spawn_row(&witness, 11, "job-a", &sha256(b"source-a"), "spawn").unwrap();
+        append_reap_row(&witness, 11, "job-a", Some(0), None).unwrap();
+    }
+    fn link_three_successors(root: &Path) {
+        link_closed_successor(root);
+        let witness = successor_journal_path(&root.join("self/journal.jsonl"));
+        append_spawn_row(&witness, 12, "job-b", &sha256(b"source-b"), "spawn").unwrap();
+    }
+    fn flip_successor_job(journal: &Path) {
+        let mut lines = successor_lines(journal);
+        assert!(lines.len() >= 2, "tamper needs a successor row");
+        let before = parse(&lines[1]).unwrap();
+        let revision = text(&before, "revision");
+        let marker = "\"job\":\"job-a\"";
+        let at = lines[1].find(marker).expect("reap payload job");
+        let mut bytes = lines[1].clone().into_bytes();
+        let index = at + marker.len() - 2;
+        assert_eq!(bytes[index], b'a');
+        bytes[index] = b'b';
+        lines[1] = String::from_utf8(bytes).unwrap();
+        let after = parse(&lines[1]).unwrap();
+        assert_eq!(text(&after, "revision"), revision);
+        assert_ne!(revision, sha256(without_revision(&after).unwrap().string().as_bytes()));
+        store_successor_lines(journal, &lines);
+    }
+    fn resume_child(probe: &str, root: &Path, proof: &Path, revision: &str, exact: &str) -> std::process::Output {
+        test_child(
+            &[
+                ("RLLM_SELF_BUILD_PROBE", probe),
+                ("RLLM_EXEC_ROOT", root.to_str().unwrap()),
+                ("RLLM_EXEC_PROOF", proof.to_str().unwrap()),
+                ("RLLM_RESUME_REVISION", revision),
+            ],
+            exact,
+        )
+    }
+
+    #[test]
+    fn resume_reaches_the_successor() {
+        let _isolate = isolate();
+        if std::env::var("RLLM_SELF_BUILD_PROBE").ok().as_deref() == Some("resume-exec") {
+            let root = PathBuf::from(std::env::var("RLLM_EXEC_ROOT").unwrap());
+            let proof = std::env::var("RLLM_EXEC_PROOF").unwrap();
+            let revision = std::env::var("RLLM_RESUME_REVISION").unwrap();
+            let mut request = resume_request(&root, &revision, true);
+            put(&mut request, "args", Arr(vec![s("continue"), s(&proof)]));
+            let result = resume(&request);
+            panic!("resume exec returned {result:?}");
+        }
+        let scratch = Scratch::new("resume-exec");
+        let root = scratch.path();
+        let (revision, digest) = prepare_committed(root);
+        link_closed_successor(root);
+        let journal = fs::read(root.join("self/journal.jsonl")).unwrap();
+        let head = fs::read(root.join(".git/refs/heads/main")).unwrap();
+        let preview = resume(&resume_request(root, &revision, false)).unwrap();
+        assert_eq!(text(&preview, "commit"), digest);
+        assert_eq!(text(&preview, "revision"), revision);
+        assert_eq!(get(&preview, "review_confirmed"), &Bool(false));
+        let parent_commit = text(&preview, "parent_commit");
+        assert!(hex40(&parent_commit), "{parent_commit}");
+        assert_ne!(parent_commit, digest);
+        assert_eq!(
+            get(&preview, "committed_paths"),
+            &Arr(vec![s("notes/base.txt"), s("src/lib.rs")])
+        );
+        assert_eq!(text(&preview, "source_digest"), text(&rows(&root.join("self/journal.jsonl"))[0], "source_digest"));
+        assert_eq!(fs::read(root.join("self/journal.jsonl")).unwrap(), journal);
+        assert_eq!(fs::read(root.join(".git/refs/heads/main")).unwrap(), head);
+        let proof = root.join("valid-proof");
+        let output = resume_child(
+            "resume-exec",
+            root,
+            &proof,
+            &revision,
+            "self_build::checks::resume_reaches_the_successor",
+        );
+        let body = fs::read_to_string(&proof).unwrap_or_else(|error| panic!("{error}\n{}", child_text(&output)));
+        assert_eq!(body, "continue\n", "{}", child_text(&output));
+        assert!(output.status.success(), "{}", child_text(&output));
+    }
+
+    #[test]
+    fn resume_refuses_a_tampered_successor_journal() {
+        let _isolate = isolate();
+        if std::env::var("RLLM_SELF_BUILD_PROBE").ok().as_deref() == Some("resume-tampered") {
+            let root = PathBuf::from(std::env::var("RLLM_EXEC_ROOT").unwrap());
+            let proof = std::env::var("RLLM_EXEC_PROOF").unwrap();
+            let revision = std::env::var("RLLM_RESUME_REVISION").unwrap();
+            let journal = root.join("self/journal.jsonl");
+            flip_successor_job(&journal);
+            let mut request = resume_request(&root, &revision, true);
+            put(&mut request, "args", Arr(vec![s("continue"), s(&proof)]));
+            match resume(&request) {
+                Err(error) if error == "successor journal row is not content-addressed" => {
+                    panic!("refused before exec: {error}");
+                }
+                other => panic!("resume exec returned {other:?}"),
+            }
+        }
+        let scratch = Scratch::new("resume-tampered");
+        let root = scratch.path();
+        let (revision, _) = prepare_committed(root);
+        link_closed_successor(root);
+        let proof = root.join("tampered-proof");
+        let output = resume_child(
+            "resume-tampered",
+            root,
+            &proof,
+            &revision,
+            "self_build::checks::resume_refuses_a_tampered_successor_journal",
+        );
+        let detail = child_text(&output);
+        assert!(!proof.exists(), "tampered chain still exec'd the successor\n{detail}");
+        assert!(detail.contains("successor journal row is not content-addressed"), "{detail}");
+        assert!(detail.contains("refused before exec"), "{detail}");
+        assert!(!detail.contains("successor exec failed"), "{detail}");
+        assert!(!output.status.success(), "{detail}");
+    }
+
+    #[test]
+    fn resume_refuses_a_rewound_companion() {
+        let _isolate = isolate();
+        if std::env::var("RLLM_SELF_BUILD_PROBE").ok().as_deref() == Some("resume-rewound") {
+            let root = PathBuf::from(std::env::var("RLLM_EXEC_ROOT").unwrap());
+            let proof = std::env::var("RLLM_EXEC_PROOF").unwrap();
+            let revision = std::env::var("RLLM_RESUME_REVISION").unwrap();
+            fork_companion(&root.join("self/journal.jsonl"));
+            let mut request = resume_request(&root, &revision, true);
+            put(&mut request, "args", Arr(vec![s("continue"), s(&proof)]));
+            match resume(&request) {
+                Err(error) if error == "successor journal rolled back onto a revision already observed" => {
+                    panic!("refused before exec: {error}");
+                }
+                other => panic!("resume exec returned {other:?}"),
+            }
+        }
+        let scratch = Scratch::new("resume-rewound");
+        let root = scratch.path();
+        let (revision, _) = prepare_committed(root);
+        link_three_successors(root);
+        let proof = root.join("rewind-proof");
+        let output = resume_child(
+            "resume-rewound",
+            root,
+            &proof,
+            &revision,
+            "self_build::checks::resume_refuses_a_rewound_companion",
+        );
+        let detail = child_text(&output);
+        assert!(!proof.exists(), "rewound chain still exec'd the successor\n{detail}");
+        assert!(detail.contains("successor journal rolled back onto a revision already observed"), "{detail}");
+        assert!(detail.contains("refused before exec"), "{detail}");
+        assert!(!detail.contains("successor exec failed"), "{detail}");
+        assert!(!output.status.success(), "{detail}");
+    }
+
+    #[test]
+    fn resume_dispatch_reaches_the_verb_through_envelope() {
+        let _isolate = isolate();
+        let scratch = Scratch::new("resume-envelope");
+        let root = scratch.path();
+        let (revision, digest) = prepare_committed(root);
+        link_closed_successor(root);
+        let mut request = resume_request(root, &revision, false);
+        put(&mut request, "op", s("self_resume"));
+        let parsed = parse(&super::envelope(&request.string())).unwrap();
+        assert_eq!(get(&parsed, "error"), &Null, "{}", parsed.string());
+        let value = get(&parsed, "value");
+        assert_eq!(text(value, "commit"), digest);
+        assert_eq!(text(value, "revision"), revision);
+        assert_eq!(get(value, "review_confirmed"), &Bool(false));
+        assert!(hex40(&text(value, "parent_commit")), "{}", value.string());
+        fs::write(root.join("self/journal.jsonl"), b"{}\n").unwrap();
+        let denied = parse(&super::envelope(&request.string())).unwrap();
+        assert_eq!(text(&denied, "error"), "revision is not a journalled revision of this room");
+        put(&mut request, "op", s("self_resume_missing"));
+        let unknown = parse(&super::envelope(&request.string())).unwrap();
+        assert_eq!(text(&unknown, "error"), "Unknown operation");
     }
 }
