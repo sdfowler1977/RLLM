@@ -31,7 +31,10 @@ fn main() {
     let publication = publication_record(&project);
     let readback = std::fs::read_to_string(project.join("tools/readback.rs"))
         .unwrap_or_else(|error| panic!("could not read tools/readback.rs: {error}"));
-    let default_form = "RLLM_CHECK_APK',";
+    // This source is itself a reader. The needle is split so the guard does not
+    // match the file that states it.
+    let owned_form = String::from("RLLM_CHECK_APK'") + ",";
+    let default_form = owned_form.as_str();
     let mut passed = Vec::new();
 
     check(
@@ -198,7 +201,7 @@ fn verification_readers(project: &Path) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = std::fs::read_dir(&directory)
         .unwrap_or_else(|error| panic!("could not read {}: {error}", directory.display()))
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().is_some_and(|extension| extension == "py"))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
         .collect();
     paths.sort();
     paths
