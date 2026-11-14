@@ -41,3 +41,55 @@ A selected page can redirect to its canonical address. The current reader follow
 ## Search without a model
 
 Open Workspace → Search the web, enter a focused query and submit it. When review is required, the app shows the query and source plan. Results appear locally in the output view and are available without an LLM connection. Existing search-source configuration, review, cancellation and finite alternatives apply. This direct user action does not require an agent or its model-tool permission. The separate Workspace Search action still searches local files.
+
+## Request identity — run log on the committed bytes
+
+This log was made on committed bytes, not on a lane room: a fresh clone of `48ad494 Send the owned User-Agent
+line and pin the Accept line each route writes` (`/tmp/g98room`, `tooling` symlinked, nothing applied on top),
+driven only by the sanctioned builders. Source alone is not evidence, so every line below is output.
+
+```
+COMMIT 48ad4945c77e Send the owned User-Agent line and pin the Accept line each route writes
+TOOLS tools compiler: rustc 1.99.1 (58cf8f9c3 2026-10-13)
+TOOLS tool tests: /tmp/g98room/output/tools/package-tests cases: 46
+TOOLS tool tests: /tmp/g98room/output/tools/harness-tests cases: 37
+TOOLS verification compiler: rustc 1.99.1 (58cf8f9c3 2026-10-13)
+TOOLS twin helper tests: /tmp/g98room/output/verification/twin-helper-tests cases: 44
+UNITS-BUILD-RC=0
+GATE Rust cases passed: 895/895; isolated application cases: 61
+HEADLESS /tmp/g98room/output/headless/RLLM
+TWIN-LINES 72
+GROUP http_framing PASS (exit 0, 0s, 192 checks)
+GROUP network_feedback PASS (exit 0, 0s, 41 checks)
+GROUP response_fields PASS (exit 0, 0s, 45 checks)
+GROUP mcp_catalog PASS (exit 0, 0s, 30 checks)
+GROUP mcp_continuation PASS (exit 0, 0s, 32 checks)
+```
+
+The eight cases that pin the owned lines were then run by full module path on the same binary — a short name with
+`--exact` filters to nothing and prints a green-looking `0 passed`, so the paths are quoted in full:
+
+```
+CASES test application::checks::hosted_continuation_accepts_json ... ok
+CASES test application::checks::nonstreaming_model_route_advertises_json ... ok
+CASES test application::checks::streaming_model_route_advertises_json_and_event_stream ... ok
+CASES test gateway::checks::gateway_route_accepts_json ... ok
+CASES test mcp_lifecycle::checks::mcp_route_asks_for_json ... ok
+CASES test network::field_checks::caller_user_agent_is_an_invalid_http_header ... ok
+CASES test network::field_checks::headerless_request_carries_exactly_one_owned_user_agent ... ok
+CASES test provider::checks::provider_probe_accepts_json ... ok
+CASES test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 887 filtered out
+LIST-TOTAL 896
+```
+
+What that witnesses: the product appends exactly one `User-Agent: RLLM web reader` line to every outbound web
+request and rejects a caller-supplied `User-Agent` as an invalid HTTP header; the model route advertises
+`application/json` when streaming is off and `application/json, text/event-stream` when it is on; the hosted
+continuation, gateway reply, provider probe and MCP route each advertise `application/json`. The same bytes were
+run through the whole 71-group check against their own baseline: `4157 checks` before, `4160 checks` after, the
+only mover `http_framing base=189 patched=192`, and no check name lost in any group.
+
+What it does not witness: nothing here crossed the public internet. The phone screenshot that reads `Website
+returned HTTP 403; no page contents were accepted` is a website's answer to a request RLLM made, and the owner's
+URL for that request has not been supplied, so the live-internet leg stays unwitnessed. A focused live probe of
+the search endpoints remains a separate check (`output/verification/live_web --live`).
