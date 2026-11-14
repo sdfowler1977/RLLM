@@ -544,10 +544,14 @@ pub(super) fn reset_task(st:&mut Json){inquiry::focus_task(st);put(st,"delegatio
 pub(super) fn standalone_result(reply:&str)->String{format!("Agent task result:\n{reply}")}
 const REFINEMENT_TOOLS:&[&str]=&["list","read","search","inspect","compare","observations","hypotheses","experiments","web_read","web_search","phone_list","phone_read","drive_list","drive_read"];
 pub(super) fn phase_permits(st:&Json,tool:&str)->bool{text(get(st,"task_run"),"mode")!="refine"||REFINEMENT_TOOLS.contains(&tool)}
-pub(super) fn has_operation_room(st:&Json)->bool{
- let limit=match answer_mode::current(st){answer_mode::Mode::Direct=>0,answer_mode::Mode::Lookup=>2,_=>8};
- number(st,"steps").saturating_add(usize::from(answer_mode::native_started(st)))<limit
+const LOOKUP_OPERATIONS:usize=4;
+const TURN_OPERATIONS:usize=8;
+pub(super) fn operation_limit(st:&Json)->usize{
+ match answer_mode::current(st){answer_mode::Mode::Direct=>0,answer_mode::Mode::Lookup=>LOOKUP_OPERATIONS,_=>TURN_OPERATIONS}
 }
+// Provider-hosted search is the connection's own request: application.rs admits it once per turn
+// through answer_mode::native_started, so it must not also spend an operation slot here.
+pub(super) fn has_operation_room(st:&Json)->bool{number(st,"steps")<operation_limit(st)}
 pub(super) fn can_request_operations(st:&Json)->bool{has_operation_room(st)&&tool_format::proposal_phase(st)}
 pub(super) fn allowed_tool(st:&Json,p:&Json)->Result<()>{workspace::check_tool(st,&text(p,"tool"))?;harness_rules::check(st,&text(p,"tool"),get(p,"args"),true)?;let agent=if get(st,"task_run")==&Null{active_agent(st)}else{get(get(st,"task_run"),"agent").clone()};let tool=text(p,"tool");if !answer_mode::permits(st,&tool,get(p,"args")){return Err("The current answer mode does not use this operation".into());}if ["inspect","compare"].contains(&tool.as_str())&&text(get(p,"args"),"content")=="complete_digest"&&!text(&agent,"tools").split(',').map(str::trim).any(|v|v=="read"){return Err("Complete-file observation requires enabled read permission".into());}if tool=="self_build"{harness_rules::check(st,"write",&super::super::self_build::write_args(get(p,"args")),true)?;if !text(&agent,"tools").split(',').map(str::trim).any(|v|v=="write"){return Err("Self-build requires enabled write permission".into());}}if tool=="reconstruct"{let source=reconstruction::web_authority(st,get(p,"args"),true)?;for name in if source!=Null{vec!["write",if text(&source,"tool")=="web_search"{"web_search"}else{"web_read"}]}else{vec!["read","write"]}{if !text(&agent,"tools").split(',').map(str::trim).any(|v|v==name){return Err(format!("Reconstruction requires enabled {name} permission"));}}if source!=Null{allowed_tool(st,&source)?;}}if tool=="web_read"&&get(get(p,"args"),"capture")!=&Null{allowed_tool(st,&obj(vec![("tool",s("capture"))]))?;}if boolean(st,"request_hosted_mode") && tool=="web_search"{return Err("This request uses provider-hosted search. Turn hosted search off in this connection to use RLLM search.".into());}if tool=="delegate"{delegation::target(st,p)?;}if !phase_permits(st,&tool){return Err("Refinement probes use read-only tools; run a subagent task for reviewed changes or MCP calls".into());}if !text(&agent,"tools").split(',').map(str::trim).any(|v|v==tool){return Err(format!("Tool {tool} is disabled in the selected agent profile"));}Ok(())}
 const COMMAND_PROCESS:&str="Investigation is intrinsic to following commands and figuring things out. Identify the goal and unknowns, choose useful available evidence, distinguish observations from interpretations, test explanations, apply findings and check the actual result. Scale the work to the question. Use current permissions, reviewed operations and actual returned results to form the answer.";
@@ -611,7 +615,7 @@ pub(super) fn agent_prompt(st:&Json,agent:&Json)->String{
   if tools.iter().any(|tool|tool=="web_search"){prompt.push_str(" Use web_search with {query} for a focused query.");}
   if tools.iter().any(|tool|tool=="web_read"){prompt.push_str(" Use web_read with {url} for an exact relevant public page.");}
   if search::automatic(st){prompt.push_str(" The controller handles automatic web access and review rules.");}
-  if !has_operation_room(st){prompt.push_str(" The two-operation lookup budget is used. Return the best verified answer now.");}
+  if !has_operation_room(st){prompt.push_str(&format!(" The {}-operation lookup budget is used. Return the best verified answer now.",operation_limit(st)));}
   prompt.push_str(&answer_mode::lookup_context(st));
   return prompt;
  }
@@ -3938,6 +3942,17 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
  fn configured()->(Json,Json){let agent=obj(vec![("name",s("Parent")),("tools",s("read,write,delegate,mcp")),("subagents",Arr(vec![Num("1".into())])),("investigation_preferences",Bool(false))]);(obj(vec![("profiles",Arr(vec![obj(vec![("name",s("Configured")),("model",s("configured")),("protocol",s("chat")),("endpoint",s("http://model.test/v1/chat/completions"))])])),("agents",Arr(vec![agent.clone(),obj(vec![("name",s("Child"))])])),("mcp",obj(vec![("endpoint",s("http://peer.test/mcp"))]))]),agent)}
  #[test]fn refinement_catalog_uses_the_executor_phase_restrictions(){let(mut st,agent)=configured();assert_eq!(available_tools(&st,&agent),vec!["read","write","delegate","mcp"]);for phase in ["baseline","probe","propose","compose"]{put(&mut st,"task_run",obj(vec![("mode",s("refine")),("phase",s(phase)),("agent",agent.clone())]));let actual=available_tools(&st,&agent);assert_eq!(actual,if matches!(phase,"baseline"|"probe"){vec!["read"]}else{vec![]});for tool in &actual{assert!(phase_permits(&st,tool));}assert!(!phase_permits(&st,"write"));assert!(!agent_prompt(&st,&agent).contains("Callable subagents:"));assert!(!agent_prompt(&st,&agent).contains("request mcp args"));}}
  #[test]fn catalogs_follow_existing_operation_and_depth_allowances(){let(mut st,agent)=configured();put(&mut st,"steps",Num("8".into()));assert!(available_tools(&st,&agent).is_empty());assert!(!delegation::slots_available(&st));assert!(agent_prompt(&st,&agent).contains("operation allowance is exhausted"));put(&mut st,"steps",Num("7".into()));put(&mut st,"delegation_stack",Arr(vec![Null;delegation::MAX_DEPTH]));assert_eq!(available_tools(&st,&agent),vec!["read","write","mcp"]);assert!(!agent_prompt(&st,&agent).contains("Callable subagents:"));put(&mut st,"delegation_stack",Arr(vec![Null;delegation::MAX_DEPTH-1]));assert!(available_tools(&st,&agent).contains(&"delegate".into()));}
+ #[test]fn lookup_budget_spends_only_rllm_operations(){
+  let(mut st,agent)=configured();
+  put(&mut st,"answer_turn",obj(vec![("chat",Null),("source",Null),("mode",s("lookup"))]));
+  assert_eq!(operation_limit(&st),LOOKUP_OPERATIONS);
+  put(&mut st,"steps",Num("3".into()));assert!(has_operation_room(&st));
+  put(&mut st,"steps",Num("4".into()));assert!(!has_operation_room(&st));
+  assert!(agent_prompt(&st,&agent).contains("The 4-operation lookup budget is used"));
+  put(&mut st,"answer_turn",obj(vec![("chat",Null),("source",Null),("mode",s("lookup")),("native_started",Bool(true))]));
+  put(&mut st,"steps",Num("3".into()));assert!(has_operation_room(&st));
+  put(&mut st,"steps",Num("4".into()));assert!(!has_operation_room(&st));
+ }
  #[test]fn child_guidance_requires_current_delegate_permission(){let(st,mut agent)=configured();put(&mut agent,"tools",s("read"));let prompt=agent_prompt(&st,&agent);assert!(!prompt.contains("Callable subagents:"));assert!(prompt.contains("The configuration catalog supplies current child routes and their eligibility"));put(&mut agent,"tools",s("read,delegate"));let prompt=agent_prompt(&st,&agent);assert!(prompt.contains("Callable subagents:"));assert!(prompt.contains("\"agent\":1")&&prompt.contains("\"text\":\"Child\"")&&prompt.contains("\"text\":\"configured\""));}
  #[test]fn ordinary_turns_and_explicit_tasks_use_their_own_guidance(){
   let base=obj(vec![("version",Num("1".into())),("agents",Arr(vec![obj(vec![("name",s("General")),("tools",s("read,inspect")),("investigation_preferences",Bool(false))])]))]);
