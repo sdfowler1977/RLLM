@@ -4,8 +4,10 @@
 // present, reads each group's JSON, and writes the connected object plus one
 // checks row per group in verification/RESULTS.json. A missing development
 // input is unavailable and is not charged as a product failure. A product
-// failure leaves that record untouched. The bare run and `harness <group>`
-// do not write the record.
+// failure leaves that record untouched. The same sweep writes
+// output/checks/current-regression.json, one name and code per group, including
+// when a group fails. Code 0 is written only for a group that passed. The bare
+// run and `harness <group>` do not write either record.
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::os::unix::io::AsRawFd;
@@ -1528,6 +1530,64 @@ fn unavailable_object(row: &SweepRow) -> String {
     }
 }
 
+// Publisher code 0 is a pass. The one gap a candidate publication tolerates is
+// binary_flow with code 1 and only the keys name and code. A group that did not
+// run, or that exited 0 without a positive check count, has no measured
+// non-zero exit. Recording 0 would say it passed, and recording 1 on
+// binary_flow would look like that tolerated gap, so the code is 2.
+const REGRESSION_NOT_PASSED: i32 = 2;
+
+fn regression_code(row: &SweepRow) -> i32 {
+    if row.code == Some(0) && matches!(row.checks, Some(count) if count > 0) {
+        return 0;
+    }
+    match row.code {
+        Some(code) if code != 0 => code,
+        _ => REGRESSION_NOT_PASSED,
+    }
+}
+
+fn regression_document(rows: &[SweepRow]) -> Result<String, String> {
+    let mut body = String::from("[\n");
+    for (index, name) in GROUPS.iter().enumerate() {
+        let row = rows.iter().find(|row| row.name == *name).ok_or_else(|| {
+            format!("current-regression.json refused: group {name} has no row")
+        })?;
+        let code = regression_code(row);
+        if index > 0 {
+            body.push_str(",\n");
+        }
+        body.push_str("  {\n    \"name\": \"");
+        body.push_str(&json_escape(name));
+        body.push_str("\",\n    \"code\": ");
+        body.push_str(&code.to_string());
+        body.push_str("\n  }");
+    }
+    body.push_str("\n]\n");
+    Ok(body)
+}
+
+// The whole array is built before the file is opened. A missing group returns
+// here and the previous output/checks/current-regression.json stays as it was.
+fn publish_regression(root: &Path, rows: &[SweepRow]) -> Result<(), String> {
+    let document = regression_document(rows)?;
+    let dir = root.join("output/checks");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return Err("current-regression.json could not be written".into());
+    }
+    let path = dir.join("current-regression.json");
+    let temporary = dir.join("current-regression.json.new");
+    if std::fs::write(&temporary, &document).is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err("current-regression.json could not be written".into());
+    }
+    if std::fs::rename(&temporary, &path).is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err("current-regression.json could not be written".into());
+    }
+    Ok(())
+}
+
 // Replaces the connected object and the checks object. The serialized text must still
 // contain the names published_comparator, flow_comparator and authentication_comparator;
 // selected_rust_* fields stay because this writer never touches them, not because a
@@ -1722,6 +1782,27 @@ fn sweep_one(root: &Path, name: &'static str, opts: &SweepOpts, seconds: u64) ->
     SweepRow { name, code: Some(code), checks, missing: Vec::new(), reason, report: report_text }
 }
 
+fn finish_sweep(root: &Path, rows: &[SweepRow]) -> Result<i32, String> {
+    let passed = rows.iter().filter(|row| !row_failed(row) && row.code.is_some()).count();
+    let failed = rows.iter().filter(|row| row_failed(row)).count();
+    let unavailable = rows.iter().filter(|row| row.code.is_none()).count();
+    let absent = rows.iter().filter(|row| row.code.is_some() && row.checks.is_none()).count();
+    let total: usize = rows.iter().map(|row| if row.code == Some(0) { row.checks.unwrap_or(0) } else { 0 }).sum();
+    let regression = publish_regression(root, rows);
+    let wrote = if regression.is_ok() { commit_sweep(root, rows) } else { false };
+    println!(
+        "summary: {passed} pass, {failed} fail, {unavailable} unavailable, {absent} absent of {} groups, {total} checks",
+        GROUPS.len()
+    );
+    if let Err(error) = regression {
+        return Err(error);
+    }
+    if !wrote || failed > 0 || absent > 0 {
+        return Ok(1);
+    }
+    Ok(0)
+}
+
 fn run_sweep(args: &[String]) -> Result<i32, String> {
     let opts = parse_sweep(args)?;
     let root = project_root();
@@ -1732,20 +1813,13 @@ fn run_sweep(args: &[String]) -> Result<i32, String> {
     println!("harness sweep: {} groups", GROUPS.len());
     let _ = std::io::Write::flush(&mut std::io::stdout());
     let rows: Vec<SweepRow> = GROUPS.iter().map(|name| sweep_one(&root, name, &opts, SECONDS)).collect();
-    let passed = rows.iter().filter(|row| !row_failed(row) && row.code.is_some()).count();
-    let failed = rows.iter().filter(|row| row_failed(row)).count();
-    let unavailable = rows.iter().filter(|row| row.code.is_none()).count();
-    let absent = rows.iter().filter(|row| row.code.is_some() && row.checks.is_none()).count();
-    let total: usize = rows.iter().map(|row| if row.code == Some(0) { row.checks.unwrap_or(0) } else { 0 }).sum();
-    let wrote = commit_sweep(&root, &rows);
-    println!(
-        "summary: {passed} pass, {failed} fail, {unavailable} unavailable, {absent} absent of {} groups, {total} checks",
-        GROUPS.len()
-    );
-    if !wrote || failed > 0 || absent > 0 {
-        return Ok(1);
+    match finish_sweep(&root, &rows) {
+        Ok(code) => Ok(code),
+        Err(error) => {
+            eprintln!("regression record left untouched: {error}");
+            Ok(1)
+        }
     }
-    Ok(0)
 }
 
 fn replace_connected(text: &str, replacement: &str) -> Option<String> {
@@ -2660,5 +2734,246 @@ mod checks {
         assert!(GROUPS.iter().any(|name| *name == "gateway_expectation" && name.starts_with("gateway") && *name != "gateway"));
         let line = requested_group_refusal("gateway").unwrap_or_else(|| panic!("prefix gateway was accepted"));
         assert_eq!(line, "unknown group gateway (not a runner group, a declared helper or a declared optional group)");
+    }
+
+    fn rendered_regression(codes: &[i32]) -> String {
+        assert_eq!(codes.len(), GROUPS.len(), "rendered row count");
+        let mut body = String::from("[\n");
+        for (index, (name, code)) in GROUPS.iter().zip(codes.iter()).enumerate() {
+            if index > 0 {
+                body.push_str(",\n");
+            }
+            body.push_str("  {\n    \"name\": \"");
+            body.push_str(&json_escape(name));
+            body.push_str("\",\n    \"code\": ");
+            body.push_str(&code.to_string());
+            body.push_str("\n  }");
+        }
+        body.push_str("\n]\n");
+        body
+    }
+
+    fn regression_path(root: &Path) -> PathBuf {
+        root.join("output/checks/current-regression.json")
+    }
+
+    // tools/package.rs::load_runs is a separate binary, so this crate cannot call
+    // it. The parser applies that reader's shape: an array of objects, a name
+    // string, and an integer code. It also requires the name to be non-empty and
+    // the keys to be exactly name then code, which is the object exact_binary_flow
+    // counts. A non-array, a non-object row, a missing name, a non-integer code,
+    // or any other key fails.
+    fn publisher_regression_rows(text: &str) -> Result<Vec<(String, i64)>, String> {
+        let mut scan = Scan { text: text.as_bytes(), i: 0 };
+        scan.skip_ws();
+        if !scan.eat(b'[') {
+            return Err("not an array".into());
+        }
+        let mut rows = Vec::new();
+        loop {
+            scan.skip_ws();
+            if scan.eat(b']') {
+                break;
+            }
+            if !rows.is_empty() && !scan.eat(b',') {
+                return Err("row was not an object".into());
+            }
+            scan.skip_ws();
+            if !scan.eat(b'{') {
+                return Err("row was not an object".into());
+            }
+            let mut name: Option<String> = None;
+            let mut code: Option<i64> = None;
+            let mut keys = Vec::new();
+            loop {
+                scan.skip_ws();
+                if scan.eat(b'}') {
+                    if keys.is_empty() {
+                        break;
+                    }
+                    return Err("trailing comma".into());
+                }
+                let key = scan.key().ok_or_else(|| "missing name".to_string())?;
+                scan.skip_ws();
+                if !scan.eat(b':') {
+                    return Err("row was not an object".into());
+                }
+                scan.skip_ws();
+                match key.as_str() {
+                    "name" => {
+                        if scan.peek() != Some(b'"') {
+                            return Err("name was not a string".into());
+                        }
+                        let start = scan.i;
+                        scan.skip_string().ok_or_else(|| "name was not a string".to_string())?;
+                        let end = scan.i;
+                        let raw = std::str::from_utf8(&scan.text[start + 1..end - 1]).map_err(|_| "name was not a string".to_string())?;
+                        if raw.is_empty() {
+                            return Err("name was empty".into());
+                        }
+                        name = Some(raw.to_string());
+                    }
+                    "code" => match scan.take_executed_int() {
+                        Some(Some(value)) => code = Some(value),
+                        _ => return Err("code was not an integer".into()),
+                    },
+                    other => return Err(format!("unexpected key {other}")),
+                }
+                keys.push(key);
+                scan.skip_ws();
+                if scan.eat(b',') {
+                    continue;
+                }
+                if scan.eat(b'}') {
+                    break;
+                }
+                return Err("row was not an object".into());
+            }
+            if keys.len() != 2 || keys[0] != "name" || keys[1] != "code" {
+                return Err(format!("keys were {keys:?}"));
+            }
+            let name = name.ok_or_else(|| "missing name".to_string())?;
+            let code = code.ok_or_else(|| "code was not an integer".to_string())?;
+            rows.push((name, code));
+        }
+        scan.skip_ws();
+        if scan.i != scan.text.len() {
+            return Err("trailing bytes".into());
+        }
+        Ok(rows)
+    }
+
+    #[test]
+    fn regression_record_names_every_group_once_in_groups_order() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        plant_record(root);
+        let code = finish_sweep(root, &pass_rows()).unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(code, 0, "a passing sweep still exits 0");
+        let path = regression_path(root);
+        let first = std::fs::read(&path).unwrap();
+        let expected = rendered_regression(&vec![0; GROUPS.len()]);
+        assert_eq!(String::from_utf8(first.clone()).unwrap(), expected, "regression bytes");
+        assert_eq!(finish_sweep(root, &pass_rows()).unwrap(), 0, "second publish");
+        assert_eq!(std::fs::read(&path).unwrap(), first, "same rows rewrote the bytes");
+        let mut reversed = pass_rows();
+        reversed.reverse();
+        assert_eq!(finish_sweep(root, &reversed).unwrap(), 0, "reversed input");
+        assert_eq!(std::fs::read(&path).unwrap(), first, "row order followed the input instead of GROUPS");
+        let parsed = publisher_regression_rows(&expected).unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(parsed.len(), GROUPS.len(), "row count");
+        let mut seen = BTreeSet::new();
+        for (index, (name, code)) in parsed.iter().enumerate() {
+            assert_eq!(name, GROUPS[index], "group order");
+            assert_eq!(*code, 0, "{name} code");
+            assert!(seen.insert(name.clone()), "duplicate {name}");
+        }
+    }
+
+    #[test]
+    fn regression_record_maps_pass_failure_and_absent_codes() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let mut rows = pass_rows();
+        let slot = rows.iter_mut().find(|row| row.name == "history").unwrap();
+        slot.code = Some(9);
+        slot.checks = Some(4);
+        let slot = rows.iter_mut().find(|row| row.name == "binary_flow").unwrap();
+        slot.code = None;
+        slot.checks = Some(0);
+        slot.report = None;
+        let slot = rows.iter_mut().find(|row| row.name == "apk_alignment").unwrap();
+        slot.code = Some(0);
+        slot.checks = None;
+        slot.report = None;
+        let slot = rows.iter_mut().find(|row| row.name == "turn_background").unwrap();
+        slot.code = Some(0);
+        slot.checks = Some(0);
+        let slot = rows.iter_mut().find(|row| row.name == "history_migration").unwrap();
+        slot.code = Some(-1);
+        slot.checks = None;
+        let slot = rows.iter_mut().find(|row| row.name == "scene").unwrap();
+        slot.code = Some(124);
+        slot.checks = None;
+        let code = finish_sweep(root, &rows).unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(code, 1, "a failing sweep still exits 1");
+        let text = std::fs::read_to_string(regression_path(root)).unwrap();
+        let parsed = publisher_regression_rows(&text).unwrap_or_else(|err| panic!("{err}"));
+        let code_of = |name: &str| parsed.iter().find(|(got, _)| got == name).map(|(_, code)| *code).unwrap();
+        assert_eq!(code_of("provider_process"), 0, "a pass row");
+        assert_eq!(code_of("history"), 9, "measured non-zero exit");
+        assert_eq!(code_of("binary_flow"), i64::from(REGRESSION_NOT_PASSED), "unavailable code None");
+        assert_ne!(code_of("binary_flow"), 0, "unavailable was recorded as a pass");
+        assert_ne!(code_of("binary_flow"), 1, "unavailable binary_flow looked like the tolerated gap");
+        assert_eq!(code_of("apk_alignment"), i64::from(REGRESSION_NOT_PASSED), "exit 0 with absent checks");
+        assert_ne!(code_of("apk_alignment"), 0, "absent checks were recorded as a pass");
+        assert_eq!(code_of("turn_background"), i64::from(REGRESSION_NOT_PASSED), "exit 0 with zero checks");
+        assert_ne!(code_of("turn_background"), 0, "zero checks were recorded as a pass");
+        assert_eq!(code_of("history_migration"), -1, "measured negative exit");
+        assert_eq!(code_of("scene"), 124, "measured timeout exit");
+        assert_eq!(REGRESSION_NOT_PASSED, 2, "not-passed sentinel");
+        let mut codes = vec![0i32; GROUPS.len()];
+        let set = |codes: &mut [i32], name: &str, value: i32| {
+            codes[GROUPS.iter().position(|group| *group == name).unwrap()] = value;
+        };
+        set(&mut codes, "history", 9);
+        set(&mut codes, "binary_flow", REGRESSION_NOT_PASSED);
+        set(&mut codes, "apk_alignment", REGRESSION_NOT_PASSED);
+        set(&mut codes, "turn_background", REGRESSION_NOT_PASSED);
+        set(&mut codes, "history_migration", -1);
+        set(&mut codes, "scene", 124);
+        assert_eq!(text, rendered_regression(&codes), "verdict bytes");
+    }
+
+    #[test]
+    fn regression_record_matches_the_publisher_row_shape() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let mut rows = pass_rows();
+        let slot = rows.iter_mut().find(|row| row.name == "history").unwrap();
+        slot.code = Some(-3);
+        slot.checks = None;
+        finish_sweep(root, &rows).unwrap_or_else(|err| panic!("{err}"));
+        let text = std::fs::read_to_string(regression_path(root)).unwrap();
+        let parsed = publisher_regression_rows(&text).unwrap_or_else(|err| panic!("publisher shape refused the harness bytes: {err}"));
+        assert_eq!(parsed.len(), GROUPS.len(), "row count");
+        let mut seen = BTreeSet::new();
+        for (index, (name, code)) in parsed.iter().enumerate() {
+            assert_eq!(name, GROUPS[index], "group order");
+            assert!(!name.is_empty(), "empty name");
+            assert!(seen.insert(name.clone()), "duplicate {name}");
+            if *name == "history" {
+                assert_eq!(*code, -3, "integer code");
+            }
+        }
+        assert!(publisher_regression_rows(r#"{"name":"history","code":0}"#).is_err(), "a non-array was accepted");
+        assert!(publisher_regression_rows("[1]\n").is_err(), "a non-object row was accepted");
+        assert!(publisher_regression_rows("[{\"code\":0}]\n").is_err(), "a missing name was accepted");
+        assert!(publisher_regression_rows("[{\"name\":\"\",\"code\":0}]\n").is_err(), "an empty name was accepted");
+        assert!(publisher_regression_rows("[{\"name\":\"history\",\"code\":1.5}]\n").is_err(), "a non-integer code was accepted");
+        assert!(publisher_regression_rows("[{\"name\":\"history\",\"code\":0,\"reason\":\"x\"}]\n").is_err(), "an extra key was accepted");
+    }
+
+    #[test]
+    fn regression_record_refuses_a_missing_group_and_keeps_the_prior_file() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        let path = regression_path(root);
+        let prior = b"[\n  {\n    \"name\": \"prior\",\n    \"code\": 9\n  }\n]\n";
+        std::fs::write(&path, prior).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let rows: Vec<_> = pass_rows().into_iter().filter(|row| row.name != "history").collect();
+        let err = finish_sweep(root, &rows).err();
+        assert_eq!(
+            err.as_deref(),
+            Some("current-regression.json refused: group history has no row"),
+            "regression writer refused without naming the missing group"
+        );
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(after, before, "prior regression record changed");
+        assert_eq!(after, prior, "prior bytes");
+        assert!(!root.join("output/checks/current-regression.json.new").exists(), "temporary regression file was left behind");
+        assert!(!root.join("verification/RESULTS.json").exists(), "a refused regression write still published the delivered record");
     }
 }
