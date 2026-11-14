@@ -2866,5 +2866,66 @@
     "named_red": "checks::project_python_census_counts_this_tree :: test result: FAILED. 0 passed; 1 failed; 45 filtered out - the only red of the 14",
     "restored": "all 14 green again and WHOLE-SUITE test result: ok. 46 passed; 0 failed; 0 filtered out; PY-COUNT-AFTER 1 (only tools/package.py)",
     "note": "a first attempt was void: the extracted name kept the trailing colon from the --list row (`checks::project_python_census_counts_this_tree:`), so every run printed `0 passed; 46 filtered out`"
+  },
+  "lane_g4_witnessed_2026_11_14": {
+    "lane": "G4 (MCP credentials, workspace roots, duplicate content coding)",
+    "room": "/tmp/g97room - fresh clone at b0b6b56 (code of committed lane J), /tmp/laneG4.patch (99,376 B, 9 paths, +965/-41) applied cleanly",
+    "witness_logs": [
+      "/tmp/laneG4-verify.log",
+      "/tmp/g4-cases.log (corrected named-case leg)",
+      "/tmp/g97-fullcheck.log (full 71-group census)"
+    ],
+    "measured": {
+      "units_base": "Rust cases passed: 895/895; isolated application cases: 61",
+      "units_patched": "Rust cases passed: 922/922; isolated application cases: 61 (+27, the same delta the lane reports from its pre-J base)",
+      "named_cases": "NAME-COUNT 30 RESOLVED-COUNT 30 MISSING=0; 30 passed; 0 failed; 0 measured; 892 filtered out",
+      "twins": 72,
+      "delivered_record": "e2f35542e44b55094558a8ebcedbbe32f539a4188cdb2b69e84b5de2ab6435a0 unchanged",
+      "groups": {
+        "http_framing": "PASS 195 (HEAD 192, lane J already committed; the lane's table said 189->192 on its own base)",
+        "mcp_catalog": "PASS 38 (HEAD 30)",
+        "mcp_catalog_events": "PASS 148 (HEAD 145)",
+        "mcp_continuation": "PASS 32",
+        "mcp_history": "PASS 21",
+        "network_feedback": "PASS 41",
+        "response_fields": "PASS 45"
+      }
+    },
+    "census": {
+      "base_sweep": "64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4160 checks",
+      "patched_sweep": "64 pass, 0 fail, 7 unavailable, 0 absent of 71 groups, 4174 checks",
+      "movers": [
+        "http_framing 192->195",
+        "mcp_catalog 30->38",
+        "mcp_catalog_events 145->148"
+      ],
+      "new_check_names_enumerated": 14,
+      "lost_checks": "none in any of the 71 groups, checked name by name in all three moving groups"
+    },
+    "witness_defect": "the first named-case leg resolved nothing because the --list extractor kept a trailing colon, so it ran the whole suite and printed 16 application::checks::* failures that only appear outside the sanctioned gate runner"
+  },
+  "lane_g4_seat_reject_2026_11_14": {
+    "seat": "MiniMax-M3 audit seat, packet /tmp/mm-packet52.json (rules /tmp/mmA52.txt), verdict /tmp/mm-laneG452.out",
+    "verdict": "REJECT",
+    "prior_findings_closed": [
+      "G03 whole-set foreign fallback",
+      "G3-08 64-owner FIFO eviction",
+      "G04 roots equality and frozen prepare",
+      "G01/F07 401 masking a framing error",
+      "G3-05 key bound 8199/8200",
+      "G3-02/G3-01 duplicate coding diagnostics",
+      "G3-12 counts",
+      "G3-19 bounds",
+      "F01/F02/F08 credential producers"
+    ],
+    "kept_open": [
+      "F03: the endpoint admission bound is untested (only the key bound 8199/8200 is pinned; endpoint 8192/8193 is not)",
+      "F08: no mutation leg shows the new behaviours red - 64-owner eviction, same-owner rebind, roots/list equality with workspace::mcp_roots, credential normalisation on plan/control/resume, duplicate Content-Encoding refusal, foreign-URI intersection",
+      "F04: the 401 branch discriminates textually (Err(error) if !error.starts_with(\"HTTP 401.\")), so an unrelated decoder error that begins with that text would be replaced by the credential sentence",
+      "F05: the three credential producers are each pinned against the same normaliser, but no case proves the stored raw paste and the three emitted headers are byte-identical",
+      "UNMEASURED: the self_rebuild handoff case was not executed"
+    ],
+    "code_status": "NOT committed",
+    "next": "lane G5 dispatched (room /tmp/g103room, card /tmp/laneG5-card.md) with these five items and the coordinator's witness numbers"
   }
 }

@@ -755,3 +755,23 @@ The Python-ceiling plant the previous seat said was unreproduced is now measured
 the K2 bytes with ceilings at 0/0): planting `verification/debt.py` with no rebuild makes exactly one of the 14
 Python-census cases red — `checks::project_python_census_counts_this_tree` — and removing it returns the whole
 suite to `46 passed; 0 failed`, with `tools/package.py` the only Python file left in the measured paths.
+
+## The MCP lane got its coverage witnessed and still failed on mutation coverage
+
+The MCP credential and workspace-roots round (G4, 9 paths, +965/−41) was witnessed on current HEAD
+(`/tmp/g97room`, `/tmp/laneG4-verify.log`, `/tmp/g4-cases.log`): `895/895; isolated application cases: 61` →
+`922/922; 61`, 30 of 30 published case names resolving to full module paths and all 30 passing
+(`30 passed; 0 failed; … 892 filtered out`), 72 twins, the delivered record unchanged, and group legs
+`http_framing PASS (195)`, `mcp_catalog PASS (38)` from 30, `mcp_catalog_events PASS (148)` from 145, with
+`mcp_continuation` 32, `mcp_history` 21, `network_feedback` 41 and `response_fields` 45 unchanged. The full
+71-group census moved from `4160` to `4174` checks, and a name-by-name join in the three moving groups enumerated
+all 14 new check names with **zero lost**. The seat (`/tmp/mm-laneG452.out`) closed nine carried findings and
+still returned `VERDICT: REJECT`, on four points that are all about proof, not behaviour: the endpoint admission
+bound `8192/8193` is untested while only the key bound `8199/8200` is pinned; no mutation leg shows the new
+behaviours red (64-owner FIFO eviction, same-owner rebind, `roots/list` equality with `workspace::mcp_roots`,
+credential normalisation on plan/control/resume, duplicate `Content-Encoding` refusal, foreign-URI intersection);
+the 401 branch discriminates textually (`Err(error) if !error.starts_with("HTTP 401.")`), so an unrelated decoder
+error that happens to begin with that text is replaced by the credential sentence; and no case proves the stored
+raw paste and the three emitted `Authorization` headers are byte-identical. Lane G5 (`/tmp/g103room`,
+`/tmp/laneG5-card.md`) was dispatched with exactly those items. This lane carries the MCP behaviour the owner
+called mandatory, so it is not skipped for speed.
