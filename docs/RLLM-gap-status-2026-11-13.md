@@ -893,3 +893,101 @@ script's own `git checkout -q -- verification/RESULTS.json`, leaving the room an
 `summary: 65 pass, 1 fail, 5 unavailable, 1 absent of 71 groups, 4171 checks`. A sweep in which any
 group fails never writes the record; a clean sweep does. That is why the record refresh stays a
 deliberate main-tree action rather than a side effect of witnessing.
+
+## A group that needs a reference artifact has no executable route outside a sweep (14 Nov)
+
+Lane K3's census came back flat — base and patched byte-identical:
+
+```
+PATCHED-SWEEP history_migration FAIL (exit 101, 0s, absent checks)
+PATCHED-SWEEP prompt_reference FAIL (exit 101, 0s, absent checks)
+PATCHED-SWEEP summary: 63 pass, 2 fail, 6 unavailable, 2 absent of 71 groups, 4108 checks
+BASE-SWEEP history_migration FAIL (exit 101, 0s, absent checks)
+BASE-SWEEP prompt_reference FAIL (exit 101, 0s, absent checks)
+BASE-SWEEP summary: 63 pass, 2 fail, 6 unavailable, 2 absent of 71 groups, 4108 checks
+```
+
+A flat census is not a property of a lane, so it was separated by measurement into two instrument
+defects, recorded in `closure_ledger.json`.
+
+The first is inside the twin. The native `history_migration` group tries to corrupt the saved
+evidence the way the retired Python did, with the object-only accessor on a JSON array:
+
+```
+verification/history_migration.rs:325  let corrupted_receipt = field_mut(field_mut(corrupted_case, "evidence"), "0");
+verification/history_migration.rs:416-419  expected object (panics)
+```
+
+Run by hand at the lane K3 bytes it dies before its two corrupted-history checks:
+
+```
+output/verification/history_migration --previous-controller output/previous-controller
+DIRECT-RC=101 thread 'main' panicked at verification/history_migration.rs:418:9: expected object
+```
+
+The retired Python did `c['evidence'][0]['output'] = ...`, which a list supports. So retiring those
+two `.py` files is not yet true in substance: the two assertions they made have no executable
+instrument. Repair lane K4 was dispatched for it.
+
+The second defect is in the runner, and measuring it closed an alternative reading. A group that
+declares a required reference has no single-group form that can run it — the flag is refused in
+either position, and the reference flags belong to the `sweep` subcommand only:
+
+```
+$ output/tools/harness history_migration
+history_migration FAIL (exit 2, 0s, unparsed checks)
+  history_migration: error: the following arguments are required: --previous-controller
+$ output/tools/harness --previous-controller output/previous-controller history_migration
+unknown group --previous-controller (not a runner group, a declared helper or a declared optional group)
+unknown group output/previous-controller (not a runner group, a declared helper or a declared optional group)
+usage: harness sweep [--previous-scene-controller PATH] [--previous-controller PATH] [--previous-flow-controller PATH] [--previous-auth-controller PATH] [--auth-baseline PATH] [--auth-baseline-sha256 HEX]
+       harness [group ...]
+```
+
+What that means for the census everyone reads: in a room that carries no `output/previous-controller`
+— which is every fresh room, including the two censuses that witnessed the lookup and MCP lanes —
+these groups are not red, they are quietly never executed:
+
+```
+/tmp/g106-fullcheck.log  PATCHED-SWEEP history_migration UNAVAILABLE (not executed, missing: path --previous-controller reference at output/previous-controller)
+/tmp/g107-fullcheck.log  BASE-SWEEP    history_migration UNAVAILABLE (not executed, missing: path --previous-controller reference at output/previous-controller)
+```
+
+Supply the reference and the crash appears (`FAIL (exit 101, 0s, absent checks)`, as above). So the
+delivered 71-group census has never run `history_migration` or `prompt_reference` at all, and an
+instrument crash can hide behind an availability sentence. Repair lane K5 was dispatched for the
+runner half.
+
+The census gap was then closed by arithmetic on the two rooms' own records. The K3 room lost exactly
+the 52 checks `prompt_reference` contributes:
+
+```
+/tmp/g106room-record-patched.json  prompt_reference passed = 52   (clean sweep: 64 pass, 0 fail, 7 unavailable, summary 4169 checks)
+/tmp/g105room-record-patched.json  prompt_reference live contribution = 0   (the row is FAIL (exit 101, 0s, absent checks))
+4108 + 52 = 4160   the HEAD total a clean room prints
+4160 + 9 = 4169    the lookup-budget room's patched sweep
+```
+
+The `+9` is not a defect: that census ran in the lookup-budget room, whose lane adds 5 checks to
+`hosted_phases` (118 -> 123) and 4 to `query_feedback` (74 -> 78). The stale numbers inside the K3
+room's record are themselves explained by the record rule — a sweep with any failing group leaves the
+delivered record untouched, which is why that room's record still reads `71 groups, 4248 checks`
+(the committed value) while its sweep printed 4108. The last thing the probe closed is that the
+reference flags cannot be paired with a group name in either subcommand: in `sweep` mode a trailing
+group name is swallowed as the flag's value — `missing value for history_migration` — so the only
+route that carries a reference is a whole sweep, and the only route that runs one twin alone is the
+twin binary itself.
+
+Because of the CLI finding, the K3 mutation witness lost its group legs: every leg that tried
+`harness history_migration --previous-controller …` produced the refusal above, not a verdict. The
+mutated twin binaries were built and restored honestly —
+
+```
+L4 verification/history_migration.rs 8d296d71f7c09420… -> 04e943251daf7679…  twin 54541666c8ec9fc2…  RESTORED-DIGEST 8d296d71f7c09420…
+L5 verification/live_web.rs          f5f2b18aa7f53312… -> 2575ae961fe7bc5b…  twin 47702d1644cfd11d…  RESTORED-DIGEST f5f2b18aa7f53312…
+```
+
+— but whether a mutant twin would still be graded honestly is still unwitnessed. The legs that did
+run discriminate: planting one `.py` moves `checks::project_python_census_counts_this_tree` from
+`13 passed; 0 failed` to `12 passed; 1 failed`, and raising the ceiling `0 → 1` in `tools/package.rs`
+moves the suite to `39 passed; 7 failed`.
