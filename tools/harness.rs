@@ -28,8 +28,9 @@ const GROUPS: &[&str] = &[
     "storage_auth", "storage_oauth", "credential_rotation", "storage_owner", "voice_settings",
     "field_flow", "flags_flow", "product_flow", "diagnostics", "services", "media", "jobs", "voice",
     "media_stream", "media_upload", "voice_interruption", "voice_background", "voice_session",
-    "capture_lifecycle", "scene", "apk_alignment", "audio_route", "state_sealing", "desktop_runtime",
-    "turn_background", "permission_modes", "self_rebuild", "rrsi_loop",
+    "capture_lifecycle", "scene", "apk_alignment", "release_numbering", "audio_route", "state_sealing",
+    "desktop_runtime", "turn_background", "permission_modes", "self_rebuild", "rrsi_loop",
+    "turn_runtime",
 ];
 
 // Scripts under verification/ that are not runner groups. A file outside these
@@ -48,6 +49,270 @@ const ENV_TOKENS: &[(&str, &str)] = &[
     ("os.environ['RLLM_CHECK_APK']", "RLLM_CHECK_APK"),
     ("os.environ['CLIENT_CAPTURE_TEST_FONT']", "CLIENT_CAPTURE_TEST_FONT"),
 ];
+
+// The native spellings of the same read. A native twin reads its environment
+// through std::env, so the Python tokens above never match its source and the
+// runner executes a group whose toolchain is missing instead of reporting the
+// missing input. The spelling alone does not decide: the consumer of the
+// value does, so a guarded or defaulted read stays optional.
+const RUST_ENV_READS: &[&str] = &["env::var_os", "env::var"];
+
+// The sanctioned resource toolchain. tooling/env.sh exports its directory as
+// CLIENT_TOOLS and the tree ships the same copy, so a native twin may read the
+// variable or fall back to the in-project path. What the group needs is the
+// tool itself, and its absence is an unavailable development input rather than
+// a product failure, so the runner resolves the tool exactly as the twin does.
+const RESOURCE_TOOLS: &str = "tooling/buildtools/android-15";
+const RESOURCE_TOOL: &str = "aapt2";
+
+fn is_ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+// Find the next needle that is not inside a comment or a string literal, so a
+// token written in prose never reads as code.
+fn find_outside(chars: &[char], from: usize, needle: &str) -> Option<usize> {
+    let needle: Vec<char> = needle.chars().collect();
+    let mut at = from;
+    while at < chars.len() {
+        match chars[at] {
+            '/' if chars.get(at + 1) == Some(&'/') => {
+                at = match chars[at..].iter().position(|c| *c == '\n') {
+                    Some(offset) => at + offset + 1,
+                    None => chars.len(),
+                };
+            }
+            '/' if chars.get(at + 1) == Some(&'*') => {
+                at = match chars[at + 2..].windows(2).position(|pair| pair == ['*', '/']) {
+                    Some(offset) => at + 2 + offset + 2,
+                    None => chars.len(),
+                };
+            }
+            '"' => {
+                at = match string_end(chars, at) {
+                    Some(end) => end + 1,
+                    None => chars.len(),
+                };
+            }
+            '\'' => {
+                at = match char_end(chars, at) {
+                    Some(end) => end + 1,
+                    None => at + 1,
+                };
+            }
+            _ => {
+                if chars[at..].starts_with(&needle[..]) {
+                    return Some(at);
+                }
+                at += 1;
+            }
+        }
+    }
+    None
+}
+
+fn string_end(chars: &[char], at: usize) -> Option<usize> {
+    let mut index = at + 1;
+    while index < chars.len() {
+        match chars[index] {
+            '\\' => index += 1,
+            '"' => return Some(index),
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+// A character literal, or a lifetime that only looks like one.
+fn char_end(chars: &[char], at: usize) -> Option<usize> {
+    match chars.get(at + 1) {
+        Some('\\') => {
+            let mut index = at + 2;
+            while index < chars.len() && chars[index] != '\'' {
+                index += 1;
+            }
+            if index < chars.len() {
+                Some(index)
+            } else {
+                None
+            }
+        }
+        Some(_) => {
+            if chars.get(at + 2) == Some(&'\'') {
+                Some(at + 2)
+            } else {
+                None
+            }
+        }
+        None => None,
+    }
+}
+
+fn matching_paren(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut at = open;
+    while at < chars.len() {
+        match chars[at] {
+            '"' => {
+                at = match string_end(chars, at) {
+                    Some(end) => end + 1,
+                    None => return None,
+                };
+            }
+            '\'' => {
+                at = match char_end(chars, at) {
+                    Some(end) => end + 1,
+                    None => at + 1,
+                };
+            }
+            '(' => {
+                depth += 1;
+                at += 1;
+            }
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+                at += 1;
+            }
+            _ => at += 1,
+        }
+    }
+    None
+}
+
+// The literal name of an environment variable, when the read names one.
+fn literal_name(chars: &[char]) -> Option<String> {
+    let mut start = 0;
+    while start < chars.len() && chars[start].is_whitespace() {
+        start += 1;
+    }
+    let mut end = chars.len();
+    while end > start && chars[end - 1].is_whitespace() {
+        end -= 1;
+    }
+    if end - start < 3 || chars[start] != '"' || chars[end - 1] != '"' {
+        return None;
+    }
+    let inner = &chars[start + 1..end - 1];
+    if inner.contains(&'"') {
+        return None;
+    }
+    Some(inner.iter().collect())
+}
+
+fn skip_space(chars: &[char], mut at: usize) -> usize {
+    while at < chars.len() && chars[at].is_whitespace() {
+        at += 1;
+    }
+    at
+}
+
+// The chain that consumes a read decides whether the group needs the value:
+// expect and unwrap abort the group, and unwrap_or_else aborts it only when
+// its fallback panics. A read whose chain ends supplies its own alternative.
+fn chain_requires_value(chars: &[char], from: usize) -> bool {
+    let mut at = from;
+    loop {
+        at = skip_space(chars, at);
+        if chars.get(at) != Some(&'.') {
+            return false;
+        }
+        at += 1;
+        let start = at;
+        while at < chars.len() && is_ident_char(chars[at]) {
+            at += 1;
+        }
+        if at == start {
+            return false;
+        }
+        let name: String = chars[start..at].iter().collect();
+        at = skip_space(chars, at);
+        if chars.get(at) != Some(&'(') {
+            continue;
+        }
+        let Some(close) = matching_paren(chars, at) else {
+            return false;
+        };
+        let args: String = chars[at + 1..close].iter().collect();
+        match name.as_str() {
+            "expect" | "unwrap" => return true,
+            "unwrap_or_else" => {
+                if args.contains("panic!") {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        at = close + 1;
+    }
+}
+
+// The environment variables a native twin reads, with whether the consumer of
+// the value makes the read required. The read is located in the group's own
+// source and the consumer decides, so a guarded read or a read with a default
+// stays optional and never blocks the group.
+fn rust_env_reads(source: &str) -> Vec<(String, bool)> {
+    let chars: Vec<char> = source.chars().collect();
+    let mut reads: Vec<(String, bool)> = Vec::new();
+    for needle in RUST_ENV_READS {
+        let mut from = 0;
+        while let Some(found) = find_outside(&chars, from, needle) {
+            from = found + needle.len();
+            // A longer name such as myenv::var is not this read.
+            if found > 0 && is_ident_char(chars[found - 1]) {
+                continue;
+            }
+            if chars.get(from) != Some(&'(') {
+                continue;
+            }
+            let Some(close) = matching_paren(&chars, from) else {
+                break;
+            };
+            if let Some(name) = literal_name(&chars[from + 1..close]) {
+                if !reads.iter().any(|(existing, _)| *existing == name) {
+                    reads.push((name, chain_requires_value(&chars, close + 1)));
+                }
+            }
+            from = close + 1;
+        }
+    }
+    reads
+}
+
+// The resource tools a group needs, resolved the way the twin resolves them:
+// the exported directory first, the in-project copy when the group's own
+// source names it. The dependency is satisfied by whichever copy actually
+// carries the tool, so a twin that names the in-project path runs without an
+// ambient variable and a group with neither copy is reported as unavailable
+// instead of failing on a missing executable.
+fn resource_tool_input(
+    root: &Path,
+    source: &str,
+    reads: &[(String, bool)],
+    configured: Option<&str>,
+) -> Option<Input> {
+    let reads_the_tools = reads.iter().any(|(name, _)| name.as_str() == "CLIENT_TOOLS");
+    if !reads_the_tools && !source.contains(RESOURCE_TOOLS) {
+        return None;
+    }
+    let mut present = false;
+    if let Some(directory) = configured.map(str::trim).filter(|value| !value.is_empty()) {
+        present = Path::new(directory).join(RESOURCE_TOOL).is_file();
+    }
+    if !present && source.contains(RESOURCE_TOOLS) {
+        present = root.join(RESOURCE_TOOLS).join(RESOURCE_TOOL).is_file();
+    }
+    Some(Input {
+        kind: "env",
+        detail: format!(
+            "CLIENT_TOOLS environment variable or the in-project resource tools at {RESOURCE_TOOLS}/{RESOURCE_TOOL}"
+        ),
+        present,
+    })
+}
 
 // Reference binaries a group can consume. Whether one is required comes from the
 // group's own source: required=True, or a default path the group reads without a
@@ -96,12 +361,41 @@ fn json_escape(value: &str) -> String {
 fn required_inputs(root: &Path, source: &str) -> Vec<Input> {
     let mut inputs = Vec::new();
     let mut seen = BTreeSet::new();
+    // A native twin reads the same variables through std::env, so the Python
+    // spellings below never match its source. The read is required only when
+    // its value is consumed by a panic, so a missing toolchain is reported as
+    // an unavailable input instead of failing the group.
+    let native_reads = rust_env_reads(source);
+    // The resource tools are the one dependency a twin may resolve two ways, so
+    // the runner resolves the tool the way the twin resolves it and names the
+    // tool that is absent instead of the variable that would have pointed at
+    // it.
+    let configured = std::env::var("CLIENT_TOOLS").ok();
+    if let Some(input) = resource_tool_input(root, source, &native_reads, configured.as_deref()) {
+        seen.insert("CLIENT_TOOLS".to_string());
+        inputs.push(input);
+    }
     for (token, name) in ENV_TOKENS {
         if source.contains(token) && seen.insert((*name).to_string()) {
             inputs.push(Input {
                 kind: "env",
                 detail: format!("{name} environment variable"),
                 present: match std::env::var(name) {
+                    Ok(value) => !value.trim().is_empty(),
+                    Err(_) => false,
+                },
+            });
+        }
+    }
+    for (name, required) in native_reads {
+        if !required {
+            continue;
+        }
+        if seen.insert(name.clone()) {
+            inputs.push(Input {
+                kind: "env",
+                detail: format!("{name} environment variable"),
+                present: match std::env::var(&name) {
                     Ok(value) => !value.trim().is_empty(),
                     Err(_) => false,
                 },
@@ -2293,8 +2587,8 @@ mod checks {
         let identity = rust_quoted(&source, "const IDENTITY_PAIRS:");
         let hyphen = rust_quoted(&source, "const HYPHEN_PAIRS:");
         assert_eq!(explicit.len() % 2, 0, "explicit pairs are not paired");
-        assert_eq!(GROUPS.len(), 71, "runner group count");
-        assert_eq!(explicit.len() / 2 + identity.len() + hyphen.len(), 71, "publisher pair count");
+        assert_eq!(GROUPS.len(), 73, "runner group count");
+        assert_eq!(explicit.len() / 2 + identity.len() + hyphen.len(), 73, "publisher pair count");
         for name in GROUPS {
             let expected = if let Some(chunk) = explicit.chunks(2).find(|chunk| chunk[0] == *name) {
                 format!("{}.json", chunk[1])
@@ -2397,9 +2691,9 @@ mod checks {
         assert!(text.contains(&format!("\"reason\": \"{reason}\"")), "failing group reason");
         assert!(text.contains("history is recorded as 0 because that group produced no positive check count"), "zero_count_disclosure");
         let (groups, total) = counts_in(&text).expect("counts");
-        assert_eq!(groups, 71, "counts groups");
-        assert_eq!(total, 70 * 3, "totals equal the sum of counts");
-        assert!(text.contains("\"groups_passed\": 70"), "groups_passed");
+        assert_eq!(groups, 73, "counts groups");
+        assert_eq!(total, 72 * 3, "totals equal the sum of counts");
+        assert!(text.contains("\"groups_passed\": 72"), "groups_passed");
     }
 
     #[test]
@@ -2437,14 +2731,14 @@ mod checks {
         let text = std::fs::read_to_string(&record).unwrap();
         let checks = json_object_after(&text, "checks");
         let keys = object_keys(checks);
-        assert_eq!(keys.len(), 71, "checks rows");
+        assert_eq!(keys.len(), 73, "checks rows");
         assert_eq!(keys, GROUPS.iter().copied().map(str::to_string).collect::<Vec<_>>(), "checks group order");
         let provider = json_field(checks, "provider_process");
         assert_eq!(provider, report, "executed report was reformatted");
         assert_eq!(object_keys(provider), vec!["scope".to_string(), "passed".to_string()], "executed checks keys");
         let (groups, total) = counts_in(&text).expect("counts");
-        assert_eq!(groups, 71, "counts groups");
-        assert_eq!(total, 70 * 3 + 2, "executed report did not change the other counts");
+        assert_eq!(groups, 73, "counts groups");
+        assert_eq!(total, 72 * 3 + 2, "executed report did not change the other counts");
     }
 
     #[test]
@@ -2585,6 +2879,54 @@ mod checks {
         std::fs::create_dir_all(root.join("output")).unwrap();
         std::fs::write(root.join("output/previous-controller"), b"controller").unwrap();
         assert!(!required_inputs(root, native).iter().any(|input| !input.present && input.detail.contains("--previous-controller")), "the reference build satisfies the input");
+    }
+
+    #[test]
+    fn a_native_environment_read_is_required_only_when_its_value_is_consumed_by_a_panic() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let hard = "fn main(){let tools = std::env::var_os(\"CLIENT_NDK\")\n    .expect(\"CLIENT_NDK must name the sanctioned toolchain\");}";
+        let inputs = required_inputs(root, hard);
+        let input = inputs
+            .iter()
+            .find(|input| input.detail.contains("CLIENT_NDK"))
+            .expect("a native read of a required variable is an input");
+        assert_eq!(input.kind, "env", "the input names the environment");
+        let expected = std::env::var("CLIENT_NDK").map(|value| !value.trim().is_empty()).unwrap_or(false);
+        assert_eq!(input.present, expected, "the input tracks the variable the group reads");
+        let chained = "fn main(){let tools = std::env::var_os(\"CLIENT_NDK\").map(std::path::PathBuf::from).unwrap_or_else(|| panic!(\"CLIENT_NDK is not set\"));}";
+        assert!(required_inputs(root, chained).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a panicking fallback is a required read");
+        let guarded = "fn main(){if let Some(root) = std::env::var_os(\"CLIENT_NDK\") { run(root); }}";
+        assert!(!required_inputs(root, guarded).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a guarded read stays runnable");
+        let defaulted = "fn main(){let tools = std::env::var(\"CLIENT_NDK\").unwrap_or_default();}";
+        assert!(!required_inputs(root, defaulted).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a defaulted read stays runnable");
+        let prose = "fn main(){/* std::env::var_os(\"CLIENT_NDK\") */ let tools = \"\";}";
+        assert!(!required_inputs(root, prose).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a read written in a comment is not a read");
+    }
+
+    #[test]
+    fn the_resource_tool_is_satisfied_by_the_copy_that_carries_it() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let source = "fn main(){ let tools = std::env::var_os(\"CLIENT_TOOLS\").map(std::path::PathBuf::from).unwrap_or_else(|| project.join(\"tooling/buildtools/android-15\")); }";
+        let reads = rust_env_reads(source);
+        let missing = resource_tool_input(root, source, &reads, None)
+            .expect("the resource tools are an input of the group");
+        assert!(!missing.present, "without a copy the tool is missing");
+        assert!(missing.detail.contains("CLIENT_TOOLS"), "the input names the variable");
+        assert!(missing.detail.contains(RESOURCE_TOOLS), "the input names the in-project copy");
+        std::fs::create_dir_all(root.join(RESOURCE_TOOLS)).unwrap();
+        std::fs::write(root.join(RESOURCE_TOOLS).join(RESOURCE_TOOL), b"tool").unwrap();
+        let in_project = resource_tool_input(root, source, &reads, None)
+            .expect("the resource tools are an input of the group");
+        assert!(in_project.present, "the in-project copy satisfies the dependency");
+        let empty = TempDir::new();
+        let exported = resource_tool_input(root, source, &reads, Some(empty.path().to_str().unwrap()))
+            .expect("the resource tools are an input of the group");
+        assert!(exported.present, "the in-project copy still satisfies the dependency");
+        let without = resource_tool_input(empty.path(), source, &reads, None)
+            .expect("the resource tools are an input of the group");
+        assert!(!without.present, "a tree without the tool leaves the dependency missing");
     }
 
     #[test]

@@ -14,6 +14,7 @@ struct Peer {
     address: SocketAddr,
     mode: Arc<Mutex<String>>,
     requests: Arc<Mutex<usize>>,
+    observed: Arc<Mutex<Vec<String>>>,
 }
 
 impl Peer {
@@ -22,8 +23,10 @@ impl Peer {
         let address = listener.local_addr().unwrap_or_else(|error| panic!("peer address: {error}"));
         let mode = Arc::new(Mutex::new("original".to_string()));
         let requests = Arc::new(Mutex::new(0usize));
+        let observed = Arc::new(Mutex::new(Vec::new()));
         let worker_mode = Arc::clone(&mode);
         let worker_requests = Arc::clone(&requests);
+        let worker_observed = Arc::clone(&observed);
         let worker = thread::spawn(move || {
             for stream in listener.incoming() {
                 let stream = match stream {
@@ -32,14 +35,15 @@ impl Peer {
                 };
                 let mode = Arc::clone(&worker_mode);
                 let requests = Arc::clone(&worker_requests);
+                let observed = Arc::clone(&worker_observed);
                 thread::spawn(move || {
-                    if let Err(error) = serve(stream, mode, requests) {
+                    if let Err(error) = serve(stream, mode, requests, observed) {
                         panic!("MCP peer request failed: {error}");
                     }
                 });
             }
         });
-        (Self { address, mode, requests }, worker)
+        (Self { address, mode, requests, observed }, worker)
     }
 
     fn set_mode(&self, mode: &str) {
@@ -51,9 +55,54 @@ impl Peer {
             .lock()
             .unwrap_or_else(|error| panic!("peer requests lock: {error}"))
     }
+
+    /// Every Authorization header the peer received, in arrival order. An
+    /// absent header is recorded as an empty string.
+    fn observed(&self) -> Vec<String> {
+        self.observed
+            .lock()
+            .unwrap_or_else(|error| panic!("peer observed lock: {error}"))
+            .clone()
+    }
 }
 
-fn serve(mut stream: TcpStream, mode: Arc<Mutex<String>>, requests: Arc<Mutex<usize>>) -> std::io::Result<()> {
+/// The catalog legs demand one exact credential; the authentication legs
+/// observe whatever the product sends.
+fn strict_credential(mode: &str) -> bool {
+    !matches!(
+        mode,
+        "credential-any"
+            | "unauthorized"
+            | "unauthorized-scope"
+            | "unauthorized-plain"
+            | "reflect"
+            | "reflect-mixed"
+    )
+}
+
+/// The informational head a mode puts in front of its answer.
+///
+/// The same head shape is offered to the request path here and to the
+/// streaming path in the events group, so both paths can be compared on one
+/// input.
+fn interim_prefix(mode: &str) -> Option<String> {
+    let head = match mode {
+        "interim-identity" => "HTTP/1.1 103 Early Hints\r\nContent-Encoding: identity\r\n\r\n",
+        "interim-duplicate-coding" => {
+            "HTTP/1.1 103 Early Hints\r\nContent-Encoding: identity\r\nContent-Encoding: identity\r\n\r\n"
+        }
+        "interim-gzip" => "HTTP/1.1 103 Early Hints\r\nContent-Encoding: gzip\r\n\r\n",
+        _ => return None,
+    };
+    Some(head.to_string())
+}
+
+fn serve(
+    mut stream: TcpStream,
+    mode: Arc<Mutex<String>>,
+    requests: Arc<Mutex<usize>>,
+    observed: Arc<Mutex<Vec<String>>>,
+) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let request = read_http_request(&mut stream)?;
     let mut headers = HashMap::new();
@@ -62,7 +111,15 @@ fn serve(mut stream: TcpStream, mode: Arc<Mutex<String>>, requests: Arc<Mutex<us
             headers.insert(name.to_ascii_lowercase(), value.trim().to_string());
         }
     }
-    if request.path != "/mcp" || headers.get("authorization").map(String::as_str) != Some("Bearer catalog-test") {
+    let authorization = headers.get("authorization").cloned().unwrap_or_default();
+    let mode = mode.lock().unwrap_or_else(|error| panic!("peer mode lock: {error}")).clone();
+    observed
+        .lock()
+        .unwrap_or_else(|error| panic!("peer observed lock: {error}"))
+        .push(authorization.clone());
+    if strict_credential(&mode)
+        && (request.path != "/mcp" || authorization != "Bearer catalog-test")
+    {
         panic!("invalid MCP request {} {:?}", request.path, headers.get("authorization"));
     }
     let message = Value::parse(&String::from_utf8(request.body).expect("UTF-8 request"));
@@ -72,25 +129,75 @@ fn serve(mut stream: TcpStream, mode: Arc<Mutex<String>>, requests: Arc<Mutex<us
         .lock()
         .unwrap_or_else(|error| panic!("peer requests lock: {error}")) += 1;
 
-    let mode = mode.lock().unwrap_or_else(|error| panic!("peer mode lock: {error}")).clone();
-    let (status, reason, body) = if method == "notifications/initialized" {
-        (202, "Accepted", Vec::new())
+    let (status, reason, body, extra) = if mode == "unauthorized" {
+        (
+            401,
+            "Unauthorized",
+            Vec::new(),
+            "WWW-Authenticate: Bearer realm=\"mcp\", error=\"invalid_token\"\r\n",
+        )
+    } else if mode == "unauthorized-scope" {
+        (
+            401,
+            "Unauthorized",
+            Vec::new(),
+            "WWW-Authenticate: Bearer realm=\"mcp\", error=\"insufficient_scope\"\r\n",
+        )
+    } else if mode == "unauthorized-plain" {
+        (401, "Unauthorized", Vec::new(), "")
+    } else if mode == "unauthorized-framing" {
+        // A refused head that repeats the coding header is framing too. The
+        // framing of a head is judged before its status decides the outcome,
+        // so this head is refused as framing and never as a status.
+        (
+            401,
+            "Unauthorized",
+            Vec::new(),
+            "Content-Encoding: identity\r\nContent-Encoding: identity\r\n",
+        )
+    } else if mode == "reflect" {
+        (
+            200,
+            "OK",
+            rpc_error(&message, &format!("rejected Authorization: {authorization}")),
+            "",
+        )
+    } else if mode == "reflect-mixed" {
+        // A peer that echoes the credential back in another case, without the
+        // scheme word, cannot put that credential in front of the user.
+        let token = authorization
+            .split_once(' ')
+            .map(|(_, value)| value.to_string())
+            .unwrap_or_else(|| authorization.clone());
+        (
+            200,
+            "OK",
+            rpc_error(&message, &format!("rejected token {}", token.to_uppercase())),
+            "",
+        )
+    } else if method == "notifications/initialized" {
+        (202, "Accepted", Vec::new(), "")
     } else if method == "initialize" {
         let result = obj(vec![
             ("protocolVersion".into(), s("2025-11-25")),
             ("capabilities".into(), obj(vec![("tools".into(), obj(vec![]))])),
             ("serverInfo".into(), obj(vec![("name".into(), s("Catalog peer")), ("version".into(), s("1"))])),
         ]);
-        (200, "OK", rpc(&message, result))
+        (200, "OK", rpc(&message, result), "")
     } else if method == "tools/list" {
-        (200, "OK", rpc(&message, tools_list(&mode, &params)))
+        (200, "OK", rpc(&message, tools_list(&mode, &params)), "")
     } else {
         panic!("unexpected MCP method: {method}");
     };
     let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
+    // An informational head is framing too. The same shape has to be judged
+    // the same way here and on the streaming path.
+    if let Some(prefix) = interim_prefix(&mode) {
+        stream.write_all(prefix.as_bytes())?;
+    }
     stream.write_all(head.as_bytes())?;
     stream.write_all(&body)?;
     stream.flush()?;
@@ -103,6 +210,23 @@ fn rpc(message: &Value, result: Value) -> Vec<u8> {
         ("jsonrpc".into(), s("2.0")),
         ("id".into(), message.get("id").cloned().unwrap_or(Value::Null)),
         ("result".into(), result),
+    ])
+    .to_string()
+    .into_bytes()
+}
+
+/// A JSON-RPC error the server authored in reply to the request.
+fn rpc_error(message: &Value, detail: &str) -> Vec<u8> {
+    obj(vec![
+        ("jsonrpc".into(), s("2.0")),
+        ("id".into(), message.get("id").cloned().unwrap_or(Value::Null)),
+        (
+            "error".into(),
+            obj(vec![
+                ("code".into(), Value::Num("-32001".into())),
+                ("message".into(), s(detail)),
+            ]),
+        ),
     ])
     .to_string()
     .into_bytes()
@@ -491,10 +615,493 @@ fn run(controller: &mut Controller, root: &str, peer: &Peer) -> Vec<String> {
         names(state_of(&empty)).is_empty() && !truthy(state_of(&empty).get("busy")),
     );
     keep(&mut passed, "empty discovery leaves no staged pages", absent(state_of(&empty).get("mcp_client_listing")));
+
+    // --- MCP authentication: one canonical credential, one honest refusal ---
+
+    let mut auth_state = state_of(&empty).clone();
+
+    // The bearer token field states what it accepts, so a user is not left
+    // guessing whether the server wants a token or a whole header line.
+    let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+    let token_field = modal_fields(&opened)
+        .into_iter()
+        .find(|field| field.get("key").map(Value::str_) == Some("key"))
+        .unwrap_or_else(|| panic!("the MCP connection form has no bearer token field"));
+    keep(
+        &mut passed,
+        "the bearer token field says what it accepts and keeps its value secret",
+        token_field.get("label").map(Value::str_) == Some("Server bearer token (required if the server uses authentication)")
+            && token_field.get("kind").map(Value::str_) == Some("secret"),
+    );
+
+    // A pasted credential arrives in the shapes a clipboard or a copied header
+    // line produces. Every shape must leave the product with one bare token
+    // and one canonical Authorization header.
+    for (pasted, label) in [
+        ("raw-token-123", "a bare token"),
+        ("Bearer raw-token-123", "a scheme-prefixed token"),
+        ("\"raw-token-123\"", "a quoted token"),
+        ("Authorization: Bearer raw-token-123", "a pasted header line"),
+    ] {
+        peer.set_mode("credential-any");
+        let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+        let saved = event(
+            controller,
+            Some(state_of(&opened)),
+            "mcp_client_save",
+            obj(vec![
+                ("endpoint".into(), s(&endpoint)),
+                ("key".into(), s(pasted)),
+                ("access".into(), Value::Bool(true)),
+            ]),
+            root,
+        );
+        keep(
+            &mut passed,
+            &format!("{label} is stored as the bare token"),
+            state_of(&saved)
+                .get("mcp")
+                .and_then(|value| value.get("key"))
+                .map(|value| value.str_().to_string())
+                .as_deref()
+                == Some("raw-token-123"),
+        );
+        let listed = event(controller, Some(state_of(&saved)), "mcp_client_list", obj(vec![]), root);
+        keep(
+            &mut passed,
+            &format!("{label} produces exactly one canonical bearer header"),
+            authorization_headers(&effect_wire(&listed)) == ["Bearer raw-token-123"],
+        );
+        let before = peer.observed().len();
+        let step = settle(controller, listed, root);
+        let observed = peer.observed();
+        keep(
+            &mut passed,
+            &format!("{label} reaches the server as one canonical bearer header"),
+            observed.len() > before && observed[before..].iter().all(|value| value == "Bearer raw-token-123"),
+        );
+        keep(
+            &mut passed,
+            &format!("a successful exchange with {label} states that a credential was sent"),
+            {
+                let notice = notice_text(state_of(&step));
+                notice.contains("with a bearer token") && !notice.contains("without a bearer token")
+            },
+        );
+        auth_state = state_of(&step).clone();
+    }
+
+    // A connection saved before the credential was normalised still holds the
+    // pasted header line. The request boundary canonicalises it again, so the
+    // negotiated connection holds one bare token and the wire still carries
+    // exactly one canonical header.
+    peer.set_mode("credential-any");
+    let legacy = with_credential(&auth_state, &endpoint, "Bearer raw-token-123");
+    let listed = event(controller, Some(&legacy), "mcp_client_list", obj(vec![]), root);
+    let connection_key = state_of(&listed)
+        .get("mcp_client_connection")
+        .and_then(|value| value.get("key"))
+        .map(|value| value.str_().to_string());
+    let header = authorization_headers(&effect_wire(&listed));
+    keep(
+        &mut passed,
+        "a connection saved before the normaliser existed negotiates one bare token",
+        connection_key.as_deref() == Some("raw-token-123"),
+    );
+    keep(
+        &mut passed,
+        "a legacy pasted credential composes one canonical bearer header",
+        header == ["Bearer raw-token-123"],
+    );
+    let before = peer.observed().len();
+    let step = settle(controller, listed, root);
+    let observed = peer.observed();
+    keep(
+        &mut passed,
+        "a legacy pasted credential reaches the server as one canonical bearer header",
+        observed.len() > before && observed[before..].iter().all(|value| value == "Bearer raw-token-123"),
+    );
+    auth_state = state_of(&step).clone();
+
+    // The word "Bearer" is a legal token, so a credential that is exactly the
+    // scheme word is that token and must not be read as a scheme with nothing
+    // behind it.
+    peer.set_mode("credential-any");
+    let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+    let saved = event(
+        controller,
+        Some(state_of(&opened)),
+        "mcp_client_save",
+        obj(vec![
+            ("endpoint".into(), s(&endpoint)),
+            ("key".into(), s("Bearer")),
+            ("access".into(), Value::Bool(true)),
+        ]),
+        root,
+    );
+    keep(
+        &mut passed,
+        "a credential that is exactly the scheme word stays the token it legally is",
+        state_of(&saved)
+            .get("mcp")
+            .and_then(|value| value.get("key"))
+            .map(|value| value.str_().to_string())
+            .as_deref()
+            == Some("Bearer"),
+    );
+    let listed = event(controller, Some(state_of(&saved)), "mcp_client_list", obj(vec![]), root);
+    keep(
+        &mut passed,
+        "a credential that is exactly the scheme word produces exactly one canonical bearer header",
+        authorization_headers(&effect_wire(&listed)) == ["Bearer Bearer"],
+    );
+    let before = peer.observed().len();
+    let step = settle(controller, listed, root);
+    let observed = peer.observed();
+    keep(
+        &mut passed,
+        "a credential that is exactly the scheme word reaches the server as one canonical bearer header",
+        observed.len() > before && observed[before..].iter().all(|value| value == "Bearer Bearer"),
+    );
+    auth_state = state_of(&step).clone();
+
+    // A scheme with no token behind it is not a credential. It is refused
+    // where it is entered instead of being put on the wire.
+    peer.set_mode("credential-any");
+    let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+    let before = peer.observed().len();
+    let saved = event(
+        controller,
+        Some(state_of(&opened)),
+        "mcp_client_save",
+        obj(vec![
+            ("endpoint".into(), s(&endpoint)),
+            ("key".into(), s("Bearer ")),
+            ("access".into(), Value::Bool(true)),
+        ]),
+        root,
+    );
+    keep(
+        &mut passed,
+        "a credential that is a scheme with no token behind it is refused where it is entered",
+        truthy(state_of(&saved).get("notice_error"))
+            && notice_text(state_of(&saved)) == "Invalid MCP bearer token format."
+            && absent(state_of(&saved).get("effect")),
+    );
+    keep(
+        &mut passed,
+        "a refused credential sends no request at all",
+        peer.observed().len() == before,
+    );
+    auth_state = state_of(&saved).clone();
+
+    // An empty credential is a real condition, not a malformed one: no
+    // Authorization header is produced at all.
+    peer.set_mode("credential-any");
+    let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+    let saved = event(
+        controller,
+        Some(state_of(&opened)),
+        "mcp_client_save",
+        obj(vec![
+            ("endpoint".into(), s(&endpoint)),
+            ("key".into(), s("")),
+            ("access".into(), Value::Bool(true)),
+        ]),
+        root,
+    );
+    let listed = event(controller, Some(state_of(&saved)), "mcp_client_list", obj(vec![]), root);
+    keep(
+        &mut passed,
+        "an empty credential sends no authorization header at all",
+        authorization_headers(&effect_wire(&listed)).is_empty(),
+    );
+    let before = peer.observed().len();
+    let step = settle(controller, listed, root);
+    let observed = peer.observed();
+    keep(
+        &mut passed,
+        "the server receives no authorization header for an empty credential",
+        observed.len() > before && observed[before..].iter().all(|value| value.is_empty()),
+    );
+    keep(
+        &mut passed,
+        "a successful exchange without a credential states that no credential was sent",
+        notice_text(state_of(&step)).contains("without a bearer token"),
+    );
+    auth_state = state_of(&step).clone();
+
+    // A refused exchange reports what the peer answered, and never echoes the
+    // credential.
+    peer.set_mode("unauthorized");
+    let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+    let saved = event(
+        controller,
+        Some(state_of(&opened)),
+        "mcp_client_save",
+        obj(vec![
+            ("endpoint".into(), s(&endpoint)),
+            ("key".into(), s("raw-token-123")),
+            ("access".into(), Value::Bool(true)),
+        ]),
+        root,
+    );
+    let listed = event(controller, Some(state_of(&saved)), "mcp_client_list", obj(vec![]), root);
+    let (refused, _) = exchange(controller, &listed, root);
+    let refused_state = state_of(&refused);
+    let refused_notice = notice_text(refused_state);
+    keep(
+        &mut passed,
+        "a refused exchange reports the status of the MCP request",
+        refused_notice.contains("MCP HTTP 401"),
+    );
+    keep(
+        &mut passed,
+        "a rejected credential is reported as invalid rather than as a generic failure",
+        refused_notice.contains("as invalid"),
+    );
+    keep(
+        &mut passed,
+        "a rejected credential is never echoed in the notice",
+        !refused_notice.contains("raw-token-123"),
+    );
+    keep(
+        &mut passed,
+        "a refused exchange settles instead of retrying",
+        truthy(refused_state.get("notice_error")) && !truthy(refused_state.get("busy")),
+    );
+    auth_state = refused_state.clone();
+
+    // The same refusal without a credential must read differently: a missing
+    // credential is not a rejected one.
+    peer.set_mode("unauthorized");
+    let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+    let saved = event(
+        controller,
+        Some(state_of(&opened)),
+        "mcp_client_save",
+        obj(vec![
+            ("endpoint".into(), s(&endpoint)),
+            ("key".into(), s("")),
+            ("access".into(), Value::Bool(true)),
+        ]),
+        root,
+    );
+    let listed = event(controller, Some(state_of(&saved)), "mcp_client_list", obj(vec![]), root);
+    let (missing, _) = exchange(controller, &listed, root);
+    let missing_notice = notice_text(state_of(&missing));
+    keep(
+        &mut passed,
+        "a refusal without a credential says that no credential was sent",
+        missing_notice.contains("no bearer token was sent"),
+    );
+    keep(
+        &mut passed,
+        "a missing credential and a rejected credential are told apart",
+        missing_notice != refused_notice,
+    );
+    auth_state = state_of(&missing).clone();
+
+    // A server that reflects the credential in its own text cannot put that
+    // credential in front of the user.
+    peer.set_mode("reflect");
+    let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+    let saved = event(
+        controller,
+        Some(state_of(&opened)),
+        "mcp_client_save",
+        obj(vec![
+            ("endpoint".into(), s(&endpoint)),
+            ("key".into(), s("leak-canary-777")),
+            ("access".into(), Value::Bool(true)),
+        ]),
+        root,
+    );
+    let listed = event(controller, Some(state_of(&saved)), "mcp_client_list", obj(vec![]), root);
+    let (leaked, _) = exchange(controller, &listed, root);
+    let leaked_notice = notice_text(state_of(&leaked));
+    keep(
+        &mut passed,
+        "server text that reflects the credential cannot put it in the notice",
+        !leaked_notice.contains("leak-canary-777"),
+    );
+    keep(
+        &mut passed,
+        "the reflected credential is shown as redacted",
+        leaked_notice.contains("[redacted]"),
+    );
+    auth_state = state_of(&leaked).clone();
+
+    // A peer that echoes the credential back in another case, without the
+    // scheme word, cannot put that credential in front of the user either.
+    peer.set_mode("reflect-mixed");
+    let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+    let saved = event(
+        controller,
+        Some(state_of(&opened)),
+        "mcp_client_save",
+        obj(vec![
+            ("endpoint".into(), s(&endpoint)),
+            ("key".into(), s("leak-canary-777")),
+            ("access".into(), Value::Bool(true)),
+        ]),
+        root,
+    );
+    let listed = event(controller, Some(state_of(&saved)), "mcp_client_list", obj(vec![]), root);
+    let (mixed, _) = exchange(controller, &listed, root);
+    let mixed_notice = notice_text(state_of(&mixed));
+    keep_detail(
+        &mut passed,
+        "a credential echoed back in another case is redacted as well",
+        !mixed_notice.to_lowercase().contains("leak-canary-777") && mixed_notice.contains("[redacted]"),
+        format!("notice={mixed_notice:?}"),
+    );
+    auth_state = state_of(&mixed).clone();
+
+    // A refused head is framing too. The framing of the final head is judged
+    // before its status decides the outcome, so the head that repeats the
+    // coding header is refused as framing on the request path exactly as the
+    // same head is refused as framing on the streaming path.
+    peer.set_mode("unauthorized-framing");
+    let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+    let saved = event(
+        controller,
+        Some(state_of(&opened)),
+        "mcp_client_save",
+        obj(vec![
+            ("endpoint".into(), s(&endpoint)),
+            ("key".into(), s("catalog-test")),
+            ("access".into(), Value::Bool(true)),
+        ]),
+        root,
+    );
+    let listed = event(controller, Some(state_of(&saved)), "mcp_client_list", obj(vec![]), root);
+    let step = settle(controller, listed, root);
+    let notice = notice_text(state_of(&step));
+    keep_detail(
+        &mut passed,
+        "a refused head with a repeated coding header is refused as framing on the request path",
+        notice == "Duplicate response coding" && truthy(state_of(&step).get("notice_error")),
+        format!("notice={notice:?}"),
+    );
+    auth_state = state_of(&step).clone();
+
+    // An informational head is framing too. The same three head shapes are
+    // offered to the request path here and to the streaming path in the
+    // events group, so both paths can be judged on one input.
+    for (mode, case, expected) in [
+        (
+            "interim-identity",
+            "an informational head that declares only identity coding is accepted on the request path",
+            "",
+        ),
+        (
+            "interim-duplicate-coding",
+            "an informational head that repeats the coding header is refused on the request path",
+            "Duplicate response coding",
+        ),
+        (
+            "interim-gzip",
+            "an informational head that declares a compressed coding is refused on the request path",
+            "Compressed response not supported by this transport",
+        ),
+    ] {
+        peer.set_mode(mode);
+        let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+        let saved = event(
+            controller,
+            Some(state_of(&opened)),
+            "mcp_client_save",
+            obj(vec![
+                ("endpoint".into(), s(&endpoint)),
+                ("key".into(), s("catalog-test")),
+                ("access".into(), Value::Bool(true)),
+            ]),
+            root,
+        );
+        let listed = event(controller, Some(state_of(&saved)), "mcp_client_list", obj(vec![]), root);
+        let step = settle(controller, listed, root);
+        let notice = notice_text(state_of(&step));
+        if expected.is_empty() {
+            keep_detail(
+                &mut passed,
+                case,
+                names(state_of(&step)) == ["first", "second"] && !truthy(state_of(&step).get("notice_error")),
+                format!("notice={notice:?} names={:?}", names(state_of(&step))),
+            );
+        } else {
+            keep_detail(
+                &mut passed,
+                case,
+                notice == expected && truthy(state_of(&step).get("notice_error")),
+                format!("notice={notice:?} names={:?}", names(state_of(&step))),
+            );
+        }
+        auth_state = state_of(&step).clone();
+    }
+
+    // MCP access switched off stops discovery; the reason is named and no
+    // request leaves the product.
+    peer.set_mode("credential-any");
+    let before = peer.observed().len();
+    let opened = event(controller, Some(&auth_state), "mcp_client_settings", obj(vec![]), root);
+    let saved = event(
+        controller,
+        Some(state_of(&opened)),
+        "mcp_client_save_discover",
+        obj(vec![
+            ("endpoint".into(), s(&endpoint)),
+            ("key".into(), s("raw-token-123")),
+            ("access".into(), Value::Bool(false)),
+        ]),
+        root,
+    );
+    keep(
+        &mut passed,
+        "an off-access save names the reason no request was sent",
+        notice_text(state_of(&saved)).contains("access is off"),
+    );
+    keep(
+        &mut passed,
+        "an off-access save sends no discovery request",
+        peer.observed().len() == before,
+    );
+
     if peer.request_count() == 0 {
         panic!("MCP peer received no requests");
     }
     passed
+}
+
+/// The raw HTTP request the product composed.
+fn effect_wire(step: &Value) -> String {
+    step.get("effect")
+        .and_then(|effect| effect.get("wire"))
+        .map(|wire| wire.str_().to_string())
+        .unwrap_or_else(|| panic!("missing network wire: {}", step.to_string()))
+}
+
+/// The Authorization headers a composed request carries.
+fn authorization_headers(wire: &str) -> Vec<String> {
+    wire.split("\r\n\r\n")
+        .next()
+        .unwrap_or_default()
+        .split("\r\n")
+        .skip(1)
+        .filter_map(|line| {
+            line.split_once(':')
+                .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                .map(|(_, value)| value.trim().to_string())
+        })
+        .collect()
+}
+
+/// The notice the product last showed.
+fn notice_text(state: &Value) -> String {
+    state
+        .get("notice")
+        .map(|value| value.str_().to_string())
+        .unwrap_or_default()
 }
 
 fn finish_page(controller: &mut Controller, state: &Value, root: &str) -> (Value, Value) {
@@ -505,6 +1112,28 @@ fn finish_page(controller: &mut Controller, state: &Value, root: &str) -> (Value
 fn start(controller: &mut Controller, state: &Value, root: &str) -> Value {
     let mut step = event(controller, Some(state), "mcp_client_list", obj(vec![]), root);
     for _ in 0..2 {
+        step = exchange(controller, &step, root).0;
+    }
+    step
+}
+
+/// Answer every request the product composes until it composes none.
+///
+/// A discovery chain can ask for more than one page, so a fixed number of
+/// exchanges can leave the product busy with a request still pending. Every
+/// composed request is answered here, so the next leg starts from a product
+/// that is no longer busy.
+fn settle(controller: &mut Controller, step: Value, root: &str) -> Value {
+    let mut step = step;
+    for _ in 0..16 {
+        let pending = step
+            .get("effect")
+            .and_then(|effect| effect.get("kind"))
+            .map(|kind| kind.str_() == "network")
+            .unwrap_or(false);
+        if !pending {
+            break;
+        }
         step = exchange(controller, &step, root).0;
     }
     step
@@ -585,6 +1214,33 @@ fn modal_buttons(value: &Value) -> Vec<Value> {
         .clone()
 }
 
+fn modal_fields(value: &Value) -> Vec<Value> {
+    value
+        .get("ui")
+        .and_then(|ui| ui.get("modal"))
+        .and_then(|modal| modal.get("fields"))
+        .map(Value::arr)
+        .unwrap_or_else(|| panic!("missing modal fields"))
+        .clone()
+}
+
+/// A state whose saved MCP connection carries the given credential.
+///
+/// A connection saved before the credential was normalised still holds the
+/// pasted text, so the request boundary has to canonicalise it again.
+fn with_credential(state: &Value, endpoint: &str, key: &str) -> Value {
+    let Value::Obj(fields) = state else {
+        panic!("expected state object");
+    };
+    let mut fields = fields.clone();
+    let saved = obj(vec![("endpoint".into(), s(endpoint)), ("key".into(), s(key))]);
+    match fields.iter_mut().find(|(name, _)| name == "mcp") {
+        Some(slot) => slot.1 = saved,
+        None => fields.push(("mcp".into(), saved)),
+    }
+    Value::Obj(fields)
+}
+
 fn button_enabled(buttons: &[Value], event_name: &str) -> Option<bool> {
     buttons
         .iter()
@@ -612,6 +1268,15 @@ fn truthy(value: Option<&Value>) -> bool {
 fn keep(passed: &mut Vec<String>, name: &str, ok: bool) {
     if !ok {
         panic!("{name}");
+    }
+    passed.push(name.to_string());
+}
+
+/// A check that names what it saw, so a failing leg says more than the
+/// check's own name.
+fn keep_detail(passed: &mut Vec<String>, name: &str, ok: bool, detail: String) {
+    if !ok {
+        panic!("{name}: {detail}");
     }
     passed.push(name.to_string());
 }

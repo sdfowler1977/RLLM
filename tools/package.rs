@@ -17,10 +17,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const USAGE: &str = "\
 usage: package --destination DESTINATION [--candidate] [--dry-run]
+       package --release-numbering [--apply]
 
 --destination DIRECTORY   publication directory (created if needed)
 --candidate               allow the single binary_flow gap
 --dry-run                 check and print artifact sizes, write nothing inside the destination
+--release-numbering       print the release numbering this publication would record, and refuse a
+                          release number that may not be recorded downward
+--apply                   write the advanced release numbering into the publication record
 ";
 
 fn refuse(message: &str) -> String {
@@ -1038,7 +1042,22 @@ fn u32_at(data: &[u8], offset: usize) -> Result<u32, String> {
     Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
 }
 
-fn read_archive(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+// One member of a zip archive, described by the central directory. The
+// description is held apart from the bytes so that a single member can be
+// read without inflating the rest of the archive: the publisher reads one
+// member out of a staged artifact, and the artifact may hold far more bytes
+// than the publisher has any use for.
+struct ArchiveMember {
+    name: String,
+    method: u16,
+    crc: u32,
+    compressed_size: usize,
+    uncompressed_size: usize,
+    local_offset: usize,
+}
+
+// The members of a zip archive, named by its central directory.
+fn archive_members(data: &[u8]) -> Result<Vec<ArchiveMember>, String> {
     if data.len() < 22 {
         return Err("File is not a zip file".into());
     }
@@ -1072,7 +1091,7 @@ fn read_archive(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         return Err("Truncated central directory".into());
     }
     let mut cursor = offset_cd;
-    let mut described = Vec::with_capacity(entries);
+    let mut described: Vec<ArchiveMember> = Vec::with_capacity(entries);
     while cursor < end_dir {
         if cursor + 46 > end_dir || data[cursor..cursor + 4] != [0x50, 0x4b, 0x01, 0x02] {
             return Err("Bad magic number for central directory".into());
@@ -1092,40 +1111,348 @@ fn read_archive(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
             return Err("Truncated central directory".into());
         }
         let name = std::str::from_utf8(&data[name_at..name_end]).map_err(|_| "zip filename is not valid UTF-8".to_string())?.to_string();
-        described.push((name, method, crc, compressed_size, uncompressed_size, local_offset));
+        described.push(ArchiveMember { name, method, crc, compressed_size, uncompressed_size, local_offset });
         cursor = next;
     }
     if described.len() != entries {
         return Err("Truncated central directory".into());
     }
+    Ok(described)
+}
+
+// The bytes of one member of a zip archive, inflated and checked against the
+// length and the checksum the central directory declares for it.
+fn archive_member_bytes(data: &[u8], member: &ArchiveMember) -> Result<Vec<u8>, String> {
+    let name = &member.name;
+    let local_offset = member.local_offset;
+    if local_offset + 30 > data.len() || data[local_offset..local_offset + 4] != [0x50, 0x4b, 0x03, 0x04] {
+        return Err(format!("Bad magic number for file header {name}"));
+    }
+    let name_len = u16_at(data, local_offset + 26)? as usize;
+    let extra_len = u16_at(data, local_offset + 28)? as usize;
+    let data_at = local_offset + 30 + name_len + extra_len;
+    let data_end = data_at.checked_add(member.compressed_size).ok_or_else(|| format!("Truncated member {name}"))?;
+    if data_end > data.len() {
+        return Err(format!("Truncated member {name}"));
+    }
+    let compressed = &data[data_at..data_end];
+    let plain = match member.method {
+        0 => compressed.to_vec(),
+        8 => inflate(compressed, member.uncompressed_size).map_err(|err| format!("{name}: {err}"))?,
+        other => return Err(format!("{name}: compression type {other}")),
+    };
+    if plain.len() != member.uncompressed_size {
+        return Err(format!("{name}: length {} does not match {}", member.uncompressed_size, plain.len()));
+    }
+    let actual = crc32(&plain);
+    if actual != member.crc {
+        return Err(format!("{name}: Bad CRC-32"));
+    }
+    Ok(plain)
+}
+
+// Every member of a zip archive, with its bytes.
+fn read_archive(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let described = archive_members(data)?;
     let mut out = Vec::with_capacity(described.len());
-    for (name, method, crc, compressed_size, uncompressed_size, local_offset) in described {
-        if local_offset + 30 > data.len() || data[local_offset..local_offset + 4] != [0x50, 0x4b, 0x03, 0x04] {
-            return Err(format!("Bad magic number for file header {name}"));
-        }
-        let name_len = u16_at(data, local_offset + 26)? as usize;
-        let extra_len = u16_at(data, local_offset + 28)? as usize;
-        let data_at = local_offset + 30 + name_len + extra_len;
-        let data_end = data_at.checked_add(compressed_size).ok_or_else(|| format!("Truncated member {name}"))?;
-        if data_end > data.len() {
-            return Err(format!("Truncated member {name}"));
-        }
-        let compressed = &data[data_at..data_end];
-        let plain = match method {
-            0 => compressed.to_vec(),
-            8 => inflate(compressed, uncompressed_size).map_err(|err| format!("{name}: {err}"))?,
-            other => return Err(format!("{name}: compression type {other}")),
-        };
-        if plain.len() != uncompressed_size {
-            return Err(format!("{name}: length {uncompressed_size} does not match {}", plain.len()));
-        }
-        let actual = crc32(&plain);
-        if actual != crc {
-            return Err(format!("{name}: Bad CRC-32"));
-        }
-        out.push((name, plain));
+    for member in described {
+        out.push((member.name.clone(), archive_member_bytes(data, &member)?));
     }
     Ok(out)
+}
+
+// One member of a zip archive, read by name. A member the archive does not
+// hold is reported as absent and not as a broken archive, because a caller
+// that wants one file has to be able to tell "this archive holds no such
+// member" apart from "this archive is damaged".
+fn read_archive_member(data: &[u8], wanted: &str) -> Result<Option<Vec<u8>>, String> {
+    for member in archive_members(data)? {
+        if member.name == wanted {
+            return Ok(Some(archive_member_bytes(data, &member)?));
+        }
+    }
+    Ok(None)
+}
+
+// ---------------------------------------------------------------------------
+// The compiled manifest of a staged artifact.
+//
+// The manifest of an Android package is binary Android XML. The publisher
+// reads it here, in this file, with the standard library alone: the release
+// number a publication records has to be the number the artifact carries, and
+// the artifact is the only authority for that. Shelling out to a build tool
+// or to another program would put a toolchain version between the publisher
+// and the number it records, and the number it records is what a release
+// floor is made of.
+// ---------------------------------------------------------------------------
+
+const ANDROID_RES_NAMESPACE: &str = "http://schemas.android.com/apk/res/android";
+const RES_XML_TYPE: u16 = 0x0003;
+const RES_STRING_POOL_TYPE: u16 = 0x0001;
+const RES_XML_START_ELEMENT_TYPE: u16 = 0x0102;
+const RES_STRING_POOL_UTF8_FLAG: u32 = 1 << 8;
+const ATTRIBUTE_TYPE_STRING: u8 = 0x03;
+const ATTRIBUTE_TYPE_INT_DEC: u8 = 0x10;
+const ATTRIBUTE_TYPE_INT_HEX: u8 = 0x11;
+const NO_ENTRY: u32 = 0xFFFF_FFFF;
+
+fn le_u16(bytes: &[u8], at: usize) -> Option<u16> {
+    let slice = bytes.get(at..at + 2)?;
+    Some(u16::from_le_bytes([slice[0], slice[1]]))
+}
+
+fn le_u32(bytes: &[u8], at: usize) -> Option<u32> {
+    let slice = bytes.get(at..at + 4)?;
+    Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+// The length of a string in a UTF-8 string pool: one byte, or two when the
+// high bit of the first one is set.
+fn pool_length_u8(bytes: &[u8], at: usize) -> Option<(u32, usize)> {
+    let first = *bytes.get(at)?;
+    if first & 0x80 == 0 {
+        return Some((first as u32, at + 1));
+    }
+    let second = *bytes.get(at + 1)?;
+    Some(((((first & 0x7f) as u32) << 8) | second as u32, at + 2))
+}
+
+// The length of a string in a UTF-16 string pool: two bytes, or four when
+// the high bit of the first one is set.
+fn pool_length_u16(bytes: &[u8], at: usize) -> Option<(u32, usize)> {
+    let first = le_u16(bytes, at)?;
+    if first & 0x8000 == 0 {
+        return Some((first as u32, at + 2));
+    }
+    let second = le_u16(bytes, at + 2)?;
+    Some(((((first & 0x7fff) as u32) << 16) | second as u32, at + 4))
+}
+
+// The strings a compiled manifest draws its names and its values from.
+struct ManifestPool {
+    strings_start: usize,
+    offsets: Vec<u32>,
+    utf8: bool,
+}
+
+impl ManifestPool {
+    fn parse(bytes: &[u8], chunk: usize, header: usize) -> Option<ManifestPool> {
+        let count = le_u32(bytes, chunk + 8)? as usize;
+        let flags = le_u32(bytes, chunk + 16)?;
+        let strings_start = le_u32(bytes, chunk + 20)? as usize;
+        let mut offsets = Vec::with_capacity(count);
+        for index in 0..count {
+            offsets.push(le_u32(bytes, chunk + header + index * 4)?);
+        }
+        Some(ManifestPool {
+            strings_start: chunk + strings_start,
+            offsets,
+            utf8: flags & RES_STRING_POOL_UTF8_FLAG != 0,
+        })
+    }
+
+    fn string(&self, bytes: &[u8], index: u32) -> Option<String> {
+        if index == NO_ENTRY {
+            return None;
+        }
+        let offset = *self.offsets.get(index as usize)? as usize;
+        let at = self.strings_start + offset;
+        if self.utf8 {
+            let (_, cursor) = pool_length_u8(bytes, at)?;
+            let (length, cursor) = pool_length_u8(bytes, cursor)?;
+            let slice = bytes.get(cursor..cursor + length as usize)?;
+            Some(String::from_utf8_lossy(slice).to_string())
+        } else {
+            let (length, mut cursor) = pool_length_u16(bytes, at)?;
+            let mut units = Vec::with_capacity(length as usize);
+            for _ in 0..length {
+                units.push(le_u16(bytes, cursor)?);
+                cursor += 2;
+            }
+            Some(String::from_utf16_lossy(&units))
+        }
+    }
+}
+
+// What a compiled manifest declares about itself: the package it publishes
+// and the release number it carries.
+//
+// The release number is the android-namespaced versionCode attribute and
+// only that attribute: an attribute that happens to be named versionCode but
+// belongs to no namespace is a different attribute of the manifest, and
+// reading it as the release number would take the number of a package that
+// never declared one. The package is the unqualified package attribute of
+// the manifest element, which is the application the artifact carries.
+struct ArtifactManifest {
+    package: Option<String>,
+    version_code: Option<u64>,
+}
+
+// The facts of one start-element chunk, or None when the chunk is not the
+// manifest element.
+fn manifest_element_facts(bytes: &[u8], cursor: usize, pool: &ManifestPool) -> Result<Option<ArtifactManifest>, String> {
+    let attributes = cursor + 16;
+    let element_name = le_u32(bytes, cursor + 20).unwrap_or(NO_ENTRY);
+    let attribute_start = le_u16(bytes, attributes + 8).unwrap_or(0) as usize;
+    let attribute_size = le_u16(bytes, attributes + 10).unwrap_or(0) as usize;
+    let attribute_count = le_u16(bytes, attributes + 12).unwrap_or(0) as usize;
+    if attribute_size < 20 {
+        return Err("the compiled manifest holds an element with a malformed attribute table".to_string());
+    }
+    if pool.string(bytes, element_name).as_deref() != Some("manifest") {
+        return Ok(None);
+    }
+    let mut facts = ArtifactManifest { package: None, version_code: None };
+    for index in 0..attribute_count {
+        let at = attributes + attribute_start + index * attribute_size;
+        let namespace = le_u32(bytes, at).unwrap_or(NO_ENTRY);
+        let name = le_u32(bytes, at + 4).unwrap_or(NO_ENTRY);
+        let data_type = *bytes.get(at + 15).unwrap_or(&0);
+        let data = le_u32(bytes, at + 16).unwrap_or(0);
+        match pool.string(bytes, name).as_deref() {
+            Some("versionCode") => {
+                if pool.string(bytes, namespace).as_deref() == Some(ANDROID_RES_NAMESPACE)
+                    && (data_type == ATTRIBUTE_TYPE_INT_DEC || data_type == ATTRIBUTE_TYPE_INT_HEX)
+                {
+                    facts.version_code = Some(data as u64);
+                }
+            }
+            Some("package") => {
+                if namespace == NO_ENTRY && data_type == ATTRIBUTE_TYPE_STRING {
+                    facts.package = pool.string(bytes, data);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(Some(facts))
+}
+
+// The facts of a compiled manifest, read out of its attribute table.
+fn artifact_manifest(bytes: &[u8]) -> Result<ArtifactManifest, String> {
+    if le_u16(bytes, 0) != Some(RES_XML_TYPE) {
+        return Err("the compiled manifest is not binary Android XML".to_string());
+    }
+    let header = le_u16(bytes, 2).unwrap_or(0) as usize;
+    let declared = le_u32(bytes, 4).unwrap_or(0) as usize;
+    let end = if declared == 0 { bytes.len() } else { declared.min(bytes.len()) };
+    let mut cursor = header;
+    let mut pool: Option<ManifestPool> = None;
+    while cursor + 8 <= end {
+        let chunk_type = le_u16(bytes, cursor).unwrap_or(0);
+        let chunk_header = le_u16(bytes, cursor + 2).unwrap_or(0) as usize;
+        let chunk_size = le_u32(bytes, cursor + 4).unwrap_or(0) as usize;
+        if chunk_size < 8 {
+            return Err("the compiled manifest holds a chunk without a size".to_string());
+        }
+        let chunk_end = cursor + chunk_size;
+        if chunk_end > end {
+            return Err("the compiled manifest holds a chunk that overruns the document".to_string());
+        }
+        if chunk_type == RES_STRING_POOL_TYPE {
+            pool = Some(
+                ManifestPool::parse(bytes, cursor, chunk_header)
+                    .ok_or_else(|| "the compiled manifest holds a malformed string pool".to_string())?,
+            );
+        }
+        if chunk_type == RES_XML_START_ELEMENT_TYPE {
+            let Some(pool) = pool.as_ref() else {
+                return Err("the compiled manifest names an element before its string pool".to_string());
+            };
+            if let Some(facts) = manifest_element_facts(bytes, cursor, pool)? {
+                return Ok(facts);
+            }
+        }
+        cursor = chunk_end;
+    }
+    Err("the compiled manifest holds no manifest element".to_string())
+}
+
+// The staged artifact a publication releases: the file the record names, the
+// bytes it holds and the release number the record claims for it.
+struct StagedArtifact {
+    path_text: String,
+    path: PathBuf,
+    bytes: Vec<u8>,
+    sha256: String,
+    declared_version: i128,
+}
+
+// The artifact the record names, read and checked against the length and the
+// checksum the record declares for it. The record's own claim about the
+// artifact is settled here, before anything is read out of the artifact, so
+// a record that describes a file the tree does not hold is refused first.
+fn staged_artifact(apk: &Json, declared_version: i128) -> Result<StagedArtifact, String> {
+    let path_text = json_string(get(apk, "path").ok_or_else(|| refuse("output/checks/apk.json path"))?)
+        .ok_or_else(|| refuse("output/checks/apk.json path"))?;
+    let path = PathBuf::from(&path_text);
+    if !path.is_file() {
+        return Err(refuse(&format!("{path_text} absent")));
+    }
+    let bytes = fs::read(&path).map_err(|_| refuse(&format!("{path_text} unreadable")))?;
+    let declared_len = as_i128(get(apk, "bytes").ok_or_else(|| refuse("output/checks/apk.json bytes"))?)
+        .ok_or_else(|| refuse("output/checks/apk.json bytes"))?;
+    let declared_sha = json_string(get(apk, "sha256").ok_or_else(|| refuse("output/checks/apk.json sha256"))?)
+        .ok_or_else(|| refuse("output/checks/apk.json sha256"))?;
+    let digest = hex_digest(&sha256(&bytes));
+    if declared_len != bytes.len() as i128 || declared_sha != digest {
+        return Err(refuse(&format!("{path_text} bytes or sha256 mismatch")));
+    }
+    Ok(StagedArtifact { path_text, path, bytes, sha256: digest, declared_version })
+}
+
+// The manifest of the staged artifact, read out of the artifact itself.
+fn artifact_manifest_of(artifact: &StagedArtifact) -> Result<ArtifactManifest, String> {
+    let member = read_archive_member(&artifact.bytes, "AndroidManifest.xml")
+        .map_err(|err| refuse(&format!("{} is not a readable archive: {err}", artifact.path_text)))?;
+    let Some(bytes) = member else {
+        return Err(refuse(&format!("{} carries no AndroidManifest.xml", artifact.path_text)));
+    };
+    artifact_manifest(&bytes).map_err(|err| refuse(&format!("{} AndroidManifest.xml {err}", artifact.path_text)))
+}
+
+// The release a publication records has to be the release the artifact
+// carries, and it has to be carried by the package the record publishes.
+//
+// The version the record declares is a claim about the artifact, and the
+// artifact is the authority: its own manifest names the package it publishes
+// and the version code it holds. A record that claims a version code the
+// artifact does not carry is refused before the release floor is consulted,
+// because a floor that moved to a number no artifact carries guards nothing.
+// And an artifact that publishes a different package than the record names is
+// refused, because the floor that guards a release belongs to the package
+// that carries it, and the floor of one package may not guard the release of
+// another.
+fn bound_release(artifact: &StagedArtifact, record: &Json) -> Result<(), String> {
+    let manifest = artifact_manifest_of(artifact)?;
+    let Some(version_code) = manifest.version_code else {
+        return Err(refuse(&format!(
+            "{} carries no android:versionCode, so the release number it holds cannot be read",
+            artifact.path_text
+        )));
+    };
+    let version_code = i128::from(version_code);
+    if version_code != artifact.declared_version {
+        return Err(refuse(&format!(
+            "{} carries version code {version_code}, but output/checks/apk.json declares {}; a release may not record a number the artifact does not carry",
+            artifact.path_text, artifact.declared_version
+        )));
+    }
+    let Some(package) = manifest.package else {
+        return Err(refuse(&format!(
+            "{} names no package in its manifest, so the release floor it would move belongs to no package",
+            artifact.path_text
+        )));
+    };
+    if let Some(recorded) = recorded_package(record) {
+        if recorded != package {
+            return Err(refuse(&format!(
+                "{} publishes package {package}, but the record publishes {recorded}; a release floor belongs to the package that carries it",
+                artifact.path_text
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -1508,6 +1835,201 @@ fn j_str(value: &str) -> Json {
     Json::Str(value.to_string())
 }
 
+// The package the record publishes. A version code is counted per package id,
+// so the release floor belongs to a package and not to the tree: the record
+// names the package it publishes, and that package's floor is the one the
+// publisher keeps.
+fn recorded_package(manifest: &Json) -> Option<String> {
+    json_string(get(manifest, "package")?)
+}
+
+// The release floor the record holds for one package: the scalar baseline and
+// the entry of the per-package ledger joined, because both describe that
+// package and a floor that ignored one of them would be a floor below the
+// record. The scalar baseline describes the package the record names and no
+// other, so it speaks only for that package. A package the record holds no
+// floor for has no floor here.
+fn recorded_package_floor(manifest: &Json, package: &str) -> Option<i128> {
+    let scalar = if recorded_package(manifest).as_deref() == Some(package) {
+        get(manifest, "distributed_baseline").and_then(as_i128)
+    } else {
+        None
+    };
+    let ledger = match get(manifest, "distributed_baselines") {
+        Some(Json::Obj(pairs)) => pairs
+            .iter()
+            .find(|(name, _)| name == package)
+            .and_then(|(_, item)| as_i128(item)),
+        _ => None,
+    };
+    match (scalar, ledger) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+// The monotone record: a release number may only ever grow. The record carries
+// the version that was published last and the release floor of the package it
+// publishes, so a version below either of them is refused with both values
+// named instead of quietly lowering the floor. The advance records the
+// incoming version in the per-package ledger and keeps the scalar baseline in
+// step with it, so the floor of the package the record names never moves
+// backwards and the floor of another package is left alone.
+//
+// The two guards and the advance live in one function so the publisher's route
+// and this function are the same mechanism: a guard that is only reachable
+// through a route is a guard no unit case can convict.
+fn monotone_record(manifest: &mut Json, incoming_version: i128) -> Result<i128, String> {
+    let Some(package) = recorded_package(manifest) else {
+        return Err(refuse(
+            "the record names no package, so there is no package whose release floor could be advanced",
+        ));
+    };
+    if let Some(recorded) = get(manifest, "version").and_then(as_i128) {
+        if incoming_version < recorded {
+            return Err(refuse(&format!(
+                "Version {incoming_version} is below the recorded version {recorded}; a release may not be recorded downward"
+            )));
+        }
+    }
+    if let Some(floor) = recorded_package_floor(manifest, &package) {
+        if incoming_version < floor {
+            return Err(refuse(&format!(
+                "Version {incoming_version} is below the release floor {floor} of package {package}; a release may not be recorded downward"
+            )));
+        }
+    }
+    // The advance. The ledger carries the floor of the package the record
+    // names, and the scalar baseline is kept in step with that package's
+    // floor, because the scalar describes the package the record names and
+    // no other.
+    let next_baseline = incoming_version;
+    let scalar = get(manifest, "distributed_baseline").and_then(as_i128);
+    let next_scalar = scalar.map(|value| value.max(next_baseline)).unwrap_or(next_baseline);
+    upsert(
+        manifest,
+        "distributed_baseline",
+        j_int(i64::try_from(next_scalar).map_err(|_| refuse("distributed baseline"))?),
+    )?;
+    let mut entries: Vec<(String, Json)> = match get(manifest, "distributed_baselines") {
+        Some(Json::Obj(pairs)) => pairs.clone(),
+        _ => Vec::new(),
+    };
+    entries.retain(|(name, _)| name != &package);
+    entries.push((
+        package.clone(),
+        j_int(i64::try_from(next_baseline).map_err(|_| refuse("distributed baseline"))?),
+    ));
+    upsert(manifest, "distributed_baselines", Json::Obj(entries))?;
+    Ok(next_baseline)
+}
+
+// The release numbering of one publication: the version the release carries,
+// the version the record published last, the package the record publishes, the
+// release floor that package carries, and the floor the record carries after
+// this release. The monotone rule lives in monotone_record; this function is
+// the one place that reads the record, applies the rule and reports the
+// result, so the publish route and the release-numbering route are the same
+// mechanism and a guard that one route applies is the guard the other route
+// applies.
+struct ReleaseNumbering {
+    incoming: i128,
+    recorded_version: Option<i128>,
+    recorded_baseline: Option<i128>,
+    recorded_package: Option<String>,
+    package_floor: Option<i128>,
+    next_baseline: i128,
+}
+
+fn release_numbering(manifest: &mut Json, incoming_version: i128) -> Result<ReleaseNumbering, String> {
+    let recorded_version = get(manifest, "version").and_then(as_i128);
+    let recorded_baseline = get(manifest, "distributed_baseline").and_then(as_i128);
+    let recorded_package = recorded_package(manifest);
+    let package_floor = recorded_package
+        .as_deref()
+        .and_then(|package| recorded_package_floor(manifest, package));
+    let next_baseline = monotone_record(manifest, incoming_version)?;
+    Ok(ReleaseNumbering {
+        incoming: incoming_version,
+        recorded_version,
+        recorded_baseline,
+        recorded_package,
+        package_floor,
+        next_baseline,
+    })
+}
+
+// The release numbering as the publisher's own route reports it. The route
+// reads the release number the staged artifact carries and the record the
+// publication owns, so it settles the release number without a build,
+// without the toolchain and without walking the tree. The artifact is read
+// here as well as on the publish route, because the number this route
+// records has to be the number the artifact carries: a route that recorded
+// the record's own claim could move a floor to a version code that no
+// artifact holds.
+fn release_numbering_route(root: &Path, apply: bool) -> Result<String, String> {
+    let apk = read_required(root, "output/checks/apk.json")?;
+    let version_value = get(&apk, "version")
+        .ok_or_else(|| refuse("output/checks/apk.json version"))?
+        .clone();
+    let incoming_version = as_i128(&version_value).ok_or_else(|| refuse("output/checks/apk.json version"))?;
+    let manifest_path = root.join("PUBLICATION-MANIFEST.json");
+    let manifest_text = fs::read_to_string(&manifest_path).map_err(|_| refuse("PUBLICATION-MANIFEST.json absent"))?;
+    let mut manifest = parse_json(&manifest_text).map_err(|err| refuse(&format!("PUBLICATION-MANIFEST.json {err}")))?;
+    let artifact = staged_artifact(&apk, incoming_version)?;
+    bound_release(&artifact, &manifest)?;
+    let numbering = release_numbering(&mut manifest, incoming_version)?;
+    if apply {
+        write_record(&manifest_path, json_text(&manifest).as_bytes())?;
+    }
+    Ok(release_numbering_text(&numbering, apply))
+}
+
+// The record is replaced by a rename, so a reader never sees a half-written
+// record.
+fn write_record(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let temporary = path.with_extension("json.release-tmp");
+    fs::write(&temporary, bytes).map_err(|_| refuse(&format!("{} is unwritable", temporary.display())))?;
+    fs::rename(&temporary, path).map_err(|_| refuse(&format!("{} could not be replaced", path.display())))?;
+    Ok(())
+}
+
+fn release_numbering_text(numbering: &ReleaseNumbering, applied: bool) -> String {
+    let mut members: Vec<(String, Json)> = vec![(
+        "incoming_version".to_string(),
+        j_int(i64::try_from(numbering.incoming).unwrap_or(i64::MAX)),
+    )];
+    if let Some(recorded) = numbering.recorded_version {
+        members.push((
+            "recorded_version".to_string(),
+            j_int(i64::try_from(recorded).unwrap_or(i64::MAX)),
+        ));
+    }
+    if let Some(recorded) = numbering.recorded_baseline {
+        members.push((
+            "recorded_distributed_baseline".to_string(),
+            j_int(i64::try_from(recorded).unwrap_or(i64::MAX)),
+        ));
+    }
+    if let Some(package) = &numbering.recorded_package {
+        members.push(("recorded_package".to_string(), j_str(package)));
+    }
+    if let Some(floor) = numbering.package_floor {
+        members.push((
+            "recorded_package_release_floor".to_string(),
+            j_int(i64::try_from(floor).unwrap_or(i64::MAX)),
+        ));
+    }
+    members.push((
+        "next_distributed_baseline".to_string(),
+        j_int(i64::try_from(numbering.next_baseline).unwrap_or(i64::MAX)),
+    ));
+    members.push(("applied".to_string(), Json::Bool(applied)));
+    json_text(&Json::Obj(members))
+}
+
 fn refuse_groups_absent() -> String {
     refuse("tools/harness.rs absent; expected const GROUPS")
 }
@@ -1840,6 +2362,100 @@ const HYPHEN_PAIRS: &[&str] = &[
     "mcp_history",
     "self_rebuild",
     "rrsi_loop",
+    "release_numbering",
+    "turn_runtime",
+];
+
+// The report file every runner group publishes.
+//
+// The three tables above say which classification a group belongs to; this
+// one says which file the group has to publish. It is written out group by
+// group from the producer's own naming rule - the twin's group_report_file
+// applied to the runner's group list - and it is deliberately NOT derived
+// from EXPLICIT_PAIRS, IDENTITY_PAIRS or HYPHEN_PAIRS. That separation is
+// the whole point of the table: a group moved from one classification table
+// to another changes what the publisher derives without changing what is
+// pinned here, so the publisher's own case convicts the move instead of
+// following it.
+//
+// The table exists only in a test build, so the production path cannot
+// consume it even by accident; the expectation and the mechanism that has
+// to meet it are separate code in separate builds.
+#[cfg(test)]
+const PINNED_REPORT_FILES: &[(&str, &str)] = &[
+    ("provider_process", "current-results.json"),
+    ("network_drive", "network-results.json"),
+    ("drive_ownership", "drive-ownership.json"),
+    ("question_process", "process-results.json"),
+    ("history", "history-results.json"),
+    ("a2a", "a2a.json"),
+    ("acp", "acp.json"),
+    ("oauth", "oauth.json"),
+    ("device_authorization", "device_authorization.json"),
+    ("binary_flow", "binary-flow.json"),
+    ("pe_declarations", "pe-declarations.json"),
+    ("commands", "commands.json"),
+    ("history_migration", "history-migration.json"),
+    ("hosted_phases", "hosted-phases.json"),
+    ("prompt_reference", "prompt-reference.json"),
+    ("provider_evidence", "provider-evidence.json"),
+    ("delegation_visibility", "delegation-visibility.json"),
+    ("local_feedback", "local-feedback.json"),
+    ("network_feedback", "network-feedback.json"),
+    ("proposal_feedback", "proposal-feedback.json"),
+    ("proposal_recovery", "proposal-recovery.json"),
+    ("review_ownership", "review-ownership.json"),
+    ("task_ownership", "task-ownership.json"),
+    ("dav_listing", "dav-listing.json"),
+    ("server_admission", "server-admission.json"),
+    ("http_framing", "http-framing.json"),
+    ("gateway_expectation", "gateway-expectation.json"),
+    ("device_shortcut", "device-shortcut.json"),
+    ("request_fields", "request-fields.json"),
+    ("response_fields", "response-fields.json"),
+    ("chunk_fields", "chunk-fields.json"),
+    ("storage_etags", "storage-etags.json"),
+    ("platform_resolution", "platform-resolution.json"),
+    ("query_feedback", "query-feedback.json"),
+    ("carry_flow", "carry-flow.json"),
+    ("workspace_navigation", "workspace-navigation.json"),
+    ("mcp_catalog", "mcp-catalog.json"),
+    ("mcp_catalog_events", "mcp-catalog-events.json"),
+    ("mcp_images", "mcp-images.json"),
+    ("mcp_continuation", "mcp-continuation.json"),
+    ("mcp_history", "mcp-history.json"),
+    ("document_providers", "document_providers.json"),
+    ("snapshot_identity", "snapshot_identity.json"),
+    ("storage_auth", "storage_auth.json"),
+    ("storage_oauth", "storage_oauth.json"),
+    ("credential_rotation", "credential_rotation.json"),
+    ("storage_owner", "storage-owner.json"),
+    ("voice_settings", "voice_settings.json"),
+    ("field_flow", "field-flow.json"),
+    ("flags_flow", "flags-flow.json"),
+    ("product_flow", "product-flow.json"),
+    ("diagnostics", "diagnostics.json"),
+    ("services", "services.json"),
+    ("media", "media.json"),
+    ("jobs", "jobs.json"),
+    ("voice", "voice.json"),
+    ("media_stream", "media_stream.json"),
+    ("media_upload", "media_upload.json"),
+    ("voice_interruption", "voice_interruption.json"),
+    ("voice_background", "voice_background.json"),
+    ("voice_session", "voice_session.json"),
+    ("capture_lifecycle", "capture_lifecycle.json"),
+    ("scene", "scene.json"),
+    ("apk_alignment", "apk_alignment.json"),
+    ("release_numbering", "release-numbering.json"),
+    ("audio_route", "audio_route.json"),
+    ("state_sealing", "state-sealing.json"),
+    ("desktop_runtime", "desktop_runtime.json"),
+    ("turn_background", "turn_background.json"),
+    ("permission_modes", "permission_modes.json"),
+    ("self_rebuild", "self-rebuild.json"),
+    ("rrsi_loop", "rrsi-loop.json"),
+    ("turn_runtime", "turn-runtime.json"),
 ];
 
 fn report_pairs() -> Vec<(String, String)> {
@@ -2192,7 +2808,7 @@ const TOOL_PYTHON: &[ToolPython] = &[
 
 // Both ceilings are the measured verification/ totals after every Python leg
 // that a native twin replaced was deleted. Measured against the runner's own
-// inventory: 71 groups in GROUPS, 70 of them with no verification/<name>.py
+// inventory: 73 groups in GROUPS, 72 of them with no verification/<name>.py
 // left, 2 files and 114 lines still present (one wired group, history_migration,
 // plus live_web.py, which is not a wired group). A larger file count or line
 // count refuses; a smaller count still passes. The ceilings move down with every
@@ -2714,20 +3330,31 @@ struct PublishOptions<'a> {
 fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
     let root = opts.root;
     let apk = read_required(root, "output/checks/apk.json")?;
-    let apk_path_text = json_string(get(&apk, "path").ok_or_else(|| refuse("output/checks/apk.json path"))?)
-        .ok_or_else(|| refuse("output/checks/apk.json path"))?;
-    let apk_path = PathBuf::from(&apk_path_text);
-    if !apk_path.is_file() {
-        return Err(refuse(&format!("{apk_path_text} absent")));
-    }
-    let apk_bytes = fs::read(&apk_path).map_err(|_| refuse(&format!("{apk_path_text} unreadable")))?;
-    let declared_len = as_i128(get(&apk, "bytes").ok_or_else(|| refuse("output/checks/apk.json bytes"))?)
-        .ok_or_else(|| refuse("output/checks/apk.json bytes"))?;
-    let declared_sha = json_string(get(&apk, "sha256").ok_or_else(|| refuse("output/checks/apk.json sha256"))?)
-        .ok_or_else(|| refuse("output/checks/apk.json sha256"))?;
-    if declared_len != apk_bytes.len() as i128 || declared_sha != hex_digest(&sha256(&apk_bytes)) {
-        return Err(refuse(&format!("{apk_path_text} bytes or sha256 mismatch")));
-    }
+    // The release number is settled before the tree is walked. A release
+    // number that may not be recorded downward is refused before the
+    // connected groups are counted and before a single artifact is produced,
+    // so the refusal costs nothing and names the two values that collide.
+    let version_value = get(&apk, "version")
+        .ok_or_else(|| refuse("output/checks/apk.json version"))?
+        .clone();
+    let incoming_version = as_i128(&version_value).ok_or_else(|| refuse("output/checks/apk.json version"))?;
+    let manifest_path = root.join("PUBLICATION-MANIFEST.json");
+    let manifest_text = fs::read_to_string(&manifest_path).map_err(|_| refuse("PUBLICATION-MANIFEST.json absent"))?;
+    let mut manifest = parse_json(&manifest_text).map_err(|err| refuse(&format!("PUBLICATION-MANIFEST.json {err}")))?;
+    // The staged artifact is read before the release floor is settled. The
+    // version the record declares is a claim about the artifact, and the
+    // artifact is the authority: its own manifest names the package it
+    // publishes and the version code it carries. A record whose claim the
+    // artifact does not back is refused here, before the floor is consulted,
+    // because a floor that moved to a number no artifact carries guards
+    // nothing.
+    let artifact = staged_artifact(&apk, incoming_version)?;
+    bound_release(&artifact, &manifest)?;
+    // A release number may only ever grow. The record carries the version that
+    // was published last and the distributed baseline every later release must
+    // be at or above, so recording a downward version is refused with both
+    // values named instead of quietly lowering the floor.
+    let numbering = release_numbering(&mut manifest, incoming_version)?;
     let Some(Json::Obj(input_pairs)) = get(&apk, "build_inputs") else {
         return Err(refuse("output/checks/apk.json build_inputs"));
     };
@@ -2764,6 +3391,24 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
     candidate_gate(&failed, opts.candidate)?;
     pairs_cover(&expected)?;
     let pairs = report_pairs();
+    // Every required report is looked for before any of them is read, so one
+    // refusal names every report that is absent instead of only the first
+    // one. The refusal class and the exit code are unchanged; what the
+    // message carries grows, so the whole gap is visible in a single refusal
+    // instead of one absent report per publish attempt.
+    let missing: Vec<String> = pairs
+        .iter()
+        .map(|(_, file)| format!("output/checks/{file}.json"))
+        .filter(|relative| !root.join(relative).is_file())
+        .collect();
+    if !missing.is_empty() {
+        let listed = missing
+            .iter()
+            .map(|relative| format!("{relative} absent"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(refuse(&listed));
+    }
     let mut checks = Vec::new();
     for (name, file) in &pairs {
         let relative = format!("output/checks/{file}.json");
@@ -2803,13 +3448,12 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
     if hex_digest(&sha256(&controller_bytes)) != controller_sha {
         return Err(refuse("Published comparator executable changed"));
     }
-    let version_value = get(&apk, "version").ok_or_else(|| refuse("output/checks/apk.json version"))?.clone();
     let version = show_scalar(&version_value)?;
     let bytes_text = show_scalar(get(&apk, "bytes").ok_or_else(|| refuse("output/checks/apk.json bytes"))?)?;
-    let sha_text = declared_sha.clone();
-    let stamp = apk_path.parent().and_then(|path| path.file_name()).and_then(|name| name.to_str()).unwrap_or("").to_string();
+    let sha_text = artifact.sha256.clone();
+    let stamp = artifact.path.parent().and_then(|path| path.file_name()).and_then(|name| name.to_str()).unwrap_or("").to_string();
     if !stamp_matches(&stamp) {
-        return Err(refuse(&format!("{apk_path_text} parent {stamp} is not a publication stamp")));
+        return Err(refuse(&format!("{} parent {stamp} is not a publication stamp", artifact.path_text)));
     }
     let total: u64 = counts.iter().map(|(_, count)| *count).sum();
     let groups = runs.len();
@@ -2948,9 +3592,9 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
         }
         return Err(refuse(&format!("Source differs from inspected APK inputs: {differ}")));
     }
-    let manifest_path = root.join("PUBLICATION-MANIFEST.json");
-    let manifest_text = fs::read_to_string(&manifest_path).map_err(|_| refuse("PUBLICATION-MANIFEST.json absent"))?;
-    let mut manifest = parse_json(&manifest_text).map_err(|err| refuse(&format!("PUBLICATION-MANIFEST.json {err}")))?;
+    // The record was read and the release numbering settled at the top of this
+    // function, before the tree was walked: the version that may not be
+    // recorded downward was refused there, with both values named.
     let published_name = format!("RLLM__Candidate-Application__{stamp}.apk");
     let source_name = format!("RLLM__Candidate-Source__{stamp}.zip");
     let sums_name = format!("RLLM__Candidate-Checksums__{stamp}.txt");
@@ -2962,7 +3606,7 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
         obj(vec![
             ("location", j_str("companion")),
             ("path", j_str(&published_name)),
-            ("bytes", j_int(apk_bytes.len() as i64)),
+            ("bytes", j_int(artifact.bytes.len() as i64)),
             ("sha256", j_str(&sha_text)),
         ]),
     )?;
@@ -3016,7 +3660,7 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
     let published_path = destination.join(&published_name);
     let source_path_out = destination.join(&source_name);
     let sums_path = destination.join(&sums_name);
-    let apk_sha = hex_digest(&sha256(&apk_bytes));
+    let apk_sha = artifact.sha256.clone();
     let zip_sha = hex_digest(&sha256(&zip_bytes));
     let sums = format!("{apk_sha}  {published_name}\n{zip_sha}  {source_name}\n").into_bytes();
     let record = Json::Obj(vec![
@@ -3035,7 +3679,7 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
         (
             "files".into(),
             Json::Obj(vec![
-                (published_name.clone(), obj(vec![("bytes", j_int(apk_bytes.len() as i64)), ("sha256", j_str(&apk_sha))])),
+                (published_name.clone(), obj(vec![("bytes", j_int(artifact.bytes.len() as i64)), ("sha256", j_str(&apk_sha))])),
                 (source_name.clone(), obj(vec![("bytes", j_int(zip_bytes.len() as i64)), ("sha256", j_str(&zip_sha))])),
                 (sums_name.clone(), obj(vec![("bytes", j_int(sums.len() as i64)), ("sha256", j_str(&hex_digest(&sha256(&sums))))])),
             ]),
@@ -3045,7 +3689,7 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
     let printed = dump(&record, Some(2));
     let signature = root.join("output/tools/signature");
     if opts.dry_run {
-        run_signature(&signature, &apk_path)?;
+        run_signature(&signature, &artifact.path)?;
     }
     let before = vec![
         Artifact { path: root.join("verification/RESULTS.json"), bytes: results_bytes },
@@ -3056,12 +3700,19 @@ fn prepare(opts: &PublishOptions<'_>) -> Result<Plan, String> {
         Artifact { path: manifest_path, bytes: manifest_bytes },
         Artifact { path: source_path_out.clone(), bytes: zip_bytes },
     ];
-    let apk_artifact = Artifact { path: published_path.clone(), bytes: apk_bytes };
+    let apk_artifact = Artifact { path: published_path.clone(), bytes: artifact.bytes };
     let after = vec![
         Artifact { path: sums_path, bytes: sums },
         Artifact { path: root.join("output/checks/packaged.json"), bytes: packaged },
     ];
     let mut preview = python_line;
+    preview.push_str(&format!(
+        "release numbering: incoming {}, recorded version {}, recorded distributed baseline {}, next distributed baseline {}\n",
+        numbering.incoming,
+        numbering.recorded_version.map(|value| value.to_string()).unwrap_or_else(|| "absent".to_string()),
+        numbering.recorded_baseline.map(|value| value.to_string()).unwrap_or_else(|| "absent".to_string()),
+        numbering.next_baseline
+    ));
     for artifact in before.iter().chain(std::iter::once(&apk_artifact)).chain(after.iter()) {
         push_preview(&mut preview, &artifact.path, &artifact.bytes);
     }
@@ -3109,15 +3760,19 @@ fn project_root() -> Result<PathBuf, String> {
 }
 
 struct Cli {
-    destination: PathBuf,
+    destination: Option<PathBuf>,
     candidate: bool,
     dry_run: bool,
+    release_numbering: bool,
+    apply: bool,
 }
 
 fn parse_cli(args: &[String]) -> Result<Cli, i32> {
     let mut destination = None;
     let mut candidate = false;
     let mut dry_run = false;
+    let mut release_numbering = false;
+    let mut apply = false;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
@@ -3128,6 +3783,16 @@ fn parse_cli(args: &[String]) -> Result<Cli, i32> {
         }
         if arg == "--candidate" {
             candidate = true;
+            index += 1;
+            continue;
+        }
+        if arg == "--release-numbering" {
+            release_numbering = true;
+            index += 1;
+            continue;
+        }
+        if arg == "--apply" {
+            apply = true;
             index += 1;
             continue;
         }
@@ -3155,10 +3820,21 @@ fn parse_cli(args: &[String]) -> Result<Cli, i32> {
         return Err(2);
     }
     let Some(destination) = destination else {
+        if release_numbering {
+            return Ok(Cli { destination: None, candidate, dry_run, release_numbering, apply });
+        }
         eprintln!("{USAGE}package: error: --destination is required");
         return Err(2);
     };
-    Ok(Cli { destination, candidate, dry_run })
+    if release_numbering {
+        eprintln!("{USAGE}package: error: --release-numbering does not publish and takes no destination");
+        return Err(2);
+    }
+    if apply {
+        eprintln!("{USAGE}package: error: --apply belongs to --release-numbering");
+        return Err(2);
+    }
+    Ok(Cli { destination: Some(destination), candidate, dry_run, release_numbering: false, apply: false })
 }
 
 fn publish(root: &Path, destination: &Path, candidate: bool, dry_run: bool) -> Result<String, String> {
@@ -3192,16 +3868,34 @@ fn main() {
                 println!("{err}");
                 1
             }
-            Ok(root) => match publish(&root, &cli.destination, cli.candidate, cli.dry_run) {
-                Ok(text) => {
-                    println!("{text}");
-                    0
+            Ok(root) => {
+                if cli.release_numbering {
+                    match release_numbering_route(&root, cli.apply) {
+                        Ok(text) => {
+                            println!("{text}");
+                            0
+                        }
+                        Err(err) => {
+                            println!("{err}");
+                            1
+                        }
+                    }
+                } else if let Some(destination) = cli.destination {
+                    match publish(&root, &destination, cli.candidate, cli.dry_run) {
+                        Ok(text) => {
+                            println!("{text}");
+                            0
+                        }
+                        Err(err) => {
+                            println!("{err}");
+                            1
+                        }
+                    }
+                } else {
+                    eprintln!("{USAGE}package: error: --destination is required");
+                    2
                 }
-                Err(err) => {
-                    println!("{err}");
-                    1
-                }
-            },
+            }
         },
     };
     std::process::exit(code);
@@ -3237,12 +3931,49 @@ mod checks {
         pairs_cover(&names).unwrap();
         assert_eq!(EXPLICIT_PAIRS.len(), 35);
         assert_eq!(IDENTITY_PAIRS.len(), 22);
-        assert_eq!(HYPHEN_PAIRS.len(), 14);
-        assert_eq!(names.len(), 71, "{}", names.len());
-        assert_eq!(report_pairs().len(), 71);
+        assert_eq!(HYPHEN_PAIRS.len(), 16);
+        assert_eq!(names.len(), 73, "{}", names.len());
+        assert_eq!(report_pairs().len(), 73);
         assert_eq!(names.len(), EXPLICIT_PAIRS.len() + IDENTITY_PAIRS.len() + HYPHEN_PAIRS.len());
         assert_eq!(names.first().map(String::as_str), Some("provider_process"));
-        assert_eq!(names.last().map(String::as_str), Some("rrsi_loop"));
+        assert_eq!(names.last().map(String::as_str), Some("turn_runtime"));
+    }
+
+    #[test]
+    fn every_runner_group_publishes_its_pinned_report_file() {
+        // The pin is a complete statement of the report file names, so it is
+        // checked for completeness first: a pin that had lost a row would
+        // otherwise agree with a publisher that had also lost that group.
+        assert_eq!(PINNED_REPORT_FILES.len(), 73);
+        let mut pinned_names = BTreeSet::new();
+        for (name, file) in PINNED_REPORT_FILES {
+            assert!(pinned_names.insert(*name), "the pinned table names {name} twice");
+            assert!(file.ends_with(".json"), "the pinned file {file} for {name} is not a report file");
+        }
+        // The pin names the runner's groups exactly, so a group the runner
+        // has and the pin does not, or the other way round, is a gap in the
+        // pin rather than a silent difference.
+        let runner = load_runner_groups(&project_root().unwrap()).unwrap();
+        let pinned_group_names: BTreeSet<String> = pinned_names.into_iter().map(|name| name.to_string()).collect();
+        let runner_group_names: BTreeSet<String> = runner.into_iter().collect();
+        assert_eq!(pinned_group_names, runner_group_names);
+        // The publisher's own derivation has to agree with the pin, group by
+        // group. The pin is independent of the classification tables, so a
+        // group moved between them changes this derivation and is convicted
+        // here rather than only in another file.
+        let derived: BTreeMap<String, String> = report_pairs()
+            .into_iter()
+            .map(|(name, file)| (name, format!("{file}.json")))
+            .collect();
+        assert_eq!(derived.len(), PINNED_REPORT_FILES.len());
+        for (name, file) in PINNED_REPORT_FILES {
+            match derived.get(*name) {
+                Some(published) => {
+                    assert_eq!(published, file, "group {name} publishes {published} but the pin names {file}")
+                }
+                None => panic!("the publisher derives no report file for group {name}, and the pin names {file}"),
+            }
+        }
     }
 
     #[test]
@@ -3345,6 +4076,7 @@ const GROUPS: &[&str] = &[
             "capture_lifecycle",
             "scene",
             "apk_alignment",
+            "release_numbering",
             "audio_route",
             "state_sealing",
             "desktop_runtime",
@@ -3352,6 +4084,7 @@ const GROUPS: &[&str] = &[
             "permission_modes",
             "self_rebuild",
             "rrsi_loop",
+            "turn_runtime",
         ]
         .into_iter()
         .map(str::to_string)
@@ -3380,9 +4113,9 @@ const GROUPS: &[&str] = &[
     }
 
     #[test]
-    fn single_groups_declaration_returns_the_real_71_names() {
+    fn single_groups_declaration_returns_the_real_73_names() {
         let expected = real_runner_group_names();
-        assert_eq!(expected.len(), 71);
+        assert_eq!(expected.len(), 73);
         let parsed = parse_groups_list(&real_groups_declaration()).unwrap();
         assert_eq!(parsed, expected);
         let runner = load_runner_groups(&project_root().unwrap()).unwrap();
@@ -3412,7 +4145,7 @@ const GROUPS: &[&str] = &[
         names.push("not_a_group".into());
         let err = pairs_cover(&names).unwrap_err();
         assert!(err.contains("Packaging report inventory differs from the runner GROUPS list"), "{err}");
-        assert!(err.contains("groups 71, pairs 71"), "{err}");
+        assert!(err.contains("groups 73, pairs 73"), "{err}");
         pairs_cover(&report_pairs().into_iter().map(|(name, _)| name).collect::<Vec<_>>()).unwrap();
     }
 
@@ -3616,6 +4349,85 @@ const GROUPS: &[&str] = &[
         out
     }
 
+    // A compiled manifest, written the way an Android build writes it: a
+    // string pool followed by the manifest element, with the package as an
+    // unqualified attribute and the release number as the android-namespaced
+    // one. The publisher reads the manifest of the artifact it releases, so
+    // the artifact a case stages has to carry a real compiled manifest and
+    // not a stand-in for one.
+    fn axml_manifest(package: &str, version_code: u32) -> Vec<u8> {
+        let strings = [ANDROID_RES_NAMESPACE, "manifest", "package", package, "versionCode"];
+        let mut offsets = Vec::new();
+        let mut data = Vec::new();
+        for text in strings {
+            offsets.push(data.len() as u32);
+            data.push(text.chars().count() as u8);
+            data.push(text.len() as u8);
+            data.extend_from_slice(text.as_bytes());
+            data.push(0);
+        }
+        let header = 28usize;
+        let mut pool = Vec::new();
+        pool.extend_from_slice(&RES_STRING_POOL_TYPE.to_le_bytes());
+        pool.extend_from_slice(&(header as u16).to_le_bytes());
+        pool.extend_from_slice(&((header + offsets.len() * 4 + data.len()) as u32).to_le_bytes());
+        pool.extend_from_slice(&(strings.len() as u32).to_le_bytes());
+        pool.extend_from_slice(&0u32.to_le_bytes());
+        pool.extend_from_slice(&RES_STRING_POOL_UTF8_FLAG.to_le_bytes());
+        pool.extend_from_slice(&((header + offsets.len() * 4) as u32).to_le_bytes());
+        pool.extend_from_slice(&0u32.to_le_bytes());
+        for offset in &offsets {
+            pool.extend_from_slice(&offset.to_le_bytes());
+        }
+        pool.extend_from_slice(&data);
+        // The attributes of the manifest element: the package, unqualified,
+        // and the release number, in the android namespace. The package
+        // carries the index of its own text in the raw value as well as in
+        // the typed value, the way an Android build writes it, so that a
+        // reader of either field reads the package.
+        let mut attributes = Vec::new();
+        for (namespace, name, raw, data_type, value) in [
+            (NO_ENTRY, 2u32, 3u32, ATTRIBUTE_TYPE_STRING, 3u32),
+            (0u32, 4u32, NO_ENTRY, ATTRIBUTE_TYPE_INT_DEC, version_code),
+        ] {
+            attributes.extend_from_slice(&namespace.to_le_bytes());
+            attributes.extend_from_slice(&name.to_le_bytes());
+            attributes.extend_from_slice(&raw.to_le_bytes());
+            attributes.extend_from_slice(&8u16.to_le_bytes());
+            attributes.push(0);
+            attributes.push(data_type);
+            attributes.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut element = Vec::new();
+        element.extend_from_slice(&RES_XML_START_ELEMENT_TYPE.to_le_bytes());
+        element.extend_from_slice(&16u16.to_le_bytes());
+        element.extend_from_slice(&((36 + attributes.len()) as u32).to_le_bytes());
+        element.extend_from_slice(&1u32.to_le_bytes());
+        element.extend_from_slice(&NO_ENTRY.to_le_bytes());
+        element.extend_from_slice(&NO_ENTRY.to_le_bytes());
+        element.extend_from_slice(&1u32.to_le_bytes());
+        element.extend_from_slice(&20u16.to_le_bytes());
+        element.extend_from_slice(&20u16.to_le_bytes());
+        element.extend_from_slice(&2u16.to_le_bytes());
+        element.extend_from_slice(&0u16.to_le_bytes());
+        element.extend_from_slice(&0u16.to_le_bytes());
+        element.extend_from_slice(&0u16.to_le_bytes());
+        element.extend_from_slice(&attributes);
+        let mut document = Vec::new();
+        document.extend_from_slice(&RES_XML_TYPE.to_le_bytes());
+        document.extend_from_slice(&8u16.to_le_bytes());
+        document.extend_from_slice(&((8 + pool.len() + element.len()) as u32).to_le_bytes());
+        document.extend_from_slice(&pool);
+        document.extend_from_slice(&element);
+        document
+    }
+
+    // A staged artifact: an archive whose manifest names the package it
+    // publishes and carries the release number it holds.
+    fn staged_apk(package: &str, version_code: u32) -> Vec<u8> {
+        archive_bytes(&[("AndroidManifest.xml".into(), axml_manifest(package, version_code))]).unwrap()
+    }
+
     fn fixture() -> (TempDir, PathBuf) {
         let dir = TempDir::new();
         let root = dir.0.clone();
@@ -3646,7 +4458,8 @@ const GROUPS: &[&str] = &[
         let stamp = root.join("output/build/2026-01-02__03-04-05Z");
         fs::create_dir_all(&stamp).unwrap();
         let apk = stamp.join("app.apk");
-        fs::write(&apk, b"apk-bytes").unwrap();
+        let apk_bytes = staged_apk("com.local.client.lab", 7);
+        fs::write(&apk, &apk_bytes).unwrap();
         let inputs = Json::Obj(vec![
             ("AndroidManifest.xml".into(), j_str(&hex_digest(&sha256(b"manifest")))),
             ("package.sh".into(), j_str(&hex_digest(&sha256(b"pkg")))),
@@ -3654,8 +4467,8 @@ const GROUPS: &[&str] = &[
         ]);
         let apk_json = Json::Obj(vec![
             ("path".into(), j_str(&apk.display().to_string())),
-            ("bytes".into(), j_int(9)),
-            ("sha256".into(), j_str(&hex_digest(&sha256(b"apk-bytes")))),
+            ("bytes".into(), j_int(apk_bytes.len() as i64)),
+            ("sha256".into(), j_str(&hex_digest(&sha256(&apk_bytes)))),
             ("version".into(), j_int(7)),
             ("build_inputs".into(), inputs.clone()),
         ]);
@@ -3673,6 +4486,7 @@ const GROUPS: &[&str] = &[
         }
         let manifest = Json::Obj(vec![
             ("state".into(), j_str("old")),
+            ("package".into(), j_str("com.local.client.lab")),
             (
                 "build_inputs".into(),
                 Json::Obj(vec![
@@ -3723,7 +4537,7 @@ const GROUPS: &[&str] = &[
         assert!(root.join("output/checks/packaged.json").is_file());
         let notes = fs::read_to_string(root.join("release/NOTES.md")).unwrap();
         assert!(notes.contains("Auto chooses a direct reply"), "{notes}");
-        assert!(notes.contains("71/71 connected groups passed"), "{notes}");
+        assert!(notes.contains("73/73 connected groups passed"), "{notes}");
         assert!(notes.contains("4 Rust cases from the full suite"), "{notes}");
         let readme = fs::read_to_string(root.join("README.md")).unwrap();
         assert!(readme.contains("Current signed candidate 7"), "{readme}");
@@ -4022,6 +4836,220 @@ const GROUPS: &[&str] = &[
         assert!(census_line(&err).contains("package.py (publisher until a signed candidate is published with the native package binary)"), "{err}");
     }
 
+    // The report files the publisher requires, planted from the pinned
+    // table. The pinned table is written out by hand and is independent of
+    // the publisher's own derivation, so the set of report files on disk is
+    // the contract; a report file the pinned table does not name is taken
+    // away, so the case measures the publisher against the pinned set and
+    // against nothing else.
+    fn plant_pinned_reports(root: &Path) {
+        for (_, file) in PINNED_REPORT_FILES {
+            let path = root.join(format!("output/checks/{file}"));
+            if !path.is_file() {
+                fs::write(&path, "{\"passed\":1}\n").unwrap();
+            }
+        }
+        for (_, file) in report_pairs() {
+            let path = root.join(format!("output/checks/{file}.json"));
+            if path.is_file() && !PINNED_REPORT_FILES.iter().any(|(_, pinned)| *pinned == format!("{file}.json")) {
+                fs::remove_file(&path).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn publish_refusal_names_every_absent_required_report() {
+        // Two required reports are absent at the same time. A refusal that
+        // names only the first of them hides the second one, so the operator
+        // has to run the publisher again to learn about it.
+        //
+        // The reports are planted from the pinned table and not from the
+        // publisher's own derivation, so a change in the classification
+        // tables cannot make this case fail on a fixture that planted
+        // another name: the pinned names are the contract, and the refusal
+        // has to name exactly the ones that are missing.
+        let (_dir, root) = fixture();
+        plant_pinned_reports(&root);
+        let absent = ["binary-flow", "history-migration"];
+        for file in absent {
+            let path = root.join(format!("output/checks/{file}.json"));
+            assert!(path.is_file(), "the fixture did not plant {file}.json");
+            fs::remove_file(&path).unwrap();
+        }
+        let destination = root.join("destination");
+        let before = snapshot(&root);
+        let err = publish(&root, &destination, false, false).expect_err("an absent required report must refuse");
+        assert_eq!(snapshot(&root), before, "the refused publish changed the tree: {err}");
+        assert!(destination.is_dir(), "publish did not reach the destination");
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 0, "the refused publish wrote an artifact");
+        // The refusal class is unchanged: the message still starts with the
+        // same refusal prefix, and each absent report is named in the same
+        // wording the single-report refusal used.
+        assert_eq!(
+            refusal_lines(&err),
+            "refusing: output/checks/binary-flow.json absent; output/checks/history-migration.json absent",
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn publish_refusal_names_exactly_the_reports_that_are_missing() {
+        // The refusal names the reports that are missing and nothing else.
+        // The set the publisher found missing is taken from the tree itself
+        // and compared with the set the refusal names, in both directions: a
+        // refusal that hid one of them, or that named one that is there,
+        // does not tell the operator what is missing.
+        let (_dir, root) = fixture();
+        let absent = ["binary-flow", "history-migration"];
+        for file in absent {
+            let path = root.join(format!("output/checks/{file}.json"));
+            assert!(path.is_file(), "the fixture did not plant {file}.json");
+            fs::remove_file(&path).unwrap();
+        }
+        let expected: Vec<String> = report_pairs()
+            .iter()
+            .map(|(_, file)| format!("output/checks/{file}.json"))
+            .filter(|relative| !root.join(relative).is_file())
+            .map(|relative| format!("{relative} absent"))
+            .collect();
+        assert_eq!(expected.len(), 2, "{expected:?}");
+        let err = publish(&root, &root.join("destination"), false, false)
+            .expect_err("an absent required report must refuse");
+        let text = refusal_lines(&err);
+        let named: Vec<String> = text
+            .strip_prefix("refusing: ")
+            .unwrap_or(text.as_str())
+            .split("; ")
+            .map(|part| part.to_string())
+            .collect();
+        assert_eq!(
+            named, expected,
+            "the refusal names a different set of reports than the publisher found missing: {err}"
+        );
+    }
+
+    // The staged artifact, replaced by one that says something else. The
+    // record's own claim about the artifact is updated with it, so the case
+    // reaches the publisher's binding of the release number and not its
+    // length-and-checksum guard.
+    fn restage_apk(root: &Path, package: &str, version_code: u32) {
+        let path = root.join("output/checks/apk.json");
+        let text = fs::read_to_string(&path).unwrap();
+        let record = parse_json(&text).unwrap();
+        let apk_path = get(&record, "path")
+            .and_then(json_string)
+            .expect("the fixture's apk.json names no path");
+        let bytes = staged_apk(package, version_code);
+        fs::write(PathBuf::from(&apk_path), &bytes).unwrap();
+        let Json::Obj(pairs) = record else {
+            panic!("the fixture's apk.json is not an object");
+        };
+        let mut pairs = pairs;
+        for (key, value) in pairs.iter_mut() {
+            match key.as_str() {
+                "bytes" => *value = j_int(bytes.len() as i64),
+                "sha256" => *value = j_str(&hex_digest(&sha256(&bytes))),
+                _ => {}
+            }
+        }
+        fs::write(&path, json_text(&Json::Obj(pairs))).unwrap();
+    }
+
+    // The record the fixture writes, with the keys a case needs on it.
+    fn record_with(root: &Path, extra: Vec<(&str, Json)>) {
+        let path = root.join("PUBLICATION-MANIFEST.json");
+        let text = fs::read_to_string(&path).unwrap();
+        let Json::Obj(pairs) = parse_json(&text).unwrap() else {
+            panic!("the fixture's record is not an object");
+        };
+        let mut pairs = pairs;
+        for (key, value) in extra {
+            pairs.retain(|(name, _)| name != key);
+            pairs.push((key.to_string(), value));
+        }
+        fs::write(&path, json_text(&Json::Obj(pairs))).unwrap();
+    }
+
+    #[test]
+    fn publish_refuses_a_release_number_the_artifact_does_not_carry() {
+        // The record claims a release number and the artifact carries
+        // another one. The publisher reads the number out of the artifact,
+        // so the publication is refused with both numbers named. The record
+        // below carries a floor that would refuse the declared number as
+        // well, and the refusal that comes out is the artifact's: the
+        // release number is bound to the artifact before the release floor
+        // is consulted.
+        let (_dir, root) = fixture();
+        record_with(
+            &root,
+            vec![("version", j_int(1794569619)), ("distributed_baseline", j_int(1794569619))],
+        );
+        restage_apk(&root, "com.local.client.lab", 9);
+        let apk = root.join("output/build/2026-01-02__03-04-05Z/app.apk").display().to_string();
+        let destination = root.join("destination");
+        let before = snapshot(&root);
+        let err = publish(&root, &destination, false, false)
+            .expect_err("a release number the artifact does not carry must refuse");
+        assert_eq!(snapshot(&root), before, "the refused publish changed the tree: {err}");
+        assert_eq!(
+            refusal_lines(&err),
+            format!(
+                "refusing: {apk} carries version code 9, but output/checks/apk.json declares 7; a release may not record a number the artifact does not carry"
+            ),
+            "{err}"
+        );
+        assert!(!err.contains("below the recorded version"), "{err}");
+        assert!(!err.contains("below the release floor"), "{err}");
+    }
+
+    #[test]
+    fn publish_refuses_an_artifact_that_publishes_another_package() {
+        // The artifact publishes another package than the record publishes.
+        // The release floor belongs to the package that carries it, so the
+        // floor of one package may not guard the release of another, and the
+        // publication is refused with both packages named.
+        let (_dir, root) = fixture();
+        restage_apk(&root, "com.local.client.other", 7);
+        let apk = root.join("output/build/2026-01-02__03-04-05Z/app.apk").display().to_string();
+        let destination = root.join("destination");
+        let before = snapshot(&root);
+        let err = publish(&root, &destination, false, false)
+            .expect_err("an artifact that publishes another package must refuse");
+        assert_eq!(snapshot(&root), before, "the refused publish changed the tree: {err}");
+        assert_eq!(
+            refusal_lines(&err),
+            format!(
+                "refusing: {apk} publishes package com.local.client.other, but the record publishes com.local.client.lab; a release floor belongs to the package that carries it"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_release_numbering_route_refuses_a_number_the_artifact_does_not_carry() {
+        // The route advances the same floor the publish route advances, so
+        // it reads the same artifact: a record whose declared number the
+        // artifact does not carry is refused here too, and the route writes
+        // nothing when it refuses.
+        let (_tree, root) = release_numbering_tree(
+            "refuse-artifact",
+            1794569620,
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619\n}\n",
+        );
+        restage_apk(&root, "com.local.client.lab", 1794270239);
+        let error = release_numbering_route(&root, true).unwrap_err();
+        assert!(
+            error.contains("carries version code 1794270239, but output/checks/apk.json declares 1794569620"),
+            "{error}"
+        );
+        let after = fs::read_to_string(root.join("PUBLICATION-MANIFEST.json")).unwrap();
+        assert!(after.contains("\"distributed_baseline\": 1794569619"), "{after}");
+        assert!(
+            !after.contains("distributed_baselines"),
+            "a refused route must not open a per-package ledger: {after}"
+        );
+    }
+
     #[test]
     fn package_py_is_the_only_allowlisted_tools_python() {
         assert_eq!(TOOL_PYTHON.len(), 1);
@@ -4180,5 +5208,291 @@ const GROUPS: &[&str] = &[
         assert_eq!(VERIFICATION_PY_LINE_CEILING, 114);
         assert!(line.contains("elsewhere files 0 lines 0"), "{line}");
         println!("{line}");
+    }
+
+    // The publisher's monotone record. The two guards and the advance live in
+    // one function, so these cases convict the mechanism the publisher's route
+    // runs, not a copy of it.
+    #[test]
+    fn monotone_record_refuses_a_version_below_the_recorded_version() {
+        let mut manifest = obj(vec![
+            ("package", j_str("com.local.client.lab")),
+            ("version", j_int(1794569619)),
+            ("distributed_baseline", j_int(1794569600)),
+        ]);
+        let error = monotone_record(&mut manifest, 1794569618).unwrap_err();
+        assert_eq!(
+            error,
+            "refusing: Version 1794569618 is below the recorded version 1794569619; a release may not be recorded downward"
+        );
+        // A refused release leaves the record exactly as it was.
+        assert_eq!(as_i128(get(&manifest, "distributed_baseline").unwrap()), Some(1794569600));
+        assert!(
+            get(&manifest, "distributed_baselines").is_none(),
+            "a refused release must not open a per-package ledger"
+        );
+    }
+
+    #[test]
+    fn monotone_record_refuses_a_version_below_the_release_floor_of_its_package() {
+        let mut manifest = obj(vec![
+            ("package", j_str("com.local.client.lab")),
+            ("version", j_int(1794569600)),
+            ("distributed_baseline", j_int(1794569619)),
+        ]);
+        let error = monotone_record(&mut manifest, 1794569618).unwrap_err();
+        assert_eq!(
+            error,
+            "refusing: Version 1794569618 is below the release floor 1794569619 of package com.local.client.lab; a release may not be recorded downward"
+        );
+        assert_eq!(as_i128(get(&manifest, "distributed_baseline").unwrap()), Some(1794569619));
+        assert!(
+            get(&manifest, "distributed_baselines").is_none(),
+            "a refused release must not open a per-package ledger"
+        );
+    }
+
+    #[test]
+    fn monotone_record_advances_the_baseline_to_the_greater_value() {
+        // A version above the recorded baseline becomes the recorded baseline.
+        let mut manifest = obj(vec![
+            ("package", j_str("com.local.client.lab")),
+            ("version", j_int(1794569600)),
+            ("distributed_baseline", j_int(1794569619)),
+        ]);
+        let advanced = monotone_record(&mut manifest, 1794569620).unwrap();
+        assert_eq!(advanced, 1794569620);
+        assert_eq!(as_i128(get(&manifest, "distributed_baseline").unwrap()), Some(1794569620));
+        assert_eq!(
+            recorded_package_floor(&manifest, "com.local.client.lab"),
+            Some(1794569620),
+            "the ledger must carry the floor of the package the record names"
+        );
+        // A version at or above the recorded baseline leaves it where it is.
+        let mut manifest = obj(vec![
+            ("package", j_str("com.local.client.lab")),
+            ("version", j_int(1794569600)),
+            ("distributed_baseline", j_int(1794569619)),
+        ]);
+        let advanced = monotone_record(&mut manifest, 1794569619).unwrap();
+        assert_eq!(advanced, 1794569619);
+        assert_eq!(as_i128(get(&manifest, "distributed_baseline").unwrap()), Some(1794569619));
+        assert_eq!(recorded_package_floor(&manifest, "com.local.client.lab"), Some(1794569619));
+    }
+
+    #[test]
+    fn monotone_record_records_the_first_baseline_when_the_record_carries_none() {
+        let mut manifest = obj(vec![
+            ("package", j_str("com.local.client.lab")),
+            ("version", j_int(1794569600)),
+        ]);
+        assert!(get(&manifest, "distributed_baseline").is_none());
+        let advanced = monotone_record(&mut manifest, 1794569620).unwrap();
+        assert_eq!(advanced, 1794569620);
+        assert_eq!(as_i128(get(&manifest, "distributed_baseline").unwrap()), Some(1794569620));
+        assert_eq!(recorded_package_floor(&manifest, "com.local.client.lab"), Some(1794569620));
+    }
+
+    #[test]
+    fn monotone_record_refuses_a_record_that_names_no_package() {
+        let mut manifest = obj(vec![
+            ("version", j_int(1794569600)),
+            ("distributed_baseline", j_int(1794569619)),
+        ]);
+        let error = monotone_record(&mut manifest, 1794569620).unwrap_err();
+        assert_eq!(
+            error,
+            "refusing: the record names no package, so there is no package whose release floor could be advanced"
+        );
+        assert_eq!(
+            as_i128(get(&manifest, "distributed_baseline").unwrap()),
+            Some(1794569619),
+            "a refused release leaves the record exactly as it was"
+        );
+    }
+
+    #[test]
+    fn the_floor_of_another_package_does_not_speak_for_the_named_one() {
+        // The ledger holds a floor for every package the tree publishes. The
+        // floor of the package the record names is the one that speaks, and
+        // the floor of another package is left exactly where it was.
+        let mut manifest = obj(vec![
+            ("package", j_str("com.local.client.lab")),
+            ("version", j_int(1794569600)),
+            ("distributed_baseline", j_int(1794569619)),
+            (
+                "distributed_baselines",
+                obj(vec![
+                    ("com.local.client.lab", j_int(1794569619)),
+                    ("com.local.client", j_int(1794569999)),
+                ]),
+            ),
+        ]);
+        let advanced = monotone_record(&mut manifest, 1794569620).unwrap();
+        assert_eq!(advanced, 1794569620);
+        assert_eq!(
+            recorded_package_floor(&manifest, "com.local.client"),
+            Some(1794569999),
+            "the floor of another package must be left exactly as it was"
+        );
+        assert_eq!(
+            recorded_package_floor(&manifest, "com.local.client.lab"),
+            Some(1794569620),
+            "the floor of the named package must follow the advance"
+        );
+        assert_eq!(
+            as_i128(get(&manifest, "distributed_baseline").unwrap()),
+            Some(1794569620),
+            "the scalar baseline describes the package the record names"
+        );
+    }
+
+    #[test]
+    fn a_version_below_the_ledger_floor_of_the_named_package_is_refused() {
+        let mut manifest = obj(vec![
+            ("package", j_str("com.local.client.lab")),
+            ("version", j_int(1794569600)),
+            ("distributed_baseline", j_int(1794569610)),
+            (
+                "distributed_baselines",
+                obj(vec![("com.local.client.lab", j_int(1794569619))]),
+            ),
+        ]);
+        let error = monotone_record(&mut manifest, 1794569618).unwrap_err();
+        assert_eq!(
+            error,
+            "refusing: Version 1794569618 is below the release floor 1794569619 of package com.local.client.lab; a release may not be recorded downward"
+        );
+        assert_eq!(
+            recorded_package_floor(&manifest, "com.local.client.lab"),
+            Some(1794569619),
+            "a refused release must leave the floor where it was"
+        );
+    }
+
+    // The publisher's own route. The route reads the release number the
+    // inspected APK carries and the record the publication owns, so these
+    // cases convict the route a release runs, not a copy of it.
+    fn release_numbering_tree(label: &str, version: i64, record: &str) -> (TempDir, PathBuf) {
+        let tree = TempDir::new();
+        let root = tree.0.join(label);
+        fs::create_dir_all(root.join("output/checks")).unwrap();
+        // The route records the release number the staged artifact carries,
+        // so the tree holds an artifact whose manifest carries that number
+        // and names the package the record publishes.
+        let apk = root.join("output/build/2026-01-02__03-04-05Z/app.apk");
+        fs::create_dir_all(apk.parent().unwrap()).unwrap();
+        let apk_bytes = staged_apk("com.local.client.lab", version as u32);
+        fs::write(&apk, &apk_bytes).unwrap();
+        let apk_json = Json::Obj(vec![
+            ("path".into(), j_str(&apk.display().to_string())),
+            ("bytes".into(), j_int(apk_bytes.len() as i64)),
+            ("sha256".into(), j_str(&hex_digest(&sha256(&apk_bytes)))),
+            ("version".into(), j_int(version)),
+        ]);
+        fs::write(root.join("output/checks/apk.json"), json_text(&apk_json)).unwrap();
+        fs::write(root.join("PUBLICATION-MANIFEST.json"), record).unwrap();
+        (tree, root)
+    }
+
+    #[test]
+    fn the_release_numbering_route_refuses_a_version_below_the_recorded_version() {
+        let (_tree, root) = release_numbering_tree(
+            "refuse",
+            1794270237,
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794569619,\n  \"distributed_baseline\": 1794569619\n}\n",
+        );
+        let error = release_numbering_route(&root, false).unwrap_err();
+        assert_eq!(
+            error,
+            "refusing: Version 1794270237 is below the recorded version 1794569619; a release may not be recorded downward"
+        );
+        // A refused release leaves the record exactly as it was.
+        let after = fs::read_to_string(root.join("PUBLICATION-MANIFEST.json")).unwrap();
+        assert!(after.contains("\"distributed_baseline\": 1794569619"), "{after}");
+        assert!(
+            !after.contains("distributed_baselines"),
+            "a refused release must not open a per-package ledger: {after}"
+        );
+    }
+
+    #[test]
+    fn the_release_numbering_route_refuses_a_version_below_the_floor_of_its_package() {
+        let (_tree, root) = release_numbering_tree(
+            "refuse-package",
+            1794569618,
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619,\n  \"distributed_baselines\": { \"com.local.client.lab\": 1794569619 }\n}\n",
+        );
+        let error = release_numbering_route(&root, false).unwrap_err();
+        assert_eq!(
+            error,
+            "refusing: Version 1794569618 is below the release floor 1794569619 of package com.local.client.lab; a release may not be recorded downward"
+        );
+        let after = fs::read_to_string(root.join("PUBLICATION-MANIFEST.json")).unwrap();
+        assert!(after.contains("\"distributed_baseline\": 1794569619"), "{after}");
+    }
+
+    #[test]
+    fn the_release_numbering_route_advances_the_record_and_leaves_a_nested_decoy_alone() {
+        let (_tree, root) = release_numbering_tree(
+            "advance",
+            1794569620,
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619,\n  \"nested\": { \"distributed_baseline\": 9999999999 }\n}\n",
+        );
+        let text = release_numbering_route(&root, true).unwrap();
+        assert!(text.contains("\"next_distributed_baseline\": 1794569620"), "{text}");
+        assert!(text.contains("\"applied\": true"), "{text}");
+        let after = fs::read_to_string(root.join("PUBLICATION-MANIFEST.json")).unwrap();
+        let record = parse_json(&after).unwrap();
+        assert_eq!(as_i128(get(&record, "distributed_baseline").unwrap()), Some(1794569620));
+        let nested = get(&record, "nested").unwrap();
+        assert_eq!(as_i128(get(nested, "distributed_baseline").unwrap()), Some(9999999999));
+        assert_eq!(
+            recorded_package_floor(&record, "com.local.client.lab"),
+            Some(1794569620),
+            "the advance must record the floor of the package the record names: {after}"
+        );
+    }
+
+    #[test]
+    fn the_release_numbering_route_leaves_the_floor_of_another_package_alone() {
+        let (_tree, root) = release_numbering_tree(
+            "advance-package",
+            1794569620,
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619,\n  \"distributed_baselines\": {\n    \"com.local.client\": 1794569999,\n    \"com.local.client.lab\": 1794569619\n  }\n}\n",
+        );
+        let text = release_numbering_route(&root, true).unwrap();
+        assert!(text.contains("\"recorded_package\": \"com.local.client.lab\""), "{text}");
+        assert!(text.contains("\"recorded_package_release_floor\": 1794569619"), "{text}");
+        let after = fs::read_to_string(root.join("PUBLICATION-MANIFEST.json")).unwrap();
+        let record = parse_json(&after).unwrap();
+        assert_eq!(
+            recorded_package_floor(&record, "com.local.client"),
+            Some(1794569999),
+            "the floor of another package must be left exactly as it was: {after}"
+        );
+        assert_eq!(recorded_package_floor(&record, "com.local.client.lab"), Some(1794569620));
+    }
+
+    #[test]
+    fn the_release_numbering_route_reports_the_numbering_it_would_record() {
+        let (_tree, root) = release_numbering_tree(
+            "report",
+            1794569620,
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619\n}\n",
+        );
+        let text = release_numbering_route(&root, false).unwrap();
+        assert!(text.contains("\"incoming_version\": 1794569620"), "{text}");
+        assert!(text.contains("\"recorded_version\": 1794270237"), "{text}");
+        assert!(text.contains("\"recorded_distributed_baseline\": 1794569619"), "{text}");
+        assert!(text.contains("\"next_distributed_baseline\": 1794569620"), "{text}");
+        assert!(text.contains("\"applied\": false"), "{text}");
+        // A route that reports does not write.
+        let after = fs::read_to_string(root.join("PUBLICATION-MANIFEST.json")).unwrap();
+        assert!(after.contains("\"distributed_baseline\": 1794569619"), "{after}");
+        assert!(
+            !after.contains("distributed_baselines"),
+            "a route that reports does not write a ledger: {after}"
+        );
     }
 }

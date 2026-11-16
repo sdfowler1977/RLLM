@@ -131,6 +131,33 @@ fn handle(mut stream: TcpStream, _port: u16, state: Arc<Mutex<PeerState>>) {
         state.requests.push((path.clone(), "GET".to_string(), last));
         let stream_case = state.stream_case.clone();
         drop(state);
+        if stream_case == "method-not-allowed" {
+            // The endpoint does not offer the optional server GET stream. The
+            // refusal is a status, not a broken stream.
+            write_headers(
+                &mut stream,
+                "405 Method Not Allowed",
+                &[("Content-Type", "text/event-stream"), ("Content-Length", "0")],
+                &[],
+            );
+            return;
+        }
+        if stream_case == "unauthorized" {
+            // The endpoint refuses the connection and says why in a bearer
+            // challenge. The refusal is a status of the credential, not a
+            // broken stream.
+            write_headers(
+                &mut stream,
+                "401 Unauthorized",
+                &[
+                    ("WWW-Authenticate", "Bearer realm=\"mcp\", error=\"invalid_token\""),
+                    ("Content-Type", "text/event-stream"),
+                    ("Content-Length", "0"),
+                ],
+                &[],
+            );
+            return;
+        }
         let other = notice("notifications/resources/list_changed", None);
         let changed = notice("notifications/tools/list_changed", Some(obj(vec![("untrusted".into(), s("SERVER_PAYLOAD"))])));
         if matches!(stream_case.as_str(), "trailer-observation" | "chunk-limit-observation") {
@@ -162,6 +189,9 @@ fn handle(mut stream: TcpStream, _port: u16, state: Arc<Mutex<PeerState>>) {
         } else {
             vec![other, changed]
         };
+        if let Some(prefix) = interim_prefix(&stream_case) {
+            stream.write_all(prefix).unwrap_or_else(|error| panic!("peer write: {error}"));
+        }
         write_body(&mut stream, 200, "text/event-stream", &sse(&records));
         return;
     }
@@ -281,6 +311,36 @@ fn handle(mut stream: TcpStream, _port: u16, state: Arc<Mutex<PeerState>>) {
 }
 
 fn write_post_stream(stream: &mut TcpStream, _path: &str, case: &str, mut reply: Value, changed: Value) {
+    if case == "refused-401" {
+        // The endpoint refuses the request and says why in a bearer challenge.
+        write_headers(
+            stream,
+            "401 Unauthorized",
+            &[
+                ("WWW-Authenticate", "Bearer realm=\"mcp\", error=\"invalid_token\""),
+                ("Content-Type", "application/json"),
+                ("Content-Length", "0"),
+            ],
+            &[],
+        );
+        return;
+    }
+    if case == "refused-framing" {
+        // A refused head is framing too. The coding header is repeated, so the
+        // framing rules refuse the head before its status can name anything.
+        write_headers(
+            stream,
+            "401 Unauthorized",
+            &[
+                ("Content-Type", "application/json"),
+                ("Content-Encoding", "identity"),
+                ("Content-Encoding", "identity"),
+                ("Content-Length", "0"),
+            ],
+            &[],
+        );
+        return;
+    }
     if case.starts_with("control-") {
         write_control_stream(stream, case, reply);
         return;
@@ -516,6 +576,20 @@ fn write_body(stream: &mut TcpStream, status: u16, mime: &str, body: &[u8]) {
     stream.write_all(&wire).unwrap_or_else(|error| panic!("peer write: {error}"));
 }
 
+/// The informational head a peer may put in front of a real response. An
+/// informational head is framing too, so the same three shapes are offered
+/// here and in the mcp_catalog group: one input can judge both paths.
+fn interim_prefix(case: &str) -> Option<&'static [u8]> {
+    Some(match case {
+        "interim-identity" => b"HTTP/1.1 103 Early Hints\r\nContent-Encoding: identity\r\n\r\n",
+        "interim-duplicate-coding" => {
+            b"HTTP/1.1 103 Early Hints\r\nContent-Encoding: identity\r\nContent-Encoding: identity\r\n\r\n"
+        }
+        "interim-gzip" => b"HTTP/1.1 103 Early Hints\r\nContent-Encoding: gzip\r\n\r\n",
+        _ => return None,
+    })
+}
+
 fn write_chunk(stream: &mut TcpStream, body: &[u8]) {
     let mut wire = format!("{:x}\r\n", body.len()).into_bytes();
     wire.extend_from_slice(body);
@@ -645,8 +719,16 @@ fn run(controller: &mut Controller, peer: &Peer, passed: &mut Vec<String>) {
     let (sid, obs) = open_get(controller, &paused);
     keep(passed, "first resumable segment has no tool-change event", obs.get("tool_changes") == Some(&twin::n("0")));
     let paused = finish_get(controller, &paused, &sid, root, true);
+    // The peer counter has to see a second GET when the product really sends
+    // one, so a later bound on the number of GETs is not vacuous.
+    let gets_before_resume = request_method_count(peer, "GET");
     let resumed = controller.event(Some(state(&paused)), "mcp_client_resume", obj(vec![]), root);
     let (sid, obs) = open_get(controller, &resumed);
+    keep(
+        passed,
+        "the peer counts the second server GET an explicit resume sends",
+        request_method_count(peer, "GET") == gets_before_resume + 1,
+    );
     keep(
         passed,
         "owned resume retains negotiated change capability and cursor",
@@ -966,6 +1048,183 @@ fn run(controller: &mut Controller, peer: &Peer, passed: &mut Vec<String>) {
         let progressed = progress(controller, &listening, rejected.get("observation").unwrap_or_else(|| panic!("rejected observation")), None, root);
         keep(passed, &format!("{case} rejected GET progress cannot dirty the catalog"), unmarked(state(&progressed)));
         close_stream(controller, &stream);
+    }
+    // An endpoint that does not offer the optional server GET stream refuses
+    // it with a status. The refusal names that optional stream, so the user
+    // is not left with a generic transport failure, and it is not retried.
+    {
+        let before_gets = request_method_count(peer, "GET");
+        let listening = negotiate(controller, state(&alpha), "mcp_client_listen", root);
+        let effect = listening.get("effect").cloned().unwrap_or_else(|| panic!("listen effect"));
+        set_stream_case(peer, "method-not-allowed");
+        let raw = network(&effect);
+        set_stream_case(peer, "normal");
+        let stream = open_stream(controller, &effect, "mcp_server");
+        let refused = feed(controller, &stream, &raw);
+        keep(
+            passed,
+            "an endpoint without the optional MCP GET stream names that stream instead of failing generically",
+            error_is(
+                &refused,
+                "This MCP endpoint does not offer an optional server GET stream (HTTP 405); no retry was sent",
+            ),
+        );
+        keep(
+            passed,
+            "a refused optional MCP GET stream sends no retry request",
+            request_method_count(peer, "GET") == before_gets + 1,
+        );
+        // The host reports the refused stream to the product the way it reports
+        // every other failed transport. The product must stop waiting for that
+        // stream and hand the user back.
+        let reported = fail(
+            controller,
+            state(&listening),
+            effect.get("purpose").map(Value::str_).unwrap_or_else(|| panic!("stream purpose")),
+            &error_text(&refused),
+            true,
+            root,
+        );
+        keep(
+            passed,
+            "a refused optional MCP GET stream leaves the product waiting for nothing",
+            released(state(&reported).get("mcp_client_expected")),
+        );
+        keep(
+            passed,
+            "a refused optional MCP GET stream releases the product to act again",
+            idle(state(&reported)),
+        );
+        close_stream(controller, &stream);
+    }
+    // A refused MCP exchange is refused where the head is read, in the MCP
+    // client's own words. The shared decoder's sentence belongs to the web
+    // reader, so a refused MCP head never shows it.
+    {
+        let pending = call_original(controller, state(&alpha), root);
+        let effect = pending.get("effect").cloned().unwrap_or_else(|| panic!("refused request effect"));
+        set_post_case(peer, "refused-401");
+        let raw = network(&effect);
+        set_post_case(peer, "json");
+        let stream = open_stream(controller, &effect, protocol_of(&effect));
+        let refused = feed(controller, &stream, &raw);
+        keep_detail(
+            passed,
+            "a refused MCP request stream is refused in the MCP client's own words",
+            error_is(
+                &refused,
+                "MCP HTTP 401: the endpoint reported the bearer token RLLM sent as invalid. Save a current token for this server and connect again.",
+            ),
+            format!("error={:?}", error_text(&refused)),
+        );
+        // The host reports the refused stream to the product the way it reports
+        // every other failed transport, so the product stops waiting for it.
+        fail(
+            controller,
+            state(&pending),
+            &purpose_of(&pending),
+            &error_text(&refused),
+            true,
+            root,
+        );
+        close_stream(controller, &stream);
+    }
+    {
+        let listening = negotiate(controller, state(&alpha), "mcp_client_listen", root);
+        let effect = listening.get("effect").cloned().unwrap_or_else(|| panic!("listen effect"));
+        set_stream_case(peer, "unauthorized");
+        let raw = network(&effect);
+        set_stream_case(peer, "normal");
+        let stream = open_stream(controller, &effect, "mcp_server");
+        let refused = feed(controller, &stream, &raw);
+        keep_detail(
+            passed,
+            "a refused MCP server stream is refused in the MCP client's own words",
+            error_is(
+                &refused,
+                "MCP HTTP 401: the endpoint reported the bearer token RLLM sent as invalid. Save a current token for this server and listen again.",
+            ),
+            format!("error={:?}", error_text(&refused)),
+        );
+        fail(
+            controller,
+            state(&listening),
+            effect.get("purpose").map(Value::str_).unwrap_or_else(|| panic!("stream purpose")),
+            &error_text(&refused),
+            true,
+            root,
+        );
+        close_stream(controller, &stream);
+    }
+    // A refused head is framing too. Its framing is judged before its status
+    // decides the outcome, so the same head the request path refuses as
+    // framing is refused here as framing and never as a status.
+    {
+        let pending = call_original(controller, state(&alpha), root);
+        let effect = pending.get("effect").cloned().unwrap_or_else(|| panic!("refused framing effect"));
+        set_post_case(peer, "refused-framing");
+        let raw = network(&effect);
+        set_post_case(peer, "json");
+        let stream = open_stream(controller, &effect, protocol_of(&effect));
+        let refused = feed(controller, &stream, &raw);
+        keep_detail(
+            passed,
+            "a refused MCP head with a repeated coding header is refused as framing",
+            error_is(&refused, "Duplicate streaming framing header"),
+            format!("error={:?}", error_text(&refused)),
+        );
+        fail(
+            controller,
+            state(&pending),
+            &purpose_of(&pending),
+            &error_text(&refused),
+            true,
+            root,
+        );
+        close_stream(controller, &stream);
+    }
+    // An informational head is framing too. The streaming path judges the
+    // same three head shapes the request path judges in the mcp_catalog
+    // group, so one input can be read against both paths.
+    {
+        // The plain head first, so the accepted interim head can be compared
+        // with what the same stream yields without one.
+        let listening = negotiate(controller, state(&alpha), "mcp_client_listen", root);
+        let effect = listening.get("effect").cloned().unwrap_or_else(|| panic!("listen effect"));
+        let raw = network(&effect);
+        let stream = open_stream(controller, &effect, "mcp_server");
+        let plain = feed(controller, &stream, &raw);
+        let plain_observation = plain.get("observation").cloned();
+        close_stream(controller, &stream);
+        for (case, description, message) in [
+            ("interim-identity", "declares only identity coding", ""),
+            ("interim-duplicate-coding", "repeats the coding header", "Duplicate streaming framing header"),
+            ("interim-gzip", "declares a compressed coding", "Unsupported streaming content encoding"),
+        ] {
+            let listening = negotiate(controller, state(&alpha), "mcp_client_listen", root);
+            let effect = listening.get("effect").cloned().unwrap_or_else(|| panic!("listen effect"));
+            set_stream_case(peer, case);
+            let raw = network(&effect);
+            set_stream_case(peer, "normal");
+            let stream = open_stream(controller, &effect, "mcp_server");
+            let part = feed(controller, &stream, &raw);
+            if message.is_empty() {
+                keep(
+                    passed,
+                    "an informational head that declares only identity coding leaves the streamed records unchanged",
+                    part.get("error").is_none()
+                        && plain_observation.is_some()
+                        && part.get("observation") == plain_observation.as_ref(),
+                );
+            } else {
+                keep(
+                    passed,
+                    &format!("an informational head that {description} is refused on the streaming path"),
+                    error_is(&part, message) && no_controls(&part),
+                );
+            }
+            close_stream(controller, &stream);
+        }
     }
     for (case, tail) in [
         ("framed-length", LENGTH_TAIL),
@@ -1591,6 +1850,20 @@ fn error_text(part: &Value) -> String {
     }
 }
 
+/// A field the product no longer holds.
+fn released(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => true,
+        Some(Value::Str(text)) => text.is_empty(),
+        _ => false,
+    }
+}
+
+/// The product is not waiting for an operation to finish.
+fn idle(st: &Value) -> bool {
+    !matches!(st.get("busy"), Some(Value::Bool(true)))
+}
+
 fn output_has(st: &Value, needle: &str) -> bool {
     match st.get("output") {
         Some(Value::Str(text)) => text.contains(needle),
@@ -1646,6 +1919,16 @@ fn last_request(peer: &Peer) -> (String, String, String) {
 fn keep(passed: &mut Vec<String>, name: &str, ok: bool) {
     if !ok {
         panic!("{name}");
+    }
+    passed.push(name.to_string());
+}
+
+// A check that reports what the product actually said when it does not hold.
+// The literal text belongs in the panic, so a failure names the refusal the
+// product produced instead of only the check's own name.
+fn keep_detail(passed: &mut Vec<String>, name: &str, ok: bool, detail: String) {
+    if !ok {
+        panic!("{name}: {detail}");
     }
     passed.push(name.to_string());
 }

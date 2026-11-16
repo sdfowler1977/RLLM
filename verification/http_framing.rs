@@ -29,6 +29,11 @@ fn main() {
 }
 
 fn run(controller: &mut Controller, root: &str, passed: &mut Vec<String>) {
+    // The shared decoder's own coding rows run FIRST. This twin panics at the
+    // first failing row, so a row placed later can never be witnessed on its
+    // own: every row below must be falsifiable by a mutation of the subject
+    // rather than masked by an unrelated row that fails earlier.
+    shared_decoder_duplicate_coding_rows(controller, passed);
     let cases: [(&str, &[u8], u16, bool); 9] = [
         ("length", b"HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nContent-Length: 5\r\n\r\nhello", 200, false),
         ("chunked", b"HTTP/1.1 207 Multi-Status\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\nResult: done\r\n\r\n", 207, false),
@@ -75,16 +80,27 @@ fn run(controller: &mut Controller, root: &str, passed: &mut Vec<String>) {
         keep(passed, &format!("{label} remains a scoped incomplete response"), finish(controller, id, true, "response").is_err());
     }
 
-    for (label, raw) in [
-        ("duplicate length", b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n".as_slice()),
-        ("ambiguous framing", b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n".as_slice()),
-        ("bodyless extra bytes", b"HTTP/1.1 304 Not Modified\r\nContent-Length: 1\r\n\r\nx".as_slice()),
-        ("extra bytes", b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nab".as_slice()),
-        ("framing trailer", b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nContent-Length: 0\r\n\r\n".as_slice()),
+    // One set of framing-failure wire bytes per fixture is driven through both
+    // the buffered shared decoder and the incremental frame session, and each
+    // mechanism must answer with its own diagnostic. A bare is_err() would
+    // still pass if one mechanism stopped refusing and another refused in its
+    // place, or if a refusal migrated to a different message.
+    for (label, raw, framed, buffered) in [
+        ("duplicate length", b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n".as_slice(), "Duplicate framing header", "Duplicate response length"),
+        ("ambiguous framing", b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n".as_slice(), "Ambiguous HTTP framing", "Ambiguous response framing"),
+        ("bodyless extra bytes", b"HTTP/1.1 304 Not Modified\r\nContent-Length: 1\r\n\r\nx".as_slice(), "Extra HTTP body bytes", "Body on bodyless response"),
+        ("extra bytes", b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nab".as_slice(), "Extra HTTP body bytes", "Incomplete or oversized response body"),
+        ("framing trailer", b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nContent-Length: 0\r\n\r\n".as_slice(), "Framing trailer forbidden", "Framing trailer forbidden"),
     ] {
         let id = open_frame(controller, "response", FRAME_LIMIT, false);
-        keep(passed, &format!("{label} is refused locally"), feed(controller, id, raw, "response").is_err());
+        let reply = feed(controller, id, raw, "response");
+        keep_msg(passed, &format!("{label} is refused locally as {framed}"), error_text_result(&reply).as_deref() == Some(framed), || match &reply {
+            Ok(value) => value.to_string(),
+            Err(error) => error.clone(),
+        });
         keep(passed, &format!("{label} retires only its failed session"), !close_frame(controller, id, "response"));
+        let reply = call(controller, obj(vec![("op".into(), s("network_binary")), ("data".into(), s(&b64_encode(raw)))]));
+        keep_msg(passed, &format!("{label} is refused by the buffered decoder as {buffered}"), error_text(&reply).as_deref() == Some(buffered), || reply.to_string());
     }
 
     for header in [
@@ -547,8 +563,286 @@ fn run(controller: &mut Controller, root: &str, passed: &mut Vec<String>) {
     let (_, result) = persistent(controller, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", false, None, None, None).unwrap_or_else(|error| panic!("{name}: {error}"));
     keep_msg(passed, name, status_is(&result, 200), || result.to_string());
 
+    duplicate_content_coding_matrix(controller, passed);
+    shared_coding_refusal_on_page_routes(controller, root, passed);
+    redirect_boundary_refusals(controller, root, passed);
     integration(controller, root, passed);
     owned_request_lines(controller, root, passed);
+}
+
+/// One set of wire bytes per fixture is driven through all three independent
+/// framing mechanisms — the buffered shared decoder behind every buffered
+/// surface, the incremental frame session, and the streaming parser — with each
+/// mechanism's own verdict pinned literally. A repeated Content-Encoding must be
+/// refused by the shared decoder on the final head, on a 1xx head and on a 3xx
+/// head, because those heads reach it in the same recursion; the streaming
+/// parser also judges 1xx coding fields, while chat/local leave a 3xx head to
+/// their final response decoder. A single field
+/// naming several codings is one field and must not read as a duplicate.
+fn duplicate_content_coding_matrix(controller: &mut Controller, passed: &mut Vec<String>) {
+    const REPEATED: &str = "Duplicate response coding";
+    const FRAME_REPEATED: &str = "Duplicate framing header";
+    const STREAM_REPEATED: &str = "Duplicate streaming framing header";
+    let fixtures: [(&str, &[u8], Option<&str>, Option<&str>, Option<&str>); 7] = [
+        (
+            "repeated coding on the final head",
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\ncontent-encoding: identity\r\nContent-Length: 0\r\n\r\n",
+            Some(REPEATED), Some(FRAME_REPEATED), Some(STREAM_REPEATED),
+        ),
+        (
+            "repeated coding on a 1xx head",
+            b"HTTP/1.1 100 Continue\r\nContent-Encoding: identity\r\ncontent-encoding: identity\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+            Some(REPEATED), Some(FRAME_REPEATED), Some(STREAM_REPEATED),
+        ),
+        (
+            "repeated coding on a 3xx head",
+            b"HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Encoding: identity\r\ncontent-encoding: identity\r\nContent-Length: 0\r\n\r\n",
+            Some(REPEATED), Some(FRAME_REPEATED), None,
+        ),
+        (
+            "one coding on a 1xx head and one on the final head",
+            b"HTTP/1.1 100 Continue\r\nContent-Encoding: identity\r\n\r\nHTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 0\r\n\r\n",
+            None, None, None,
+        ),
+        (
+            "one field naming several codings",
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip, identity\r\nContent-Length: 0\r\n\r\n",
+            Some("Compressed response not supported by this transport"), None, Some("Unsupported streaming content encoding"),
+        ),
+        (
+            "one identity coding",
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 0\r\n\r\n",
+            None, None, None,
+        ),
+        (
+            "repeated coding on a bodyless 304 head",
+            b"HTTP/1.1 304 Not Modified\r\nContent-Encoding: gzip\r\ncontent-encoding: gzip\r\n\r\n",
+            Some(REPEATED), Some(FRAME_REPEATED), None,
+        ),
+    ];
+    let mut measured = Vec::new();
+    for (label, wire, buffered, framed, streamed) in fixtures {
+        let reply = call(controller, obj(vec![("op".into(), s("network_binary")), ("data".into(), s(&b64_encode(wire)))]));
+        let actual_buffered = error_text(&reply);
+        let id = open_frame(controller, "response", FRAME_LIMIT, false);
+        let fed = feed(controller, id, wire, "response");
+        let actual_framed = error_text_result(&fed);
+        let fed_detail = match &fed {
+            Ok(value) => value.to_string(),
+            Err(error) => error.clone(),
+        };
+        let retired = !close_frame(controller, id, "response");
+        let mut actual_streamed = Vec::new();
+        for protocol in ["chat", "local"] {
+            let id = stream_open(controller, protocol);
+            let part = stream_feed(controller, id, wire);
+            actual_streamed.push((protocol, error_text(&part)));
+            let _ = stream_finish(controller, id, true);
+        }
+        println!(
+            "coding matrix {label}: buffered {actual_buffered:?} frame {actual_framed:?} streaming {:?}",
+            actual_streamed.iter().map(|(protocol, text)| (*protocol, text.as_deref())).collect::<Vec<_>>()
+        );
+        measured.push((label, buffered, framed, streamed, actual_buffered, actual_framed, fed_detail, retired, actual_streamed));
+    }
+    for (label, buffered, framed, streamed, actual_buffered, actual_framed, fed_detail, retired, actual_streamed) in measured {
+        keep_msg(
+            passed,
+            &format!("buffered decoder verdict for {label} is {}", expectation(buffered)),
+            actual_buffered.as_deref() == buffered,
+            || format!("actual {actual_buffered:?}"),
+        );
+        keep_msg(
+            passed,
+            &format!("frame session verdict for {label} is {}", expectation(framed)),
+            actual_framed.as_deref() == framed,
+            || fed_detail,
+        );
+        if framed.is_some() {
+            keep(passed, &format!("frame session refused for {label} retires only that session"), retired);
+        }
+        for (protocol, actual) in actual_streamed {
+            keep_msg(
+                passed,
+                &format!("{protocol} streaming verdict for {label} is {}", expectation(streamed)),
+                actual.as_deref() == streamed,
+                || format!("actual {actual:?}"),
+            );
+        }
+    }
+}
+
+/// The shared buffered decoder is the one place every buffered surface routes
+/// through, so its duplicate-coding refusal is read back here through the
+/// product's own network_binary op — the real runtime path, not a copy of the
+/// rule. The core unit case in core/network.rs asserts the same string, so one
+/// shared message is pinned on both ends. A repeated coding is refused as the
+/// duplicate it is whatever coding the fields name; one coding still names the
+/// refusal this transport gives it, and one identity coding still succeeds.
+fn shared_decoder_duplicate_coding_rows(controller: &mut Controller, passed: &mut Vec<String>) {
+    const REPEATED: &str = "Duplicate response coding";
+    const UNSUPPORTED: &str = "Compressed response not supported by this transport";
+    for (label, wire, expected) in [
+        (
+            "a repeated coding on the final head",
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Encoding: gzip\r\nContent-Length: 0\r\n\r\n".as_slice(),
+            Some(REPEATED),
+        ),
+        (
+            "a repeated coding on a 1xx head",
+            b"HTTP/1.1 100 Continue\r\nContent-Encoding: gzip\r\nContent-Encoding: gzip\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".as_slice(),
+            Some(REPEATED),
+        ),
+        (
+            "one coding this transport cannot carry",
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 0\r\n\r\n".as_slice(),
+            Some(UNSUPPORTED),
+        ),
+        (
+            "one identity coding",
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 0\r\n\r\n".as_slice(),
+            None,
+        ),
+    ] {
+        let reply = call(controller, obj(vec![("op".into(), s("network_binary")), ("data".into(), s(&b64_encode(wire)))]));
+        let actual = error_text(&reply);
+        keep_msg(
+            passed,
+            &format!("shared decoder verdict for {label} is {}", expectation(expected)),
+            actual.as_deref() == expected,
+            || format!("actual {actual:?}"),
+        );
+    }
+}
+
+/// The page surface judges its own representation metadata before the shared
+/// buffered decoder, so a repeated Content-Encoding on an actual page head keeps
+/// the page's own diagnostic. A redirect head has no scanner of its own, so it is
+/// refused by the shared decoder; a repeated Content-Length is a framing defect the
+/// page scanner does not judge and must still reach the decoder's wording. A
+/// single legitimate coding must still decode into actual page text.
+fn shared_coding_refusal_on_page_routes(controller: &mut Controller, root: &str, passed: &mut Vec<String>) {
+    let scratch = Scratch::create(Path::new(root));
+    let room = scratch.path().to_string();
+    for (label, url, wire, refusal, kind) in [
+        (
+            "repeated coding on a page head",
+            "https://page.invalid/repeated-page",
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: identity\r\nContent-Encoding: identity\r\nContent-Length: 0\r\n\r\n".as_slice(),
+            "Duplicate page Content-Encoding",
+            "response",
+        ),
+        (
+            "repeated coding on a redirect head",
+            "https://page.invalid/repeated-redirect",
+            b"HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Encoding: identity\r\nContent-Encoding: identity\r\nContent-Length: 0\r\n\r\n".as_slice(),
+            "Duplicate response coding",
+            "redirect",
+        ),
+        (
+            "repeated length on a page head",
+            "https://page.invalid/repeated-length",
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 0\r\ncontent-length: 0\r\n\r\n".as_slice(),
+            "Duplicate response length",
+            "response",
+        ),
+    ] {
+        let reply = page_response(controller, &room, url, wire);
+        let body = event_body(&reply);
+        let outcome = body.to_string();
+        keep_msg(
+            passed,
+            &format!("page route refuses {label} as {refusal} with failure kind {kind}"),
+            outcome.contains(refusal)
+                && outcome
+                    .replace("\\\"", "\"")
+                    .contains(&format!(r#""failure_kind":"{kind}""#))
+                && nested_str(body, &["effect", "purpose"]) != Some("web_tool")
+                && nested_str(body, &["state", "notice"]) != Some("Following the website's redirect."),
+            || outcome,
+        );
+    }
+
+    let body = twin::gzip_store(b"SINGLE_CODING_PAGE");
+    let wire = cat(&[b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: ", body.len().to_string().as_bytes(), b"\r\n\r\n", &body]);
+    let reply = page_response(controller, &room, "https://page.invalid/single-coding", &wire);
+    let page = nested_str(event_body(&reply), &["effect", "wire"]).unwrap_or_default().to_string();
+    keep_msg(
+        passed,
+        "page route still decodes one legitimate content coding",
+        error_text(&reply).is_none() && page.contains("SINGLE_CODING_PAGE") && page.contains("content coding gzip"),
+        || reply.to_string(),
+    );
+}
+
+/// Drive one owned page read to the product's own response callback.
+// Drive the public callback, not a direct call to redirect::location. Socket
+// framing has its own earlier header refusal; an owned buffered callback can
+// still supply an overlong head below the redirect's raw-response allowance.
+fn redirect_boundary_refusals(controller: &mut Controller, root: &str, passed: &mut Vec<String>) {
+    let scratch = Scratch::create(Path::new(root));
+    let room = scratch.path().to_string();
+    let head = |size| {
+        let mut wire = b"HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nX-Pad: ".to_vec();
+        wire.resize(size, b'x');
+        wire.extend_from_slice(b"\r\n\r\n");
+        wire
+    };
+    let mut over_wire = b"HTTP/1.1 302 Found\r\nLocation: /final\r\n\r\n".to_vec();
+    over_wire.resize(2 * 1024 * 1024 + 1, b'x');
+    let mut interim = b"HTTP/1.1 100 Continue\r\n\r\n".repeat(5);
+    interim.extend_from_slice(b"HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\n\r\n");
+    for (label, wire, refusal) in [
+        ("65537 header bytes before delimiter", head(65537), "Redirect HTTP headers exceed limit"),
+        ("2097153 raw response bytes", over_wire, "Redirect response exceeds its 2 MiB bound"),
+        ("unterminated redirect head", b"HTTP/1.1 302 Found\r\nLocation: /final\r\n".to_vec(), "Redirect HTTP headers are incomplete"),
+        ("five informational heads", interim, "Redirect response exceeds four informational heads"),
+    ] {
+        let reply = page_response(controller, &room, "https://page.invalid/boundary", &wire);
+        let body = event_body(&reply);
+        let outcome = body.to_string();
+        let local = outcome.contains(refusal)
+            && outcome.replace("\\\"", "\"").contains(r#""failure_kind":"redirect""#)
+            && nested_str(body, &["effect", "purpose"]) != Some("web_tool")
+            && nested_str(body, &["state", "notice"]) != Some("Following the website's redirect.");
+        println!("redirect callback {label}: expected {refusal:?}; matched={local}");
+        keep_msg(passed, &format!("public redirect callback refuses {label} as {refusal}"), local, || outcome);
+        let healthy = call(controller, obj(vec![("op".into(), s("network_binary")), ("data".into(), s(&b64_encode(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")))]));
+        keep_msg(passed, &format!("{label} refusal leaves an unrelated decoder operation available"), error_text(&healthy).is_none(), || healthy.to_string());
+    }
+    let reply = page_response(controller, &room, "https://page.invalid/boundary", &head(65536));
+    keep_msg(
+        passed,
+        "the exact 65536-byte redirect header follows its actual Location through the public callback",
+        nested_str(event_body(&reply), &["effect", "purpose"]) == Some("web_tool")
+            && nested_str(event_body(&reply), &["effect", "wire"]).is_some_and(|wire| wire.starts_with("GET /final HTTP/1.1\r\n")),
+        || reply.to_string(),
+    );
+    let reply = page_response(controller, &room, "https://page.invalid/healthy", b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 7\r\n\r\nHEALTHY");
+    keep_msg(passed, "a valid page still completes after the redirect refusals", nested_str(event_body(&reply), &["effect", "wire"]).is_some_and(|wire| wire.contains("HEALTHY")), || reply.to_string());
+}
+
+fn page_response(controller: &mut Controller, root: &str, url: &str, wire: &[u8]) -> Value {
+    let sent = send_draft(controller, root, None, "Read the fixture page.");
+    let proposal = format!(r#"{{"tool":"web_read","args":{{"url":"{url}"}}}}"#);
+    let fed = feed_proposal(controller, root, &sent, &proposal);
+    let page = follow_web(controller, root, &fed);
+    let body = event_body(&page);
+    let effect = body.get("effect").cloned().unwrap_or_else(|| panic!("page read has no effect: {}", page.to_string()));
+    if nested_str(&effect, &["purpose"]) != Some("web_tool") {
+        panic!("page read did not open a web tool request: {}", page.to_string());
+    }
+    let ticket = effect.get("web_ticket").cloned().unwrap_or_else(|| panic!("web tool effect has no web_ticket: {}", page.to_string()));
+    let state = body.get("state").cloned().unwrap_or(Value::Null);
+    product_event(controller, Some(&state), "network_result", obj(vec![
+        ("purpose".into(), s("web_tool")),
+        ("web_ticket".into(), ticket),
+        ("data".into(), s(&b64_encode(wire))),
+    ]), root)
+}
+
+fn expectation(expected: Option<&str>) -> String {
+    expected.map(|text| text.to_string()).unwrap_or_else(|| "acceptance".into())
 }
 
 fn integration(controller: &mut Controller, root: &str, passed: &mut Vec<String>) {
