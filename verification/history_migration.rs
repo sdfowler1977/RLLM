@@ -10,8 +10,8 @@ const SCOPE: &str = "Owner compatibility checks: actual prior and current contro
 fn main() {
     let previous = parse_args();
     let project = std::env::current_dir().unwrap_or_else(|error| panic!("cwd: {error}"));
-    let scratch = twin::create_scratch(&project, "history-migration");
-    let root = scratch.to_str().unwrap_or_else(|| panic!("scratch path is not UTF-8"));
+    let scratch = Scratch(twin::create_scratch(&project, "history-migration"));
+    let root = scratch.0.to_str().unwrap_or_else(|| panic!("scratch path is not UTF-8"));
     std::fs::write(Path::new(root).join("input.txt"), "Ordinary local input remains available.")
         .unwrap_or_else(|error| panic!("could not write input.txt: {error}"));
 
@@ -41,7 +41,7 @@ fn main() {
         ),
         ("scope".into(), s(SCOPE)),
     ]);
-    twin::report_value_printed("history_migration", &body, false);
+    twin::report_value_printed("history_migration", &body, PRINTED_REPORT_TRAILING_NEWLINE);
 
     let written = obj(vec![(
         "passed".into(),
@@ -49,8 +49,8 @@ fn main() {
     )]);
     twin::report_value("history_migration", &written, true);
 
-    std::fs::remove_dir_all(&scratch)
-        .unwrap_or_else(|error| panic!("could not remove {}: {error}", scratch.display()));
+    std::fs::remove_dir_all(&scratch.0)
+        .unwrap_or_else(|error| panic!("could not remove {}: {error}", scratch.0.display()));
 }
 
 fn parse_args() -> PathBuf {
@@ -560,4 +560,28 @@ fn check(passed: &mut Vec<String>, name: &str, value: bool) {
         panic!("{name}");
     }
     passed.push(name.to_string());
+}
+
+/// The printed report body ends with the newline the retired leg's print() wrote.
+///
+/// The retired leg prints its report with `print(json.dumps(body, indent=2))`, and
+/// `print` appends the trailing newline, so the leg's printed report body carries
+/// that newline. The twin asks the shared reporter for the same trailing newline,
+/// and the report file it writes afterwards is the leg's own file shape.
+const PRINTED_REPORT_TRAILING_NEWLINE: bool = true;
+
+/// The scratch directory this leg owns, removed on every exit path.
+///
+/// The retired leg holds its temporary directory in a context manager, so the
+/// directory is removed when the leg ends, including when it aborts. The twin's own
+/// scratch directory was removed on the success path only, so an aborted run left it
+/// behind in the project's output tree. This guard owns the directory for the whole
+/// run and removes it on the way out, whichever way the leg ends. It changes nothing
+/// the leg reports: an abort still aborts with the same diagnostic.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
