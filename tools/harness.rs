@@ -111,6 +111,80 @@ fn find_outside(chars: &[char], from: usize, needle: &str) -> Option<usize> {
     None
 }
 
+// Find the next needle that is not inside a comment, keeping string literals.
+// The set of arguments a group accepts is a property of that group's parser,
+// so a token written in prose must never decide a dispatch: a comment is not
+// the group's grammar. A parser arm, on the other hand, lives inside a string
+// literal, so this scan keeps literals and skips comments - the opposite of
+// find_outside, which skips literals too and so cannot see a parser arm.
+fn find_outside_comments(chars: &[char], from: usize, needle: &str) -> Option<usize> {
+    let needle: Vec<char> = needle.chars().collect();
+    if needle.is_empty() {
+        return None;
+    }
+    let mut at = from;
+    while at < chars.len() {
+        match chars[at] {
+            '/' if chars.get(at + 1) == Some(&'/') => {
+                at = match chars[at..].iter().position(|c| *c == '\n') {
+                    Some(offset) => at + offset + 1,
+                    None => chars.len(),
+                };
+            }
+            '/' if chars.get(at + 1) == Some(&'*') => {
+                at = match chars[at + 2..].windows(2).position(|pair| pair == ['*', '/']) {
+                    Some(offset) => at + 2 + offset + 2,
+                    None => chars.len(),
+                };
+            }
+            '"' => {
+                // A literal is code: the whole extent is searched, quotes
+                // included, so a quoted token is found where the group writes
+                // it and a phrase inside a diagnostic is found as well.
+                let end = string_end(chars, at).unwrap_or(chars.len() - 1);
+                if let Some(offset) = chars[at..=end]
+                    .windows(needle.len())
+                    .position(|window| *window == needle[..])
+                {
+                    return Some(at + offset);
+                }
+                at = end + 1;
+            }
+            '\'' => {
+                // A lifetime only looks like a character literal.
+                let Some(end) = char_end(chars, at) else {
+                    if chars[at..].starts_with(&needle[..]) {
+                        return Some(at);
+                    }
+                    at += 1;
+                    continue;
+                };
+                if let Some(offset) = chars[at..=end]
+                    .windows(needle.len())
+                    .position(|window| *window == needle[..])
+                {
+                    return Some(at + offset);
+                }
+                at = end + 1;
+            }
+            _ => {
+                if chars[at..].starts_with(&needle[..]) {
+                    return Some(at);
+                }
+                at += 1;
+            }
+        }
+    }
+    None
+}
+
+// Whether a needle appears in a group's source outside its comments. The
+// group's own tokens are read here and not from the prose around them.
+fn contains_outside_comments(source: &str, needle: &str) -> bool {
+    let chars: Vec<char> = source.chars().collect();
+    find_outside_comments(&chars, 0, needle).is_some()
+}
+
 fn string_end(chars: &[char], at: usize) -> Option<usize> {
     let mut index = at + 1;
     while index < chars.len() {
@@ -406,8 +480,10 @@ fn required_inputs(root: &Path, source: &str) -> Vec<Input> {
         // A script declares an argument; a native twin states its own requirement
         // in the parse error it prints when the argument is missing. A twin that
         // only mentions the flag guards the comparison itself and stays runnable.
+        // The phrase is read from the group's own literal, so a comment that
+        // mentions it is prose and decides nothing.
         let declared = format!("add_argument('{flag}'");
-        let native_required = source.contains(&format!("arguments are required: {flag}"));
+        let native_required = contains_outside_comments(source, &format!("arguments are required: {flag}"));
         if !source.contains(&declared) && !native_required {
             continue;
         }
@@ -568,6 +644,21 @@ fn flag_path(root: &Path, flag: &str) -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
+// A native twin parses the runner's reference flags itself, so the Python
+// declaration never appears in its source and the group would be dispatched
+// without the reference its comparison leg is gated on. The spelling that says
+// a group accepts a flag is a quoted token outside the group's comments, and
+// the group is native when it reads its own arguments; a Python group never
+// does, so its own path through this function is untouched.
+fn native_accepts_flag(source: &str, flag: &str) -> bool {
+    if !contains_outside_comments(source, "env::args") {
+        return false;
+    }
+    contains_outside_comments(source, &format!("\"{flag}\""))
+        || contains_outside_comments(source, &format!("\"{flag}=\""))
+        || contains_outside_comments(source, &format!("arguments are required: {flag}"))
+}
+
 // A required reference is validated before dispatch; an optional one is passed
 // only when it actually exists, and its absence is reported as an unexercised
 // comparison leg rather than a silent narrowing.
@@ -575,7 +666,9 @@ fn group_arguments(root: &Path, source: &str) -> (Vec<String>, Vec<String>) {
     let mut arguments = Vec::new();
     let mut unexercised = Vec::new();
     for (flag, default, _) in INPUT_FLAGS {
-        if !source.contains(&format!("add_argument('{flag}'")) {
+        let declared = format!("add_argument('{flag}'");
+        let python_declared = source.contains(&declared);
+        if !python_declared && !native_accepts_flag(source, flag) {
             continue;
         }
         let supplied = flag_path(root, flag).or_else(|| {
@@ -587,7 +680,12 @@ fn group_arguments(root: &Path, source: &str) -> (Vec<String>, Vec<String>) {
                 arguments.push(path.display().to_string());
             }
             None => {
-                if !flag_required(source, flag, default) {
+                // A Python group states its own requirement with required=True; a
+                // native group's reference is a comparison input, so its absence
+                // leaves the group runnable and is reported as an unexercised
+                // comparison leg instead of a silent narrowing.
+                let required = python_declared && flag_required(source, flag, default);
+                if !required {
                     unexercised.push((*flag).to_string());
                 }
             }
@@ -2022,9 +2120,10 @@ fn sweep_one(root: &Path, name: &'static str, opts: &SweepOpts, seconds: u64) ->
     // The report this run is expected to publish is removed before the group
     // runs, so a report left by an earlier run cannot stand in for a group
     // that published nothing. Freshness alone cannot carry that provenance:
-    // this filesystem truncates modification times, so a report written after
-    // the run started still reads older than the run start, and the backward
-    // tolerance that absorbs that also accepts a leftover.
+    // the kernel stamps a file with a clock that trails the real time clock
+    // the freshness check reads, so a report written after the run started
+    // still reads older than the run start, and the backward tolerance that
+    // absorbs that trail also accepts a leftover.
     clear_report(root, name);
     let started_at = SystemTime::now();
     let (code, stdout, elapsed) = sweep_run(root, name, &arguments, seconds);
@@ -2873,6 +2972,12 @@ mod checks {
 
     #[test]
     fn a_native_group_that_names_its_required_reference_is_unavailable_without_it() {
+        // The reference this row measures is the one in the tree; when the
+        // environment names another one the pre-flight would answer for the
+        // environment, so the row reports that it did not measure.
+        if !no_environment_reference_is_configured(&["--previous-controller"]) {
+            return;
+        }
         let dir = TempDir::new();
         let root = dir.path();
         let native = "fn main(){match flag{--previous-controller=>{}}panic!(\"the following arguments are required: --previous-controller\");}";
@@ -2886,6 +2991,179 @@ mod checks {
         std::fs::create_dir_all(root.join("output")).unwrap();
         std::fs::write(root.join("output/previous-controller"), b"controller").unwrap();
         assert!(!required_inputs(root, native).iter().any(|input| !input.present && input.detail.contains("--previous-controller")), "the reference build satisfies the input");
+    }
+
+    // The rows that measure a reference measure the reference that sits in the
+    // tree; an environment reference would answer for it and would turn their
+    // absence cases into a measurement of the environment instead.
+    fn environment_reference_is_configured(value: Option<&str>) -> bool {
+        value.map(|value| !value.trim().is_empty()).unwrap_or(false)
+    }
+
+    // A row whose premise is absent reports that it did not measure and
+    // returns, so an ambient value outside the product leaves the rows
+    // unmeasured instead of failing the sanctioned build of the runner. Each
+    // row names the references it measures, because the environment answers
+    // for one reference at a time: the variable that names a flag is the one
+    // that would take that flag's place in the tree.
+    fn no_environment_reference_is_configured(flags: &[&str]) -> bool {
+        for flag in flags {
+            let Some((_, _, variable)) = INPUT_FLAGS.iter().find(|(name, _, _)| *name == *flag) else {
+                continue;
+            };
+            let configured = std::env::var(*variable).ok();
+            if environment_reference_is_configured(configured.as_deref()) {
+                eprintln!(
+                    "not measured: {variable} names a reference outside the tree, so this row would measure the environment"
+                );
+                return false;
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn a_native_group_receives_the_reference_flag_its_own_source_names() {
+        if !no_environment_reference_is_configured(&["--previous-controller"]) {
+            return;
+        }
+        let dir = TempDir::new();
+        let root = dir.path();
+        // The shape of verification/history_migration.rs: the group reads its
+        // own arguments, matches the flag itself and states its requirement in
+        // the parse error it prints when the flag is missing.
+        let native = "fn main(){let mut previous=None;for argument in std::env::args().skip(1){match argument.as_str(){\"--previous-controller\"=>{previous=Some(argument);}}}if previous.is_none(){panic!(\"the following arguments are required: --previous-controller\");}}";
+        assert!(!native.contains("add_argument("), "this row measures the native spelling, not the Python one");
+        // The pre-flight names the reference it needs and the builder names the
+        // reference it passes; both must be the same file, or the comparison
+        // leg is exercised against a reference the group never saw.
+        let absent = required_inputs(root, native);
+        assert!(absent.iter().any(|input| input.kind == "path" && !input.present && input.detail.contains("--previous-controller reference at output/previous-controller")), "the pre-flight names the reference the argument builder passes: {:?}", absent.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
+        std::fs::create_dir_all(root.join("output")).unwrap();
+        std::fs::write(root.join("output/previous-controller"), b"controller").unwrap();
+        let present = required_inputs(root, native);
+        assert!(!present.iter().any(|input| input.detail.contains("--previous-controller")), "the reference the tree holds satisfies the pre-flight: {:?}", present.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
+        let (arguments, unexercised) = group_arguments(root, native);
+        assert_eq!(arguments.first().map(String::as_str), Some("--previous-controller"), "a native group is dispatched with the reference flag its own source names: {arguments:?}");
+        assert_eq!(arguments.len(), 2, "the native reference flag and its path, and nothing else: {arguments:?}");
+        assert!(arguments[1].ends_with("output/previous-controller"), "the native reference path is the one the tree holds: {arguments:?}");
+        assert!(unexercised.is_empty(), "the comparison leg is exercised when the reference exists: {unexercised:?}");
+    }
+
+    #[test]
+    fn a_native_group_whose_reference_is_absent_stays_runnable_and_names_the_unexercised_leg() {
+        if !no_environment_reference_is_configured(&["--previous-controller"]) {
+            return;
+        }
+        let dir = TempDir::new();
+        let root = dir.path();
+        // The shape of verification/prompt_reference.rs: the group reads its own
+        // arguments, takes the reference when one is offered and compares only
+        // when one was given.
+        let native = "fn main(){let mut previous=None;for argument in std::env::args().skip(1){if argument==\"--previous-controller\"{previous=Some(argument);}}if previous.is_none(){println!(\"no previous controller\");}}";
+        assert!(!native.contains("arguments are required:"), "this row measures the optional native reference, not the required one");
+        let (arguments, unexercised) = group_arguments(root, native);
+        assert!(arguments.is_empty(), "an absent reference is not passed to the group: {arguments:?}");
+        assert_eq!(unexercised, vec!["--previous-controller".to_string()], "the absent reference is reported as an unexercised comparison leg");
+        let inputs = required_inputs(root, native);
+        assert!(inputs.iter().all(|input| input.present), "an absent optional reference leaves the group runnable: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
+        assert!(!inputs.iter().any(|input| input.detail.contains("--previous-controller")), "an optional native reference is not a required input: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
+        std::fs::create_dir_all(root.join("output")).unwrap();
+        std::fs::write(root.join("output/previous-controller"), b"controller").unwrap();
+        let (arguments, unexercised) = group_arguments(root, native);
+        assert_eq!(arguments.first().map(String::as_str), Some("--previous-controller"), "the native group receives the reference when the tree holds one: {arguments:?}");
+        assert_eq!(arguments.len(), 2, "the native reference flag and its path, and nothing else: {arguments:?}");
+        assert!(unexercised.is_empty(), "the comparison leg is exercised when the reference exists: {unexercised:?}");
+    }
+
+    #[test]
+    fn the_python_spelling_of_a_group_is_unchanged() {
+        if !no_environment_reference_is_configured(&["--previous-controller"]) {
+            return;
+        }
+        let dir = TempDir::new();
+        let root = dir.path();
+        let required = "import argparse\nargs=argparse.ArgumentParser();args.add_argument('--previous-controller',required=True)\nargs=args.parse_args()";
+        let (arguments, unexercised) = group_arguments(root, required);
+        assert!(arguments.is_empty(), "a required Python reference is not passed when it is absent: {arguments:?}");
+        assert!(unexercised.is_empty(), "a required Python reference is a missing input, not an unexercised leg: {unexercised:?}");
+        let inputs = required_inputs(root, required);
+        assert!(inputs.iter().any(|input| input.kind == "path" && !input.present && input.detail.contains("--previous-controller reference at output/previous-controller")), "the pre-flight still reports the required Python reference as missing: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
+        let optional = "import argparse\nargs=argparse.ArgumentParser();args.add_argument('--previous-controller')\nargs=args.parse_args()\nif args.previous_controller:\n    print(args.previous_controller)";
+        let (arguments, unexercised) = group_arguments(root, optional);
+        assert!(arguments.is_empty(), "an absent optional Python reference is not passed: {arguments:?}");
+        assert_eq!(unexercised, vec!["--previous-controller".to_string()], "an absent optional Python reference is an unexercised comparison leg");
+        std::fs::create_dir_all(root.join("output")).unwrap();
+        std::fs::write(root.join("output/previous-controller"), b"controller").unwrap();
+        let (arguments, unexercised) = group_arguments(root, required);
+        assert_eq!(arguments.first().map(String::as_str), Some("--previous-controller"), "the Python group receives its reference: {arguments:?}");
+        assert_eq!(arguments.len(), 2, "the Python reference flag and its path, and nothing else: {arguments:?}");
+        assert!(unexercised.is_empty(), "the Python comparison leg is exercised when the reference exists: {unexercised:?}");
+    }
+
+    // A token written in prose is not the group's grammar. The set of
+    // arguments a group accepts is a property of that group's parser, so a
+    // comment that names a flag must not change what the runner dispatches,
+    // while a parser arm - which lives inside a string literal - is still
+    // found. The known limit of this rule is a quoted token in a literal that
+    // is not a parser arm: it is read as an accepted argument.
+    #[test]
+    fn a_quoted_token_in_a_comment_never_decides_a_native_dispatch() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        // The shape that was measured: the group reads its own arguments and
+        // the only mention of the flag is a comment that names it.
+        let commented = "// the runner also knows the older \"--previous-controller\" reference.\nfn main(){for argument in std::env::args().skip(1){let _=argument;}}";
+        assert!(commented.contains("\"--previous-controller\""), "the comment names the token as a quoted token");
+        assert!(!native_accepts_flag(commented, "--previous-controller"), "a quoted token in a comment is prose, not the group's grammar");
+        let (arguments, unexercised) = group_arguments(root, commented);
+        assert!(arguments.is_empty(), "a group whose only mention is a comment is dispatched nothing: {arguments:?}");
+        assert!(unexercised.is_empty(), "a group whose only mention is a comment has no reference leg to report: {unexercised:?}");
+        // A block comment is prose as well.
+        let blocked = "/* \"--previous-controller\" */\nfn main(){for argument in std::env::args().skip(1){let _=argument;}}";
+        assert!(!native_accepts_flag(blocked, "--previous-controller"), "a quoted token in a block comment is prose as well");
+        // The group's own parser arm is a string literal, so the scan keeps
+        // literals and the group is dispatched the flag it accepts.
+        let armed = "fn main(){for argument in std::env::args().skip(1){match argument.as_str(){\"--previous-controller\"=>{}}}}";
+        assert!(native_accepts_flag(armed, "--previous-controller"), "a parser arm is a string literal and is found");
+        let assigned = "fn main(){for argument in std::env::args().skip(1){if argument.starts_with(\"--previous-controller=\"){}}}";
+        assert!(native_accepts_flag(assigned, "--previous-controller"), "the assignment spelling is a literal too");
+        // A group that reads its arguments only inside a comment is not a
+        // native group at all.
+        let prose_only = "// fn main(){for argument in std::env::args().skip(1){let _=argument;}}\nfn main(){}";
+        assert!(!native_accepts_flag(prose_only, "--previous-controller"), "arguments named only in a comment are not the group's own arguments");
+    }
+
+    // The pre-flight and the argument builder read the same authority, so the
+    // sentence a twin prints when the argument is missing is read from the
+    // group's own literal and the same sentence in a comment demands nothing.
+    #[test]
+    fn a_required_phrase_in_a_comment_never_decides_a_native_required_input() {
+        // The missing reference this row measures is the one in the tree; when
+        // the environment names another one the pre-flight would answer for
+        // the environment, so the row reports that it did not measure.
+        if !no_environment_reference_is_configured(&["--previous-controller"]) {
+            return;
+        }
+        let dir = TempDir::new();
+        let root = dir.path();
+        let stated = "fn main(){panic!(\"the following arguments are required: --previous-controller\");}";
+        let inputs = required_inputs(root, stated);
+        assert!(inputs.iter().any(|input| input.kind == "path" && !input.present && input.detail.contains("--previous-controller reference at output/previous-controller")), "a native twin's own diagnostic is a required input: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
+        let commented = "// the following arguments are required: --previous-controller\nfn main(){for argument in std::env::args().skip(1){let _=argument;}}";
+        let inputs = required_inputs(root, commented);
+        assert!(!inputs.iter().any(|input| input.detail.contains("--previous-controller")), "the same sentence in a comment is prose and demands nothing: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
+    }
+
+    // A row whose premise is absent says that it did not measure and returns.
+    // An ambient value outside the product therefore leaves the rows
+    // unmeasured instead of failing the sanctioned build of the runner.
+    #[test]
+    fn a_row_whose_premise_is_absent_reports_that_it_did_not_measure() {
+        assert!(!environment_reference_is_configured(None), "an unset reference is not a configured one");
+        assert!(!environment_reference_is_configured(Some("")), "a blank reference is not a configured one");
+        assert!(!environment_reference_is_configured(Some("  \t\n")), "a blank reference is not a configured one");
+        assert!(environment_reference_is_configured(Some("/tmp/other-tree/previous-controller")), "a reference outside the tree is a configured one");
     }
 
     #[test]
@@ -2989,6 +3267,59 @@ mod checks {
         assert!(row.checks.is_none(), "a group that published nothing has no count");
         assert!(row.report.is_none(), "no report text is carried over from a leftover");
         assert!(!report.exists(), "the leftover report outlived the run that had to clear it");
+    }
+
+    // The other half of the same rule: a group that publishes its own report
+    // while it runs is credited with that report, and the report it published
+    // is still on disk after the run.
+    #[test]
+    fn a_report_published_during_the_run_is_credited_and_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        std::fs::create_dir_all(root.join("output/verification")).unwrap();
+        // The group publishes its own report while it runs, and exits 0.
+        let report_name = group_report_file("scene");
+        let twin = root.join("output/verification/scene");
+        std::fs::write(&twin, format!("#!/bin/sh\nmkdir -p output/checks\nprintf '{{\"passed\": 7}}\\n' > output/checks/{report_name}\nexit 0\n")).unwrap();
+        std::fs::set_permissions(&twin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let report = root.join("output/checks").join(&report_name);
+        let row = sweep_one(root, "scene", &bare_opts(), SECONDS);
+        assert_eq!(row.code, Some(0), "the group ran and exited 0");
+        assert_eq!(row.checks, Some(7), "the count came from the report the group published");
+        assert!(report.exists(), "the published report is still on disk after the run");
+        assert_eq!(std::fs::read_to_string(&report).unwrap(), "{\"passed\": 7}\n", "the report on disk is the one the group published");
+        assert!(row.report.is_some(), "the published report is carried into the row");
+    }
+
+    // A group whose development input is missing is never executed, so it
+    // cannot have published a report. A report left by an earlier run must not
+    // be credited to it either.
+    #[test]
+    fn an_unavailable_group_is_not_credited_a_stale_report() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        // The development input the group needs is absent, so it cannot run.
+        std::fs::write(root.join("verification/scene.py"), "raise SystemExit('output/tools/gate')\n").unwrap();
+        // A report of an earlier run is on disk and carries a count of its own.
+        let report = root.join("output/checks").join(group_report_file("scene"));
+        std::fs::write(&report, "{\"passed\": 4242}\n").unwrap();
+        let row = sweep_one(root, "scene", &bare_opts(), SECONDS);
+        assert!(row.code.is_none(), "a group with a missing development input is not executed");
+        assert_eq!(row.checks, Some(0), "a group that did not run is recorded as 0");
+        assert!(row.report.is_none(), "no report text is carried for a group that did not run");
+        // The delivered record counts the group as 0, not with the count of the
+        // report that was left behind.
+        let mut rows = pass_rows();
+        *rows.iter_mut().find(|item| item.name == "scene").unwrap() = row;
+        let record = plant_record(root);
+        assert!(commit_sweep(root, &rows), "an unavailable sweep still publishes");
+        let text = std::fs::read_to_string(&record).unwrap();
+        assert!(text.contains("\"scene\": 0"), "the record counts the unexecuted group as 0");
+        assert!(!text.contains("4242"), "the record did not take the count of the leftover report");
     }
 
     #[test]
