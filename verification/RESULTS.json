@@ -64,19 +64,19 @@
       "voice_session": 34,
       "capture_lifecycle": 15,
       "scene": 90,
-      "apk_alignment": 0,
+      "apk_alignment": 11,
       "release_numbering": 58,
       "audio_route": 23,
       "state_sealing": 16,
       "desktop_runtime": 24,
-      "turn_background": 0,
+      "turn_background": 64,
       "permission_modes": 27,
       "self_rebuild": 12,
       "rrsi_loop": 23,
       "turn_runtime": 13
     },
-    "total_executed": 4442,
-    "groups_passed": 69,
+    "total_executed": 4517,
+    "groups_passed": 71,
     "groups": 73,
     "unavailable": [
       {
@@ -90,21 +90,9 @@
         "code": null,
         "missing": ["--previous-controller reference at output/previous-controller"],
         "recorded_as": 0
-      },
-      {
-        "name": "apk_alignment",
-        "code": null,
-        "missing": ["companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json (not on this machine)"],
-        "recorded_as": 0
-      },
-      {
-        "name": "turn_background",
-        "code": null,
-        "missing": ["companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json (not on this machine)"],
-        "recorded_as": 0
       }
     ],
-    "zero_count_disclosure": "binary_flow, history_migration, apk_alignment, turn_background are recorded as 0 because those groups produced no positive check count. A 0 is not a pass and not a harvested check total."
+    "zero_count_disclosure": "binary_flow, history_migration are recorded as 0 because those groups produced no positive check count. A 0 is not a pass and not a harvested check total."
   },
   "selected_rust_cases": null,
   "selected_rust_runs": [],
@@ -4704,12 +4692,22 @@
   "scope": "Owner execution with actual HTTP-returned GLB files, Rust accessor/node/material validation and software rasterization, owned frame/close operations and filesystem mutations. Installed Android controls, gesture/coalescing/lifecycle and display acceptance remain unverified. Static triangle geometry with embedded PNG base-color sampling and alpha cutouts; animation and physical materials are outside this execution."
 },
     "apk_alignment": {
-      "name": "apk_alignment",
-      "code": null,
-      "missing": ["companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json (not on this machine)"],
-      "recorded_as": 0,
-      "reason": "apk_alignment was not executed because a development input is missing: companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json (not on this machine)."
-    },
+  "passed": 11,
+  "checks": [
+    "every instrument that reads an APK subject resolves it from the publication record instead of a default path it never verifies",
+    "the publication record names the delivered signed APK and the tree states no release APK while delivery is a companion file",
+    "the readback leg verifies the companion artifact by name and byte identity instead of assuming a release path",
+    "real official zipalign retains every current APK payload",
+    "truncated alignment output is rejected before signing",
+    "valid ZIP with changed payload inventory cannot be signed",
+    "valid ZIP with missing payload inventory cannot be signed",
+    "valid ZIP with extra payload inventory cannot be signed",
+    "valid ZIP with duplicate payload inventory cannot be signed",
+    "payload CRC corruption cannot pass identity validation",
+    "packaging validation leaves the saved signed application unchanged"
+  ],
+  "scope": "Actual official zipalign and current saved APK payloads. Deliberately damaged temporary copies exercise pre-sign rejection. No new application or signature acceptance is claimed; transient retry is not forced."
+},
     "release_numbering": {
   "passed": 58,
   "checks": [
@@ -4855,12 +4853,77 @@
   "scope": "Built Linux/Windows host runtime: script-declared build, runtime self-test over loopback sockets and real workspace tools, vault sealing at the declared path, cross-process resume, per-action settling and persistence, malformed-request tolerance, foreign-key and truncated-vault refusal."
 },
     "turn_background": {
-      "name": "turn_background",
-      "code": null,
-      "missing": ["companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json (not on this machine)"],
-      "recorded_as": 0,
-      "reason": "turn_background was not executed because a development input is missing: companion APK RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk named by PUBLICATION-MANIFEST.json (not on this machine)."
-    },
+  "passed": 64,
+  "checks": [
+    "a declared foreground service is what promotes an ordinary model turn",
+    "the promotion is started from the model-effect path and asks once for reply permission",
+    "the promotion holds a partial wake lock for the turn window and releases it at the deadline",
+    "the promotion names the dataSync type on the API level that requires it",
+    "the promotion is released when the task is removed or the service is destroyed",
+    "the window and the lease are decided once by the core, for the fresh path and the re-targeted path alike",
+    "a core miss supplies no lease and does not substitute the requested timeout",
+    "the promotion window and the request transport window are one window, so neither can outlive the other",
+    "only the service path carries a per-request timeout, so a model turn is promoted on the shared default rather than a guess",
+    "a chained model effect re-extends the live promotion instead of starting a second one",
+    "a start that arrives after its ticket was retired never promotes or takes the wake lock",
+    "the rate clock re-arms itself while the app is backgrounded so elapsed time keeps advancing",
+    "the first frame after a resume re-reads the true elapsed time instead of a stale snapshot",
+    "a turn is only settled when the core reports nothing else pending",
+    "the promotion is released on every turn-ending path",
+    "executed core: a denied background publication persists its reply and conversation",
+    "executed core: denied drain preserves turn_pending unchanged",
+    "executed core: denied drain surfaces the retained reply without claiming notification delivery",
+    "executed core: allowed drain publishes the retained reply and clears turn_pending",
+    "a reply tap names the conversation it belongs to and reopening waits for the turn to end",
+    "a refused background start or refused notification cannot fail the committed turn",
+    "the model transport runs on the process-scoped owner, so the view can go while the turn runs",
+    "the owner claims the transport token and the socket of the model turn, and its token space cannot collide with the view's",
+    "a destroyed view detaches from the turn and leaves the live scope alone",
+    "a recreated view re-binds to the live turn by its durable identity instead of starting a second turn",
+    "a returning view adopts the running turn and never issues the request again",
+    "the state the core returns is committed, so the identity survives the view that carried it",
+    "the expiry notice and the refused-start notice reach the user as the same string",
+    "the lease expiry reaches the user through the lost bridge instead of ending silently",
+    "the reply limit, the titles and the channels are owned by the core, not by the platform",
+    "the platform half of the turn reaches the core through one typed operation and no second call site",
+    "the admission, the lease and the holder token are decided by the core, and the platform only realizes the decision",
+    "the identity is retired only by the holder that owns it, so a stale teardown leaves a newer live turn alone",
+    "an interrupted turn keeps its durable identity, so a returning view can still re-bind to it",
+    "a turn whose remote completion is uncertain is never replayed",
+    "the streaming transport of a model turn is bound by the window the core decided",
+    "a nested control request of a turn is bound by the same deadline the turn is bound by",
+    "a nested control request of a turn is cancelled by the same liveness predicate the transport uses",
+    "executed core: requested 1 ms after 0 ms yields window 30000 and lease 30000",
+    "executed core: requested 9000000 ms after 0 ms yields window 120000 and lease 120000",
+    "executed core: requested 120000 ms after 30000 ms yields window 120000 and lease 90000",
+    "executed core: holder extension keeps only the request's remaining 75000 ms",
+    "executed core: requested 120000 ms after 120000 ms yields window 120000 and lease 0",
+    "executed core: requested 120000 ms after -1 ms yields window 120000 and lease 120000",
+    "executed core: request clock 60000 and lease clock 15000 independently drive progress and expiry",
+    "executed core: request clock 60000 and lease clock 30000 independently drive progress and expiry",
+    "executed core: request clock 1000 and lease clock 30000 independently drive progress and expiry",
+    "source contract only: Java forwards separate request and lease clocks; device routing is unmeasured",
+    "the platform never recomputes the admission, the lease or the holder token of a turn",
+    "the core decides what a returning view finds, so an uncertain turn is reported instead of passing unnoticed",
+    "nothing renews a promotion, so the protection of a turn cannot outlive its request",
+    "source contract only: the platform transport declares the 120 s horizon; device timing is unmeasured",
+    "the real linker reads the packaged application manifest",
+    "the packaged application declares the turn service that outlives focus",
+    "the packaged turn service is promoted as dataSync",
+    "the packaged permission set carries the dataSync foreground permission",
+    "the packaged service set keeps the three prior services beside the turn service",
+    "the packaged application carries its dex payloads",
+    "dexdump reads classes.dex",
+    "the packaged service declarations resolve to the classes the dex carries",
+    "packaged dex contains no retired Java lease constants or leaseOf policy",
+    "the packaged dex carries the promotion surface including its lifetime callbacks",
+    "the packaged dex carries the turn-continuity surface on the activity",
+    "the wake-lock tag and reply conversation key survive into the packaged dex"
+  ],
+  "scope": "Mixed dimensions, named per row: executed production-core turn publication, lease arithmetic and independent clocks; source contracts for Android adapter wiring; packaged manifest and dex inspection. Physical Activity recreation, screen-off, process pressure, foreground-service admission, transport timing and notification delivery remain device-bound and unmeasured. This group does not drive a device. turn_runtime separately drives the headless product event and effect envelopes.",
+  "classes_dex_sha256": "6a6fc54881fc9b7d0af8ec631d4228ffc6af8fc44c72cf1754b0fd261e607bd1",
+  "apk_sha256_build_instant_only": "063cd4ee15f69b5d2acb4157544dddb42840f1fa500061c603aface44c382463"
+},
     "permission_modes": {
   "passed": 27,
   "checks": [
@@ -4992,7 +5055,7 @@
     "host": "turn.test",
     "kind": "network",
     "limit": 2097152,
-    "model_ticket": "1794810113392402187",
+    "model_ticket": "1794818697958125725",
     "port": 80,
     "purpose": "model",
     "stream": false,
@@ -5003,10 +5066,10 @@
   "publication": {
     "channel": "replies",
     "channel_name": "Replies",
-    "chat": "1794810113391602273",
+    "chat": "1794818697957285930",
     "decision": "publish",
     "state": {
-      "active": "1794810113391602273",
+      "active": "1794818697957285930",
       "active_tool": null,
       "agent_pending": false,
       "agent_running": false,
@@ -5019,15 +5082,15 @@
         }
       ],
       "answer_turn": {
-        "chat": "1794810113391602273",
+        "chat": "1794818697957285930",
         "dow": false,
         "mode": "auto",
         "offset_minutes": 0,
-        "source": "1794810113392182813-1"
+        "source": "1794818697957875871-1"
       },
       "appearance_preview": null,
-      "approval_root": "/home/shawn/RLLM/output/turn-runtime-2477439-1794810113390358392-0",
-      "approval_root_identity": "66306:4603914",
+      "approval_root": "/home/shawn/RLLM/output/turn-runtime-3581229-1794818697955982738-0",
+      "approval_root_identity": "66306:4603865",
       "apps_expected": null,
       "archive_export_ticket": null,
       "busy": false,
@@ -5036,13 +5099,13 @@
         {
           "agent_profile": 0,
           "draft_attachments": [],
-          "id": "1794810113391602273",
-          "inquiry_id": "question-1794810113392197573-1",
+          "id": "1794818697957285930",
+          "inquiry_id": "question-1794818697957894211-1",
           "messages": [
             {
               "attachments": [],
               "content": "Return a plain background reply.",
-              "harness_user_id": "1794810113392182813-1",
+              "harness_user_id": "1794818697957875871-1",
               "role": "user"
             },
             {
@@ -5086,13 +5149,13 @@
       },
       "format_retry_request": false,
       "harness_form_root": {
-        "identity": "66306:4603914",
-        "root": "/home/shawn/RLLM/output/turn-runtime-2477439-1794810113390358392-0"
+        "identity": "66306:4603865",
+        "root": "/home/shawn/RLLM/output/turn-runtime-3581229-1794818697955982738-0"
       },
       "harness_native_source": {
-        "chat": "1794810113391602273",
+        "chat": "1794818697957285930",
         "digest": "00548958394cec23c8a710f71d58e491b03823a09e484ee0cd1226f5043e7316",
-        "id": "1794810113392182813-1",
+        "id": "1794818697957875871-1",
         "kind": "message"
       },
       "harness_policy": null,
@@ -5114,15 +5177,15 @@
               "complete": true,
               "origin": "returned model answer",
               "prefix_sha256": "7692f5f146d3ce0dafb1a9b846bb5b17a1e87f1e7b470dce5efb401d45149a0e",
-              "recorded": "1794810113394488092",
+              "recorded": "1794818697960243521",
               "sha256": "7692f5f146d3ce0dafb1a9b846bb5b17a1e87f1e7b470dce5efb401d45149a0e",
               "text": "Measured background reply survives permission denial."
             },
-            "chat": "1794810113391602273",
+            "chat": "1794818697957285930",
             "checks": [],
-            "created": "1794810113392202413",
+            "created": "1794818697957899921",
             "evidence": [],
-            "id": "question-1794810113392197573-1",
+            "id": "question-1794818697957894211-1",
             "notes": [],
             "omitted_evidence": 0,
             "origin": "native user request",
@@ -5136,8 +5199,8 @@
             "question_sha256": "9783694a5887e1dd35ff93de7498d4540ac427f5f7430403a9a61a35eb282ba9",
             "schema": 1,
             "scope": {
-              "identity": "66306:4603914",
-              "workspace": "/home/shawn/RLLM/output/turn-runtime-2477439-1794810113390358392-0"
+              "identity": "66306:4603865",
+              "workspace": "/home/shawn/RLLM/output/turn-runtime-3581229-1794818697955982738-0"
             }
           }
         ],
@@ -5146,13 +5209,13 @@
       "local_failure_followups": 0,
       "local_rate": {
         "characters": 53,
-        "chat": "1794810113391602273",
+        "chat": "1794818697957285930",
         "connection": 0,
         "elapsed_ms": 0,
         "live": false,
         "model": "controlled",
         "outcome": "success",
-        "ticket": "1794810113392402187"
+        "ticket": "1794818697958125725"
       },
       "mcp_client_connection": null,
       "mcp_client_expected": null,
@@ -5201,7 +5264,7 @@
       ],
       "project_prepare": null,
       "request_agent_name": "General",
-      "request_chat": "1794810113391602273",
+      "request_chat": "1794818697957285930",
       "request_hosted_mode": false,
       "request_hosted_search": false,
       "request_index": 0,
@@ -5212,16 +5275,16 @@
         {
           "connection": 0,
           "endpoint": "http://turn.test/v1/chat/completions",
-          "id": "1794810113392556269",
+          "id": "1794818697958283258",
           "local_rate": {
             "characters": 53,
-            "chat": "1794810113391602273",
+            "chat": "1794818697957285930",
             "connection": 0,
             "elapsed_ms": 0,
             "live": false,
             "model": "controlled",
             "outcome": "success",
-            "ticket": "1794810113392402187"
+            "ticket": "1794818697958125725"
           },
           "model": "controlled",
           "outcome": "success",
