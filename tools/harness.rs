@@ -2019,6 +2019,13 @@ fn sweep_one(root: &Path, name: &'static str, opts: &SweepOpts, seconds: u64) ->
     let output = root.join("output/checks");
     let report = output.join(group_report_file(name));
     let log = output.join(format!("{name}.log"));
+    // The report this run is expected to publish is removed before the group
+    // runs, so a report left by an earlier run cannot stand in for a group
+    // that published nothing. Freshness alone cannot carry that provenance:
+    // this filesystem truncates modification times, so a report written after
+    // the run started still reads older than the run start, and the backward
+    // tolerance that absorbs that also accepts a leftover.
+    clear_report(root, name);
     let started_at = SystemTime::now();
     let (code, stdout, elapsed) = sweep_run(root, name, &arguments, seconds);
     let printed = name == "response_fields" || name == "chunk_fields";
@@ -2955,6 +2962,33 @@ mod checks {
         assert!(text.contains("output/tools/alignment"), "record entry carries missing");
         assert!(text.contains("\"apk_alignment\": 0"), "counts record 0");
         assert!(text.contains("zero_count_disclosure"), "zero_count_disclosure");
+    }
+
+    // The sweep credits the report the group publishes. A report left behind by
+    // an earlier run must never stand in for a group that published nothing, so
+    // the sweep removes the expected report before the group runs.
+    #[test]
+    fn a_leftover_report_is_not_credited_as_this_runs_measurement() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        std::fs::create_dir_all(root.join("output/verification")).unwrap();
+        // The group runs, exits 0 and publishes no report of its own.
+        let twin = root.join("output/verification/scene");
+        std::fs::write(&twin, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&twin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The leftover of an earlier run carries a count of its own, and its
+        // modification time is older than the run that follows it.
+        let report = root.join("output/checks").join(group_report_file("scene"));
+        std::fs::write(&report, "{\"passed\": 4242}\n").unwrap();
+        let earlier = SystemTime::now() - std::time::Duration::from_secs(1);
+        std::fs::OpenOptions::new().write(true).open(&report).unwrap().set_modified(earlier).unwrap();
+        let row = sweep_one(root, "scene", &bare_opts(), SECONDS);
+        assert_ne!(row.checks, Some(4242), "the sweep credited a leftover report");
+        assert!(row.checks.is_none(), "a group that published nothing has no count");
+        assert!(row.report.is_none(), "no report text is carried over from a leftover");
+        assert!(!report.exists(), "the leftover report outlived the run that had to clear it");
     }
 
     #[test]
