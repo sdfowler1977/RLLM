@@ -24,12 +24,22 @@ Run `bash project/RLLM/tools/build-tools.sh` from the workspace root, then `proj
 ## Complete APK
 
 ```bash
-CLIENT_VARIANT=lab CLIENT_SIGNING_DIR=/private/rllm-identity CLIENT_VERSION_CODE=$(date +%s) bash package.sh
+CLIENT_VARIANT=lab CLIENT_SIGNING_DIR=/private/rllm-identity CLIENT_VERSION_CODE=$(output/tools/apk --next-version-code --package com.local.client.lab) bash package.sh
 ```
 
 This builds both Android ABIs, JNI, Android resources and Java/DEX, packages the full APK, applies16KiB alignment and signs with the retained authorized key. The final RLLM.apk path is printed under the UTC build-start directory. CLIENT_UNSIGNED=1 allows local compilation checks and yields RLLM-unsigned.apk; it is not an installable update. The matching signed APK is delivered separately from the source ZIP.
 
+The release number is not read from the wall clock. `output/tools/apk --next-version-code --package PACKAGE` returns the first version code strictly above the release floor of that package, and `--package` may be left out to ask for the floor of the whole tree. The floor of a package is the join of the release numbers the retained artifacts of that package carry, the distributed baseline the publication record holds for that package — the `distributed_baselines` ledger, and the scalar `distributed_baseline` for the package the record names — and the version the record published last. The floor therefore belongs to the tree and not to the host: two hosts that hold the same tree derive the same number, while a host whose tree holds a newer artifact or a newer record derives a different one. The tool reads the tree it is asked about: `--root DIR` names it, and without it the tool resolves the project root from its own location. A code at or below the floor is refused by name, with the code, the floor and the package named, before any toolchain or build directory is touched. `package.sh` reads the same floor through the same tool and for the package the variant publishes, so the route and the tool can never hold two different floors, and it advances the record's floor of that package when the build succeeds.
+
 ## Current signing identity
+
+Build intermediates do not establish a package's release floor. Package evidence
+comes from the publication record, `APK/`, and final `RLLM.apk` or
+`RLLM-unsigned.apk` files directly in an `output/` build directory. When a package
+has no such evidence, both `--release-baseline --package PACKAGE` and
+`--next-version-code --package PACKAGE` use the conservative whole-tree floor;
+the latter returns that floor plus one. This prevents an intermediate manifest
+with the initial code 1 from resetting an unpublished package's floor.
 
 Certificate SHA256:
 
@@ -81,7 +91,7 @@ Before signing, the build runs tools/build-tools.sh to compile the native packag
 
 Tool recovery also verifies persisted compiler archives after a parent-owned sequential write, file fsync, close and rename, then verifies them again before extraction. One bounded download retry is allowed. Rejected cache bytes are retained under distinct names; failed or truncated downloads cannot be reported as restored tools. This repairs an observed recovery where two target standard-library archives became truncated after the old downloader reported success.
 
-The current check runner contains 69 ordered groups. Packaging compares the complete ordered runner inventory and every report mapping rather than an older fixed group count. New transport groups are included in counts and retained reports. Published-controller provenance must name the actual verified source archive and hash the actual executable; it must not describe a different published build. Missing historical comparison results remain blocking or explicitly unavailable under the existing candidate policy; they are never replaced by current-controller results. These are build-time controls only.
+The current check runner contains 72 ordered groups. Packaging compares the complete ordered runner inventory and every report mapping rather than an older fixed group count. New transport groups are included in counts and retained reports. Published-controller provenance must name the actual verified source archive and hash the actual executable; it must not describe a different published build. Missing historical comparison results remain blocking or explicitly unavailable under the existing candidate policy; they are never replaced by current-controller results. These are build-time controls only.
 
 The credential-rotation group exercises malformed refresh responses through actual local HTTP authorization/storage peers. Its preceding-controller reproduction is recorded separately; source token validation never depends on those development results.
 

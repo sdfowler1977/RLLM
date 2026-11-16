@@ -118,6 +118,56 @@ or exporting `RLLM_CHECK_APK` at it, restores both without any new signing crede
 - `.gitignore` carries exactly one APK exception, `!release/RLLM-Lab.apk`, while `package.sh` names its
   artifact `RLLM`. The exception never matches anything the packaging script produces.
 
+## Release numbering
+
+The release-numbering verification group answers one question: which version code a release may carry, and
+whether the release tools, the publication record and the retained artifacts agree on that number. Its
+coverage is published here as a partition and not as a single total, because the rows are not
+interchangeable: a row that measures product behaviour is evidence about the product, a row that compares
+documentation text is evidence about this document, and a row that pins the build configuration is evidence
+about the toolchain the measurement ran with.
+
+- Release-numbering coverage partition: 53 product-behaviour rows, 4 documentation-text rows, 1 build-configuration row, 58 rows in total with a configured build toolchain and 57 rows in total without one.
+- The 53 product-behaviour rows measure the namespace rule that makes the android-namespaced `versionCode`
+  the release number, the release floor of a package, the per-package `distributed_baselines` ledger, the
+  rendered manifest, the publication route, the join between the release report the product produces
+  and the artifacts the tree retains, the standing the publication record names for the tree's
+  signed releases, and the release number the publication route reads out of a staged artifact.
+  They are evidence about the product's behaviour.
+- The 4 documentation-text rows compare `docs/BUILD.md` and this log with the allocator command they must
+  spell (`output/tools/apk --next-version-code --package com.local.client.lab`), with the ledger they must
+  name, and with the wall-clock substitution they must not carry. They compare text and measure no runtime
+  behaviour.
+- The 1 build-configuration row holds only while `CLIENT_RUST` names the toolchain the release tools are
+  built with. Without it the group registers 57 rows: the same 53 product-behaviour rows and the same 4
+  documentation-text rows.
+
+The partition is measured by the group itself. The verification twin counts the rows every leg registers and
+fails when the partition published above differs from that measurement, so a number here cannot drift away
+from the rows it describes. Reproduce the measurement with the sanctioned runner:
+
+```bash
+bash tools/build-verification.sh .
+output/tools/harness release_numbering
+```
+
+The standing of the tree's signed releases is named in `PUBLICATION-MANIFEST.json` rather than left to be
+inferred from the files in `APK/`. The record carries the per-package floor map `distributed_baselines`,
+which pins the release floor of the package the record names (`com.local.client.lab`, floor `1794569619`);
+a package the record does not name keeps the tree-wide protection, and the allocator hands out `1794569620`
+for that package as well. The record names the current candidate —
+`APK/RLLM__Lab-46e392e-main-tree__2026-11-14__01-46-09Z.apk`, package `com.local.client.lab`, version code
+`1794270239`, 7837714 bytes, sha256
+`c7bfec698e68315bfaf5f618e0453a366b811ab3f39f0966f28b73d76a39e9d2` — and the releases it supersedes:
+`APK/RLLM__Lab-46e392e__2026-11-14__01-30-59Z.apk` (version code `1794270238`, sha256
+`a0254af2048e91eee1dcbcc39b68b4b37e04971dac4830d3ff6a0f75e9eed4a0`) and
+`APK/RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk` (version code `1794270237`, sha256
+`86b7d74156a11dc6ee6d70866bb480e30b75bac57c3400878c86b9f205921c3d`), each superseded by version code
+`1794270239`. Nothing under `APK/` was moved or deleted to record that standing. The candidate's version
+code `1794270239` is still below the tree's distributed baseline `1794569619`, so publishing that candidate
+as it stands would be refused; the floor only ever grows, and the record says so
+(`above_distributed_baseline: false`) instead of hiding it.
+
 ## Background continuity on the phone (2026-11-10)
 
 Owner-reported defect: taking the APK out of focus (answering a text) stops the task and the reply never
@@ -155,9 +205,13 @@ Three files changed, nothing deleted. Note the javac form: `-bootclasspath <andr
 Not proven here: that the owner's phone now delivers the reply while backgrounded — `DEVICE-ACCEPTANCE`
 is blocked (no device attached), so the claim rests on the mechanism, not on observed behaviour. The
 artifact side is now closed as far as this machine can close it: `CLIENT_UNSIGNED=1
-CLIENT_VERSION_CODE=$(date +%s) bash package.sh` (after `source tooling/env.sh`) rebuilt the Lab APK end
-to end — `output/2026-11-10__22-31-38Z/RLLM-unsigned.apk`, 6,944,777 bytes, `versionCode 1794349898`,
-`PKG_EXIT=0`, `Alignment payload validation: 25 exact members` — and reading the shipped artifact back
+CLIENT_VERSION_CODE=$(output/tools/apk --next-version-code --package com.local.client.lab) bash package.sh` (after `source tooling/env.sh`)
+rebuilds the Lab APK end to end, taking the release number from the tool's release floor rather
+than the wall clock — the floor of a package is the join of the distributed baseline the record holds
+for that package and the release numbers the retained artifacts of that package carry, so it is a
+property of the tree the run happened in — the run of 2026-11-10 produced `output/2026-11-10__22-31-38Z/RLLM-unsigned.apk`,
+6,944,777 bytes, `versionCode 1794349898` (the wall-clock code that run used, before the recorded baseline
+existed), `PKG_EXIT=0`, `Alignment payload validation: 25 exact members` — and reading the shipped artifact back
 with the pinned tools shows `com.local.client.TurnService foregroundServiceType=0x00000001` beside the
 unchanged `VoiceSession 0x00000082`, `Execution isolatedProcess=true process=":execution"` and
 `Gateway 0x40000000`, 15 permissions and 4 services, and a `classes.dex` with 224 class descriptors
@@ -400,9 +454,11 @@ Proof that the checks discriminate (four arms, each red naming exactly its own c
 `/tmp/apk-mut2.sh`): re-introduce the hardcoded default in `turn_background.py`; shorten the manifest's
 `sha256`; `touch release/stray.apk`; replace `readback.py`'s companion branch with `pass`. Every file was
 restored by copy and the post-arm digests equal the baseline. Direct refusal proof — with the pinned env and no
-`RLLM_CHECK_APK`, `python3 verification/turn_background.py` exits 1 with
+`RLLM_CHECK_APK`, `output/verification/turn_background` (the native instrument; the retired Python leg
+`verification/turn_background.py` no longer exists) exits 101 with
 “refusing to invent an artifact: PUBLICATION-MANIFEST.json delivers
-`RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk` as a companion file that is not on this machine”.
+`RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk` as a companion file that is not on this machine; set
+RLLM_CHECK_APK to the APK under test”.
 
 Two instrument traps surfaced and are recorded so they do not recur: the first guard searched for the literal
 `os.environ.get('RLLM_CHECK_APK',` inside the very file containing that pattern, so it failed on a clean tree

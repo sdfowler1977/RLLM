@@ -1693,20 +1693,1034 @@ fn parse_cli(args: &[String]) -> Result<Cli, i32> {
     Ok(Cli { apk: positionals.remove(0), version: version.unwrap() })
 }
 
-fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
-    let code = match parse_cli(&args) {
-        Err(code) => code,
-        Ok(cli) => match inspect(Path::new(&cli.apk), &cli.version) {
-            Ok(text) => {
-                println!("{text}");
-                0
+// ---------------------------------------------------------------------------
+// Release floor and next version code.
+//
+// Android refuses to install an APK whose android:versionCode is not strictly
+// greater than the code already installed on the device, so a release number
+// may only ever grow. The floor below is derived from measured bytes -- the
+// compiled AndroidManifest versionCode of every retained artifact the tree
+// holds -- joined with the values recorded in PUBLICATION-MANIFEST.json. It is
+// never a constant and never the wall clock, so the same tree on any host
+// derives the same number.
+//
+// The compiled manifest is decoded here instead of through aapt: the Android
+// SDK on this host is not the one the toolchain pins, and a release number
+// must not depend on which build-tools happen to be installed.
+// ---------------------------------------------------------------------------
+
+const ANDROID_RES_NAMESPACE: &str = "http://schemas.android.com/apk/res/android";
+const RES_XML_TYPE: u16 = 0x0003;
+const RES_STRING_POOL_TYPE: u16 = 0x0001;
+const RES_XML_START_ELEMENT_TYPE: u16 = 0x0102;
+const RES_STRING_POOL_UTF8_FLAG: u32 = 1 << 8;
+const ATTRIBUTE_TYPE_STRING: u8 = 0x03;
+const ATTRIBUTE_TYPE_INT_DEC: u8 = 0x10;
+const ATTRIBUTE_TYPE_INT_HEX: u8 = 0x11;
+const NO_ENTRY: u32 = 0xFFFF_FFFF;
+
+fn u16_le(bytes: &[u8], at: usize) -> Option<u16> {
+    let slice = bytes.get(at..at + 2)?;
+    Some(u16::from_le_bytes([slice[0], slice[1]]))
+}
+
+fn u32_le(bytes: &[u8], at: usize) -> Option<u32> {
+    let slice = bytes.get(at..at + 4)?;
+    Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn read_length_u8(bytes: &[u8], at: usize) -> Option<(u32, usize)> {
+    let first = *bytes.get(at)?;
+    if first & 0x80 == 0 {
+        return Some((first as u32, at + 1));
+    }
+    let second = *bytes.get(at + 1)?;
+    Some(((((first & 0x7f) as u32) << 8) | second as u32, at + 2))
+}
+
+fn read_length_u16(bytes: &[u8], at: usize) -> Option<(u32, usize)> {
+    let first = u16_le(bytes, at)?;
+    if first & 0x8000 == 0 {
+        return Some((first as u32, at + 2));
+    }
+    let second = u16_le(bytes, at + 2)?;
+    Some(((((first & 0x7fff) as u32) << 16) | second as u32, at + 4))
+}
+
+struct AxmlPool {
+    strings_start: usize,
+    offsets: Vec<u32>,
+    utf8: bool,
+}
+
+impl AxmlPool {
+    fn parse(bytes: &[u8], chunk: usize, header: usize) -> Option<AxmlPool> {
+        let count = u32_le(bytes, chunk + 8)? as usize;
+        let flags = u32_le(bytes, chunk + 16)?;
+        let strings_start = u32_le(bytes, chunk + 20)? as usize;
+        let mut offsets = Vec::with_capacity(count);
+        for index in 0..count {
+            offsets.push(u32_le(bytes, chunk + header + index * 4)?);
+        }
+        Some(AxmlPool {
+            strings_start: chunk + strings_start,
+            offsets,
+            utf8: flags & RES_STRING_POOL_UTF8_FLAG != 0,
+        })
+    }
+
+    fn string(&self, bytes: &[u8], index: u32) -> Option<String> {
+        if index == NO_ENTRY {
+            return None;
+        }
+        let offset = *self.offsets.get(index as usize)? as usize;
+        let at = self.strings_start + offset;
+        if self.utf8 {
+            let (_, cursor) = read_length_u8(bytes, at)?;
+            let (length, cursor) = read_length_u8(bytes, cursor)?;
+            let slice = bytes.get(cursor..cursor + length as usize)?;
+            Some(String::from_utf8_lossy(slice).to_string())
+        } else {
+            let (length, mut cursor) = read_length_u16(bytes, at)?;
+            let mut units = Vec::with_capacity(length as usize);
+            for _ in 0..length {
+                units.push(u16_le(bytes, cursor)?);
+                cursor += 2;
             }
-            Err(err) => {
-                eprintln!("{}", err.traceback_line());
-                1
+            Some(String::from_utf16_lossy(&units))
+        }
+    }
+}
+
+// What a compiled manifest declares about itself: the package it belongs to
+// and the release number it carries. The release number is the
+// android-namespaced versionCode attribute and only that attribute; the
+// package id is the unqualified package attribute of the manifest element.
+struct ManifestFacts {
+    package: Option<String>,
+    version_code: Option<u64>,
+}
+
+// The compiled manifest, read from the attribute table of the manifest
+// element. A missing value means the manifest carries no such value, which is
+// the case for the resource-only packages the build leaves behind.
+fn axml_manifest_facts(bytes: &[u8]) -> ManifestFacts {
+    axml_manifest_facts_of(bytes).unwrap_or(ManifestFacts { package: None, version_code: None })
+}
+
+fn axml_manifest_facts_of(bytes: &[u8]) -> Option<ManifestFacts> {
+    let mut facts = ManifestFacts { package: None, version_code: None };
+    if u16_le(bytes, 0)? != RES_XML_TYPE {
+        return None;
+    }
+    let header = u16_le(bytes, 2)? as usize;
+    let declared = u32_le(bytes, 4)? as usize;
+    let end = if declared == 0 { bytes.len() } else { declared.min(bytes.len()) };
+    let mut cursor = header;
+    let mut pool: Option<AxmlPool> = None;
+    while cursor + 8 <= end {
+        let chunk_type = u16_le(bytes, cursor)?;
+        let chunk_header = u16_le(bytes, cursor + 2)? as usize;
+        let chunk_size = u32_le(bytes, cursor + 4)? as usize;
+        if chunk_size < 8 {
+            return None;
+        }
+        let chunk_end = cursor + chunk_size;
+        if chunk_end > end {
+            return None;
+        }
+        match chunk_type {
+            RES_STRING_POOL_TYPE => pool = AxmlPool::parse(bytes, cursor, chunk_header),
+            RES_XML_START_ELEMENT_TYPE => {
+                let pool = pool.as_ref()?;
+                let attributes = cursor + 16;
+                let element_name = u32_le(bytes, cursor + 20)?;
+                let attribute_start = u16_le(bytes, attributes + 8)? as usize;
+                let attribute_size = u16_le(bytes, attributes + 10)? as usize;
+                let attribute_count = u16_le(bytes, attributes + 12)? as usize;
+                if attribute_size < 20 {
+                    return None;
+                }
+                let is_manifest = pool.string(bytes, element_name).as_deref() == Some("manifest");
+                for index in 0..attribute_count {
+                    let at = attributes + attribute_start + index * attribute_size;
+                    let namespace = u32_le(bytes, at)?;
+                    let name = u32_le(bytes, at + 4)?;
+                    let data_type = *bytes.get(at + 15)?;
+                    let data = u32_le(bytes, at + 16)?;
+                    let attribute_name = pool.string(bytes, name);
+                    if attribute_name.as_deref() == Some("versionCode") {
+                        // The release number is the android-namespaced attribute
+                        // and only that attribute: an attribute named
+                        // versionCode that belongs to no namespace is a
+                        // different attribute of the manifest, and reading it as
+                        // the release number would take the version of a package
+                        // that never declared one.
+                        let resolved = pool.string(bytes, namespace).unwrap_or_default();
+                        if resolved != ANDROID_RES_NAMESPACE {
+                            continue;
+                        }
+                        facts.version_code = match data_type {
+                            ATTRIBUTE_TYPE_INT_DEC | ATTRIBUTE_TYPE_INT_HEX => Some(data as u64),
+                            _ => None,
+                        };
+                        continue;
+                    }
+                    // The package id is the unqualified package attribute of the
+                    // manifest element: it names the application the artifact
+                    // carries, and every release number belongs to one of them.
+                    if is_manifest
+                        && namespace == NO_ENTRY
+                        && attribute_name.as_deref() == Some("package")
+                        && data_type == ATTRIBUTE_TYPE_STRING
+                    {
+                        facts.package = pool.string(bytes, data);
+                    }
+                }
+                if is_manifest {
+                    return Some(facts);
+                }
+            }
+            _ => {}
+        }
+        cursor = chunk_end;
+    }
+    Some(facts)
+}
+
+// The android:versionCode attribute of the compiled manifest.
+#[cfg(test)]
+fn axml_version_code(bytes: &[u8]) -> Option<u64> {
+    axml_manifest_facts(bytes).version_code
+}
+
+fn json_string_at(bytes: &[u8], at: usize) -> Option<(String, usize)> {
+    let mut index = at + 1;
+    let mut raw = Vec::new();
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'\\' {
+            index += 1;
+            let escape = *bytes.get(index)?;
+            match escape {
+                b'n' => raw.push(b'\n'),
+                b't' => raw.push(b'\t'),
+                b'r' => raw.push(b'\r'),
+                b'b' => raw.push(0x08),
+                b'f' => raw.push(0x0c),
+                b'u' => {
+                    let hex = bytes.get(index + 1..index + 5)?;
+                    let code = u32::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?;
+                    let character = char::from_u32(code).unwrap_or('\u{fffd}');
+                    let mut encoded = [0u8; 4];
+                    raw.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
+                    index += 4;
+                }
+                other => raw.push(other),
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'"' {
+            return Some((String::from_utf8_lossy(&raw).to_string(), index + 1));
+        }
+        raw.push(byte);
+        index += 1;
+    }
+    None
+}
+
+// A top-level integer member of a JSON object. Nested objects are ignored, so
+// a "version" recorded inside another member never stands in for the record's
+// own version. The member's value span is located once and read from, so the
+// record has one reader for both the floor and the advance.
+fn json_top_level_number(text: &str, key: &str) -> Option<u64> {
+    let (start, end) = json_top_level_member(text, key)?;
+    let raw = text.get(start..end)?.trim();
+    let digits: String = raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u64>().ok()
+}
+
+// A top-level string member of a JSON object. Nested objects are ignored, so
+// a "package" recorded inside another member never stands in for the record's
+// own package: the release floor of a package belongs to the package the
+// record names.
+fn json_top_level_string(text: &str, key: &str) -> Option<String> {
+    let (start, end) = json_top_level_member(text, key)?;
+    let raw = text.get(start..end)?.trim();
+    if !raw.starts_with('"') {
+        return None;
+    }
+    let (value, _) = json_string_at(raw.as_bytes(), 0)?;
+    Some(value)
+}
+
+// The members of a top-level object member whose value is a flat object of
+// package id to release floor. The member's value span is located once, so a
+// "distributed_baselines" recorded inside another object is never read, and a
+// member that is present but unreadable is refused rather than ignored: a
+// floor that cannot be read must not become a default.
+fn json_top_level_number_map(text: &str, key: &str) -> Result<Option<Vec<(String, u64)>>, String> {
+    let (start, end) = match json_top_level_member(text, key) {
+        Some(span) => span,
+        None => return Ok(None),
+    };
+    let raw = text
+        .get(start..end)
+        .ok_or_else(|| format!("the record's {key} member is out of bounds"))?;
+    Ok(Some(json_number_object_members(raw)?))
+}
+
+// A flat JSON object of string keys to integer values.
+fn json_number_object_members(raw: &str) -> Result<Vec<(String, u64)>, String> {
+    let bytes = raw.as_bytes();
+    let mut index = 0usize;
+    json_skip_ws(bytes, &mut index);
+    if bytes.get(index) != Some(&b'{') {
+        return Err("the member is not a JSON object".to_string());
+    }
+    index += 1;
+    let mut members = Vec::new();
+    loop {
+        json_skip_ws(bytes, &mut index);
+        if bytes.get(index) == Some(&b'}') {
+            return Ok(members);
+        }
+        let (name, next) = json_string_at(bytes, index)
+            .ok_or_else(|| "the member has a name that is not a string".to_string())?;
+        index = next;
+        json_skip_ws(bytes, &mut index);
+        if bytes.get(index) != Some(&b':') {
+            return Err("the member has no value".to_string());
+        }
+        index += 1;
+        json_skip_ws(bytes, &mut index);
+        let start = index;
+        json_skip_value(bytes, &mut index)
+            .ok_or_else(|| "the member has a value that cannot be read".to_string())?;
+        let end = index;
+        let value = raw
+            .get(start..end)
+            .ok_or_else(|| "the member has a value that cannot be read".to_string())?
+            .trim();
+        let digits: String = value.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let number = digits
+            .parse::<u64>()
+            .map_err(|_| format!("the member {name} does not carry a release floor"))?;
+        members.push((name, number));
+        json_skip_ws(bytes, &mut index);
+        match bytes.get(index) {
+            Some(&b',') => index += 1,
+            Some(&b'}') => return Ok(members),
+            _ => return Err("the member is not a flat object".to_string()),
+        }
+    }
+}
+
+// The per-package floors as the record carries them: one package per line,
+// sorted by package id, so two writes of the same floors produce the same
+// bytes and a reader sees the same order every time.
+fn baselines_map_text(entries: &[(String, u64)], indent: usize) -> String {
+    if entries.is_empty() {
+        return "{}".to_string();
+    }
+    let mut sorted: Vec<&(String, u64)> = entries.iter().collect();
+    sorted.sort_by(|left, right| left.0.cmp(&right.0));
+    let inner = " ".repeat(indent + 2);
+    let outer = " ".repeat(indent);
+    let mut out = String::from("{\n");
+    for (index, (package, value)) in sorted.iter().enumerate() {
+        out.push_str(&inner);
+        dump_string(&mut out, package);
+        out.push_str(": ");
+        out.push_str(&value.to_string());
+        if index + 1 != sorted.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    out.push_str(&outer);
+    out.push('}');
+    out
+}
+
+// The indentation the record's own members carry, so a member the record
+// does not carry yet is added in the record's own layout.
+fn record_indent(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let Some(open) = bytes.iter().position(|byte| *byte == b'{') else {
+        return 0;
+    };
+    let mut cursor = open + 1;
+    while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+        cursor += 1;
+    }
+    let run = &text[open + 1..cursor];
+    match run.rfind('\n') {
+        Some(at) => run[at + 1..].chars().take_while(|c| *c == ' ').count(),
+        None => 0,
+    }
+}
+
+// The indentation of the line a member's value sits on.
+fn member_indent(text: &str, at: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut line_start = at.min(bytes.len());
+    while line_start > 0 && bytes[line_start - 1] != b'\n' {
+        line_start -= 1;
+    }
+    bytes[line_start..at]
+        .iter()
+        .take_while(|byte| **byte == b' ')
+        .count()
+}
+
+// The byte span of a top-level member's value inside a JSON text. A member of
+// the same name inside another object is not a top-level member, so a record
+// that carries "distributed_baseline" under another key never stands in for
+// the record's own member, whatever the record's layout.
+fn json_top_level_member(text: &str, key: &str) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    json_skip_ws(bytes, &mut index);
+    if bytes.get(index) != Some(&b'{') {
+        return None;
+    }
+    index += 1;
+    loop {
+        json_skip_ws(bytes, &mut index);
+        if bytes.get(index) == Some(&b'}') {
+            return None;
+        }
+        let (name, next) = json_string_at(bytes, index)?;
+        index = next;
+        json_skip_ws(bytes, &mut index);
+        if bytes.get(index) != Some(&b':') {
+            return None;
+        }
+        index += 1;
+        json_skip_ws(bytes, &mut index);
+        let start = index;
+        json_skip_value(bytes, &mut index)?;
+        let end = index;
+        if name == key {
+            return Some((start, end));
+        }
+        json_skip_ws(bytes, &mut index);
+        if bytes.get(index) != Some(&b',') {
+            return None;
+        }
+        index += 1;
+    }
+}
+
+fn json_skip_ws(bytes: &[u8], index: &mut usize) {
+    while *index < bytes.len() && bytes[*index].is_ascii_whitespace() {
+        *index += 1;
+    }
+}
+
+// The end of one JSON value, so a member's value span can be read or
+// rewritten without reformatting the rest of the record.
+fn json_skip_value(bytes: &[u8], index: &mut usize) -> Option<()> {
+    match bytes.get(*index)? {
+        b'"' => {
+            let (_, next) = json_string_at(bytes, *index)?;
+            *index = next;
+            Some(())
+        }
+        b'{' | b'[' => {
+            let mut depth = 0usize;
+            loop {
+                match bytes.get(*index)? {
+                    b'"' => {
+                        let (_, next) = json_string_at(bytes, *index)?;
+                        *index = next;
+                        continue;
+                    }
+                    b'{' | b'[' => depth += 1,
+                    b'}' | b']' => {
+                        if depth == 0 {
+                            return None;
+                        }
+                        depth -= 1;
+                        if depth == 0 {
+                            *index += 1;
+                            return Some(());
+                        }
+                    }
+                    _ => {}
+                }
+                *index += 1;
+            }
+        }
+        _ => {
+            while let Some(byte) = bytes.get(*index) {
+                match byte {
+                    b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E' | b't' | b'r' | b'u' | b'n' | b'a' | b'l' | b's' | b'f' => *index += 1,
+                    _ => break,
+                }
+            }
+            Some(())
+        }
+    }
+}
+
+struct ReleaseArtifact {
+    path: PathBuf,
+    code: Option<u64>,
+    package: Option<String>,
+    retained_release: bool,
+}
+
+struct ReleaseScan {
+    floor: u64,
+    artifacts: Vec<ReleaseArtifact>,
+    recorded_version: Option<u64>,
+    recorded_baseline: Option<u64>,
+    recorded_package: Option<String>,
+    recorded_baselines: Vec<(String, u64)>,
+}
+
+fn collect_apks(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let kind = match entry.file_type() {
+            Ok(kind) => kind,
+            Err(_) => continue,
+        };
+        if kind.is_dir() {
+            collect_apks(&path, out);
+        } else if kind.is_file() && path.extension().map(|ext| ext == "apk").unwrap_or(false) {
+            out.push(path);
+        }
+    }
+}
+
+// The derived floor: the highest compiled versionCode any retained artifact
+// carries, joined with the version and the baseline the publication record
+// holds. A missing record, or a record that names neither value, is a
+// refusal: a floor that cannot be derived must not become a default.
+fn scan_release(root: &Path) -> Result<ReleaseScan, String> {
+    let mut paths = Vec::new();
+    collect_apks(&root.join("APK"), &mut paths);
+    collect_apks(&root.join("output"), &mut paths);
+    paths.sort();
+    let mut artifacts = Vec::new();
+    let mut floor = 0u64;
+    for path in paths {
+        let archive = Archive::open(&path)
+            .map_err(|err| format!("{}: {}", path.display(), err.traceback_line()))?;
+        let manifest = archive
+            .read_name("AndroidManifest.xml")
+            .map_err(|err| format!("{}: {}", path.display(), err.traceback_line()))?;
+        let facts = axml_manifest_facts(&manifest);
+        let code = facts.version_code;
+        if let Some(code) = code {
+            if code > floor {
+                floor = code;
+            }
+        }
+        // APK/ is the retained release collection. In output/, only final
+        // delivery files immediately below a build directory are releases;
+        // javac, resource-linker, staging and alignment APKs are intermediates.
+        let retained_release = path.starts_with(root.join("APK"))
+            || (path.parent().and_then(Path::parent) == Some(root.join("output").as_path())
+                && matches!(path.file_name().and_then(|name| name.to_str()),
+                    Some("RLLM.apk" | "RLLM-unsigned.apk")));
+        artifacts.push(ReleaseArtifact { path, code, package: facts.package, retained_release });
+    }
+    let record = root.join("PUBLICATION-MANIFEST.json");
+    let text = fs::read_to_string(&record).map_err(|_| format!("{} is absent", record.display()))?;
+    let recorded_version = json_top_level_number(&text, "version");
+    let recorded_baseline = json_top_level_number(&text, "distributed_baseline");
+    let recorded_package = json_top_level_string(&text, "package");
+    // A record that carries no per-package floor yet is read as one that
+    // holds none: the map is the record's per-package ledger and it is
+    // written by the advance. A map that is present but unreadable is a
+    // refusal, because a floor that cannot be read must not become a default.
+    let recorded_baselines = json_top_level_number_map(&text, "distributed_baselines")?
+        .unwrap_or_default();
+    for value in [recorded_version, recorded_baseline].into_iter().flatten() {
+        if value > floor {
+            floor = value;
+        }
+    }
+    for (_, value) in &recorded_baselines {
+        if *value > floor {
+            floor = *value;
+        }
+    }
+    if recorded_version.is_none() && recorded_baseline.is_none() && recorded_baselines.is_empty() {
+        return Err(format!(
+            "{} records neither a version nor a distributed baseline",
+            record.display()
+        ));
+    }
+    Ok(ReleaseScan {
+        floor,
+        artifacts,
+        recorded_version,
+        recorded_baseline,
+        recorded_package,
+        recorded_baselines,
+    })
+}
+
+// The release floor of one package: the floor the record holds for that
+// package, joined with the release numbers of the artifacts that belong to
+// it. An artifact whose manifest names no package cannot be attributed, so it
+// counts for every package: a floor that ignored an artifact of unknown
+// provenance would let a release number below it be issued.
+//
+// The record's version and scalar baseline describe its named package.
+// Other packages use their own retained releases or ledger entries. When
+// neither exists, the conservative tree floor applies, not a zero default
+// or a placeholder code found in a build intermediate.
+fn package_floor(scan: &ReleaseScan, package: &str) -> u64 {
+    let mut floor = 0u64;
+    let mut evidence = false;
+    let mut consider = |value: u64| {
+        evidence = true;
+        if value > floor {
+            floor = value;
+        }
+    };
+    if scan.recorded_package.as_deref() == Some(package) {
+        for value in [scan.recorded_version, scan.recorded_baseline].into_iter().flatten() {
+            consider(value);
+        }
+    }
+    for (name, value) in &scan.recorded_baselines {
+        if name == package {
+            consider(*value);
+        }
+    }
+    for artifact in &scan.artifacts {
+        if !artifact.retained_release {
+            continue;
+        }
+        match artifact.package.as_deref() {
+            Some(owner) if owner != package => {}
+            _ => {
+                if let Some(code) = artifact.code {
+                    consider(code);
+                }
+            }
+        }
+    }
+    // An unpublished package must retain the prior tree-wide protection.
+    // Intermediate versionCode=1 manifests cannot establish a release floor.
+    if evidence { floor } else { scan.floor }
+}
+
+// Every package the tree knows about: the package the record names, every
+// package the record holds a floor for, and every package a retained
+// artifact declares.
+fn known_packages(scan: &ReleaseScan) -> Vec<String> {
+    let mut packages: Vec<String> = Vec::new();
+    let mut add = |package: &str| {
+        if !packages.iter().any(|known| known == package) {
+            packages.push(package.to_string());
+        }
+    };
+    if let Some(package) = &scan.recorded_package {
+        add(package);
+    }
+    for (package, _) in &scan.recorded_baselines {
+        add(package);
+    }
+    for artifact in &scan.artifacts {
+        if let Some(package) = &artifact.package {
+            add(package);
+        }
+    }
+    packages.sort();
+    packages
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum ReleaseMode {
+    Baseline,
+    Next,
+    Report,
+    ReportJson,
+    Advance,
+}
+
+fn release_report(root: &Path, scan: &ReleaseScan) {
+    println!("root: {}", root.display());
+    println!("recorded version: {}", scan.recorded_version.map(|v| v.to_string()).unwrap_or_else(|| "absent".to_string()));
+    println!("recorded distributed baseline: {}", scan.recorded_baseline.map(|v| v.to_string()).unwrap_or_else(|| "absent".to_string()));
+    println!("recorded package: {}", scan.recorded_package.clone().unwrap_or_else(|| "absent".to_string()));
+    for artifact in &scan.artifacts {
+        let code = artifact.code.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string());
+        println!("artifact {} {}", code, artifact.path.display());
+    }
+    println!("release baseline: {}", scan.floor);
+    for package in known_packages(scan) {
+        println!("package release baseline {} {}", package, package_floor(scan, &package));
+    }
+    println!("next version code: {}", scan.floor + 1);
+}
+
+// The same measurement as the human report, in a shape a reader can parse
+// instead of scrape: the release floor of the tree, the version code the
+// allocator hands out next, the values the record holds, the release floor of
+// every package the tree knows about and the compiled version code of every
+// retained artifact with the package it declares. A member the record does
+// not carry is absent from the document rather than present with a
+// placeholder, so a reader cannot mistake an absent value for a number.
+fn release_report_json(root: &Path, scan: &ReleaseScan, selected: Option<&str>) -> String {
+    let mut members: Vec<(String, Json)> = vec![
+        ("root".to_string(), Json::Str(root.display().to_string())),
+        ("release_baseline".to_string(), Json::Number(scan.floor.to_string())),
+        ("next_version_code".to_string(), Json::Number((scan.floor + 1).to_string())),
+    ];
+    if let Some(version) = scan.recorded_version {
+        members.push(("recorded_version".to_string(), Json::Number(version.to_string())));
+    }
+    if let Some(baseline) = scan.recorded_baseline {
+        members.push((
+            "recorded_distributed_baseline".to_string(),
+            Json::Number(baseline.to_string()),
+        ));
+    }
+    if let Some(package) = &scan.recorded_package {
+        members.push(("recorded_package".to_string(), Json::Str(package.clone())));
+    }
+    let floors: Vec<Json> = known_packages(scan)
+        .iter()
+        .map(|package| {
+            Json::Obj(vec![
+                ("package".to_string(), Json::Str(package.clone())),
+                (
+                    "release_baseline".to_string(),
+                    Json::Number(package_floor(scan, package).to_string()),
+                ),
+            ])
+        })
+        .collect();
+    members.push(("package_floors".to_string(), Json::Arr(floors)));
+    if let Some(package) = selected {
+        members.push(("selected_package".to_string(), Json::Str(package.to_string())));
+        members.push((
+            "selected_release_baseline".to_string(),
+            Json::Number(package_floor(scan, package).to_string()),
+        ));
+        members.push((
+            "selected_next_version_code".to_string(),
+            Json::Number((package_floor(scan, package) + 1).to_string()),
+        ));
+    }
+    let artifacts: Vec<Json> = scan
+        .artifacts
+        .iter()
+        .map(|artifact| {
+            let mut fields = vec![(
+                "path".to_string(),
+                Json::Str(artifact.path.display().to_string()),
+            )];
+            if let Some(code) = artifact.code {
+                fields.push(("version_code".to_string(), Json::Number(code.to_string())));
+            }
+            if let Some(package) = &artifact.package {
+                fields.push(("package".to_string(), Json::Str(package.clone())));
+            }
+            Json::Obj(fields)
+        })
+        .collect();
+    members.push(("artifacts".to_string(), Json::Arr(artifacts)));
+    dump(&Json::Obj(members))
+}
+
+// The release floor of one package, advanced to the code that was built. The
+// advance never lowers a floor and it never records a code below the floor
+// the tree already implies: the record and the allocator enforce one floor,
+// not two.
+//
+// The advance rewrites the record's own top-level members only, so a member
+// of the same name inside another object is left exactly as it was, and the
+// record is replaced by a rename, so a reader never sees a half-written
+// record.
+//
+// A code below the floor of its package is refused with both values and the
+// package named rather than silently leaving the record where it is: a caller
+// that believes it advanced the floor has to learn that it did not, instead of
+// reading a success that changed nothing.
+fn advance_baseline(root: &Path, code: u64, package: Option<&str>) -> Result<u64, String> {
+    let record = root.join("PUBLICATION-MANIFEST.json");
+    let text = fs::read_to_string(&record)
+        .map_err(|err| format!("{} is unreadable: {}", record.display(), err))?;
+    let recorded_package = json_top_level_string(&text, "package");
+    let target = match package {
+        Some(package) => package.to_string(),
+        None => match recorded_package.clone() {
+            Some(package) => package,
+            None => {
+                return Err(format!(
+                    "{} names no package, so there is no package whose release floor could be advanced",
+                    record.display()
+                ))
             }
         },
+    };
+    // The floor this advance must not fall below: the floor of that package,
+    // joined with the release numbers of the artifacts that belong to it.
+    let scan = scan_release(root)?;
+    let floor = package_floor(&scan, &target);
+    if code < floor {
+        return Err(format!(
+            "version code {code} is below the release floor {floor} of package {target}; a release number may not move downward"
+        ));
+    }
+    let mut entries = scan.recorded_baselines.clone();
+    entries.retain(|(name, _)| name != &target);
+    entries.push((target.clone(), code));
+    let mut updated = text.clone();
+    // The scalar baseline describes the package the record names, so it is
+    // only written for that package: a second package's floor belongs to the
+    // per-package ledger alone.
+    if recorded_package.as_deref() == Some(target.as_str()) {
+        let span = json_top_level_member(&updated, "distributed_baseline");
+        let recorded = span.and_then(|(start, end)| updated.get(start..end)?.trim().parse::<u64>().ok());
+        let next = recorded.map(|value| value.max(code)).unwrap_or(code);
+        updated = match span {
+            Some((start, end)) => {
+                let mut out = String::with_capacity(updated.len());
+                out.push_str(&updated[..start]);
+                out.push_str(&next.to_string());
+                out.push_str(&updated[end..]);
+                out
+            }
+            None => insert_top_level_member(&updated, "distributed_baseline", &next.to_string())?,
+        };
+    }
+    let span = json_top_level_member(&updated, "distributed_baselines");
+    let indent = match span {
+        Some((start, _)) => member_indent(&updated, start),
+        None => record_indent(&updated),
+    };
+    let rendered = baselines_map_text(&entries, indent);
+    updated = match span {
+        Some((start, end)) => {
+            let mut out = String::with_capacity(updated.len());
+            out.push_str(&updated[..start]);
+            out.push_str(&rendered);
+            out.push_str(&updated[end..]);
+            out
+        }
+        None => insert_top_level_member(&updated, "distributed_baselines", &rendered)?,
+    };
+    if updated == text {
+        return Ok(code);
+    }
+    let temporary = record.with_extension("json.advance-tmp");
+    fs::write(&temporary, updated.as_bytes())
+        .map_err(|err| format!("{} is unwritable: {}", temporary.display(), err))?;
+    fs::rename(&temporary, &record)
+        .map_err(|err| format!("{} could not be replaced: {}", record.display(), err))?;
+    Ok(code)
+}
+
+// A member the record does not carry yet is added as a top-level member, in
+// the record's own layout: a record written one member per line keeps that
+// layout, and a compact record keeps its compact form.
+fn insert_top_level_member(text: &str, key: &str, value: &str) -> Result<String, String> {
+    let bytes = text.as_bytes();
+    let open = bytes
+        .iter()
+        .position(|byte| *byte == b'{')
+        .ok_or_else(|| "the publication record is not a JSON object".to_string())?;
+    let run_start = open + 1;
+    let mut cursor = run_start;
+    while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+        cursor += 1;
+    }
+    let run = &text[run_start..cursor];
+    let inserted = if bytes.get(cursor) == Some(&b'}') {
+        format!("\"{key}\": {value}")
+    } else if let Some(at) = run.rfind('\n') {
+        format!("\n{}\"{key}\": {value},", &run[at + 1..])
+    } else {
+        format!("\"{key}\": {value},")
+    };
+    let mut out = String::with_capacity(text.len() + inserted.len());
+    out.push_str(&text[..open + 1]);
+    out.push_str(&inserted);
+    out.push_str(&text[open + 1..]);
+    Ok(out)
+}
+
+fn release_command(args: &[String]) -> i32 {
+    let mut mode: Option<ReleaseMode> = None;
+    let mut advance_code: Option<u64> = None;
+    let mut root_override: Option<PathBuf> = None;
+    let mut package: Option<String> = None;
+    let mut index = 0usize;
+    while index < args.len() {
+        let candidate = match args[index].as_str() {
+            "--release-baseline" => Some(ReleaseMode::Baseline),
+            "--next-version-code" => Some(ReleaseMode::Next),
+            "--release-report" => Some(ReleaseMode::Report),
+            "--release-report-json" => Some(ReleaseMode::ReportJson),
+            "--advance-baseline" => Some(ReleaseMode::Advance),
+            "--root" => {
+                index += 1;
+                let value = match args.get(index) {
+                    Some(value) => value,
+                    None => {
+                        eprintln!("apk: --root needs a directory");
+                        return 2;
+                    }
+                };
+                root_override = Some(PathBuf::from(value));
+                None
+            }
+            "--package" => {
+                index += 1;
+                let value = match args.get(index) {
+                    Some(value) => value,
+                    None => {
+                        eprintln!("apk: --package needs a package id");
+                        return 2;
+                    }
+                };
+                package = Some(value.clone());
+                None
+            }
+            other => {
+                eprintln!("apk: unrecognized arguments: {other}");
+                return 2;
+            }
+        };
+        if candidate == Some(ReleaseMode::Advance) {
+            index += 1;
+            let value = match args.get(index) {
+                Some(value) => value,
+                None => {
+                    eprintln!("apk: --advance-baseline needs a version code");
+                    return 2;
+                }
+            };
+            match value.parse::<u64>() {
+                Ok(code) => advance_code = Some(code),
+                Err(_) => {
+                    eprintln!("apk: --advance-baseline needs a version code, not {value}");
+                    return 2;
+                }
+            }
+        }
+        if let Some(candidate) = candidate {
+            if mode.is_some() && mode != Some(candidate) {
+                eprintln!("apk: --release-baseline, --next-version-code, --release-report, --release-report-json and --advance-baseline cannot be combined");
+                return 2;
+            }
+            mode = Some(candidate);
+        }
+        index += 1;
+    }
+    let mode = match mode {
+        Some(mode) => mode,
+        None => return 2,
+    };
+    // The tree the release numbers are read from. The project root is the
+    // default; a caller that measures a fixture tree names it, so the
+    // measurement is of that tree and not of whichever tree holds the binary.
+    let root = match root_override {
+        Some(path) => {
+            if !path.is_dir() {
+                eprintln!("apk: --root {} is not a directory", path.display());
+                return 2;
+            }
+            path
+        }
+        None => match project_root() {
+            Ok(root) => root,
+            Err(err) => {
+                eprintln!("{}", err.traceback_line());
+                return 1;
+            }
+        },
+    };
+    if mode == ReleaseMode::Advance {
+        let code = match advance_code {
+            Some(code) => code,
+            None => {
+                eprintln!("apk: --advance-baseline needs a version code");
+                return 2;
+            }
+        };
+        return match advance_baseline(&root, code, package.as_deref()) {
+            Ok(value) => {
+                println!("{value}");
+                0
+            }
+            Err(message) => {
+                eprintln!("apk: {message}");
+                1
+            }
+        };
+    }
+    let scan = match scan_release(&root) {
+        Ok(scan) => scan,
+        Err(message) => {
+            eprintln!("apk: {message}");
+            return 1;
+        }
+    };
+    match mode {
+        // The floor of the named package, or the floor of the whole tree when
+        // no package is named: a release number belongs to a package, and the
+        // tree's floor is the highest release number the tree holds.
+        ReleaseMode::Baseline => match package.as_deref() {
+            Some(package) => println!("{}", package_floor(&scan, package)),
+            None => println!("{}", scan.floor),
+        },
+        ReleaseMode::Next => match package.as_deref() {
+            Some(package) => println!("{}", package_floor(&scan, package) + 1),
+            None => println!("{}", scan.floor + 1),
+        },
+        ReleaseMode::Report => release_report(&root, &scan),
+        ReleaseMode::ReportJson => println!("{}", release_report_json(&root, &scan, package.as_deref())),
+        // The advance returned above: it needs the record, not a scan.
+        ReleaseMode::Advance => {}
+    }
+    0
+}
+
+fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let release = args.iter().any(|arg| {
+        arg == "--release-baseline"
+            || arg == "--next-version-code"
+            || arg == "--release-report"
+            || arg == "--release-report-json"
+            || arg == "--advance-baseline"
+    });
+    let code = if release {
+        release_command(&args)
+    } else {
+        match parse_cli(&args) {
+            Err(code) => code,
+            Ok(cli) => match inspect(Path::new(&cli.apk), &cli.version) {
+                Ok(text) => {
+                    println!("{text}");
+                    0
+                }
+                Err(err) => {
+                    eprintln!("{}", err.traceback_line());
+                    1
+                }
+            },
+        }
     };
     std::process::exit(code);
 }
@@ -1781,6 +2795,145 @@ fn elf_image(machine: u16, align: u64) -> Vec<u8> {
 }
 
 #[cfg(test)]
+fn axml_pool(strings: &[&str]) -> Vec<u8> {
+    let mut data = Vec::new();
+    let mut offsets = Vec::new();
+    for text in strings {
+        offsets.push(data.len() as u32);
+        data.push(text.chars().count() as u8);
+        data.push(text.len() as u8);
+        data.extend_from_slice(text.as_bytes());
+        data.push(0);
+    }
+    let header = 28usize;
+    let size = header + strings.len() * 4 + data.len();
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(&RES_STRING_POOL_TYPE.to_le_bytes());
+    chunk.extend_from_slice(&(header as u16).to_le_bytes());
+    chunk.extend_from_slice(&(size as u32).to_le_bytes());
+    chunk.extend_from_slice(&(strings.len() as u32).to_le_bytes());
+    chunk.extend_from_slice(&0u32.to_le_bytes());
+    chunk.extend_from_slice(&RES_STRING_POOL_UTF8_FLAG.to_le_bytes());
+    chunk.extend_from_slice(&((header + strings.len() * 4) as u32).to_le_bytes());
+    chunk.extend_from_slice(&0u32.to_le_bytes());
+    for offset in &offsets {
+        chunk.extend_from_slice(&offset.to_le_bytes());
+    }
+    chunk.extend_from_slice(&data);
+    chunk
+}
+
+// A compiled manifest element carrying the given attributes. Each attribute
+// is its namespace index, its name index, its value type and its value.
+#[cfg(test)]
+fn axml_document(strings: &[&str], attributes: &[(u32, u32, u8, u32)]) -> Vec<u8> {
+    let pool = axml_pool(strings);
+    let mut encoded = Vec::new();
+    for (namespace, name, data_type, data) in attributes {
+        encoded.extend_from_slice(&namespace.to_le_bytes());
+        encoded.extend_from_slice(&name.to_le_bytes());
+        encoded.extend_from_slice(&NO_ENTRY.to_le_bytes());
+        encoded.extend_from_slice(&8u16.to_le_bytes());
+        encoded.push(0);
+        encoded.push(*data_type);
+        encoded.extend_from_slice(&data.to_le_bytes());
+    }
+    let element_size = 16 + 20 + encoded.len();
+    let mut element = Vec::new();
+    element.extend_from_slice(&RES_XML_START_ELEMENT_TYPE.to_le_bytes());
+    element.extend_from_slice(&16u16.to_le_bytes());
+    element.extend_from_slice(&(element_size as u32).to_le_bytes());
+    element.extend_from_slice(&1u32.to_le_bytes());
+    element.extend_from_slice(&NO_ENTRY.to_le_bytes());
+    element.extend_from_slice(&NO_ENTRY.to_le_bytes());
+    element.extend_from_slice(&1u32.to_le_bytes());
+    element.extend_from_slice(&20u16.to_le_bytes());
+    element.extend_from_slice(&20u16.to_le_bytes());
+    element.extend_from_slice(&(attributes.len() as u16).to_le_bytes());
+    element.extend_from_slice(&0u16.to_le_bytes());
+    element.extend_from_slice(&0u16.to_le_bytes());
+    element.extend_from_slice(&0u16.to_le_bytes());
+    element.extend_from_slice(&encoded);
+    let mut document = Vec::new();
+    document.extend_from_slice(&RES_XML_TYPE.to_le_bytes());
+    document.extend_from_slice(&8u16.to_le_bytes());
+    document.extend_from_slice(&((8 + pool.len() + element.len()) as u32).to_le_bytes());
+    document.extend_from_slice(&pool);
+    document.extend_from_slice(&element);
+    document
+}
+
+// A compiled manifest carrying one android:versionCode attribute, or none.
+#[cfg(test)]
+fn axml_manifest(version_code: Option<u32>) -> Vec<u8> {
+    axml_manifest_in(version_code, true)
+}
+
+// The same compiled manifest with the release number declared by an attribute
+// that belongs to no namespace. That attribute is named versionCode but it is
+// not the android release number, so it must not be read as one.
+#[cfg(test)]
+fn axml_manifest_unnamespaced(version_code: Option<u32>) -> Vec<u8> {
+    axml_manifest_in(version_code, false)
+}
+
+#[cfg(test)]
+fn axml_manifest_in(version_code: Option<u32>, namespaced: bool) -> Vec<u8> {
+    let mut strings = vec![ANDROID_RES_NAMESPACE, "manifest"];
+    if version_code.is_some() {
+        strings.push("versionCode");
+    }
+    let attributes = match version_code {
+        Some(code) => vec![(
+            if namespaced { 0 } else { NO_ENTRY },
+            2u32,
+            ATTRIBUTE_TYPE_INT_DEC,
+            code,
+        )],
+        None => Vec::new(),
+    };
+    axml_document(&strings, &attributes)
+}
+
+// A compiled manifest that names its package and carries a release number.
+// The package attribute is the unqualified one, as a manifest declares it.
+#[cfg(test)]
+fn axml_manifest_of(package: &str, version_code: Option<u32>, namespaced: bool) -> Vec<u8> {
+    let mut strings = vec![ANDROID_RES_NAMESPACE, "manifest", "package", package];
+    let mut attributes = vec![(NO_ENTRY, 2u32, ATTRIBUTE_TYPE_STRING, 3u32)];
+    if let Some(code) = version_code {
+        strings.push("versionCode");
+        attributes.push((
+            if namespaced { 0 } else { NO_ENTRY },
+            4u32,
+            ATTRIBUTE_TYPE_INT_DEC,
+            code,
+        ));
+    }
+    axml_document(&strings, &attributes)
+}
+
+// A compiled manifest whose release number is declared twice: once by an
+// attribute that belongs to no namespace and once by the android-namespaced
+// attribute. Only the latter is the release number.
+#[cfg(test)]
+fn axml_manifest_unqualified_first(package: &str, unqualified: u32, namespaced: u32) -> Vec<u8> {
+    let strings = vec![
+        ANDROID_RES_NAMESPACE,
+        "manifest",
+        "package",
+        package,
+        "versionCode",
+    ];
+    let attributes = vec![
+        (NO_ENTRY, 2u32, ATTRIBUTE_TYPE_STRING, 3u32),
+        (NO_ENTRY, 4u32, ATTRIBUTE_TYPE_INT_DEC, unqualified),
+        (0, 4u32, ATTRIBUTE_TYPE_INT_DEC, namespaced),
+    ];
+    axml_document(&strings, &attributes)
+}
+
+#[cfg(test)]
 mod checks {
     use super::*;
 
@@ -1790,6 +2943,333 @@ mod checks {
         fs::create_dir_all(&path).unwrap();
         path
     }
+
+    #[test]
+    fn compiled_manifest_yields_its_version_code() {
+        assert_eq!(axml_version_code(&axml_manifest(Some(1794270237))), Some(1794270237));
+        assert_eq!(axml_version_code(&axml_manifest(Some(2100000000))), Some(2100000000));
+        assert_eq!(axml_version_code(&axml_manifest(None)), None);
+        assert_eq!(axml_version_code(b"not a manifest"), None);
+    }
+
+    #[test]
+    fn top_level_number_ignores_nested_members() {
+        let text = "{\n  \"state\": \"in_progress\",\n  \"version\": 1794270237,\n  \"nested\": { \"version\": 12 }\n}";
+        assert_eq!(json_top_level_number(text, "version"), Some(1794270237));
+        assert_eq!(json_top_level_number(text, "distributed_baseline"), None);
+        assert_eq!(json_top_level_number("{\"a\": [1, 2], \"b\": 3}", "b"), Some(3));
+    }
+
+    #[test]
+    fn an_unnamespaced_version_code_attribute_is_not_the_release_number() {
+        assert_eq!(axml_version_code(&axml_manifest(Some(1794270237))), Some(1794270237));
+        assert_eq!(axml_version_code(&axml_manifest_unnamespaced(Some(1794270237))), None);
+    }
+
+    #[test]
+    fn the_advance_refuses_a_code_below_the_recorded_baseline() {
+        let root = scratch("advance-refuse");
+        let record = root.join("PUBLICATION-MANIFEST.json");
+        let text = "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619\n}\n";
+        fs::write(&record, text).unwrap();
+        let error = advance_baseline(&root, 1794569618, None).unwrap_err();
+        assert!(error.contains("1794569618"), "{error}");
+        assert!(error.contains("1794569619"), "{error}");
+        assert!(error.contains("com.local.client.lab"), "{error}");
+        assert_eq!(
+            fs::read_to_string(&record).unwrap(),
+            text,
+            "a refused advance must leave the record exactly as it was"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_advance_rewrites_only_the_top_level_baseline() {
+        let root = scratch("advance-decoy");
+        let record = root.join("PUBLICATION-MANIFEST.json");
+        fs::write(
+            &record,
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619,\n  \"nested\": { \"distributed_baseline\": 9999999999 }\n}\n",
+        )
+        .unwrap();
+        assert_eq!(advance_baseline(&root, 1794569620, None).unwrap(), 1794569620);
+        let after = fs::read_to_string(&record).unwrap();
+        assert_eq!(json_top_level_number(&after, "distributed_baseline"), Some(1794569620));
+        assert!(
+            after.contains("\"distributed_baseline\": 9999999999"),
+            "the nested decoy must be untouched: {after}"
+        );
+        assert_eq!(
+            after.matches("9999999999").count(),
+            1,
+            "the decoy must appear exactly once: {after}"
+        );
+        let ledger = json_top_level_number_map(&after, "distributed_baselines")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            ledger,
+            vec![("com.local.client.lab".to_string(), 1794569620)],
+            "the per-package ledger must carry the floor of the package it names: {after}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_compiled_manifest_names_its_package() {
+        let facts = axml_manifest_facts(&axml_manifest_of("com.local.client.lab", Some(1794569620), true));
+        assert_eq!(facts.package.as_deref(), Some("com.local.client.lab"));
+        assert_eq!(facts.version_code, Some(1794569620));
+        let bare = axml_manifest_facts(&axml_manifest(Some(1794569620)));
+        assert_eq!(bare.package, None);
+        assert_eq!(bare.version_code, Some(1794569620));
+    }
+
+    #[test]
+    fn an_unqualified_release_number_does_not_shadow_the_qualified_one() {
+        let facts = axml_manifest_facts(&axml_manifest_unqualified_first(
+            "com.local.client.lab",
+            1794569600,
+            1794569620,
+        ));
+        assert_eq!(facts.version_code, Some(1794569620));
+        assert_eq!(facts.package.as_deref(), Some("com.local.client.lab"));
+    }
+
+    #[test]
+    fn each_package_carries_a_floor_of_its_own() {
+        let root = scratch("package-floors");
+        fs::create_dir_all(root.join("APK")).unwrap();
+        fs::write(
+            root.join("APK/main.apk"),
+            stored_zip(&[(
+                "AndroidManifest.xml",
+                &axml_manifest_of("com.local.client", Some(1794270237), true),
+            )]),
+        )
+        .unwrap();
+        fs::write(
+            root.join("APK/lab.apk"),
+            stored_zip(&[(
+                "AndroidManifest.xml",
+                &axml_manifest_of("com.local.client.lab", Some(1794569620), true),
+            )]),
+        )
+        .unwrap();
+        fs::write(
+            root.join("PUBLICATION-MANIFEST.json"),
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619\n}\n",
+        )
+        .unwrap();
+        let scan = scan_release(&root).unwrap();
+        assert_eq!(package_floor(&scan, "com.local.client"), 1794270237);
+        assert_eq!(package_floor(&scan, "com.local.client.lab"), 1794569620);
+        assert_eq!(
+            known_packages(&scan),
+            vec!["com.local.client".to_string(), "com.local.client.lab".to_string()]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_artifact_without_a_package_counts_for_every_package() {
+        let root = scratch("unattributed");
+        fs::create_dir_all(root.join("APK")).unwrap();
+        fs::write(
+            root.join("APK/main.apk"),
+            stored_zip(&[(
+                "AndroidManifest.xml",
+                &axml_manifest_of("com.local.client", Some(1794270237), true),
+            )]),
+        )
+        .unwrap();
+        fs::write(
+            root.join("APK/unattributed.apk"),
+            stored_zip(&[("AndroidManifest.xml", &axml_manifest(Some(1794600000)))]),
+        )
+        .unwrap();
+        fs::write(
+            root.join("PUBLICATION-MANIFEST.json"),
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619\n}\n",
+        )
+        .unwrap();
+        let scan = scan_release(&root).unwrap();
+        assert_eq!(
+            package_floor(&scan, "com.local.client"),
+            1794600000,
+            "an artifact of unknown provenance must count for every package"
+        );
+        assert_eq!(package_floor(&scan, "com.local.client.lab"), 1794600000);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_advance_records_a_package_floor_of_its_own() {
+        let root = scratch("advance-other-package");
+        let record = root.join("PUBLICATION-MANIFEST.json");
+        fs::write(
+            &record,
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619,\n  \"distributed_baselines\": {\"com.local.client\": 1794270237}\n}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            advance_baseline(&root, 1794270300, Some("com.local.client")).unwrap(),
+            1794270300
+        );
+        let after = fs::read_to_string(&record).unwrap();
+        assert_eq!(
+            json_top_level_number(&after, "distributed_baseline"),
+            Some(1794569619),
+            "another package's advance must not move the named package's floor: {after}"
+        );
+        let ledger = json_top_level_number_map(&after, "distributed_baselines")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            ledger,
+            vec![("com.local.client".to_string(), 1794270300)],
+            "the advanced package's floor belongs to the per-package ledger: {after}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_advance_keeps_the_named_package_floor_in_step() {
+        let root = scratch("advance-named-package");
+        let record = root.join("PUBLICATION-MANIFEST.json");
+        fs::write(
+            &record,
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619\n}\n",
+        )
+        .unwrap();
+        assert_eq!(advance_baseline(&root, 1794569621, None).unwrap(), 1794569621);
+        let after = fs::read_to_string(&record).unwrap();
+        assert_eq!(json_top_level_number(&after, "distributed_baseline"), Some(1794569621));
+        let ledger = json_top_level_number_map(&after, "distributed_baselines")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ledger, vec![("com.local.client.lab".to_string(), 1794569621)]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_advance_refuses_a_code_below_the_floor_of_that_package() {
+        let root = scratch("advance-below-package");
+        fs::create_dir_all(root.join("APK")).unwrap();
+        fs::write(
+            root.join("APK/main.apk"),
+            stored_zip(&[(
+                "AndroidManifest.xml",
+                &axml_manifest_of("com.local.client", Some(1794270237), true),
+            )]),
+        )
+        .unwrap();
+        let record = root.join("PUBLICATION-MANIFEST.json");
+        let text = "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619\n}\n";
+        fs::write(&record, text).unwrap();
+        let error = advance_baseline(&root, 1794270200, Some("com.local.client")).unwrap_err();
+        assert!(error.contains("1794270200"), "{error}");
+        assert!(error.contains("1794270237"), "{error}");
+        assert!(error.contains("com.local.client"), "{error}");
+        assert_eq!(
+            fs::read_to_string(&record).unwrap(),
+            text,
+            "a refused advance must leave the record exactly as it was"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_json_release_report_carries_the_floor_and_every_artifact() {
+        let root = scratch("report-json");
+        fs::create_dir_all(root.join("APK")).unwrap();
+        fs::write(
+            root.join("APK/one.apk"),
+            stored_zip(&[(
+                "AndroidManifest.xml",
+                &axml_manifest_of("com.local.client.lab", Some(1794270237), true),
+            )]),
+        )
+        .unwrap();
+        fs::write(
+            root.join("PUBLICATION-MANIFEST.json"),
+            "{\n  \"package\": \"com.local.client.lab\",\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619\n}\n",
+        )
+        .unwrap();
+        let scan = scan_release(&root).unwrap();
+        let text = release_report_json(&root, &scan, None);
+        assert!(text.contains("\"release_baseline\": 1794569619"), "{text}");
+        assert!(text.contains("\"next_version_code\": 1794569620"), "{text}");
+        assert!(text.contains("\"recorded_version\": 1794270237"), "{text}");
+        assert!(text.contains("\"recorded_distributed_baseline\": 1794569619"), "{text}");
+        assert!(text.contains("\"version_code\": 1794270237"), "{text}");
+        assert!(text.contains("\"recorded_package\": \"com.local.client.lab\""), "{text}");
+        assert!(
+            text.contains("\"package\": \"com.local.client.lab\""),
+            "the report must name the package of every artifact: {text}"
+        );
+        assert!(
+            text.contains("\"package_floors\""),
+            "the report must carry the floor of every package: {text}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn release_floor_joins_the_record_with_the_retained_artifacts() {
+        let root = scratch("floor");
+        fs::create_dir_all(root.join("APK")).unwrap();
+        fs::create_dir_all(root.join("output/2026-11-13__11-33-43Z")).unwrap();
+        fs::write(
+            root.join("APK/RLLM__Candidate-Application__2026-11-10__00-23-57Z.apk"),
+            stored_zip(&[("AndroidManifest.xml", &axml_manifest(Some(1794270237)))]),
+        )
+        .unwrap();
+        fs::write(
+            root.join("output/2026-11-13__11-33-43Z/RLLM-unsigned.apk"),
+            stored_zip(&[("AndroidManifest.xml", &axml_manifest(Some(1794569618)))]),
+        )
+        .unwrap();
+        fs::write(
+            root.join("PUBLICATION-MANIFEST.json"),
+            "{\n  \"version\": 1794270237,\n  \"distributed_baseline\": 1794569619\n}\n",
+        )
+        .unwrap();
+        let scan = scan_release(&root).unwrap();
+        assert_eq!(scan.recorded_version, Some(1794270237));
+        assert_eq!(scan.recorded_baseline, Some(1794569619));
+        assert_eq!(scan.floor, 1794569619);
+        assert_eq!(scan.artifacts.len(), 2);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn release_floor_is_measured_from_the_artifacts_when_the_record_has_no_baseline() {
+        let root = scratch("floor-measured");
+        fs::create_dir_all(root.join("output/2026-11-13__11-33-43Z")).unwrap();
+        fs::write(
+            root.join("output/2026-11-13__11-33-43Z/RLLM-unsigned.apk"),
+            stored_zip(&[("AndroidManifest.xml", &axml_manifest(Some(1794569618)))]),
+        )
+        .unwrap();
+        fs::write(root.join("PUBLICATION-MANIFEST.json"), "{\n  \"version\": 1794270237\n}\n").unwrap();
+        let scan = scan_release(&root).unwrap();
+        assert_eq!(scan.floor, 1794569618);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn release_floor_refuses_a_record_that_names_no_version() {
+        let root = scratch("floor-absent");
+        fs::create_dir_all(root.join("APK")).unwrap();
+        fs::write(root.join("PUBLICATION-MANIFEST.json"), "{\n  \"state\": \"in_progress\"\n}\n").unwrap();
+        assert!(scan_release(&root).is_err());
+        fs::write(root.join("PUBLICATION-MANIFEST.json"), "{}\n").unwrap();
+        assert!(scan_release(&root).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
 
     #[test]
     fn inventory_drift_added_and_removed() {
