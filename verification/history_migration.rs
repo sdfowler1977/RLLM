@@ -76,6 +76,8 @@ fn parse_args() -> PathBuf {
 
 fn drive_prior(prior: &mut Controller, root: &str, passed: &mut Vec<String>) -> Value {
     let old = String::from_utf8(vec![114, 101, 97]).unwrap();
+    let endpoint = "http://127.0.0.1:9127/mcp";
+    let key = "fixture-key";
     let resumed = prior.event(None, "resume", obj(vec![]), root);
     let mut state = field(&resumed, "state").clone();
 
@@ -103,8 +105,8 @@ fn drive_prior(prior: &mut Controller, root: &str, passed: &mut Vec<String>) -> 
         &mut state,
         &old,
         obj(vec![
-            ("endpoint".into(), s("http://127.0.0.1:9127/mcp")),
-            ("key".into(), s("fixture-key")),
+            ("endpoint".into(), s(endpoint)),
+            ("key".into(), s(key)),
         ]),
     );
 
@@ -114,8 +116,17 @@ fn drive_prior(prior: &mut Controller, root: &str, passed: &mut Vec<String>) -> 
         obj(vec![("draft".into(), s("Obtain an actual peer observation."))]),
         root,
     );
+    // The operation the controller answers under is the name it kept for the
+    // seeded peer connection: a controller built before the operation
+    // identifier was renamed keeps the legacy name, and one that has already
+    // imported the rename keeps the current one. The identifier is therefore
+    // read from the controller's own state rather than assumed, so the legacy
+    // seeding above still describes the historical scenario while the proposal
+    // names an operation this controller accepts. The historical receipt is
+    // still required to carry the legacy identifier below.
+    let identifier = operation_identifier(field(&sent, "state"), endpoint, key);
     let proposal = format!(
-        "{{\"tool\":\"{old}\",\"args\":{{\"name\":\"inspect_product\",\"arguments\":{{}}}}}}"
+        "{{\"tool\":\"{identifier}\",\"args\":{{\"name\":\"inspect_product\",\"arguments\":{{}}}}}}"
     );
     let mut dialogue = sent;
     let model_ticket = field(field(&dialogue, "state"), "model_expected").clone();
@@ -150,7 +161,10 @@ fn drive_prior(prior: &mut Controller, root: &str, passed: &mut Vec<String>) -> 
     let mut settled = false;
     for _ in 0..8 {
         let effect = field(&dialogue, "effect").clone();
-        if value_str(&effect) != Some("network") {
+        // The peer effect is an object, not a string: `network::wire` builds it
+        // with a `kind` field (`core/network.rs`), so the kind is read from that
+        // field. A missing kind is the same failure as a wrong kind.
+        if value_str(effect.get("kind").unwrap_or(&Value::Null)) != Some("network") {
             panic!("Peer operation did not produce a network effect");
         }
         let purpose = field(&effect, "purpose").clone();
@@ -313,16 +327,20 @@ fn drive_current(current: &mut Controller, root: &str, saved: &Value, passed: &m
         root,
     );
     let evidence_state = field(&evidence, "state");
+    // The rendered screen is the event reply's `ui`, a sibling of `state`
+    // (`core/application.rs`); the state itself never carries a `ui` key.
     check(
         passed,
         "historical evidence is still available",
         value_str(evidence_state.get("dialog").unwrap_or(&Value::Null)) == Some("inquiry_view")
-            && field(evidence_state, "ui").to_string().contains("Original controlled peer observation."),
+            && field(&evidence, "ui").to_string().contains("Original controlled peer observation."),
     );
 
     let mut corrupted = saved.clone();
     let corrupted_case = inquiry_by_id_mut(&mut corrupted, &case_id);
-    let corrupted_receipt = field_mut(field_mut(corrupted_case, "evidence"), "0");
+    // The evidence of a record is a list of receipts, so the tampered receipt
+    // is reached by its position in that list.
+    let corrupted_receipt = element_mut(field_mut(corrupted_case, "evidence"), 0);
     put(
         corrupted_receipt,
         "output",
@@ -360,13 +378,121 @@ fn drive_current(current: &mut Controller, root: &str, saved: &Value, passed: &m
     );
 }
 
+/// Builds the `network_result` payload for one HTTP response.
+///
+/// The product reads `inputs["data"]` and decodes it with
+/// `network::unbase64`, which refuses every byte outside the base64 alphabet
+/// (`core/network.rs`), so `data` is the base64 of the whole HTTP response
+/// text, not of the body alone. The framing the product then parses requires
+/// the `Content-Length` header to equal the byte count of the raw body that
+/// follows `\r\n\r\n`.
 fn wire(value: &Option<Value>, status: &str) -> String {
     let bytes = value.as_ref().map(|value| value.to_string()).unwrap_or_default();
-    let encoded = twin::b64_encode(bytes.as_bytes());
-    format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{encoded}",
-        bytes.len()
-    )
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        bytes.len(),
+        bytes
+    );
+    twin::b64_encode(response.as_bytes())
+}
+
+/// The operation identifier the prior controller kept for the seeded peer.
+///
+/// The twin seeds one peer connection under the legacy operation name. The
+/// product answers an operation by the name it holds that connection under, so
+/// the identifier is read from the controller's own state: the key the seeded
+/// connection was retained under. A controller that has not yet imported the
+/// rename keeps the legacy name and one that has keeps the current one, and
+/// the instrument follows the controller instead of assuming. When several
+/// records carry the seeded connection the operation the controller accepts is
+/// the one an agent profile advertises (`core/harness.rs`).
+fn operation_identifier(state: &Value, endpoint: &str, key: &str) -> String {
+    let Value::Obj(fields) = state else {
+        panic!("prior controller state is not an object");
+    };
+    let candidates: Vec<String> = fields
+        .iter()
+        .filter(|(_, value)| {
+            value.get("endpoint").and_then(value_str) == Some(endpoint)
+                && value.get("key").and_then(value_str) == Some(key)
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    let Some(first) = candidates.first().cloned() else {
+        panic!("prior controller retained no peer connection under an operation name");
+    };
+    if candidates.len() == 1 {
+        return first;
+    }
+    let advertised = advertised_tools(state);
+    candidates
+        .iter()
+        .find(|name| advertised.iter().any(|tool| tool == *name))
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!("prior controller advertised no operation name for the seeded peer connection")
+        })
+}
+
+/// The tools the active agent profile advertises.
+///
+/// The product accepts a proposed operation only when the active agent's tools
+/// list names it (`core/harness.rs`), and the active agent is the profile the
+/// current chat selects, else the globally selected profile
+/// (`core/interaction.rs`, `core/harness.rs`).
+fn advertised_tools(state: &Value) -> Vec<String> {
+    let agents = match state.get("agents") {
+        Some(Value::Arr(agents)) => agents,
+        _ => return Vec::new(),
+    };
+    let Some(agent) = agents.get(active_agent_index(state)) else {
+        return Vec::new();
+    };
+    agent
+        .get("tools")
+        .and_then(value_str)
+        .map(|tools| {
+            tools
+                .split(',')
+                .map(|tool| tool.trim().to_string())
+                .filter(|tool| !tool.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The index of the active agent profile.
+///
+/// The current chat selects the profile and the globally selected profile is
+/// the fallback (`core/interaction.rs`). The current chat is the one whose
+/// identity the state marks active (`core/application.rs`).
+fn active_agent_index(state: &Value) -> usize {
+    let active = state.get("active").and_then(value_str).unwrap_or_default();
+    let chats = match state.get("chats") {
+        Some(Value::Arr(chats)) => chats,
+        _ => return state.get("agent_selected").and_then(index_value).unwrap_or(0),
+    };
+    let chat_profile = chats
+        .iter()
+        .find(|chat| chat.get("id").and_then(value_str) == Some(active))
+        .and_then(|chat| chat.get("agent_profile"))
+        .filter(|profile| !matches!(profile, Value::Null))
+        .and_then(index_value);
+    chat_profile.unwrap_or_else(|| {
+        state
+            .get("agent_selected")
+            .and_then(index_value)
+            .unwrap_or(0)
+    })
+}
+
+/// Reads one index the way the product reads an index: a number or a numeric
+/// text, and zero for anything else (`core/application.rs`).
+fn index_value(value: &Value) -> Option<usize> {
+    match value {
+        Value::Num(text) | Value::Str(text) => Some(text.parse::<usize>().unwrap_or(0)),
+        _ => None,
+    }
 }
 
 fn inquiry_with_evidence(state: &Value) -> &Value {
@@ -420,6 +546,13 @@ fn field_mut<'a>(value: &'a mut Value, key: &str) -> &'a mut Value {
 
 fn put(value: &mut Value, key: &str, next: Value) {
     *field_mut(value, key) = next;
+}
+
+fn element_mut<'a>(value: &'a mut Value, index: usize) -> &'a mut Value {
+    let Value::Arr(items) = value else {
+        panic!("expected array");
+    };
+    &mut items[index]
 }
 
 fn check(passed: &mut Vec<String>, name: &str, value: bool) {
