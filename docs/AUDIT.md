@@ -127,10 +127,12 @@ interchangeable: a row that measures product behaviour is evidence about the pro
 documentation text is evidence about this document, and a row that pins the build configuration is evidence
 about the toolchain the measurement ran with.
 
-- Release-numbering coverage partition: 53 product-behaviour rows, 4 documentation-text rows, 1 build-configuration row, 58 rows in total with a configured build toolchain and 57 rows in total without one.
-- The 53 product-behaviour rows measure the namespace rule that makes the android-namespaced `versionCode`
+- Release-numbering coverage partition: 61 product-behaviour rows, 4 documentation-text rows, 1 build-configuration row, 66 rows in total with a configured build toolchain and 65 rows in total without one.
+- The 61 product-behaviour rows measure the namespace rule that makes the android-namespaced `versionCode`
   the release number, the release floor of a package, the per-package `distributed_baselines` ledger, the
-  rendered manifest, the publication route, the join between the release report the product produces
+  rendered manifest, the publication route, the refusal of an artifact that publishes a package the
+  record does not publish, the acceptance of a release number equal to the release floor of the package
+  the record names, the join between the release report the product produces
   and the artifacts the tree retains, the standing the publication record names for the tree's
   signed releases, and the release number the publication route reads out of a staged artifact.
   They are evidence about the product's behaviour.
@@ -139,7 +141,7 @@ about the toolchain the measurement ran with.
   name, and with the wall-clock substitution they must not carry. They compare text and measure no runtime
   behaviour.
 - The 1 build-configuration row holds only while `CLIENT_RUST` names the toolchain the release tools are
-  built with. Without it the group registers 57 rows: the same 53 product-behaviour rows and the same 4
+  built with. Without it the group registers 65 rows: the same 61 product-behaviour rows and the same 4
   documentation-text rows.
 
 The partition is measured by the group itself. The verification twin counts the rows every leg registers and

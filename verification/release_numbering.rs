@@ -947,6 +947,142 @@ fn leg_publisher(project: &Path, tools: &Path, passed: &mut Vec<String>) {
     );
 }
 
+/// A release floor belongs to the package that carries it, so a record that
+/// publishes one package and an artifact that publishes another may not be
+/// recorded, however high the release number of that artifact is. The refusal
+/// is the publisher's own: the package the artifact publishes is read out of
+/// the artifact's own manifest, and the package the record publishes is read
+/// out of the record.
+fn leg_publisher_package(project: &Path, tools: &Path, passed: &mut Vec<String>) {
+    let room = Room::new("publisher-package", project, tools);
+    // The record is written in one line and not in the shape the publisher
+    // writes it in, so a record the publisher wrote is a record whose bytes
+    // changed, and the row that holds the record can tell a record that was
+    // left alone from a record that was rewritten with the same numbers.
+    room.record("{\"package\":\"com.local.client\",\"version\":100,\"distributed_baseline\":200}\n");
+    // The control comes first: the same record and the same route accept an
+    // artifact that publishes the package the record publishes. Without it a
+    // refusal would not tell a package refusal from a refusal of every
+    // publication.
+    room.artifact(
+        "client.apk",
+        &manifest("com.local.client", &[(Some(ANDROID_NS), 250)]),
+    );
+    let accepted = room.inspected_release("client.apk");
+    let dry = room.publisher_route(false);
+    check(
+        passed,
+        "the publication route accepts an artifact that publishes the package the record publishes",
+        accepted == 250
+            && dry.code == 0
+            && dry.stdout.contains("\"incoming_version\": 250")
+            && dry.stdout.contains("\"recorded_package\": \"com.local.client\"")
+            && dry.stdout.contains("\"applied\": false"),
+    );
+    // The refusal: the artifact publishes another package, so the floor that
+    // guards this release belongs to a package that does not carry it.
+    room.artifact(
+        "lab.apk",
+        &manifest("com.local.client.lab", &[(Some(ANDROID_NS), 250)]),
+    );
+    let measured = room.inspected_release("lab.apk");
+    let before = room.record_text();
+    // The publication is applied, so a publisher that did not refuse would
+    // write the record; the refusal is therefore the only thing that can keep
+    // the record as it is.
+    let refused = room.publisher_route(true);
+    check(
+        passed,
+        "the publication route refuses an artifact that publishes a different package than the record publishes",
+        measured == 250
+            && refused.code != 0
+            && refused.stdout.contains(
+                "refusing: APK/lab.apk publishes package com.local.client.lab, but the record publishes com.local.client; a release floor belongs to the package that carries it",
+            )
+            && !refused.stdout.contains("a release may not be recorded downward"),
+    );
+    check(
+        passed,
+        "a publication refused for a package the record does not publish leaves the record exactly as it was",
+        room.record_text() == before,
+    );
+}
+/// The release floor is a floor and not a barrier: a release that carries
+/// exactly the floor of the package the record names is a release that floor
+/// guards, and a publisher that refused it would leave a package that can
+/// never be released again. The acceptance is measured at the connected
+/// layer, through the publisher's own route, against the floor the record
+/// holds and the floor the release tool reads back.
+fn leg_publisher_equal_floor(project: &Path, tools: &Path, passed: &mut Vec<String>) {
+    let room = Room::new("publisher-equal-floor", project, tools);
+    // The record's own version sits below its release floor, so the release
+    // number under test is at the floor and not at the recorded version.
+    room.record("{\"package\":\"com.local.client.lab\",\"version\":1794569618,\"distributed_baseline\":1794569619}\n");
+    room.artifact(
+        "equal.apk",
+        &manifest("com.local.client.lab", &[(Some(ANDROID_NS), 1794569619)]),
+    );
+    let measured = room.inspected_release("equal.apk");
+    let before = room.record_text();
+    let dry = room.publisher_route(false);
+    check(
+        passed,
+        "the publication route accepts a release number equal to the release floor of the package the record names",
+        measured == 1794569619
+            && dry.code == 0
+            && dry.stdout.contains("\"incoming_version\": 1794569619")
+            && dry.stdout.contains("\"next_distributed_baseline\": 1794569619"),
+    );
+    check(
+        passed,
+        "the accepted release number is the release floor the record holds for the package the record names",
+        dry.stdout.contains("\"recorded_package\": \"com.local.client.lab\"")
+            && dry.stdout.contains("\"recorded_package_release_floor\": 1794569619")
+            && dry.stdout.contains("\"recorded_version\": 1794569618")
+            && dry.stdout.contains("\"recorded_distributed_baseline\": 1794569619")
+            && dry.stdout.contains("\"applied\": false"),
+    );
+    // The floor the record holds is the floor the product's own release tool
+    // reads back. The room that reads it holds no artifact of the package the
+    // record names, so the number that comes back is the record's own floor
+    // and not the number of some artifact.
+    let read = Room::new("publisher-equal-floor-read", project, tools);
+    read.record("{ \"package\":\"com.local.client.lab\",\"version\":1794569618,\"distributed_baseline\":1794569619 }\n");
+    read.artifact(
+        "other.apk",
+        &manifest("com.local.client.other", &[(Some(ANDROID_NS), 5)]),
+    );
+    check(
+        passed,
+        "the release tool reads the release floor the record holds for the package the record names",
+        read.floor(Some("com.local.client.lab")) == "1794569619"
+            && read.floor(Some("com.local.client.other")) == "5",
+    );
+    // The other side of the same boundary: one below the floor is refused, and
+    // the refusal is the floor refusal and not the recorded-version refusal.
+    // The publication is applied, so a publisher that did not refuse would
+    // write the record; the refusal is what keeps the record as it is.
+    room.artifact(
+        "below.apk",
+        &manifest("com.local.client.lab", &[(Some(ANDROID_NS), 1794569618)]),
+    );
+    let below = room.inspected_release("below.apk");
+    let refused = room.publisher_route(true);
+    check(
+        passed,
+        "the publication route refuses a release number one below the release floor of the package the record names",
+        below == 1794569618
+            && refused.code != 0
+            && refused.stdout.contains(
+                "refusing: Version 1794569618 is below the release floor 1794569619 of package com.local.client.lab; a release may not be recorded downward",
+            ),
+    );
+    check(
+        passed,
+        "a publication refused below the release floor leaves the record exactly as it was",
+        room.record_text() == before,
+    );
+}
 /// The coverage partition the audit log publishes for this group: the rows
 /// that measure product behaviour, the rows that compare documentation text and
 /// the row that pins the build configuration.
@@ -1407,6 +1543,12 @@ fn main() {
     product_behaviour += passed.len() - before;
     before = passed.len();
     leg_publisher(&project, &tools, &mut passed);
+    product_behaviour += passed.len() - before;
+    before = passed.len();
+    leg_publisher_package(&project, &tools, &mut passed);
+    product_behaviour += passed.len() - before;
+    before = passed.len();
+    leg_publisher_equal_floor(&project, &tools, &mut passed);
     product_behaviour += passed.len() - before;
     before = passed.len();
     leg_tree(&project, &tools, &mut passed);

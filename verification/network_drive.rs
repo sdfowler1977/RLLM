@@ -6,7 +6,7 @@ const SCOPE: &str =
     "Controlled HTTP replies through real Rust event API; no live NAS or Android TLS handshake";
 const REPORT: &str = "output/checks/network-results.json";
 
-const CHECKS: [&str; 46] = [
+const CHECKS: [&str; 48] = [
     "manual PROPFIND route and certificate identity",
     "explicit certificate alias accepted and rewritten",
     "configured route and relative href accepted",
@@ -53,6 +53,8 @@ const CHECKS: [&str; 46] = [
     "child receives and retains only verified create result",
     "verified child create returns through captured parent",
     "child readback failure returns once to parent without a false result",
+    "page redirect chain is followed for five hops and the sixth redirect is refused without a further request",
+    "page redirect back to a visited address is refused as a redirect loop without a further request",
 ];
 
 fn main() {
@@ -784,6 +786,19 @@ fn main() {
             && text(field(field(&d, "effect"), "wire")).contains("unconfirmed"),
     );
 
+    // The redirect limits of a page read are driven on their own controller:
+    // the agents this group configures carry no web read, so the read is
+    // driven by a tree whose own default agent carries one.
+    let redirect_scratch = twin::create_scratch(std::path::Path::new(&root_text), "checks-");
+    let redirect_scratch_text = redirect_scratch
+        .to_str()
+        .unwrap_or_else(|| panic!("redirect scratch root is not UTF-8"))
+        .to_string();
+    let mut redirect_controller = Controller::spawn(&root_text);
+    leg_redirect_limits(&mut redirect_controller, &redirect_scratch_text, &mut passed);
+    redirect_controller.finish();
+    let _ = std::fs::remove_dir_all(&redirect_scratch);
+
     controller.finish();
     let _ = std::fs::remove_dir_all(&scratch);
     if passed.len() != CHECKS.len() {
@@ -808,6 +823,230 @@ fn event(
     root: &str,
 ) -> Value {
     controller.event(st, action, inputs, root)
+}
+
+/// The redirect limits of a page read.
+///
+/// The chain of redirects the product follows, the hop it refuses to follow,
+/// and the redirect that points back at an address the chain already visited.
+/// Every refusal is driven with real response bytes: the twin hands the
+/// product a 301 with a Location header and the product decides what to do
+/// with it. The product is started, it issues the read, and it answers, so
+/// this group measures a runtime behaviour and not the text of a source file.
+fn leg_redirect_limits(controller: &mut Controller, root: &str, passed: &mut Vec<String>) {
+    let (mut st, effect) = open_web_read(controller, root, "https://page.invalid/hop1");
+    let mut ticket = field(&effect, "web_ticket").clone();
+    let mut tickets = vec![ticket.to_string()];
+    let mut followed: Vec<(String, String, String)> = Vec::new();
+    let mut refusal: Option<(usize, String, String)> = None;
+    for hop in 1..=6 {
+        let location = format!("/hop{}", hop + 1);
+        let reply = event_value(
+            controller,
+            Some(&st),
+            "network_result",
+            twin::obj(vec![
+                ("purpose".into(), s("web_tool")),
+                ("web_ticket".into(), ticket.clone()),
+                ("data".into(), s(&b64_encode(&redirect_wire(&location)))),
+            ]),
+            root,
+        );
+        let next_effect = field(&reply, "effect").clone();
+        let next_state = state(&reply).clone();
+        match next_effect.get("web_ticket") {
+            Some(next) => {
+                followed.push((
+                    optional_text(&next_effect, "purpose"),
+                    optional_text(&next_state, "notice"),
+                    next.to_string(),
+                ));
+                tickets.push(next.to_string());
+                ticket = next.clone();
+                st = next_state;
+            }
+            None => {
+                // No web ticket was minted, so no further request was sent.
+                refusal = Some((
+                    hop,
+                    optional_text(&next_effect, "purpose"),
+                    chat_text(&next_state),
+                ));
+                break;
+            }
+        }
+    }
+    let mut unique = tickets.clone();
+    unique.sort();
+    unique.dedup();
+    keep_if(
+        passed,
+        &CHECKS[46],
+        followed.len() == 5
+            && followed.iter().all(|(purpose, notice, _)| {
+                purpose == "web_tool" && notice == "Following the website's redirect."
+            })
+            && unique.len() == tickets.len()
+            && refusal
+                .as_ref()
+                .is_some_and(|(hop, purpose, messages)| {
+                    *hop == 6
+                        && purpose == "model"
+                        && messages.contains("\"failure_kind\":\"redirect\"")
+                        && messages.contains(
+                            "Web redirect limit reached (five hops); no additional request was sent",
+                        )
+                }),
+    );
+    // The loop: a Location that resolves to an address the chain already
+    // visited is refused as a loop, and no further request is sent.
+    let (st, effect) = open_web_read(controller, root, "https://page.invalid/loop1");
+    let ticket = field(&effect, "web_ticket").clone();
+    let reply = event_value(
+        controller,
+        Some(&st),
+        "network_result",
+        twin::obj(vec![
+            ("purpose".into(), s("web_tool")),
+            ("web_ticket".into(), ticket),
+            ("data".into(), s(&b64_encode(&redirect_wire("/loop1")))),
+        ]),
+        root,
+    );
+    let effect = field(&reply, "effect").clone();
+    let messages = chat_text(state(&reply));
+    keep_if(
+        passed,
+        &CHECKS[47],
+        effect.get("web_ticket").is_none()
+            && optional_text(&effect, "purpose") == "model"
+            && messages.contains("\"failure_kind\":\"redirect\"")
+            && messages.contains("Web redirect loop detected; no additional request was sent"),
+    );
+}
+
+/// A profile the model proposes its page read through. The endpoint is a
+/// closed port on the loopback interface: the model reply the twin hands the
+/// product is the product's own input, and the product never opens a socket to
+/// it.
+fn web_profile() -> Value {
+    twin::obj(vec![
+        ("name".into(), s("Primary")),
+        ("model".into(), s("0")),
+        ("protocol".into(), s("chat")),
+        ("endpoint".into(), s("http://127.0.0.1:9/v1/chat/completions")),
+        ("plain".into(), twin::b(true)),
+        ("stream".into(), twin::b(false)),
+        ("tool_format".into(), s("structured")),
+        ("key".into(), s("")),
+    ])
+}
+
+/// The chat completion the model returns: the proposal is the content of the
+/// model's own message, so the product reads the proposal out of the reply
+/// the model sent.
+fn chat_body(content: &str) -> String {
+    twin::obj(vec![(
+        "choices".into(),
+        Value::Arr(vec![twin::obj(vec![
+            ("index".into(), n("0")),
+            ("message".into(), twin::obj(vec![("content".into(), s(content))])),
+            ("finish_reason".into(), s("stop")),
+        ])]),
+    )])
+    .to_string()
+}
+
+/// A 301 with a Location header: the bytes a redirecting site answers with.
+fn redirect_wire(location: &str) -> Vec<u8> {
+    format!("HTTP/1.1 301 Moved\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n").into_bytes()
+}
+
+/// The product's own answer to one event, with the product's own refusal text
+/// when it refuses.
+fn event_value(
+    controller: &mut Controller,
+    st: Option<&Value>,
+    action: &str,
+    inputs: Value,
+    root: &str,
+) -> Value {
+    let envelope = twin::obj(vec![
+        ("op".into(), s("event")),
+        ("state".into(), st.cloned().unwrap_or(Value::Null)),
+        ("action".into(), s(action)),
+        ("inputs".into(), inputs),
+        ("root".into(), s(root)),
+    ]);
+    let reply = controller.send(&envelope);
+    match reply.get("value") {
+        Some(value) => value.clone(),
+        None => panic!("the product refused the event: {}", reply.to_string()),
+    }
+}
+
+/// The state after the product has issued the request for a page, and the
+/// effect that carries that request.
+fn open_web_read(controller: &mut Controller, root: &str, url: &str) -> (Value, Value) {
+    let resumed = event_value(controller, None, "resume", twin::obj(vec![]), root);
+    let mut st = state(&resumed).clone();
+    set_path(&mut st, &["profiles"], Value::Arr(vec![web_profile()]));
+    let turn = event_value(
+        controller,
+        Some(&st),
+        "send",
+        twin::obj(vec![("draft".into(), s("Read the fixture page."))]),
+        root,
+    );
+    let after_send = state(&turn).clone();
+    let ticket = field(&after_send, "model_expected").clone();
+    let proposal = format!("{{\"tool\":\"web_read\",\"args\":{{\"url\":\"{url}\"}}}}");
+    let body = chat_body(&proposal);
+    let mut wire = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+    wire.extend_from_slice(body.as_bytes());
+    let fed = event_value(
+        controller,
+        Some(&after_send),
+        "network_result",
+        twin::obj(vec![
+            ("purpose".into(), s("model")),
+            ("model_ticket".into(), ticket),
+            ("data".into(), s(&b64_encode(&wire))),
+        ]),
+        root,
+    );
+    let after_feed = state(&fed).clone();
+    let effect = field(&fed, "effect").clone();
+    if optional_text(&effect, "purpose") == "web_tool" {
+        return (after_feed, effect);
+    }
+    // The standing public read was not approved on its own; the operator
+    // approves it, and the request the product issues then is the one under
+    // test.
+    let approved = event_value(controller, Some(&after_feed), "approve", twin::obj(vec![]), root);
+    (state(&approved).clone(), field(&approved, "effect").clone())
+}
+
+/// Every message the chat holds, joined: the product's own report of a failed
+/// request is a message in the chat.
+fn chat_text(st: &Value) -> String {
+    let empty: Vec<Value> = Vec::new();
+    let mut out = String::new();
+    for chat in st.get("chats").map(|value| value.arr()).unwrap_or(&empty) {
+        for message in chat.get("messages").map(|value| value.arr()).unwrap_or(&empty) {
+            out.push_str(message.get("content").map(|value| value.str_()).unwrap_or(""));
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// A member of an object, as text, or the empty text when it is not there.
+fn optional_text(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .map(|value| value.str_().to_string())
+        .unwrap_or_default()
 }
 
 fn reply(
