@@ -1595,3 +1595,47 @@ trailer is **177** on `refs/heads/main` measured by the vendor token (`grep -c -
 trailer at all — it is the phrase inside the body sentence "Cleared: this window's commits carry no
 Co-authored-by trailer (author Shawn Fowler)." of commit `31f24b9ff6ed0bca2d0ee2abcfc538410d1fd3ad`. A trailer
 census must be anchored to the trailer position or it counts its own prose.
+
+### Repin: the runner scan landed and four staged twins were superseded mid-lane (2026-11-17T11:01Z)
+
+This document last moved at `8b01007`. `git rev-list --count 629683b..HEAD` = **48** commits, **22** of
+them touching `core/`, `tools/`, `verification/` or `platform/`. HEAD is
+`75756f0bb24a6b9786eac2c96b17c6cc4a72b391` ("Make the runner's source scan nesting-aware and
+language-aware"), whose own shortstat is **1 file changed, 347 insertions(+), 73 deletions(-)**: it
+installs the nesting-aware scanner candidate `tools/harness.rs` at
+`10c950d6bed3fe91fa6db137c055f37e850d8fb83716fe6e4c8cfaf51fd08145` (179,375 B, 3,960 lines) over the
+previously installed blob. The install ran only after an independent re-audit card whose subject digest
+equalled those bytes and whose blocking-finding list was empty; the runner now scans nesting-aware block
+comments and masks Python string/f-string bodies, and the language is threaded to the declaration probes
+the scan feeds.
+
+The four-twin claim set is still staged-uninstalled, but its keys moved and the older ones are now
+stale. The independent re-audit of the first staged set returned **FAIL** on one blocking finding — a
+twin doc-comment asserted its scratch tree goes away "the same way the other twins that clean up after
+themselves do", a comparative claim the audit contradicted — and the repair round deleted that clause in
+all four files. Staged digests are therefore
+`verification/carry_flow.rs` `05175710ea3f681dd6074af6953af43f82119da8598e9894c506dce4e8ac9c50`,
+`verification/diagnostics.rs` `e8e01cdc2dac023a5e6ca7099da07e281ac3d7bd42681f6e542452081503804c`,
+`verification/drive_ownership.rs` `d26e760f1d93db4b3a4e3ce00e0eff1c4748762376b72decbebd0c6453e5a5bb`,
+`verification/turn_runtime.rs` `e34a339d0d0c6a55999c5e7280151e27db2178c64540859414735d44319052c6` —
+each exactly 39 bytes smaller than the superseded `d10d08539c1e… / 8d1613ec6ef8… / dd535f71c9e6… /
+96cdf1ae1f08…`, each a uniform +5/-3 against its live target. Every live target is still equal to its
+HEAD blob, so all four installs remain non-vacuous; each install waits on a fresh independent re-audit
+keyed to the NEW digests, not to the ones this record first published.
+
+One new lane is open beside it: a runner janitor leg for the twin scratch residue, staged at
+`output/harnj1/tools/harness.rs` (185,902 B, 4,128 lines, `150ba6a6facdb342cb6e4e8775c416c6955d50ae691489a0fe9d363defd7fe00`)
+against the installed 3,960-line base, with no card yet. It writes only that one path, so it is
+path-disjoint from the four twins; the behaviour coupling still orders the installs twins first, runner
+second.
+
+Census correction the record should carry: measured over all **279** reachable commits on
+`refs/heads/main`, the anchored attribution-trailer census (`^[[:space:]]*Co-authored-by:` over
+`git log --format=%B`) and the vendor-token census agree at **177**; the earlier looser grep counted one
+extra match that is prose inside a commit body, not a trailer. No commit made while writing this section
+carried any attribution trailer.
+
+Not measured for this section: no gate leg was re-run (this is a documentation-only commit), and the
+per-commit gate lines for the product commits between `629683b` and HEAD are still unrecorded; the
+settled 895/895, 936/951 and 942/951 legs were not re-run and their verdicts still describe the bytes
+they were measured on.
