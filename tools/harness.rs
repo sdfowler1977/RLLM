@@ -1717,10 +1717,181 @@ fn group_command(root: &Path, name: &str, arguments: &[String]) -> Command {
     }
 }
 
+// The scratch name a verification twin publishes: the prefix the twin chose,
+// the owner's pid, the wall-clock nanoseconds of the creation and the
+// collision counter. The owner and the creation time are readable out of the
+// name alone, so the runner can find a tree the child's own cleanup could
+// not remove.
+struct ScratchName {
+    owner: u32,
+    created: u128,
+}
+
+// A twin publishes its scratch tree as {prefix}-{pid}-{nanos}-{attempt}, so a
+// directory is only twin scratch when its name ends in three numeric fields
+// of those shapes and the prefix before them uses the characters a prefix can
+// use. A directory that does not have that shape is never a candidate, so a
+// structural output directory is never touched.
+fn parse_scratch_name(name: &str) -> Option<ScratchName> {
+    let mut fields = name.rsplitn(4, '-');
+    let attempt = fields.next()?;
+    let created = fields.next()?;
+    let owner = fields.next()?;
+    let prefix = fields.next()?;
+    if prefix.is_empty() || attempt.is_empty() || owner.is_empty() || created.is_empty() {
+        return None;
+    }
+    if attempt.len() > 3 || owner.len() > 10 || created.len() < 15 || created.len() > 20 {
+        return None;
+    }
+    if !attempt.bytes().all(|byte| byte.is_ascii_digit())
+        || !owner.bytes().all(|byte| byte.is_ascii_digit())
+        || !created.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    if !prefix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.' || byte == b'-') {
+        return None;
+    }
+    let owner = owner.parse::<u32>().ok()?;
+    if owner == 0 {
+        return None;
+    }
+    Some(ScratchName { owner, created: created.parse::<u128>().ok()? })
+}
+
+// /proc/<pid>/stat carries the process state and the process-group id. The
+// command name can contain spaces and parentheses, so the fields are read
+// after the last closing parenthesis.
+fn proc_fields(pid: u32) -> Option<(String, u32)> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let close = text.rfind(')')?;
+    let mut fields = text.get(close + 1..)?.split_whitespace();
+    let state = fields.next()?.to_string();
+    let _parent = fields.next()?;
+    let group = fields.next()?.parse::<u32>().ok()?;
+    Some((state, group))
+}
+
+// A pid that is gone from /proc has no process behind it. A pid whose entry
+// is still there but whose state is a zombie holds nothing open, so the trees
+// it owned are already garbage. An entry that cannot be read is treated as
+// live, because reclaiming a running owner's tree would break a live leg.
+fn process_is_live(pid: u32) -> bool {
+    if std::fs::metadata(Path::new("/proc").join(pid.to_string())).is_err() {
+        return false;
+    }
+    match proc_fields(pid) {
+        Some((state, _)) => state != "Z",
+        None => true,
+    }
+}
+
+// The runner puts every child in its own process group and ends the whole
+// group, so the trees the group owned are reclaimable too. The members are
+// read before the kill, because a member leaves /proc only once the kernel
+// has reaped it.
+fn process_group_members(group: u32) -> Vec<u32> {
+    let mut members = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return members;
+    };
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Ok(pid) = name.parse::<u32>() else {
+            continue;
+        };
+        if pid == group {
+            members.push(pid);
+            continue;
+        }
+        if proc_fields(pid).map(|(_, owner)| owner) == Some(group) {
+            members.push(pid);
+        }
+    }
+    members
+}
+
+// A killed member leaves /proc only after the kernel has reaped it, so the
+// reclaim waits briefly for the owners to go away.
+fn settle_dead(owners: &[u32]) {
+    let deadline = Instant::now() + std::time::Duration::from_millis(500);
+    while Instant::now() < deadline {
+        if owners.iter().all(|owner| !process_is_live(*owner)) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+// Reclaim the twin scratch trees under <root>/output whose owner is gone. A
+// tree is a candidate only when its name carries the owner's pid, so a
+// directory that is not twin scratch is never a candidate. The owner must
+// also be gone, so a live owner's tree is never touched.
+fn reclaim_scratch(root: &Path, eligible: impl Fn(&ScratchName) -> bool) -> Vec<PathBuf> {
+    let output = root.join("output");
+    let Ok(entries) = std::fs::read_dir(&output) else {
+        return Vec::new();
+    };
+    let mut reclaimed = Vec::new();
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(scratch) = parse_scratch_name(&name) else {
+            continue;
+        };
+        if !eligible(&scratch) || process_is_live(scratch.owner) {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if std::fs::remove_dir_all(&path).is_ok() {
+            reclaimed.push(path);
+        }
+    }
+    reclaimed
+}
+
+fn report_reclaimed(reclaimed: Vec<PathBuf>) {
+    for path in reclaimed {
+        eprintln!("  scratch reclaimed: {}", path.display());
+    }
+}
+
+// The wall-clock nanoseconds the runner reads to bound the trees it may
+// reclaim. A group and the runner read the same clock, so the nanoseconds a
+// group publishes in a scratch name can be compared with the moment the
+// runner started that group.
+fn now_nanos() -> u128 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|elapsed| elapsed.as_nanos()).unwrap_or(0)
+}
+
+// The trees the runner may reclaim for one group: the tree the group's own
+// leader published and the trees the members of the group the runner ended
+// published. The scope of the reclaim is the scope of the kill, so a tree of
+// another group, of another run or of the owner's backlog is never a
+// candidate. A tree must also have been published after the group was
+// started, because a tree that predates the group is not this group's tree
+// even when a recycled pid happens to name it.
+fn reclaim_group_scratch(root: &Path, members: &[u32], leader: u32, started: u128) -> Vec<PathBuf> {
+    reclaim_scratch(root, |scratch| {
+        (scratch.owner == leader || members.contains(&scratch.owner)) && scratch.created >= started
+    })
+}
+
 // Signal the child's process group. process_group(0) made that group id the
-// child's pid, so grandchildren that inherited it die with the deadline.
-fn kill_child_group(child: &mut std::process::Child) {
+// child's pid, so grandchildren that inherited it die with the deadline. The
+// group is then reclaimed: the runner ends the child with a signal the child
+// cannot handle, so the child's own cleanup never runs and the runner owns
+// the scratch trees the dead group left behind.
+fn kill_child_group(root: &Path, child: &mut std::process::Child, started: u128) {
     let pid = child.id() as i32;
+    let mut members = process_group_members(child.id());
     unsafe {
         kill(-pid, 9);
     }
@@ -1733,6 +1904,19 @@ fn kill_child_group(child: &mut std::process::Child) {
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
         }
     }
+    members.push(child.id());
+    settle_dead(&members);
+    report_reclaimed(reclaim_group_scratch(root, &members, child.id(), started));
+}
+
+// A group that ended on its own can still have left a tree behind: a child
+// that a signal outside the runner's deadline killed never ran its own
+// cleanup. The group is reclaimed where the runner reaps the child, under
+// the same bound: only the trees of this group, published after this group
+// started, whose owner is gone.
+fn reclaim_leftover_scratch(root: &Path, child: &std::process::Child, started: u128) {
+    let members = process_group_members(child.id());
+    report_reclaimed(reclaim_group_scratch(root, &members, child.id(), started));
 }
 
 fn set_nonblocking(fd: i32) {
@@ -1771,6 +1955,7 @@ fn poll_wait_ms(deadline: Instant) -> Option<i32> {
 // poll stops at the drain deadline and the bytes already read are kept.
 fn sweep_run(root: &Path, name: &str, arguments: &[String], seconds: u64) -> (i32, Vec<u8>, u64) {
     let started = Instant::now();
+    let group_started = now_nanos();
     let drain_deadline = started + std::time::Duration::from_secs(seconds.saturating_add(5));
     let spawned = group_command(root, name, arguments).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
     let mut child = match spawned {
@@ -1791,15 +1976,18 @@ fn sweep_run(root: &Path, name: &str, arguments: &[String], seconds: u64) -> (i3
     loop {
         if status.is_none() {
             match child.try_wait() {
-                Ok(Some(finished)) => status = Some(finished.code().unwrap_or(-1)),
+                Ok(Some(finished)) => {
+                    reclaim_leftover_scratch(root, &child, group_started);
+                    status = Some(finished.code().unwrap_or(-1));
+                }
                 Ok(None) if started.elapsed().as_secs() >= seconds => {
-                    kill_child_group(&mut child);
+                    kill_child_group(root, &mut child, group_started);
                     timed_out = true;
                     status = Some(124);
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    kill_child_group(&mut child);
+                    kill_child_group(root, &mut child, group_started);
                     let elapsed = started.elapsed().as_secs();
                     return (-1, format!("runner could not wait for the group: {error}").into_bytes(), elapsed);
                 }
@@ -2409,6 +2597,7 @@ fn replace_connected(text: &str, replacement: &str) -> Option<String> {
 // pipe buffer and block while the runner waits for its deadline.
 fn run(root: &Path, name: &str, arguments: &[String]) -> (i32, String, u64) {
     let started = Instant::now();
+    let group_started = now_nanos();
     let log = root.join(format!("output/checks/{name}.log"));
     let file = match std::fs::File::create(&log) {
         Ok(file) => file,
@@ -2425,17 +2614,20 @@ fn run(root: &Path, name: &str, arguments: &[String]) -> (i32, String, u64) {
     let mut timed_out = false;
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status.code().unwrap_or(-1),
+            Ok(Some(status)) => {
+                reclaim_leftover_scratch(root, &child, group_started);
+                break status.code().unwrap_or(-1);
+            }
             Ok(None) => {
                 if started.elapsed().as_secs() >= SECONDS {
-                    kill_child_group(&mut child);
+                    kill_child_group(root, &mut child, group_started);
                     timed_out = true;
                     break 124;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
             Err(error) => {
-                kill_child_group(&mut child);
+                kill_child_group(root, &mut child, group_started);
                 eprintln!("  {name}: runner could not wait for the group: {error}");
                 break -1;
             }
@@ -3661,6 +3853,179 @@ mod checks {
         assert!(log.contains("abandoned stdout"), "setsid drain did not say stdout was abandoned: {log}");
         assert!(log.contains("abandoned stderr"), "setsid drain did not say stderr was abandoned: {log}");
         assert!(log.contains("{\"passed\": 1"), "setsid drain log lost the bytes already read: {log}");
+    }
+
+    // The directories that are still under <root>/output after a group ended,
+    // read from the filesystem alone. The reader does not use the janitor's own
+    // name parser, so a row that counts the survivors stays honest when the
+    // parser is neutered.
+    fn survivor_trees(root: &Path) -> Vec<String> {
+        let listing = std::fs::read_dir(root.join("output"))
+            .unwrap_or_else(|error| panic!("output listing: {error}"));
+        let mut names = Vec::new();
+        for entry in listing.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let known = matches!(name.as_str(), "checks" | "verification" | "child-marker");
+            if !known && entry.path().is_dir() {
+                names.push(name);
+            }
+        }
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_published_scratch_name_carries_its_owner_and_its_creation() {
+        let carry = parse_scratch_name("carry-flow--1192316-1794570598346631580-0")
+            .unwrap_or_else(|| panic!("a published scratch name was not read"));
+        assert_eq!(carry.owner, 1192316, "owner pid");
+        assert_eq!(carry.created, 1794570598346631580, "creation nanoseconds");
+        let apk = parse_scratch_name("apk-alignment--184119-1794570598346631580-0")
+            .unwrap_or_else(|| panic!("a prefixed scratch name was not read"));
+        assert_eq!(apk.owner, 184119, "owner pid");
+        let looped = parse_scratch_name("rrsi-loop-1234567-1794570598346631580-2")
+            .unwrap_or_else(|| panic!("a loop scratch name was not read"));
+        assert_eq!(looped.owner, 1234567, "owner pid");
+        assert_eq!(looped.created, 1794570598346631580, "creation nanoseconds");
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_group_scratch_is_never_a_candidate() {
+        for name in [
+            "checks",
+            "tools",
+            "units",
+            "verification",
+            "2026-11-14__01-46-09Z",
+            "apk-build.log",
+            "run-1093496-1",
+            "x-0-0-0",
+            "prefix-1-2-3",
+            "-123-1794570598346631580-0",
+            "carry-flow--1192316-1794570598346631580-x",
+        ] {
+            assert!(parse_scratch_name(name).is_none(), "{name} was read as a group scratch");
+        }
+    }
+
+    #[test]
+    fn the_process_table_tells_a_live_owner_from_a_gone_one() {
+        let me = std::process::id();
+        assert!(process_is_live(me), "the runner's own pid was read as gone");
+        let (state, group) = proc_fields(me).unwrap_or_else(|| panic!("the runner's own process entry was not read"));
+        assert_ne!(state, "Z", "the runner's own entry read as a zombie");
+        assert!(group > 0, "the runner's own process group read as {group}");
+        assert!(proc_fields(u32::MAX).is_none(), "a pid with no process entry produced fields");
+        assert!(!process_is_live(u32::MAX), "a pid with no process entry read as live");
+    }
+
+    #[test]
+    fn the_reclaim_takes_the_tree_of_a_gone_owner_and_keeps_the_tree_of_a_live_one() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output")).unwrap();
+        let gone = root.join("output/probe-4294967295-1794570598346631580-0");
+        let live = root.join(format!("output/probe-{}-1794570598346631580-0", std::process::id()));
+        std::fs::create_dir_all(&gone).unwrap();
+        std::fs::create_dir_all(&live).unwrap();
+        let reclaimed = reclaim_scratch(root, |_| true);
+        assert_eq!(reclaimed.len(), 1, "the reclaim took {} trees", reclaimed.len());
+        assert!(!gone.exists(), "the tree of a gone owner survived");
+        assert!(live.exists(), "the tree of a live owner was taken");
+    }
+
+    #[test]
+    fn the_reclaim_scope_is_the_group_the_runner_ended() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output")).unwrap();
+        let outside = root.join("output/probe-4294967295-1794570598346631580-0");
+        std::fs::create_dir_all(&outside).unwrap();
+        let members: Vec<u32> = Vec::new();
+        let reclaimed = reclaim_group_scratch(root, &members, 4294967294, 0);
+        assert!(reclaimed.is_empty(), "a tree outside the group was reclaimed: {reclaimed:?}");
+        assert!(outside.exists(), "a tree outside the group was removed");
+    }
+
+    #[test]
+    fn a_tree_published_before_the_group_started_is_not_the_groups_tree() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output")).unwrap();
+        let older = root.join("output/probe-4294967295-1794570598346631580-0");
+        std::fs::create_dir_all(&older).unwrap();
+        let reclaimed = reclaim_group_scratch(root, &[4294967295], 4294967295, 1794570598346631581);
+        assert!(reclaimed.is_empty(), "a tree published before the group started was reclaimed: {reclaimed:?}");
+        assert!(older.exists(), "a tree published before the group started was removed");
+    }
+
+    #[test]
+    fn the_group_child_publishes_a_scratch_tree_and_hangs() {
+        let root = std::env::current_dir().unwrap_or_else(|error| panic!("working directory: {error}"));
+        if !root.join("output/child-marker").is_file() {
+            return;
+        }
+        let owner = std::process::id();
+        let created = now_nanos();
+        let path = root.join(format!("output/probe-{owner}-{created}-0"));
+        std::fs::create_dir_all(&path).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn the_survivor_of_the_twin_spawn_path_is_reclaimed_after_the_deadline() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("output/verification")).unwrap();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        std::fs::write(root.join("output/child-marker"), "child").unwrap();
+        std::os::unix::fs::symlink(
+            std::env::current_exe().unwrap_or_else(|error| panic!("this test binary: {error}")),
+            root.join("output/verification/scene"),
+        )
+        .unwrap();
+        let arguments = vec![
+            "--exact".to_string(),
+            "checks::the_group_child_publishes_a_scratch_tree_and_hangs".to_string(),
+        ];
+        let (code, _stdout, _elapsed) = sweep_run(root, "scene", &arguments, 2);
+        assert_eq!(code, 124, "a group that holds its stdout must end as a 124 deadline");
+        let survivors = survivor_trees(root);
+        assert!(survivors.is_empty(), "the tree of the killed group survived: {survivors:?}");
+    }
+
+    #[test]
+    fn the_survivor_of_the_script_spawn_path_is_reclaimed_after_the_deadline() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        std::fs::write(
+            root.join("verification/scene.py"),
+            "import os, time\nos.makedirs('output', exist_ok=True)\ncreated = time.time_ns()\nos.makedirs('output/probe-%d-%d-0' % (os.getpid(), created), exist_ok=True)\ntime.sleep(120)\n",
+        )
+        .unwrap();
+        let (code, _stdout, _elapsed) = sweep_run(root, "scene", &[], 2);
+        assert_eq!(code, 124, "a script group that holds its stdout must end as a 124 deadline");
+        let survivors = survivor_trees(root);
+        assert!(survivors.is_empty(), "the tree of the killed script group survived: {survivors:?}");
+    }
+
+    #[test]
+    fn the_tree_of_a_group_killed_outside_the_runner_is_reclaimed() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        std::fs::write(
+            root.join("verification/scene.py"),
+            "import os, signal, time\nos.makedirs('output', exist_ok=True)\ncreated = time.time_ns()\nos.makedirs('output/probe-%d-%d-0' % (os.getpid(), created), exist_ok=True)\nos.kill(os.getpid(), signal.SIGKILL)\ntime.sleep(120)\n",
+        )
+        .unwrap();
+        let (code, _stdout, _elapsed) = sweep_run(root, "scene", &[], 30);
+        assert_eq!(code, -1, "a group killed by a signal reports the signal, not a code");
+        let survivors = survivor_trees(root);
+        assert!(survivors.is_empty(), "the tree of the group killed outside the runner survived: {survivors:?}");
     }
 
     #[test]
