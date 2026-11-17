@@ -86,10 +86,13 @@ pub(super) fn run(v:&Json)->Result<Json>{
 }
 #[cfg(test)]mod resource_checks{
  use super::*;
- /// The scratch tree one capture test owns. It must not survive the test on
- /// any exit path, including a panic, so the removal rides on Drop. The owner
- /// is taken before the directory exists, so a panic while creating it or
- /// while filling it still leaves the tree with a remover. The tree this
+ /// The scratch tree one capture test owns. The removal rides on this
+ /// guard's own Drop, so the tree goes away when the test returns normally
+ /// and when a panic unwinds out of it. An uncatchable termination such as
+ /// SIGKILL leaves the tree behind; that ceiling belongs to the runner's
+ /// timeout path, which kills the test's process group, not to this guard.
+ /// The owner is taken before the directory exists, so a panic while creating
+ /// it or while filling it still leaves the tree with a remover. The tree this
  /// guard removes is the tree this call created: its filesystem identity is
  /// recorded when the tree is created and checked again before the removal,
  /// and a removal that did not happen is recorded instead of swallowed, so a
