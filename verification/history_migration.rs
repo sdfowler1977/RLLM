@@ -570,14 +570,23 @@ fn check(passed: &mut Vec<String>, name: &str, value: bool) {
 /// and the report file it writes afterwards is the leg's own file shape.
 const PRINTED_REPORT_TRAILING_NEWLINE: bool = true;
 
-/// The scratch directory this leg owns, removed on every exit path.
+/// The scratch directory this leg owns, removed when the leg unwinds.
 ///
 /// The retired leg holds its temporary directory in a context manager, so the
 /// directory is removed when the leg ends, including when it aborts. The twin's own
 /// scratch directory was removed on the success path only, so an aborted run left it
 /// behind in the project's output tree. This guard owns the directory for the whole
-/// run and removes it on the way out, whichever way the leg ends. It changes nothing
-/// the leg reports: an abort still aborts with the same diagnostic.
+/// run and removes it on the way out, and it changes nothing the leg reports: an
+/// abort still aborts with the same diagnostic.
+///
+/// The removal rides on a destructor, so it reaches the exits the process observes:
+/// the normal return, where the leg has already removed the directory itself, and
+/// the unwinding of a panic, where the destructor is what removes it. A termination
+/// the process cannot catch reaches no destructor, so a kill of the process group
+/// with SIGKILL leaves the directory behind. That ceiling is the runner's and not
+/// this leg's: the runner ends a leg that outruns its deadline by killing the
+/// process group, and the directory of a leg killed that way stays in the output
+/// tree.
 struct Scratch(PathBuf);
 
 impl Drop for Scratch {
