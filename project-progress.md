@@ -1671,3 +1671,40 @@ matches, 0 `Signed-off-by:` and 0 vendor tokens; the whole-ancestry anchored cen
 both the trailer and the vendor token, so the 177 tagged ancestors are untouched and no history was
 rewritten. `git status --porcelain` remains 28 paths: the four installed paths were clean before (live
 equal to HEAD) and are clean again after, so the dirty set is the same set as before these legs.
+
+## capture_job install leg landed (2026-11-17)
+
+`core/capture_job.rs` went in as one copy plus one single-path plumbing commit,
+`9413cefc3cff8ec3dd8c5784f59259fc04457967`: 1 file, 7 insertions, 4 deletions,
+one hunk, confirmed by `git show --stat`. Before the copy the live file measured
+equal to its HEAD blob (`c932de754feb05c7918868ff82a8d590c38396e14b735c9e00bee0e4eb679d37`,
+`git show HEAD:<path> | sha256sum`) and after it equal to the digest the audit
+pinned (`b4f970614a9f86deabcbf3f5144ac64ade2e3f42565ceed0f83c26eedc93e05a`), so
+the leg was not vacuous. The gate that licensed it is the FINAL
+`.qwen/fleet/CAPJOB_N1_RA2.card.json` (45,628 B, sha256 `cc11d2e1414b83c9…`,
+seat COMPLETED, verdict PASS, `blocking_finding_ids` an empty array); its digest
+lives at `.subject.audited_staged_sha256`, not at `.subject.sha256`.
+
+The change is comment-only: with every line whose first non-space character is
+`//` removed, the HEAD blob and the installed bytes give the same sha256
+(`3616c0a2532c8640…`), so the compiled program is unchanged and no gate leg was
+re-run. The replaced text claimed the scratch tree "must not survive the test on
+any exit path" and justified the guard by its ordering relative to sibling tests;
+the installed text states what the in-process guard actually covers and puts the
+uncatchable-termination ceiling in a runner timeout path.
+
+Residual the record should carry, from that card's non-blocking finding NB1
+(medium, disposition: the staged text stands): the sentence names a runner that
+signals the child's process group, and the audit measured that the runner which
+actually executes this module's unit test — the sanctioned unit route, whose
+timeout arm is `tools/gate.rs:313-320` — has no process-group primitive at all
+(spawned at `:291-:300` with no `process_group(0)`, killed directly at `:315`),
+while the verification runner `tools/harness.rs:1722` `kill_child_group` does. So
+the ceiling sentence is true of a real terminating leg and imprecise about which
+runner terminates this one. The audit called the tightening optional and it was
+not applied; if it is ever applied it must name both runners.
+
+Commit census: subject and body only, 0 anchored attribution trailers, 0
+`Signed-off-by`, 0 vendor or brand tokens; the whole-ancestry anchored census
+remains **177** for both the trailer and the vendor token, so the tagged
+ancestors are untouched. `git config` untouched; nothing pushed.
