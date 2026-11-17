@@ -48,8 +48,8 @@ fn declared_edit(reply:&str)->(String,String,String){
  let mut lines=reply.lines();
  let Some(first)=lines.next() else {return ("prompt".into(),reply.into(),reply.into());};
  let Some(name)=first.strip_prefix("component: ") else {return ("prompt".into(),reply.into(),reply.into());};
- let name=name.trim();
- if !crate::rrsi::known_component(name){return ("prompt".into(),reply.into(),reply.into());}
+ let name=crate::rrsi::component_key(name);
+ if !crate::rrsi::known_component(&name){return ("prompt".into(),reply.into(),reply.into());}
  let rest=lines.collect::<Vec<_>>().join("\n");
  if let Some(after)=rest.strip_prefix("hypothesis: "){
   if let Some((hypothesis,body))=after.split_once('\n'){
@@ -74,8 +74,7 @@ fn round_index_of(run:&Json)->u64{
  stored.max(inferred)
 }
 fn hypothesis_rejected(records:&[Json],digest:&str,component:&str,hypothesis:&str)->Option<u64>{
- if let Some(round)=crate::rrsi::prior_rejection(records,digest,component,hypothesis){return Some(round);}
- crate::rrsi::prior_rejection(records,digest,component,&harness_rules::digest(&s(hypothesis)))
+ crate::rrsi::prior_rejection(records,digest,component,hypothesis)
 }
 fn edit_body<'a>(reply:&'a str,claim:&str,body:&'a str)->&'a str{if claim==reply{reply}else{body}}
 fn remember_pruned(run:&mut Json){
@@ -153,11 +152,11 @@ fn critic_against(run:&mut Json,records:&[Json],incumbent:&str,reply:&str)->Resu
  let run_digest=refinement_digest(run);
  let changed=edit_body(reply,&claim,&body);
  let diff=crate::rrsi::diff_digest(incumbent,changed);
- if let Some(round)=hypothesis_rejected(records,&run_digest,&component,&claim){
+ if let Some(round)=crate::rrsi::prior_shape_rejection(records,&run_digest,&component,&claim,Some(&diff)){
   let decision=crate::rrsi::rejection_refusal(&component,round);
   return Ok(Critic{component,claim,diff,leakage:String::new(),decision,refused:true});
  }
- if crate::rrsi::pruned_components(records,&run_digest).iter().any(|name|name==&component){
+ if !crate::rrsi::untried_components(records,&run_digest).is_empty()&&crate::rrsi::pruned_components(records,&run_digest).iter().any(|name|name==&component){
   let decision=crate::rrsi::prune_refusal(&component);
   return Ok(Critic{component,claim,diff,leakage:String::new(),decision,refused:true});
  }
@@ -180,6 +179,7 @@ fn gate_candidate(run:&mut Json,reply:&str)->Result<bool>{
  let critic=critic_against(run,&records,&incumbent,reply)?;
  if !critic.refused{return Ok(false);}
  record_unscored(run,&critic.component,&critic.claim,reply,&critic.diff,&critic.leakage,&critic.decision)?;
+ improvement::retain_reference(run);
  Ok(true)
 }
 fn refuse_for_stop(st:&mut Json,mut run:Json,index:u64)->Result<Option<Json>>{
@@ -206,6 +206,28 @@ fn stop_refused(st:&mut Json,run:Json)->Result<Option<Json>>{
  put(st,"busy",Bool(false));put(st,"agent_running",Bool(false));put(st,"agent_pending",Bool(false));put(st,"model_expected",Null);
  put(st,"notice",s(&note));
  Ok(Some(Null))
+}
+// A refused candidate keeps its own refusal diagnostic. The attempt is recorded, the
+// round advances and the run keeps asking for a candidate: a refusal changed neither
+// the incumbent nor the round's measured baseline, so the stage stays where it was
+// and the comparable baseline is still the measured one. The STOP file still wins.
+fn refused_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
+ let index=round_index_of(&run);
+ if let Some(effect)=stop_effect(st,run.clone(),index)?{return Ok(effect);}
+ let refusal=text(&run,"round_note");
+ put(&mut run,"round_index",Num(index.checked_add(1).ok_or("Refinement round index overflow")?.to_string()));
+ for key in ["candidate","probe","probe_score","replay","replay_score","rejected_revision","retained_probe","tool_trail"]{
+  put(&mut run,key,Null);
+ }
+ match route(st,"subagent").and_then(|index|continue_refinement(st,run.clone(),index)){
+  Ok(effect)=>{put(st,"notice",s(&refusal));Ok(Some(effect))}
+  Err(_)=>{
+   if get(&run,"first_refinement")!=&Null{
+    keep_first_refinement(&mut run,"The second round could not start. The first tested candidate was retained.");
+   }
+   finish_refinement(st,run)
+  }
+ }
 }
 fn record_round_edit(run:&mut Json,retain_probe:bool,composed:&str,candidate:&str,verdict:&str,before:usize,replay_passed:usize,selected_passed:usize,prior:&str,round:usize,policy:&Json){
  if retain_probe{
@@ -379,7 +401,7 @@ pub(super) fn modal_for(st:&Json)->Json{
   vec![
    field_ui("name","Connection name (optional)",&text(e,"name"),"text"),
    field_ui("endpoint","Server URL, port and MCP path",&text(e,"endpoint"),"uri"),
-   field_ui("key","Bearer token (optional)",&text(e,"key"),"secret"),
+   field_ui("key","Server bearer token (required if the server uses authentication)",&text(e,"key"),"secret"),
    field_ui("access","Allow MCP access",if get(e,"access")==&Null{if workspace::allowed(st,"mcp"){"true"}else{"false"}}else if boolean(e,"access"){"true"}else{"false"},"check"),
    field_ui("agent_access","Allow the selected agent to use MCP tools",if get(e,"agent_access")==&Null{if text(&active_agent(st),"tools").split(',').any(|tool|tool.trim()=="mcp"){"true"}else{"false"}}else if boolean(e,"agent_access"){"true"}else{"false"},"check"),
    field_ui("note","Connection flow","Enter the full MCP endpoint, for example http://server:port/mcp. Saving makes this server active. Discovery, tool calls and streams use the active server. Use MCP connections to switch between saved servers.","readonly")
@@ -390,7 +412,7 @@ pub(super) fn modal_for(st:&Json)->Json{
  "mcp_client_review"=>{let pending=get(st,"mcp_client_pending");modal("Approve MCP call?",vec![field_ui("request","Tool and arguments",&obj(vec![("name",get(pending,"name").clone()),("arguments",get(pending,"arguments").clone())]).string(),"readonly"),field_ui("destination","Destination",&endpoint_summary(&text(get(st,"mcp"),"endpoint")),"readonly")],vec![button("Run this call","mcp_client_approve")])},
  "task"=>modal("Agent task",vec![field_ui("delegation","Task and child execution",&delegation::status(st),"readonly"),field_ui("context_reminder","Context reminder",&text(st,"context_reminder"),"readonly"),field_ui("task","Task (uses current draft if supplied)",&text(st,"draft"),"multiline"),field_ui("agent","Selected agent",&text(&active_agent(st),"name"),"readonly"),interaction::choice("response_check_method","Refinement check method","phrases",&[
    ("Required phrases","phrases"),("JSON fields","json_fields")]),
-  field_ui("response_checks","Refinement checks (phrases or JSON Pointer values)","","multiline"),interaction::choice("refinement_rounds","Refinement rounds","1",&[("One round","1"),("Up to two rounds (requires response checks)","2"),("Up to three rounds (requires response checks)","3")]),field_ui("evaluation_task","Separate evaluation task (optional, reply only)","","multiline"),interaction::choice("evaluation_method","Evaluation check method","phrases",&[("Required phrases","phrases"),("Exact text","equals"),("JSON value","json"),("JSON fields","json_fields"),("SHA-256 digest","sha256")]),field_ui("evaluation_checks","Expected evaluation output (kept on this device)","","multiline"),
+  field_ui("response_checks","Refinement checks (phrases or JSON Pointer values)","","multiline"),field_ui("refinement_goal","Refinement completion","Continue until all response checks pass; cancellation and the STOP control remain available.","readonly"),field_ui("evaluation_task","Separate evaluation task (optional, reply only)","","multiline"),interaction::choice("evaluation_method","Evaluation check method","phrases",&[("Required phrases","phrases"),("Exact text","equals"),("JSON value","json"),("JSON fields","json_fields"),("SHA-256 digest","sha256")]),field_ui("evaluation_checks","Expected evaluation output (kept on this device)","","multiline"),
   field_ui("evaluation_task_2","Second evaluation task (optional, reply only)","","multiline"),
   interaction::choice("evaluation_method_2","Second evaluation check method","phrases",&[
    ("Required phrases","phrases"),("Exact text","equals"),("JSON value","json"),("JSON fields","json_fields"),("SHA-256 digest","sha256")]),
@@ -446,6 +468,11 @@ pub(super) fn event_for(st:&mut Json,a:&str,inputs:&Json)->Result<Json>{
   if !matches!(dialog.as_str(),"mcp_client_settings"|"mcp_client_new"){return Err("Open an MCP connection before saving".into());}
   if interaction::locked(st){return Err("Finish or cancel the current task or tool review before saving an MCP connection".into());}
   let mut config=get(st,"edit").clone();
+  // The credential is canonicalised once, where it is entered, so every later
+  // request carries the same token instead of the pasted text.
+  if let Some(token)=network::mcp_bearer_token(&text(&config,"key"))?{
+   if let Obj(fields)=&mut config{fields.insert("key".into(),s(&token));}
+  }
   let name=bounded(&config,"name",128)?;
   if name.chars().any(char::is_control){return Err("MCP connection name cannot contain control characters".into());}
   let mut next=st.clone();
@@ -544,10 +571,17 @@ pub(super) fn reset_task(st:&mut Json){inquiry::focus_task(st);put(st,"delegatio
 pub(super) fn standalone_result(reply:&str)->String{format!("Agent task result:\n{reply}")}
 const REFINEMENT_TOOLS:&[&str]=&["list","read","search","inspect","compare","observations","hypotheses","experiments","web_read","web_search","phone_list","phone_read","drive_list","drive_read"];
 pub(super) fn phase_permits(st:&Json,tool:&str)->bool{text(get(st,"task_run"),"mode")!="refine"||REFINEMENT_TOOLS.contains(&tool)}
+#[cfg(test)]
 const LOOKUP_OPERATIONS:usize=4;
-const TURN_OPERATIONS:usize=8;
+// The quick-lookup turn keeps its own operation allowance. That ceiling is the
+// product's own and the controller's bound never raises or lowers it. Every other
+// turn is bounded only by the orchestrator's configured limit.
+const LOOKUP_TURN_OPERATIONS:usize=4;
 pub(super) fn operation_limit(st:&Json)->usize{
- match answer_mode::current(st){answer_mode::Mode::Direct=>0,answer_mode::Mode::Lookup=>LOOKUP_OPERATIONS,_=>TURN_OPERATIONS}
+ match answer_mode::current(st){
+  answer_mode::Mode::Lookup=>LOOKUP_TURN_OPERATIONS,
+  _=>improvement::operation_limit(st),
+ }
 }
 // Provider-hosted search is the connection's own request: application.rs admits it once per turn
 // through answer_mode::native_started, so it must not also spend an operation slot here.
@@ -586,7 +620,7 @@ fn operation_reference(st:&Json,agent:&Json)->String{
   ("read","read(path)."),
   ("search","search(path,query)."),
   ("write","write(path,content)."),
-  ("self_build","self_build(path,content,builder,builder_args,gate,gate_args,binary,message,job,instruction,reload,timeout_seconds) edits one workspace source file, runs one sanctioned builder and the unit gate as bounded child processes, commits that source, and records a content-addressed journal with the source digest, build digest, parent revision, gate counts and verdicts. reload=exec replaces this process with the new binary. reload=spawn starts a successor that inherits the job id and instruction. Reload is refused unless the gate is green. The previous binary is kept as a rollback artifact and is not deleted. Review follows the same rules as write."),
+  ("self_build","self_build(path,content,builder,builder_args,gate,gate_args,binary,message,job,instruction,reload,timeout_seconds) edits one permitted workspace source file, runs one sanctioned builder and the unit gate as bounded child processes, and records a content-addressed journal with the source digest, build digest, parent revision, gate counts and verdicts. The separate commit operation requires an orchestrator-issued permit. reload=exec replaces this process with the new binary. reload=spawn starts a successor that inherits the job id and instruction. Reload is refused unless the gate is green. The previous binary is kept as a rollback artifact and is not deleted. Review follows the same rules as write."),
   ("script_check","script_check(path)."),
   ("script_run","script_run(path)."),
   ("phone_list","phone_list(path) lists only the current Files and access scope: primary shared storage or the selected Android folder."),
@@ -702,7 +736,7 @@ pub(super) fn request_messages(st:&Json,mut messages:Vec<Json>)->Result<Vec<Json
 pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
  let mut run=get(st,"task_run").clone();if run==Null{return Ok(None);}put(st,"stream_text",Null);if text(&run,"chat")!=text(st,"active"){return Err("Task conversation changed; result was not applied".into());}
  let phase=text(&run,"phase");
- if tool_format::proposal_phase(st){if let Ok(mut p)=parse(reply.trim()){if text(&p,"tool")=="delegate"{delegation::unreviewed(&mut p);}if get(&p,"tool")!=&Null{if let Err(error)=allowed_tool(st,&p).and_then(|_|validate_tool(&p)){if text(&p,"tool")=="delegate"{return Ok(Some(delegation::blocked(st,&error,Some(reply))?));}if array(st,"delegation_stack").is_empty(){return Ok(Some(proposal_failure(st,&p,&error,reply)?));}return Err(error);}if web_operation::is_web(&p){web_operation::own_model(st,&mut p);}claim_records::own(st,&mut p)?;experiment_records::own(st,&mut p)?;if !has_operation_room(st){return Err("Task reached its eight-operation limit; original agent preserved".into());}let mut trail=array(&run,"tool_trail");let mut message=obj(vec![("role",s("assistant")),("content",s(reply))]);hosted_decorate(st,&mut message);trail.push(message);put(&mut run,"tool_trail",Arr(trail));put(st,"task_run",run);put(st,"pending",p);put(st,"agent_pending",Bool(true));put(st,"dialog",s("approval"));return Ok(Some(Null));}}inquiry::answer(st,reply);}
+ if tool_format::proposal_phase(st){if let Ok(mut p)=parse(reply.trim()){if text(&p,"tool")=="delegate"{delegation::unreviewed(&mut p);}if get(&p,"tool")!=&Null{if let Err(error)=allowed_tool(st,&p).and_then(|_|validate_tool(&p)){if text(&p,"tool")=="delegate"{return Ok(Some(delegation::blocked(st,&error,Some(reply))?));}if array(st,"delegation_stack").is_empty(){return Ok(Some(proposal_failure(st,&p,&error,reply)?));}return Err(error);}if web_operation::is_web(&p){web_operation::own_model(st,&mut p);}claim_records::own(st,&mut p)?;experiment_records::own(st,&mut p)?;if !has_operation_room(st){return Err(format!("Task reached the orchestrator operation limit {}; original agent preserved",operation_limit(st)));}let mut trail=array(&run,"tool_trail");let mut message=obj(vec![("role",s("assistant")),("content",s(reply))]);hosted_decorate(st,&mut message);trail.push(message);put(&mut run,"tool_trail",Arr(trail));put(st,"task_run",run);put(st,"pending",p);put(st,"agent_pending",Bool(true));put(st,"dialog",s("approval"));return Ok(Some(Null));}}inquiry::answer(st,reply);}
  if boolean(st,"web_answer_only")&&matches!(phase.as_str(),"baseline"|"probe"|"verify"|"delegate"){inquiry::answer(st,reply);}
  if phase=="delegate"{if let Some(effect)=delegation::complete(st,reply)?{return Ok(Some(effect));}append(st,"assistant",&standalone_result(reply))?;reset_task(st);put(st,"notice",s("Agent task result saved"));return Ok(Some(Null));}
  if phase=="compact"{let mut c=chat(st);put(&mut c,"context_summary",s(reply));put(&mut c,"compacted_count",get(&run,"count").clone());let scope=mcp_history::summary_scope(&c,number(&run,"count"));put(&mut c,"summary_image_scope",scope);replace_chat(st,c);reset_task(st);put(st,"notice",s("Context compacted using the assigned model; complete history retained"));return Ok(Some(Null));}
@@ -713,11 +747,10 @@ pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
  if matches!(phase.as_str(),"propose"|"compose"){
   if let Some(pool)=parse_pool(reply)?{
    evaluate_pool(st,&mut run,&pool,&[])?;
-   if boolean(&run,"incumbent_kept"){return stop_refused(st,run);}
+   if boolean(&run,"incumbent_kept"){let index=round_index_of(&run);return open_next_round(st,run,index);}
    if phase=="propose"{let candidate=get(&run,"composition").clone();put(&mut run,"candidate",candidate);}
-   let cap=number(&run,"refinement_rounds");
    let index=round_index_of(&run);
-   if cap>=3 && index<cap as u64{return open_next_round(st,run,index);}
+   if get(&run,"response_checks")!=&Null{return open_next_round(st,run,index);}
    return handoff_or_stop(st,run,index);
   }
  }
@@ -738,7 +771,7 @@ pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
      improvement::record_base(&mut run,&task_key,&verifier,number(&value,"passed"));
     }
     put(&mut run,result,s(reply));put(&mut run,score,value);
-    let next=if phase=="baseline" && number(&run,"refinement_rounds")>=3 && boolean(&run,"evaluation_requested") && get(&run,"held_out_known")==&Null{"held_out"}else{next};
+    let next=if phase=="baseline" && boolean(&run,"evaluation_requested") && get(&run,"held_out_known")==&Null{"held_out"}else{next};
     put(&mut run,"phase",s(next));
     if next=="review"{return complete_refinement_round(st,run);}
    }
@@ -758,11 +791,11 @@ pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
    put(&mut run,"phase",s("propose"));
   },
   "propose"=>{
-   if gate_candidate(&mut run,reply)?{return stop_refused(st,run);}
+   if gate_candidate(&mut run,reply)?{return refused_round(st,run);}
    put(&mut run,"candidate",s(reply));put(&mut run,"phase",s("probe"));
   },
   "compose"=>{
-   if gate_candidate(&mut run,reply)?{return stop_refused(st,run);}
+   if gate_candidate(&mut run,reply)?{return refused_round(st,run);}
    put(&mut run,"composition",s(reply));
    if get(&run,"baseline_score")==&Null{let index=round_index_of(&run);return handoff_or_stop(st,run,index);}
    put(&mut run,"phase",s("verify"));
@@ -975,8 +1008,8 @@ fn judged_acceptance(run:&Json,reference:&Json,selected:&Json,reply:&str,prior:&
 fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:&str,round:u64,measure_cost:bool)->Json{
  let digest=refinement_digest(run);
  let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
- let (budget,remaining)=crate::rrsi::budget_for(&records,&digest,round);
- let floor=improvement::noise_floor(run,&improvement::task_key(&text(run,"task")),&improvement::verifier_key(get(run,"response_checks")));
+ let (budget,_remaining)=crate::rrsi::budget_for(&records,&digest,round);
+ let floor=crate::rrsi::acceptance_floor(&records,&digest,improvement::noise_floor(run,&improvement::task_key(&text(run,"task")),&improvement::verifier_key(get(run,"response_checks"))));
  let new_len=selected_text.len() as u64;
  // The incumbent length is the latest accepted row's measured cost_after, including
  // a row that itself had no earlier pair. new_len is this candidate's measured length.
@@ -989,13 +1022,10 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
  let reason=text(&decision,"reason");
  let gain=text(&decision,"gain");
  let cost_known=boolean(&decision,"cost_known");
- let budget_block=remaining==0;
  let (component,claim,_)=declared_edit(selected_text);
  let repeated=hypothesis_rejected(&records,&digest,&component,&claim);
- let pruned=crate::rrsi::pruned_components(&records,&digest).iter().any(|name|name==&component);
- let (mut verdict_override,mut decision_text)=if budget_block{
-  (Some("rejected"),format!("refused because the annealed edit budget {budget} is already spent"))
- }else if let Some(round)=repeated{
+ let pruned=!crate::rrsi::untried_components(&records,&digest).is_empty()&&crate::rrsi::pruned_components(&records,&digest).iter().any(|name|name==&component);
+ let (mut verdict_override,mut decision_text)=if let Some(round)=repeated{
   (Some("rejected"),crate::rrsi::rejection_refusal(&component,round))
  }else if pruned{
   (Some("rejected"),crate::rrsi::prune_refusal(&component))
@@ -1007,12 +1037,10 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
   (Some("rejected"),"refused because the cost rose while the score did not".into())
  }else if reason=="cost bound"{
   (Some("rejected"),format!("refused because the cost bound was exceeded for the gain {gain}"))
- }else if reason=="lower cost"{
-  (Some("accepted"),"accepted because the equal score costs less".into())
- }else if reason=="structural novelty"{
-  (Some("accepted"),"accepted because of structural novelty".into())
  }else if reason=="duplicate shape"{
   (Some("rejected"),"refused because the duplicate shape was already recorded".into())
+ }else if !boolean(&decision,"admit"){
+  (Some("rejected"),format!("refused because {}; signed reward {}",if reason=="no gain"{"the score did not rise"}else{&reason},get(&decision,"reward").string()))
  }else if !cost_known{
   (None,"cost not recorded".into())
  }else{
@@ -1040,6 +1068,8 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
   ("beta0",get(&decision,"beta0").clone()),
   ("beta1",get(&decision,"beta1").clone()),
   ("accept_reason",s(&reason)),
+  ("reward",if verdict_override==Some("rejected"){Num((-get(&decision,"reward").string().parse::<i64>().unwrap_or(1).saturating_abs().max(1)).to_string())}else{get(&decision,"reward").clone()}),
+  ("budget_penalty",Num(crate::rrsi::budget_penalty(&records,&digest,round).to_string())),
  ]);
  if split!=Null{
   put(&mut policy,"held_out_known",Bool(boolean(run,"held_out_known")));
@@ -1209,14 +1239,13 @@ fn resume_stop(st:&mut Json,run:&Json)->Result<Option<Json>>{
 }
 fn open_next_round(st:&mut Json,mut run:Json,index:u64)->Result<Option<Json>>{
  if let Some(effect)=stop_effect(st,run.clone(),index)?{return Ok(effect);}
- let cap=number(&run,"refinement_rounds") as u64;
- if cap<3 || index>=cap{return handoff_or_stop(st,run,index);}
+ if improvement::refinement_goal(&run) || get(&run,"response_checks")==&Null{return handoff_or_stop(st,run,index);}
  if get(&run,"first_refinement")==&Null && get(&run,"selected_score")!=&Null && !text(&run,"composition").is_empty() && !boolean(&run,"incumbent_kept"){
   let kept=obj(vec![("instructions",get(&run,"composition").clone()),("reply",get(&run,"composition").clone()),("score",get(&run,"selected_score").clone())]);
   put(&mut run,"first_refinement",kept);
  }
- put(&mut run,"round_index",Num((index+1).to_string()));
- for key in ["candidate","probe","probe_score","replay","replay_score","composition","rejected_revision","retained_probe","tool_trail","incumbent_kept","selected_score","round_note"]{
+ put(&mut run,"round_index",Num(index.checked_add(1).ok_or("Refinement round index overflow")?.to_string()));
+ for key in ["candidate","probe","probe_score","replay","replay_score","rejected_revision","retained_probe","tool_trail"]{
   put(&mut run,key,Null);
  }
  let task_key=improvement::task_key(&text(&run,"task"));
@@ -1234,8 +1263,7 @@ fn open_next_round(st:&mut Json,mut run:Json,index:u64)->Result<Option<Json>>{
  }
 }
 fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
- let cap=number(&run,"refinement_rounds");
- let iterative=cap>=2;
+ let iterative=get(&run,"response_checks")!=&Null;
  let baseline=get(&run,"baseline_score");let probe=get(&run,"probe_score");let replay=get(&run,"replay_score");
  let first=get(&run,"first_refinement");
  let reference=if first==&Null{baseline.clone()}else{get(first,"score").clone()};
@@ -1269,6 +1297,7 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
  let selected_text=if retain_probe{candidate.clone()}else{composed.clone()};
  let policy=acceptance_policy(&mut run,&reference,&selected,&selected_text,round_index as u64,!dropped_pass);
  let forced=text(&policy,"verdict");
+ if forced!="rejected"{put(&mut run,"selected_score",selected.clone());put(&mut run,"incumbent_kept",Bool(false));}
  if retain_probe{
   let verified=get(&run,"candidate").clone();let revision=get(&run,"composition").clone();
   put(&mut run,"rejected_revision",revision);put(&mut run,"composition",verified);put(&mut run,"retained_probe",Bool(true));
@@ -1281,6 +1310,7 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
   let verdict=if forced=="rejected"{"rejected"}else{"accepted"};
   if forced=="rejected"{put(&mut run,"round_note",s(&text(&policy,"decision")));}
   record(&mut run,verdict,&policy);
+  if verdict=="rejected"{improvement::retain_incumbent(&mut run,&reference,&prior);}
   return handoff_or_stop(st,run,round_index as u64);
  }
  let first=get(&run,"first_refinement");
@@ -1300,7 +1330,7 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
    "accepted"
   };
   record(&mut run,verdict,&policy);
-  if cap>=3 && round_index<cap{
+  if iterative{
    if !reject{
     let reply=get(&run,if retain_probe{"probe"}else{"replay"}).clone();
     let kept=obj(vec![("instructions",get(&run,"composition").clone()),("reply",reply),("score",selected.clone())]);
@@ -1320,13 +1350,14 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
   let note=if changed{text(&policy,"decision")}else{"The first round ended the refinement. A second round requires a comparable partial gain.".into()};
   put(&mut run,"round_note",s(&note));
   record(&mut run,&verdict,&policy);
-  if cap>=3 && round_index<cap{return open_next_round(st,run,round_index as u64);}
+  if verdict=="rejected"{improvement::retain_incumbent(&mut run,&reference,&prior);}
+  if iterative{return open_next_round(st,run,round_index as u64);}
   return handoff_or_stop(st,run,round_index as u64);
  }
  record(&mut run,"accepted",&policy);
  let first=obj(vec![("instructions",get(&run,"composition").clone()),("reply",get(&run,if retain_probe{"probe"}else{"replay"}).clone()),("score",selected)]);
  put(&mut run,"first_refinement",first);
- if cap>=3{return open_next_round(st,run,round_index as u64);}
+ if iterative{return open_next_round(st,run,round_index as u64);}
  if let Some(effect)=stop_effect(st,run.clone(),round_index as u64)?{return Ok(effect);}
  put(&mut run,"phase",s("propose"));
  for key in ["candidate","probe","probe_score","replay","replay_score","composition","rejected_revision","retained_probe","tool_trail"]{put(&mut run,key,Null);}
@@ -1339,7 +1370,7 @@ fn complete_refinement_round(st:&mut Json,mut run:Json)->Result<Option<Json>>{
  }
 }
 pub(super) fn repeating_refinement(st:&Json)->bool{
- let run=get(st,"task_run");number(run,"refinement_rounds")>=2&&get(run,"first_refinement")!=&Null
+ let run=get(st,"task_run");get(run,"response_checks")!=&Null&&get(run,"first_refinement")!=&Null
   &&matches!(text(run,"phase").as_str(),"propose"|"probe"|"compose"|"verify"|"baseline"|"held_out")
 }
 pub(super) fn interrupted_refinement(st:&mut Json)->Result<Json>{
@@ -1454,9 +1485,15 @@ fn activate_mcp(st:&mut Json,mut next:Json,config:Json,discover:bool,dialog:&str
  put(&mut next,"dialog",s(dialog));
  put(&mut next,"notice",s("MCP connection selected"));
  if super::super::mcp_schema::state_bytes(&next)>6*1024*1024-8192{return Err("The MCP connection does not fit current saved state; existing connections retained".into());}
- let mut effect=if discover&&workspace::allowed(&next,"mcp"){
+ let access=workspace::allowed(&next,"mcp");
+ let mut effect=if discover&&access{
   put(&mut next,"mcp_client_next",s("list"));mcp_client_initialize(&mut next)?
  }else{Null};
+ if discover&&!access{
+  // The connection is saved; the reason no request went out is named so the
+  // user is not left with a silent selection.
+  put(&mut next,"notice",s("MCP connection saved. MCP server access is off in Workspace → Setup → Access permissions, so no discovery request was sent."));
+ }
  let cleanup=mcp_client_resume_release(st);
  if !cleanup.array()?.is_empty(){
   if effect==Null{effect=obj(vec![("kind",s("mcp_cleanup"))]);}
@@ -1523,6 +1560,9 @@ fn mcp_client_config(st:&Json)->Result<Json>{
  let config=get(st,"mcp");let endpoint=bounded(config,"endpoint",8192)?;let key=bounded(config,"key",8192)?;
  if endpoint.is_empty(){return Err("Configure the MCP endpoint first".into());}
  network::url(&endpoint,endpoint.starts_with("http://"))?;
+ // Connections saved before the normaliser existed are canonicalised here, at
+ // the request boundary, so no request carries a pasted header line.
+ let key=network::mcp_bearer_token(&key)?.unwrap_or_default();
  Ok(obj(vec![("endpoint",s(&endpoint)),("key",s(&key))]))
 }
 fn mcp_call_scope(st: &Json) -> String {
@@ -1598,7 +1638,7 @@ fn mcp_client_wire(st:&mut Json,method:&str,params:Json,purpose:&str,notificatio
  let mut message=obj(vec![("jsonrpc",s("2.0")),("method",s(method)),("params",params)]);if !notification{put(&mut message,"id",request_id.clone());}
  let mut headers=vec![("Content-Type","application/json".into()),("Accept","application/json, text/event-stream".into())];
  if method!="initialize"{headers.push(("MCP-Protocol-Version",version.clone()));}
- if !key.is_empty(){headers.push(("Authorization",format!("Bearer {key}")));}
+ if let Some(token)=network::mcp_bearer_token(&key)?{headers.push(network::mcp_authorization_header(&token)?);}
  let session=text(st,"mcp_client_session");if !session.is_empty(){if session.len()>256||!session.bytes().all(|b|(0x21..=0x7e).contains(&b)){return Err("Invalid MCP session ID".into());}headers.push(("Mcp-Session-Id",session));}
  let mut e=network::wire(&endpoint,endpoint.starts_with("http://"),"POST",&message.string(),headers)?;
  static SERIAL:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
@@ -1662,7 +1702,7 @@ fn mcp_client_server_stream(st:&mut Json)->Result<Json>{
  if !MCP_CLIENT_VERSIONS.contains(&version.as_str())||!boolean(st,"mcp_client_tools_capability"){return Err("MCP server stream requires current negotiation".into());}
  let session=text(st,"mcp_client_session");
  let mut headers=vec![("Accept","text/event-stream".into()),("MCP-Protocol-Version",version.clone())];
- if !key.is_empty(){headers.push(("Authorization",format!("Bearer {key}")));}if !session.is_empty(){headers.push(("Mcp-Session-Id",session.clone()));}
+ if let Some(token)=network::mcp_bearer_token(&key)?{headers.push(network::mcp_authorization_header(&token)?);}if !session.is_empty(){headers.push(("Mcp-Session-Id",session.clone()));}
  let mut e=network::wire(endpoint,endpoint.starts_with("http://"),"GET","",headers)?;
  let ticket=mcp_client_server_ticket()?;
  put(&mut e,"purpose",s(&ticket));put(&mut e,"stream",Bool(true));put(&mut e,"stream_protocol",s("mcp_server"));
@@ -1682,6 +1722,9 @@ fn mcp_client_initialization(st:&mut Json,result:&Json,raw:&[u8])->Result<Json>{
  let mut label=Vec::new();for key in ["name","version"]{let value=bounded(info,key,128)?;if value.trim().is_empty()||value.chars().any(char::is_control){return Err("Invalid MCP server identity".into());}label.push((key,s(&value)));}
  let session=mcp_client_session(raw)?;put(st,"mcp_client_protocol",s(&version));put(st,"mcp_client_tools_capability",Bool(true));put(st,"mcp_client_list_changed",Bool(boolean(tools,"listChanged")));put(st,"mcp_client_session",session.map(|v|s(&v)).unwrap_or(Null));
  put(st,"mcp_client_negotiation",obj(vec![("protocol",s(&version)),("server",obj(label)),("tools",Bool(true)),("source",s(&mcp_client_source(&text(get(st,"mcp_client_connection"),"endpoint"))))]));
+ // A successful exchange states whether a credential was sent, so a missing
+ // credential never reads like a rejected one.
+ put(st,"notice",s(if text(get(st,"mcp_client_connection"),"key").is_empty(){"MCP connected without a bearer token."}else{"MCP connected with a bearer token."}));
  let mut effect=mcp_client_wire(st,"notifications/initialized",obj(vec![]),"mcp_client_notification",true)?;let cleanup=mcp_client_cleanup(st);if !cleanup.array()?.is_empty(){put(&mut effect,"mcp_abort_cleanup",cleanup);}Ok(effect)
 }
 pub(super) fn mcp_client_notice_fit(st:&mut Json){
@@ -1693,9 +1736,80 @@ pub(super) fn mcp_client_notice_fit(st:&mut Json){
  for c in value.chars(){let bytes=cost(c);if bytes>budget.saturating_sub(used){break;}out.push(c);used+=bytes;}
  out.push_str(marker);put(st,"notice",s(&out));
 }
-fn mcp_client_error(error:&Json)->String{
+fn mcp_client_error(st:&Json,error:&Json)->String{
  let mut value=format!("MCP error: {}",error.string());
+ value=mcp_client_redact(st,&value);
  if value.len()>1024 {let mut end=1024;while !value.is_char_boundary(end){end-=1;}value.truncate(end);value.push_str("… [server error truncated]");}value
+}
+/// Server-authored text can echo the credential the product sent. The
+/// credential is removed before that text can become a user-visible notice.
+fn mcp_client_redact(st:&Json,value:&str)->String{
+ let mut out=value.to_string();
+ for source in [text(get(st,"mcp_client_connection"),"key"),text(get(st,"mcp"),"key")]{
+  if source.is_empty(){continue;}
+  out=mcp_client_redact_secret(&out,&source);
+ }
+ mcp_client_redact_bearer(&out)
+}
+/// The credential is removed from server-authored text whatever case it is
+/// written in, because a peer may echo the credential back in any case.
+fn mcp_client_redact_secret(value:&str,secret:&str)->String{
+ let bytes=value.as_bytes();let needle=secret.as_bytes();
+ if needle.is_empty()||needle.len()>bytes.len(){return value.to_string();}
+ let mut out=String::with_capacity(value.len());
+ let mut index=0;
+ while index<bytes.len(){
+  if index+needle.len()<=bytes.len()&&bytes[index..index+needle.len()].eq_ignore_ascii_case(needle){
+   out.push_str("[redacted]");index+=needle.len();continue;
+  }
+  let character=value[index..].chars().next().unwrap_or(' ');
+  out.push(character);index+=character.len_utf8();
+ }
+ out
+}
+fn mcp_client_redact_bearer(value:&str)->String{
+ let bytes=value.as_bytes();let mut out=String::with_capacity(value.len());let mut index=0;
+ while index<bytes.len(){
+  let tail=&value[index..];
+  if tail.len()>=6&&tail.as_bytes()[..6].eq_ignore_ascii_case(b"bearer"){
+   let mut end=index+6;
+   if end<bytes.len()&&bytes[end].is_ascii_whitespace(){
+    while end<bytes.len()&&bytes[end].is_ascii_whitespace(){end+=1;}
+    let start=end;
+    while end<bytes.len()&&(bytes[end].is_ascii_alphanumeric()||b"-._~+/=".contains(&bytes[end])){end+=1;}
+    if end>start{out.push_str(&value[index..start]);out.push_str("[redacted]");index=end;continue;}
+   }
+  }
+  let character=tail.chars().next().unwrap_or(' ');
+  out.push(character);index+=character.len_utf8();
+ }
+ out
+}
+/// The MCP client's own wording for a refused request.
+///
+/// The status is the one the product's own decoder refused for, so a
+/// diagnostic can never name a status the framing rules rejected, and a
+/// framing refusal keeps the framing's own words. The credential is never
+/// echoed, and a missing credential reads differently from a rejected one.
+pub(super) fn mcp_client_http_error(st:&Json,raw:&[u8],error:&str)->String{
+ let Some(status)=network::mcp_refused_status(error) else{return error.into();};
+ let head=network::mcp_response_head(raw).unwrap_or("");
+ let challenge=super::super::mcp_lifecycle::mcp_challenge(head);
+ super::super::mcp_lifecycle::mcp_refusal(mcp_client_credential_sent(st),status,challenge.as_deref(),"connect")
+}
+/// Whether a bearer token went out with the MCP request.
+///
+/// The credential is read through the same normaliser the request boundary
+/// uses, so a blank or unusable credential is reported as no credential.
+pub(super) fn mcp_client_credential_sent(st:&Json)->bool{
+ mcp_context_credential_sent(get(st,"mcp_client_connection"))||mcp_context_credential_sent(get(st,"mcp"))
+}
+/// Whether a bearer token went out with an MCP request made for a context.
+///
+/// The captured request context carries the credential the request boundary
+/// composed, so the answer is the credential that actually went out.
+fn mcp_context_credential_sent(context:&Json)->bool{
+ super::super::mcp_lifecycle::mcp_credential_sent(context)
 }
 pub(super) fn mcp_client_result(st:&mut Json,purpose:&str,body:&str,raw:&[u8],catalog_changed:bool)->Result<Json>{
  let phase=purpose.split(':').next().unwrap_or("");
@@ -1767,7 +1881,7 @@ fn mcp_client_result_inner(st:&mut Json,purpose:&str,body:&str,raw:&[u8],catalog
  let result=get(&response,"result");let error=get(&response,"error");
  if get(&response,"jsonrpc")!=&s("2.0")||!super::super::mcp_identity::matches(get(&response,"id"),get(st,"mcp_client_request_id"))||(response.get("result").is_ok()==response.get("error").is_ok()){return Err("Invalid or mismatched MCP response".into());}
  super::super::mcp_schema::response(&response)?;
- if response.get("error").is_ok(){return Err(mcp_client_error(error));}
+ if response.get("error").is_ok(){return Err(mcp_client_error(st,error));}
  if !matches!(result,Obj(_)){return Err("Invalid MCP result object".into());}
  if purpose=="mcp_client_init"{return mcp_client_initialization(st,result,raw);}
  if !MCP_CLIENT_VERSIONS.contains(&text(st,"mcp_client_protocol").as_str())||!boolean(st,"mcp_client_tools_capability"){return Err("MCP tools were not negotiated for this operation".into());}
@@ -3941,7 +4055,7 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
  use super::*;
  fn configured()->(Json,Json){let agent=obj(vec![("name",s("Parent")),("tools",s("read,write,delegate,mcp")),("subagents",Arr(vec![Num("1".into())])),("investigation_preferences",Bool(false))]);(obj(vec![("profiles",Arr(vec![obj(vec![("name",s("Configured")),("model",s("configured")),("protocol",s("chat")),("endpoint",s("http://model.test/v1/chat/completions"))])])),("agents",Arr(vec![agent.clone(),obj(vec![("name",s("Child"))])])),("mcp",obj(vec![("endpoint",s("http://peer.test/mcp"))]))]),agent)}
  #[test]fn refinement_catalog_uses_the_executor_phase_restrictions(){let(mut st,agent)=configured();assert_eq!(available_tools(&st,&agent),vec!["read","write","delegate","mcp"]);for phase in ["baseline","probe","propose","compose"]{put(&mut st,"task_run",obj(vec![("mode",s("refine")),("phase",s(phase)),("agent",agent.clone())]));let actual=available_tools(&st,&agent);assert_eq!(actual,if matches!(phase,"baseline"|"probe"){vec!["read"]}else{vec![]});for tool in &actual{assert!(phase_permits(&st,tool));}assert!(!phase_permits(&st,"write"));assert!(!agent_prompt(&st,&agent).contains("Callable subagents:"));assert!(!agent_prompt(&st,&agent).contains("request mcp args"));}}
- #[test]fn catalogs_follow_existing_operation_and_depth_allowances(){let(mut st,agent)=configured();put(&mut st,"steps",Num("8".into()));assert!(available_tools(&st,&agent).is_empty());assert!(!delegation::slots_available(&st));assert!(agent_prompt(&st,&agent).contains("operation allowance is exhausted"));put(&mut st,"steps",Num("7".into()));put(&mut st,"delegation_stack",Arr(vec![Null;delegation::MAX_DEPTH]));assert_eq!(available_tools(&st,&agent),vec!["read","write","mcp"]);assert!(!agent_prompt(&st,&agent).contains("Callable subagents:"));put(&mut st,"delegation_stack",Arr(vec![Null;delegation::MAX_DEPTH-1]));assert!(available_tools(&st,&agent).contains(&"delegate".into()));}
+ #[test]fn catalogs_follow_existing_operation_and_depth_allowances(){let(mut st,agent)=configured();put(&mut st,"orchestrator",obj(vec![("operation_limit",Num("8".into()))]));put(&mut st,"steps",Num("8".into()));assert!(available_tools(&st,&agent).is_empty());assert!(!delegation::slots_available(&st));assert!(agent_prompt(&st,&agent).contains("operation allowance is exhausted"));put(&mut st,"steps",Num("7".into()));put(&mut st,"delegation_stack",Arr(vec![Null;delegation::MAX_DEPTH]));assert_eq!(available_tools(&st,&agent),vec!["read","write","mcp"]);assert!(!agent_prompt(&st,&agent).contains("Callable subagents:"));put(&mut st,"delegation_stack",Arr(vec![Null;delegation::MAX_DEPTH-1]));assert!(available_tools(&st,&agent).contains(&"delegate".into()));}
  #[test]fn lookup_budget_spends_only_rllm_operations(){
   let(mut st,agent)=configured();
   put(&mut st,"answer_turn",obj(vec![("chat",Null),("source",Null),("mode",s("lookup"))]));
