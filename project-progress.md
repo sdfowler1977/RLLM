@@ -1533,3 +1533,65 @@ an overlay room (`192d6aa2` + the pre-commit lane file + the working-tree ledger
 gate showed `tools_rc=1` from a *concurrent* writer's half-built `self_rebuild.rs`
 (`error[E0425]: cannot find function 'room_handoff' … self_rebuild.rs:100`); that red was not mine and was not
 argued away — it is recorded with its attribution in the ledger row. The gate for the committed bytes is the g39 byte-copy room transcript (`/tmp/g39room.out`: 354 of 354 tree paths byte-identical to `065efd3`, every verb run there); the g30 overlay room is the witness for the pre-commit lane, where two of the 354 files differ from `065efd3` because the room script overlaid one and never copied the other.
+
+## Record-lag close: units landed since the previous entry (written 2026-11-17T08:54Z)
+
+This document last moved at `629683b` (2026-11-13T18:18:16-05:00). Since then `git rev-list --count 629683b..HEAD`
+= **45** commits, of which **20** change paths under `core/`, `tools/`, `verification/` or `platform/`. The list
+below is read from `git log --format=… --shortstat 629683b..HEAD -- core tools verification platform`, not from
+memory, and each row is the commit's own shortstat:
+
+- `6102133` classify a native group's own required reference as a missing input — 1 file, +27/-2
+- `e500c6d` commit the journalled revision on the product's own verb — 3 files, +1393/-14
+- `46e392e` carry a journalled revision forward on the re-exec verb — 2 files, +327/-1
+- `69bc535` APK-subject reader census from the native legs — 1 file, +5/-2
+- `dd5cff7` native producer for the publisher's regression record — 1 file, +328/-13
+- `1225caf` hosted-search stops spending an operation slot, lookup budget raised — 1 file, +20/-5
+- `689994a` the core turn clock answers for the background lease — 5 files, +209/-53
+- `48ad494` the owned User-Agent line plus the Accept line each route writes — 7 files, +311/-7
+- `a2e3881` release-numbering stem — 2 files, +2915/-8
+- `297937a` the 73-group registry pair and its twins — 7 files, +3669/-133
+- `9cb116c` the 73-group connected record with both APK gates converted — 1 file, +118/-55
+- `10fb71f` release-numbering and network-drive rows — 2 files, +382/-1
+- `5f72682` clear the expected report before the run so a leftover is never credited — 1 file, +34
+- `38add11` advertised tool set and active agent index in the history-migration twin — 1 file, +144/-11
+- `dc1a411` the history-migration twin prints the retired leg byte-for-byte and clears its scratch on the abort path — 1 file, +29/-5
+- `ab52052` dispatch a reference flag only to a group that names it in its own source — 1 file, +337/-6
+- `8abd8fb` a refused candidate keeps its own refusal diagnostic; lookup mode keeps its own operation allowance — 1 file, +159/-45
+- `76e637d` compare the same-build model-facing payload across compaction, not an invented ratio — 1 file, +150/-60
+- `d86300a` each verification twin removes its own scratch tree on exit — 4 files, +54/-8
+- `c57f756` the capture test reserves its scratch tree exclusively and removes it — 1 file, +54/-3 (HEAD)
+
+Standing witnesses for these bytes, measured earlier in this session and **not** re-run to write this section:
+a room of `dc1a411` reads `Rust cases passed: 895/895; isolated application cases: 61`; the live dirty tree at
+`c57f756` reads `Rust cases passed: 942/951; isolated application cases: 61` with gate rc=1,
+its nine reds pre-existing on uncommitted core bytes, and that run's gate stdout hashes to
+`426f904380bd7b937068d2ef968f48b230c6f65c89ef849e48802b12bd828985`; a twins build of the tracked tree prints 74
+`^twin:` rows. Nothing here re-litigates a settled leg.
+
+Open lane state at the same moment, five candidates staged and none installed: `verification/history_migration.rs`
+`2b5c987eb64f…`, the four-twin claim set `verification/{carry_flow,diagnostics,drive_ownership,turn_runtime}.rs`
+`d10d08539c1e… / 8d1613ec6ef8… / dd535f71c9e6… / 96cdf1ae1f08…`, and the nesting-aware scanner candidate
+`tools/harness.rs` `10c950d6bed3…`. Each live target is porcelain-clean and equal to its HEAD blob, so every one of
+those installs would move bytes; each is held until an independent re-audit card whose subject digest equals the
+bytes to be installed. Not measured for this section: the per-commit gate lines for the 20 product commits above.
+
+### Repin: the record's own HEAD pin moved while this section was written (2026-11-17T09:45Z)
+
+The section above pins HEAD at `c57f756`. That pin is now stale by one commit and is repinned here rather than
+left in the file unqualified. `git rev-list --count 629683b..HEAD` = **46** commits, **21** of them touching
+`core/`, `tools/`, `verification/` or `platform/`. HEAD is `7271ead7988da1f63027fec9cd879949230cbb15`
+("Scope the scratch-cleanup claim in the history_migration twin to what its guard covers"), which carries
+`verification/history_migration.rs` at `2b5c987eb64fbe6276e7966587ba1f328a188fb22f3a581847b453481fc8b1a5` —
+the first of the five staged candidates listed above, now installed, so that row is closed and the remaining
+four (`verification/{carry_flow,diagnostics,drive_ownership,turn_runtime}.rs`) plus `tools/harness.rs`
+`10c950d6bed3…` are still staged-uninstalled. The tree digest is identical across `7271ead` and the two
+superseded message rewrites of the same commit, which are now unreachable; no gate leg was re-run for a
+message-only change.
+
+One census correction, because the record cites this number: the count of commits carrying the attribution
+trailer is **177** on `refs/heads/main` measured by the vendor token (`grep -c -i alibabacloud` over
+`git log --format=%B`). A looser `grep -c -i 'Co-authored-by'` prints **178**, and the extra match is not a
+trailer at all — it is the phrase inside the body sentence "Cleared: this window's commits carry no
+Co-authored-by trailer (author Shawn Fowler)." of commit `31f24b9ff6ed0bca2d0ee2abcfc538410d1fd3ad`. A trailer
+census must be anchored to the trailer position or it counts its own prose.
