@@ -71,6 +71,39 @@ fn is_ident_char(c: char) -> bool {
 
 // Find the next needle that is not inside a comment or a string literal, so a
 // token written in prose never reads as code.
+// The language a group's source is written in. A decision read that reads a
+// group's own text has to read that language's comments and that language's
+// literals, so the language travels with the source whose contract it decides.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceLanguage {
+    Rust,
+    Python,
+}
+
+// A Rust block comment nests: the comment that opens here closes only at the
+// match that closes it, so the text between an outer open and its own close is
+// comment even when it holds another comment. An unclosed comment runs to the
+// end of the source.
+fn block_comment_end(chars: &[char], at: usize) -> usize {
+    let mut depth = 0i32;
+    let mut index = at;
+    while index < chars.len() {
+        if chars[index] == '/' && chars.get(index + 1) == Some(&'*') {
+            depth += 1;
+            index += 2;
+        } else if chars[index] == '*' && chars.get(index + 1) == Some(&'/') {
+            depth -= 1;
+            index += 2;
+            if depth == 0 {
+                break;
+            }
+        } else {
+            index += 1;
+        }
+    }
+    index
+}
+
 fn find_outside(chars: &[char], from: usize, needle: &str) -> Option<usize> {
     let needle: Vec<char> = needle.chars().collect();
     let mut at = from;
@@ -83,10 +116,7 @@ fn find_outside(chars: &[char], from: usize, needle: &str) -> Option<usize> {
                 };
             }
             '/' if chars.get(at + 1) == Some(&'*') => {
-                at = match chars[at + 2..].windows(2).position(|pair| pair == ['*', '/']) {
-                    Some(offset) => at + 2 + offset + 2,
-                    None => chars.len(),
-                };
+                at = block_comment_end(chars, at);
             }
             '"' => {
                 at = match string_end(chars, at) {
@@ -132,10 +162,7 @@ fn find_outside_comments(chars: &[char], from: usize, needle: &str) -> Option<us
                 };
             }
             '/' if chars.get(at + 1) == Some(&'*') => {
-                at = match chars[at + 2..].windows(2).position(|pair| pair == ['*', '/']) {
-                    Some(offset) => at + 2 + offset + 2,
-                    None => chars.len(),
-                };
+                at = block_comment_end(chars, at);
             }
             '"' => {
                 // A literal is code: the whole extent is searched, quotes
@@ -183,6 +210,150 @@ fn find_outside_comments(chars: &[char], from: usize, needle: &str) -> Option<us
 fn contains_outside_comments(source: &str, needle: &str) -> bool {
     let chars: Vec<char> = source.chars().collect();
     find_outside_comments(&chars, 0, needle).is_some()
+}
+
+// The bytes of a Python source that are code. A comment is prose and a string
+// literal is the group's own text, so neither decides an argument contract.
+// The mask is over-inclusive where the extent of a literal cannot be resolved:
+// an extent that never closes runs to the end of the source.
+fn python_code_mask(source: &str) -> Vec<bool> {
+    let bytes = source.as_bytes();
+    let mut code = vec![false; bytes.len()];
+    let mut at = 0usize;
+    while at < bytes.len() {
+        let byte = bytes[at];
+        if byte == b'#' {
+            // A line comment runs to the end of the line.
+            while at < bytes.len() && bytes[at] != b'\n' {
+                at += 1;
+            }
+            continue;
+        }
+        if byte == b'\'' || byte == b'"' {
+            let quote = byte;
+            let triple = bytes.get(at + 1) == Some(&quote) && bytes.get(at + 2) == Some(&quote);
+            let mut end = at + if triple { 3 } else { 1 };
+            while end < bytes.len() {
+                if bytes[end] == b'\\' {
+                    end += 2;
+                    continue;
+                }
+                if triple {
+                    if bytes[end] == quote
+                        && bytes.get(end + 1) == Some(&quote)
+                        && bytes.get(end + 2) == Some(&quote)
+                    {
+                        end += 3;
+                        break;
+                    }
+                } else if bytes[end] == quote {
+                    end += 1;
+                    break;
+                }
+                end += 1;
+            }
+            at = end.min(bytes.len());
+            continue;
+        }
+        code[at] = true;
+        at += 1;
+    }
+    code
+}
+
+// The first place the needle appears in code. A needle that runs from code
+// into a literal - the spelling of an argument is one - is found by its start.
+fn find_in_code(source: &str, code: &[bool], needle: &str, from: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let wanted = needle.as_bytes();
+    if wanted.is_empty() || wanted.len() > bytes.len() {
+        return None;
+    }
+    let start = from.min(bytes.len());
+    if start + wanted.len() > bytes.len() {
+        return None;
+    }
+    (start..=bytes.len() - wanted.len())
+        .find(|at| code[*at] && &bytes[*at..*at + wanted.len()] == wanted)
+}
+
+// The place a Python group declares the flag: the parser's own call in the
+// group's code, followed by the flag's own spelling. The spelling is a string
+// literal, so the call's text decides the match and not the literal's content.
+fn python_declaration_at(source: &str, code: &[bool], flag: &str) -> Option<usize> {
+    let single = format!("'{flag}'");
+    let double = format!("\"{flag}\"");
+    let mut from = 0usize;
+    while let Some(at) = find_in_code(source, code, "add_argument(", from) {
+        let text = &source[at + "add_argument(".len()..];
+        if text.starts_with(&single) || text.starts_with(&double) {
+            return Some(at);
+        }
+        from = at + 1;
+    }
+    None
+}
+
+// The text of the declaration a group wrote. A single line can declare several
+// arguments, so the text stops at the next declaration.
+fn declaration_text(source: &str, at: usize) -> &str {
+    let line_end = source[at..].find('\n').map(|offset| at + offset).unwrap_or(source.len());
+    let line = &source[at..line_end];
+    match line.find("add_argument(") {
+        Some(first) => match line[first + 13..].find("add_argument(") {
+            Some(next) => &line[..first + 13 + next],
+            None => line,
+        },
+        None => line,
+    }
+}
+
+// Whether a group's own code declares the flag as an argument. The spelling is
+// read from the group's own code in that language, so a comment that names the
+// argument declares nothing.
+fn declares_argument(source: &str, flag: &str, language: SourceLanguage) -> bool {
+    match language {
+        SourceLanguage::Rust => contains_outside_comments(source, &format!("add_argument('{flag}'")),
+        SourceLanguage::Python => {
+            let code = python_code_mask(source);
+            python_declaration_at(source, &code, flag).is_some()
+        }
+    }
+}
+
+// Whether a group's own code requires the flag. A Python group requires it
+// with the parser's own keyword on the declaration it wrote, so the keyword is
+// read from that declaration and a keyword in a comment requires nothing.
+// The scan reads a source in characters, so a position it returns is turned
+// back into the byte offset the rest of the runner slices with.
+fn byte_offset(source: &str, char_index: usize) -> usize {
+    source
+        .char_indices()
+        .nth(char_index)
+        .map(|(byte, _)| byte)
+        .unwrap_or(source.len())
+}
+
+fn declares_required(source: &str, flag: &str, language: SourceLanguage) -> bool {
+    match language {
+        SourceLanguage::Rust => {
+            let declared = format!("add_argument('{flag}'");
+            // The declaration is located where the group's own code writes it,
+            // so a declaration that only a comment writes is not the
+            // declaration the required keyword is read from.
+            let chars: Vec<char> = source.chars().collect();
+            let Some(at) = find_outside_comments(&chars, 0, &declared) else { return false };
+            let at = byte_offset(source, at);
+            contains_outside_comments(declaration_text(source, at), "required=True")
+        }
+        SourceLanguage::Python => {
+            let code = python_code_mask(source);
+            let Some(at) = python_declaration_at(source, &code, flag) else { return false };
+            let declaration = declaration_text(source, at);
+            let declaration_code = python_code_mask(declaration);
+            find_in_code(declaration, &declaration_code, "required=True", 0).is_some()
+        }
+    }
 }
 
 fn string_end(chars: &[char], at: usize) -> Option<usize> {
@@ -432,7 +603,7 @@ fn json_escape(value: &str) -> String {
 
 // A group's inputs come from its own source, so a newly required toolchain is
 // discovered instead of being assumed by a hand-maintained table.
-fn required_inputs(root: &Path, source: &str) -> Vec<Input> {
+fn required_inputs(root: &Path, source: &str, language: SourceLanguage) -> Vec<Input> {
     let mut inputs = Vec::new();
     let mut seen = BTreeSet::new();
     // A native twin reads the same variables through std::env, so the Python
@@ -482,9 +653,9 @@ fn required_inputs(root: &Path, source: &str) -> Vec<Input> {
         // only mentions the flag guards the comparison itself and stays runnable.
         // The phrase is read from the group's own literal, so a comment that
         // mentions it is prose and decides nothing.
-        let declared = format!("add_argument('{flag}'");
+        let declared = declares_argument(source, flag, language);
         let native_required = contains_outside_comments(source, &format!("arguments are required: {flag}"));
-        if !source.contains(&declared) && !native_required {
+        if !declared && !native_required {
             continue;
         }
         let detail = if default.is_empty() {
@@ -495,10 +666,10 @@ fn required_inputs(root: &Path, source: &str) -> Vec<Input> {
         let path = flag_path(root, flag).or_else(|| {
             (!default.is_empty()).then(|| root.join(default))
         });
-        let required = if source.contains(&declared) {
-            flag_required(source, flag, default)
+        let required = if declared {
+            flag_required(source, flag, default, language)
         } else {
-            native_required && !declares_optional_guard(source, flag)
+            native_required && !declares_optional_guard(source, flag, language)
         };
         if required && !path.map(|path| path.exists()).unwrap_or(false) {
             inputs.push(Input { kind: "path", detail, present: false });
@@ -600,34 +771,28 @@ fn published_apk(root: &Path) -> (PathBuf, String) {
     (root.join("release/RLLM.apk"), "release/RLLM.apk".into())
 }
 
-fn declares_required(source: &str, flag: &str) -> bool {
-    let declared = format!("add_argument('{flag}'");
-    let Some(at) = source.find(&declared) else { return false };
-    let line_end = source[at..].find('\n').map(|offset| at + offset).unwrap_or(source.len());
-    let declaration = &source[at..line_end];
-    // A single line can declare several arguments, so stop at the next one.
-    let declaration = match declaration.find("add_argument(") {
-        Some(first) => {
-            match declaration[first + 13..].find("add_argument(") {
-                Some(next) => &declaration[..first + 13 + next],
-                None => declaration,
-            }
-        }
-        None => declaration,
-    };
-    declaration.contains("required=True")
-}
-
 // A group that reads a reference only inside a guard runs without it; one that
 // reads it unconditionally cannot. Both signals live in the group's own source,
 // so the pre-flight and the argument builder must read the same authority here.
-fn declares_optional_guard(source: &str, flag: &str) -> bool {
+fn declares_optional_guard(source: &str, flag: &str, language: SourceLanguage) -> bool {
     let name = format!("args.{}", flag.trim_start_matches('-').replace('-', "_"));
-    source.contains(&format!("if {name}")) || source.contains(&format!("if !{name}"))
+    let guard = format!("if {name}");
+    let negated = format!("if !{name}");
+    match language {
+        SourceLanguage::Rust => {
+            contains_outside_comments(source, &guard) || contains_outside_comments(source, &negated)
+        }
+        SourceLanguage::Python => {
+            let code = python_code_mask(source);
+            find_in_code(source, &code, &guard, 0).is_some()
+                || find_in_code(source, &code, &negated, 0).is_some()
+        }
+    }
 }
 
-fn flag_required(source: &str, flag: &str, default: &str) -> bool {
-    !declares_optional_guard(source, flag) && (declares_required(source, flag) || !default.is_empty())
+fn flag_required(source: &str, flag: &str, default: &str, language: SourceLanguage) -> bool {
+    !declares_optional_guard(source, flag, language)
+        && (declares_required(source, flag, language) || !default.is_empty())
 }
 
 fn flag_path(root: &Path, flag: &str) -> Option<PathBuf> {
@@ -662,13 +827,12 @@ fn native_accepts_flag(source: &str, flag: &str) -> bool {
 // A required reference is validated before dispatch; an optional one is passed
 // only when it actually exists, and its absence is reported as an unexercised
 // comparison leg rather than a silent narrowing.
-fn group_arguments(root: &Path, source: &str) -> (Vec<String>, Vec<String>) {
+fn group_arguments(root: &Path, source: &str, language: SourceLanguage) -> (Vec<String>, Vec<String>) {
     let mut arguments = Vec::new();
     let mut unexercised = Vec::new();
     for (flag, default, _) in INPUT_FLAGS {
-        let declared = format!("add_argument('{flag}'");
-        let python_declared = source.contains(&declared);
-        if !python_declared && !native_accepts_flag(source, flag) {
+        let declared = declares_argument(source, flag, language);
+        if !declared && !native_accepts_flag(source, flag) {
             continue;
         }
         let supplied = flag_path(root, flag).or_else(|| {
@@ -684,7 +848,7 @@ fn group_arguments(root: &Path, source: &str) -> (Vec<String>, Vec<String>) {
                 // native group's reference is a comparison input, so its absence
                 // leaves the group runnable and is reported as an unexercised
                 // comparison leg instead of a silent narrowing.
-                let required = python_declared && flag_required(source, flag, default);
+                let required = declared && flag_required(source, flag, default, language);
                 if !required {
                     unexercised.push((*flag).to_string());
                 }
@@ -1528,12 +1692,15 @@ fn python_group(root: &Path, name: &str, arguments: &[String]) -> Command {
     command
 }
 
-fn leg_source(root: &Path, name: &str) -> String {
+fn leg_source(root: &Path, name: &str) -> (String, SourceLanguage) {
     let native = root.join(format!("verification/{name}.rs"));
     if native.is_file() {
-        read(&native)
+        (read(&native), SourceLanguage::Rust)
     } else {
-        read(&root.join(format!("verification/{name}.py")))
+        (
+            read(&root.join(format!("verification/{name}.py"))),
+            SourceLanguage::Python,
+        )
     }
 }
 
@@ -2097,8 +2264,11 @@ fn project_root() -> PathBuf {
 }
 
 fn sweep_one(root: &Path, name: &'static str, opts: &SweepOpts, seconds: u64) -> SweepRow {
-    let source = leg_source(root, name);
-    let missing: Vec<Input> = required_inputs(root, &source).into_iter().filter(|input| !input.present).collect();
+    let (source, language) = leg_source(root, name);
+    let missing: Vec<Input> = required_inputs(root, &source, language)
+        .into_iter()
+        .filter(|input| !input.present)
+        .collect();
     if !missing.is_empty() {
         println!("{}", unavailable_line(name, &missing));
         let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -2358,12 +2528,12 @@ fn main() {
         if !only.is_empty() && !only.iter().any(|wanted| wanted == name) {
             continue;
         }
-        let source = leg_source(&root, name);
-        let missing: Vec<Input> = required_inputs(&root, &source)
+        let (source, language) = leg_source(&root, name);
+        let missing: Vec<Input> = required_inputs(&root, &source, language)
             .into_iter()
             .filter(|input| !input.present)
             .collect();
-        let (arguments, unexercised) = group_arguments(&root, &source);
+        let (arguments, unexercised) = group_arguments(&root, &source, language);
         let mut blocked = missing;
         if !controller.exists() {
             blocked.push(Input {
@@ -2981,16 +3151,16 @@ mod checks {
         let dir = TempDir::new();
         let root = dir.path();
         let native = "fn main(){match flag{--previous-controller=>{}}panic!(\"the following arguments are required: --previous-controller\");}";
-        let inputs = required_inputs(root, native);
+        let inputs = required_inputs(root, native, SourceLanguage::Rust);
         assert!(inputs.iter().any(|input| input.kind == "path" && !input.present && input.detail.contains("--previous-controller reference at output/previous-controller")), "native required input: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
         let guarded = "fn main(){let value=if seen{\"--previous-controller\"}else{\"\"};}";
-        assert!(!required_inputs(root, guarded).iter().any(|input| input.detail.contains("previous-controller")), "a native mention without the required-argument phrase stays runnable");
+        assert!(!required_inputs(root, guarded, SourceLanguage::Rust).iter().any(|input| input.detail.contains("previous-controller")), "a native mention without the required-argument phrase stays runnable");
         let guard_shaped = "fn main(){if !args.previous_controller{panic!(\"the following arguments are required: --previous-controller\");}}";
-        assert!(!required_inputs(root, guard_shaped).iter().any(|input| input.detail.contains("previous-controller")), "the optional-guard pattern, not the panic phrase, decides a guarded native reference");
-        assert!(declares_optional_guard(guard_shaped, "--previous-controller"), "the guard-shaped requirement is read as optional: a known limit of the lexical rule");
+        assert!(!required_inputs(root, guard_shaped, SourceLanguage::Rust).iter().any(|input| input.detail.contains("previous-controller")), "the optional-guard pattern, not the panic phrase, decides a guarded native reference");
+        assert!(declares_optional_guard(guard_shaped, "--previous-controller", SourceLanguage::Rust), "the guard-shaped requirement is read as optional: a known limit of the lexical rule");
         std::fs::create_dir_all(root.join("output")).unwrap();
         std::fs::write(root.join("output/previous-controller"), b"controller").unwrap();
-        assert!(!required_inputs(root, native).iter().any(|input| !input.present && input.detail.contains("--previous-controller")), "the reference build satisfies the input");
+        assert!(!required_inputs(root, native, SourceLanguage::Rust).iter().any(|input| !input.present && input.detail.contains("--previous-controller")), "the reference build satisfies the input");
     }
 
     // The rows that measure a reference measure the reference that sits in the
@@ -3037,13 +3207,13 @@ mod checks {
         // The pre-flight names the reference it needs and the builder names the
         // reference it passes; both must be the same file, or the comparison
         // leg is exercised against a reference the group never saw.
-        let absent = required_inputs(root, native);
+        let absent = required_inputs(root, native, SourceLanguage::Rust);
         assert!(absent.iter().any(|input| input.kind == "path" && !input.present && input.detail.contains("--previous-controller reference at output/previous-controller")), "the pre-flight names the reference the argument builder passes: {:?}", absent.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
         std::fs::create_dir_all(root.join("output")).unwrap();
         std::fs::write(root.join("output/previous-controller"), b"controller").unwrap();
-        let present = required_inputs(root, native);
+        let present = required_inputs(root, native, SourceLanguage::Rust);
         assert!(!present.iter().any(|input| input.detail.contains("--previous-controller")), "the reference the tree holds satisfies the pre-flight: {:?}", present.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
-        let (arguments, unexercised) = group_arguments(root, native);
+        let (arguments, unexercised) = group_arguments(root, native, SourceLanguage::Rust);
         assert_eq!(arguments.first().map(String::as_str), Some("--previous-controller"), "a native group is dispatched with the reference flag its own source names: {arguments:?}");
         assert_eq!(arguments.len(), 2, "the native reference flag and its path, and nothing else: {arguments:?}");
         assert!(arguments[1].ends_with("output/previous-controller"), "the native reference path is the one the tree holds: {arguments:?}");
@@ -3062,15 +3232,15 @@ mod checks {
         // when one was given.
         let native = "fn main(){let mut previous=None;for argument in std::env::args().skip(1){if argument==\"--previous-controller\"{previous=Some(argument);}}if previous.is_none(){println!(\"no previous controller\");}}";
         assert!(!native.contains("arguments are required:"), "this row measures the optional native reference, not the required one");
-        let (arguments, unexercised) = group_arguments(root, native);
+        let (arguments, unexercised) = group_arguments(root, native, SourceLanguage::Rust);
         assert!(arguments.is_empty(), "an absent reference is not passed to the group: {arguments:?}");
         assert_eq!(unexercised, vec!["--previous-controller".to_string()], "the absent reference is reported as an unexercised comparison leg");
-        let inputs = required_inputs(root, native);
+        let inputs = required_inputs(root, native, SourceLanguage::Rust);
         assert!(inputs.iter().all(|input| input.present), "an absent optional reference leaves the group runnable: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
         assert!(!inputs.iter().any(|input| input.detail.contains("--previous-controller")), "an optional native reference is not a required input: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
         std::fs::create_dir_all(root.join("output")).unwrap();
         std::fs::write(root.join("output/previous-controller"), b"controller").unwrap();
-        let (arguments, unexercised) = group_arguments(root, native);
+        let (arguments, unexercised) = group_arguments(root, native, SourceLanguage::Rust);
         assert_eq!(arguments.first().map(String::as_str), Some("--previous-controller"), "the native group receives the reference when the tree holds one: {arguments:?}");
         assert_eq!(arguments.len(), 2, "the native reference flag and its path, and nothing else: {arguments:?}");
         assert!(unexercised.is_empty(), "the comparison leg is exercised when the reference exists: {unexercised:?}");
@@ -3084,21 +3254,56 @@ mod checks {
         let dir = TempDir::new();
         let root = dir.path();
         let required = "import argparse\nargs=argparse.ArgumentParser();args.add_argument('--previous-controller',required=True)\nargs=args.parse_args()";
-        let (arguments, unexercised) = group_arguments(root, required);
+        let (arguments, unexercised) = group_arguments(root, required, SourceLanguage::Python);
         assert!(arguments.is_empty(), "a required Python reference is not passed when it is absent: {arguments:?}");
         assert!(unexercised.is_empty(), "a required Python reference is a missing input, not an unexercised leg: {unexercised:?}");
-        let inputs = required_inputs(root, required);
+        let inputs = required_inputs(root, required, SourceLanguage::Python);
         assert!(inputs.iter().any(|input| input.kind == "path" && !input.present && input.detail.contains("--previous-controller reference at output/previous-controller")), "the pre-flight still reports the required Python reference as missing: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
         let optional = "import argparse\nargs=argparse.ArgumentParser();args.add_argument('--previous-controller')\nargs=args.parse_args()\nif args.previous_controller:\n    print(args.previous_controller)";
-        let (arguments, unexercised) = group_arguments(root, optional);
+        let (arguments, unexercised) = group_arguments(root, optional, SourceLanguage::Python);
         assert!(arguments.is_empty(), "an absent optional Python reference is not passed: {arguments:?}");
         assert_eq!(unexercised, vec!["--previous-controller".to_string()], "an absent optional Python reference is an unexercised comparison leg");
         std::fs::create_dir_all(root.join("output")).unwrap();
         std::fs::write(root.join("output/previous-controller"), b"controller").unwrap();
-        let (arguments, unexercised) = group_arguments(root, required);
+        let (arguments, unexercised) = group_arguments(root, required, SourceLanguage::Python);
         assert_eq!(arguments.first().map(String::as_str), Some("--previous-controller"), "the Python group receives its reference: {arguments:?}");
         assert_eq!(arguments.len(), 2, "the Python reference flag and its path, and nothing else: {arguments:?}");
         assert!(unexercised.is_empty(), "the Python comparison leg is exercised when the reference exists: {unexercised:?}");
+    }
+
+    // A Python comment is prose: it names no argument and requires none. The
+    // declaration is read from the group's own code, so a comment that spells
+    // the declaration decides nothing.
+    #[test]
+    fn a_python_comment_does_not_declare_an_argument() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let commented = "import argparse\n# args.add_argument('--previous-controller',required=True)\n# if args.previous_controller:\nargs=argparse.ArgumentParser();args=args.parse_args()";
+        assert!(commented.contains("# args.add_argument("), "the fixture writes the declaration in a comment");
+        assert!(!declares_argument(commented, "--previous-controller", SourceLanguage::Python), "a comment names no argument");
+        assert!(!declares_required(commented, "--previous-controller", SourceLanguage::Python), "a comment requires nothing");
+        assert!(!declares_optional_guard(commented, "--previous-controller", SourceLanguage::Python), "a comment guards nothing");
+        let (arguments, unexercised) = group_arguments(root, commented, SourceLanguage::Python);
+        assert!(arguments.is_empty(), "a group whose only mention is a comment is dispatched nothing: {arguments:?}");
+        assert!(unexercised.is_empty(), "a group whose only mention is a comment has no reference leg to report: {unexercised:?}");
+        assert!(!required_inputs(root, commented, SourceLanguage::Python).iter().any(|input| input.detail.contains("previous-controller")), "a comment demands nothing");
+        // The group's own code still declares the argument it declares.
+        let declared = "import argparse\nargs=argparse.ArgumentParser();args.add_argument('--previous-controller',required=True)\nargs=args.parse_args()";
+        assert!(declares_argument(declared, "--previous-controller", SourceLanguage::Python), "the group's own code declares the argument");
+        assert!(declares_required(declared, "--previous-controller", SourceLanguage::Python), "the group's own code requires it");
+        assert!(!declares_optional_guard(declared, "--previous-controller", SourceLanguage::Python), "the group's own code does not guard it");
+        // The Python script the tree still carries declares its argument after
+        // this change, so the tree's own groups keep their contract.
+        let script = project_root().join("verification/history_migration.py");
+        if !script.is_file() {
+            eprintln!(
+                "not measured: the tree holds no verification/history_migration.py, so this row would measure a fixture instead of the tree's own script"
+            );
+            return;
+        }
+        let text = read(&script);
+        assert!(declares_argument(&text, "--previous-controller", SourceLanguage::Python), "the tree's own Python script still declares the argument: {script:?}");
+        assert!(declares_required(&text, "--previous-controller", SourceLanguage::Python), "the tree's own Python script still requires it: {script:?}");
     }
 
     // A token written in prose is not the group's grammar. The set of
@@ -3116,7 +3321,7 @@ mod checks {
         let commented = "// the runner also knows the older \"--previous-controller\" reference.\nfn main(){for argument in std::env::args().skip(1){let _=argument;}}";
         assert!(commented.contains("\"--previous-controller\""), "the comment names the token as a quoted token");
         assert!(!native_accepts_flag(commented, "--previous-controller"), "a quoted token in a comment is prose, not the group's grammar");
-        let (arguments, unexercised) = group_arguments(root, commented);
+        let (arguments, unexercised) = group_arguments(root, commented, SourceLanguage::Rust);
         assert!(arguments.is_empty(), "a group whose only mention is a comment is dispatched nothing: {arguments:?}");
         assert!(unexercised.is_empty(), "a group whose only mention is a comment has no reference leg to report: {unexercised:?}");
         // A block comment is prose as well.
@@ -3148,11 +3353,37 @@ mod checks {
         let dir = TempDir::new();
         let root = dir.path();
         let stated = "fn main(){panic!(\"the following arguments are required: --previous-controller\");}";
-        let inputs = required_inputs(root, stated);
+        let inputs = required_inputs(root, stated, SourceLanguage::Rust);
         assert!(inputs.iter().any(|input| input.kind == "path" && !input.present && input.detail.contains("--previous-controller reference at output/previous-controller")), "a native twin's own diagnostic is a required input: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
         let commented = "// the following arguments are required: --previous-controller\nfn main(){for argument in std::env::args().skip(1){let _=argument;}}";
-        let inputs = required_inputs(root, commented);
+        let inputs = required_inputs(root, commented, SourceLanguage::Rust);
         assert!(!inputs.iter().any(|input| input.detail.contains("--previous-controller")), "the same sentence in a comment is prose and demands nothing: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
+    }
+
+    // A Rust block comment nests, so the comment that opens here closes only
+    // at the match that closes it. The text between an outer open and its own
+    // close is comment even when it holds another comment, so a flag token or
+    // a required-input phrase written there is prose and decides nothing.
+    #[test]
+    fn a_token_inside_two_nested_block_comments_decides_nothing() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        // The shape that was measured: the group reads its own arguments and
+        // the only mention of the flag sits in the outer of two nested block
+        // comments.
+        let nested = "/* outer /* inner */ \"--previous-controller\" and the following arguments are required: --previous-controller */\nfn main(){for argument in std::env::args().skip(1){let _=argument;}}";
+        assert!(nested.contains("/* inner */"), "the fixture nests a second comment inside the first");
+        assert!(!native_accepts_flag(nested, "--previous-controller"), "a quoted token in the outer of two nested block comments is prose, not the group's grammar");
+        let (arguments, unexercised) = group_arguments(root, nested, SourceLanguage::Rust);
+        assert!(arguments.is_empty(), "a group whose only mention is a nested comment is dispatched nothing: {arguments:?}");
+        assert!(unexercised.is_empty(), "a group whose only mention is a nested comment has no reference leg to report: {unexercised:?}");
+        assert!(!required_inputs(root, nested, SourceLanguage::Rust).iter().any(|input| input.detail.contains("previous-controller")), "a required-input phrase in the outer of two nested block comments demands nothing");
+        // The group's own parser arm is a string literal and is found.
+        let armed = "fn main(){for argument in std::env::args().skip(1){match argument.as_str(){\"--previous-controller\"=>{}}}}";
+        assert!(native_accepts_flag(armed, "--previous-controller"), "a parser arm is a string literal and is found");
+        // The same phrase in the group's own literal is read.
+        let stated = "fn main(){panic!(\"the following arguments are required: --previous-controller\");}";
+        assert!(required_inputs(root, stated, SourceLanguage::Rust).iter().any(|input| input.detail.contains("--previous-controller")), "the same phrase in the group's own literal is read");
     }
 
     // A row whose premise is absent says that it did not measure and returns.
@@ -3171,7 +3402,7 @@ mod checks {
         let dir = TempDir::new();
         let root = dir.path();
         let hard = "fn main(){let tools = std::env::var_os(\"CLIENT_NDK\")\n    .expect(\"CLIENT_NDK must name the sanctioned toolchain\");}";
-        let inputs = required_inputs(root, hard);
+        let inputs = required_inputs(root, hard, SourceLanguage::Rust);
         let input = inputs
             .iter()
             .find(|input| input.detail.contains("CLIENT_NDK"))
@@ -3180,13 +3411,56 @@ mod checks {
         let expected = std::env::var("CLIENT_NDK").map(|value| !value.trim().is_empty()).unwrap_or(false);
         assert_eq!(input.present, expected, "the input tracks the variable the group reads");
         let chained = "fn main(){let tools = std::env::var_os(\"CLIENT_NDK\").map(std::path::PathBuf::from).unwrap_or_else(|| panic!(\"CLIENT_NDK is not set\"));}";
-        assert!(required_inputs(root, chained).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a panicking fallback is a required read");
+        assert!(required_inputs(root, chained, SourceLanguage::Rust).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a panicking fallback is a required read");
         let guarded = "fn main(){if let Some(root) = std::env::var_os(\"CLIENT_NDK\") { run(root); }}";
-        assert!(!required_inputs(root, guarded).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a guarded read stays runnable");
+        assert!(!required_inputs(root, guarded, SourceLanguage::Rust).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a guarded read stays runnable");
         let defaulted = "fn main(){let tools = std::env::var(\"CLIENT_NDK\").unwrap_or_default();}";
-        assert!(!required_inputs(root, defaulted).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a defaulted read stays runnable");
+        assert!(!required_inputs(root, defaulted, SourceLanguage::Rust).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a defaulted read stays runnable");
         let prose = "fn main(){/* std::env::var_os(\"CLIENT_NDK\") */ let tools = \"\";}";
-        assert!(!required_inputs(root, prose).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a read written in a comment is not a read");
+        assert!(!required_inputs(root, prose, SourceLanguage::Rust).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a read written in a comment is not a read");
+    }
+
+    // The read of an environment variable is read from the group's own code,
+    // so a read written in the outer of two nested block comments is prose and
+    // is not a read.
+    #[test]
+    fn a_read_inside_two_nested_block_comments_is_not_a_read() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let nested = "fn main(){/* outer /* inner */ std::env::var_os(\"CLIENT_NDK\").expect(\"CLIENT_NDK must name the sanctioned toolchain\"); */ }";
+        assert!(!required_inputs(root, nested, SourceLanguage::Rust).iter().any(|input| input.detail.contains("CLIENT_NDK")), "a read written in the outer of two nested block comments is not a read");
+        // The same read in the group's own code is a read.
+        let code = "fn main(){let tools = std::env::var_os(\"CLIENT_NDK\").expect(\"CLIENT_NDK must name the sanctioned toolchain\");}";
+        assert!(required_inputs(root, code, SourceLanguage::Rust).iter().any(|input| input.detail.contains("CLIENT_NDK")), "the same read in the group's own code is a read");
+    }
+
+    // A declaration written in a comment is prose: it declares nothing and
+    // requires nothing. The declaration is located where the group's own code
+    // writes it, so a comment that mentions the declaration first does not
+    // become the declaration the required keyword is read from.
+    #[test]
+    fn a_declaration_in_a_comment_is_not_a_declaration() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        // A flat block comment.
+        let commented = "/* args.add_argument('--previous-controller', required=True) */\nfn main(){}";
+        assert!(!declares_argument(commented, "--previous-controller", SourceLanguage::Rust), "a declaration in a block comment declares no argument");
+        assert!(!declares_required(commented, "--previous-controller", SourceLanguage::Rust), "a declaration in a block comment requires nothing");
+        assert!(!required_inputs(root, commented, SourceLanguage::Rust).iter().any(|input| input.detail.contains("previous-controller")), "a declaration in a block comment demands nothing");
+        // The outer of two nested block comments.
+        let nested = "/* outer /* inner */ args.add_argument('--previous-controller', required=True) */\nfn main(){}";
+        assert!(!declares_argument(nested, "--previous-controller", SourceLanguage::Rust), "a declaration in the outer of two nested block comments declares no argument");
+        assert!(!declares_required(nested, "--previous-controller", SourceLanguage::Rust), "a declaration in the outer of two nested block comments requires nothing");
+        assert!(!required_inputs(root, nested, SourceLanguage::Rust).iter().any(|input| input.detail.contains("previous-controller")), "a declaration in the outer of two nested block comments demands nothing");
+        // The group's own code declares the argument it declares.
+        let declared = "fn main(){ add_argument('--previous-controller', required=True); }";
+        assert!(declares_argument(declared, "--previous-controller", SourceLanguage::Rust), "the group's own code declares the argument");
+        assert!(declares_required(declared, "--previous-controller", SourceLanguage::Rust), "the group's own code requires it");
+        // A comment that mentions the declaration first does not become the
+        // declaration the required keyword is read from.
+        let mentioned = "// args.add_argument('--previous-controller', required=True)\nfn main(){ add_argument('--previous-controller', required=True); }";
+        assert!(declares_argument(mentioned, "--previous-controller", SourceLanguage::Rust), "the group's own code declares the argument");
+        assert!(declares_required(mentioned, "--previous-controller", SourceLanguage::Rust), "the required keyword is read from the declaration in the group's own code");
     }
 
     #[test]
@@ -3225,7 +3499,7 @@ mod checks {
         assert!(row.code.is_none(), "missing input is unavailable, not a failure");
         assert_eq!(row.checks, Some(0), "missing input is recorded as 0");
         assert!(row.missing.iter().any(|item| item.contains("output/tools/alignment")), "missing input names the absent development input: {:?}", row.missing);
-        let blocked: Vec<Input> = required_inputs(root, &read(&script)).into_iter().filter(|input| !input.present).collect();
+        let blocked: Vec<Input> = required_inputs(root, &read(&script), SourceLanguage::Python).into_iter().filter(|input| !input.present).collect();
         let line = unavailable_line("apk_alignment", &blocked);
         assert!(line.contains("UNAVAILABLE (not executed, missing:"), "unavailable line");
         assert!(!line.contains("FAIL"), "unavailable line charged a failure");
