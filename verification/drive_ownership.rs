@@ -633,9 +633,11 @@ fn keep(passed: &mut Vec<String>, name: &str, ok: bool) {
     passed.push(name.to_string());
 }
 
-// The scratch tree is this twin's own working area. It must not survive the
-// twin on any exit path, including a panic, so the removal rides on Drop the
-// way the other twins that clean up after themselves do.
+// The scratch tree is this twin's own working area. The removal rides on this
+// twin's own Drop guard, so the tree goes away when the twin returns normally
+// and when a panic unwinds out of it. An uncatchable termination such as
+// SIGKILL leaves the tree behind; that ceiling belongs to the runner's
+// timeout path, which kills the twin's process group, not to this twin.
 struct Scratch(std::path::PathBuf);
 
 impl Drop for Scratch {
