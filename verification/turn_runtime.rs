@@ -7,8 +7,8 @@ const SCOPE: &str = "Executed output/headless/RLLM --jsonl: send event, returned
 fn main() {
     let root = std::env::current_dir().expect("project cwd");
     let root = root.to_str().expect("UTF-8 project path");
-    let scratch = twin::create_scratch(std::path::Path::new(root), "turn-runtime");
-    let workspace = scratch.to_str().expect("UTF-8 workspace");
+    let scratch = Scratch(twin::create_scratch(std::path::Path::new(root), "turn-runtime"));
+    let workspace = scratch.0.to_str().expect("UTF-8 workspace");
     let mut product = Controller::spawn(root);
     let mut checks = Vec::new();
     let resumed = product.event(None, "resume", obj(vec![]), workspace);
@@ -42,7 +42,7 @@ fn main() {
             && !text(&begun, "holder").is_empty());
     // No view callback is issued during this interval. Re-read the exact state
     // from disk before returning it through the public product operation.
-    let persisted_path = scratch.join("turn-state.json");
+    let persisted_path = scratch.0.join("turn-state.json");
     std::fs::write(&persisted_path, state(&begun).to_string()).expect("persist owner state");
     let persisted = Value::parse(&std::fs::read_to_string(&persisted_path).expect("read owner state"));
     let tick = turn(&mut product, vec![
@@ -150,4 +150,15 @@ fn committed_reply(state: &Value, answer: &str) -> bool {
         let Some(Value::Arr(messages)) = chat.get("messages") else { return false };
         messages.iter().any(|message| text(message, "role") == "assistant" && text(message, "content") == answer)
     })
+}
+
+// The scratch tree is this twin's own working area. It must not survive the
+// twin on any exit path, including a panic, so the removal rides on Drop the
+// way the other twins that clean up after themselves do.
+struct Scratch(std::path::PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }

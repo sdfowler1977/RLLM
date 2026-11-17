@@ -12,10 +12,11 @@ fn scratch_root() -> &'static str {
 
 fn main() {
     let root = std::env::current_dir().unwrap_or_else(|error| panic!("cwd: {error}"));
-    let scratch = twin::create_scratch(&root, "diagnostics-");
-    std::fs::write(scratch.join("input.txt"), "Local work after range validation.")
+    let scratch = Scratch(twin::create_scratch(&root, "diagnostics-"));
+    std::fs::write(scratch.0.join("input.txt"), "Local work after range validation.")
         .unwrap_or_else(|error| panic!("could not write input.txt: {error}"));
     let scratch_text = scratch
+        .0
         .to_str()
         .unwrap_or_else(|| panic!("scratch root is not UTF-8"))
         .to_string();
@@ -612,4 +613,15 @@ fn json_string(text: &str) -> String {
     }
     out.push('"');
     out
+}
+
+// The scratch tree is this twin's own working area. It must not survive the
+// twin on any exit path, including a panic, so the removal rides on Drop the
+// way the other twins that clean up after themselves do.
+struct Scratch(std::path::PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }

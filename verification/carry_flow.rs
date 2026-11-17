@@ -49,9 +49,9 @@ identity_bics: bics x28,x21,x21
 
 fn main() {
     let root = std::env::current_dir().unwrap_or_else(|error| panic!("cwd: {error}"));
-    let scratch = twin::create_scratch(&root, "carry-flow-");
+    let scratch = Scratch(twin::create_scratch(&root, "carry-flow-"));
     let root_text = root.to_str().unwrap_or_else(|| panic!("project root is not UTF-8")).to_string();
-    let scratch_text = scratch.to_str().unwrap_or_else(|| panic!("scratch path is not UTF-8")).to_string();
+    let scratch_text = scratch.0.to_str().unwrap_or_else(|| panic!("scratch path is not UTF-8")).to_string();
     let mut controller = Controller::spawn(&root_text);
     let passed = run(&mut controller, &scratch_text);
     controller.finish();
@@ -516,4 +516,15 @@ fn keep(passed: &mut Vec<String>, name: &str, ok: bool, detail: &str) {
         panic!("{name}: {detail}");
     }
     passed.push(name.to_string());
+}
+
+// The scratch tree is this twin's own working area. It must not survive the
+// twin on any exit path, including a panic, so the removal rides on Drop the
+// way the other twins that clean up after themselves do.
+struct Scratch(std::path::PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
