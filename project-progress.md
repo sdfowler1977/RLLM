@@ -1639,3 +1639,35 @@ Not measured for this section: no gate leg was re-run (this is a documentation-o
 per-commit gate lines for the product commits between `629683b` and HEAD are still unrecorded; the
 settled 895/895, 936/951 and 942/951 legs were not re-run and their verdicts still describe the bytes
 they were measured on.
+
+## Four twin install legs landed (2026-11-17)
+
+The independent re-audit of the four comment-only twin repairs closed as FINAL with a PASS verdict and an
+empty `blocking_finding_ids` array: `.qwen/fleet/HISTMIG_C2_R2A.card.json` (67,378 B, sha256
+`9d0a63dbccfe1a37…`, seat `audit-call_89e0272dac4b4be5ab9eeb0e` COMPLETED, `self_accepted false`). Its
+`subject.files` rows pin exactly the four digests this section previously published, each with
+`pin_matched: true`, and the seat re-measured all four at 13:44:08Z, so the verdict is keyed to the bytes
+that were installed rather than to a superseded key.
+
+Each install is one copy of the staged deliverable over its live path plus one single-path plumbing
+commit (`git add <path>`, `git write-tree`, `git commit-tree <tree> -p <parent>`, `git update-ref`), so no
+commit carries more than one path:
+
+- `verification/carry_flow.rs` → `08e402933a673cee3127f58f40c8a2913c313358`
+- `verification/diagnostics.rs` → `c2399c21cc0b6ff685b0da21f72c575ef07f1ca1`
+- `verification/drive_ownership.rs` → `403095067cda39ae7ba68555960216dcdab26bc4`
+- `verification/turn_runtime.rs` → `f35e19e1bb9979748d6140dc1547fb0c5fa8df72` (HEAD)
+
+Each commit moves exactly one file, 5 insertions and 3 deletions, confirmed by `git show --stat`.
+Before each copy the live path was re-measured equal to its HEAD blob (`4c22bef3e1ed…`, `cee3bcbdab87…`,
+`15d70bfe8efb…`, `7c3f5a4f8548…`) and after the copy equal to the card-pinned digest, so no leg was
+vacuous. The compiled program is provably unchanged by these four commits: stripping every line whose
+first non-space character is `//` from the HEAD blob and from the installed bytes gives the same sha256
+for all four (`9cd8528ad469f0bc…`, `6fd954ce23304548…`, `114b9d6cc0deb4c6…`, `0d7bf2e078fe14e0…`), so the
+settled gate verdicts still describe these bytes and no gate leg was re-run.
+
+Commit messages are subject plus body only. The new commit census is 0 anchored `Co-authored-by:`
+matches, 0 `Signed-off-by:` and 0 vendor tokens; the whole-ancestry anchored census stays **177** for
+both the trailer and the vendor token, so the 177 tagged ancestors are untouched and no history was
+rewritten. `git status --porcelain` remains 28 paths: the four installed paths were clean before (live
+equal to HEAD) and are clean again after, so the dirty set is the same set as before these legs.
