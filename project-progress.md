@@ -1708,3 +1708,46 @@ Commit census: subject and body only, 0 anchored attribution trailers, 0
 `Signed-off-by`, 0 vendor or brand tokens; the whole-ancestry anchored census
 remains **177** for both the trailer and the vendor token, so the tagged
 ancestors are untouched. `git config` untouched; nothing pushed.
+
+## Runner install leg landed — the last of the six queued installs (2026-11-17)
+
+`tools/harness.rs` went in as one copy plus one single-path plumbing commit,
+`b3aa2a811bf7bbfe2ecf3c5ceaf707794cbb661c`: 1 file, **373 insertions and 8
+deletions**, 3,960 -> 4,325 lines, 179,375 -> 195,806 bytes, confirmed by
+`git show --stat` and equal to the shape the independent audit measured. Before
+the copy the live file measured equal to its HEAD blob
+(`10c950d6bed3fe91fa6db137c055f37e850d8fb83716fe6e4c8cfaf51fd08145`, via
+`git show HEAD:<path> | sha256sum`) and after it equal to the audited digest
+`153d94a9a044d87035759872cfb5f90a800b7b1a0fbe741c063f367f4930bc75`, so the leg was
+not vacuous. The licensing card is the FINAL
+`.qwen/fleet/HARNJ1_RA1.card.json` (41,160 B, sha256 `56d38bfbe2b30025…`, seat
+COMPLETED, verdict PASS, `blocking_finding_ids` an empty array).
+
+Unlike the five comment-only legs, this one ships executable code, so the record
+carries the runtime legs the audit measured rather than a comment-stripping proof:
+the sanctioned gate prints `Rust cases passed: 942/951; isolated application
+cases: 61` in both the base room and the staged room with byte-identical logs,
+and the runner's own rows go from 52 declared/52 passing to 62 declared/62
+passing, with the 10 new rows also green run individually. The behaviour was
+witnessed in rooms: the base room leaves a signal-killed group's scratch tree
+behind, the staged room reclaims it, and a live owner's tree is kept.
+
+Mechanism now in the product: the existing group kill reads the scratch census
+before signalling, then reclaims only trees whose embedded owner pid belongs to
+that child and is no longer live (missing, zombie or unreadable owner counts as
+gone), plus a leftover pass for trees no running owner holds. Two residuals stay
+open and are the audit's, not new claims: the reclaim census is the pre-kill
+snapshot, so group members created after it can still be orphaned (a burst
+fixture published 2,789 trees, reclaimed 2,786, orphaned 3); and the reclaim runs
+inside the runner process, so a runner itself killed by SIGKILL runs none of it.
+
+State the record must not blur: the committed source is now the reclaiming runner,
+while the built artifact `output/harness` in the live tree still carries the base
+runner bytes — it is a build product of `tools/build-harness.sh`, was not rebuilt
+in this leg, and `output/harness sweep` remains coordinator-only and HELD, so no
+group log or delivered record moved with this commit.
+
+Commit census: subject and body only, 0 anchored attribution trailers, 0
+`Signed-off-by`, 0 vendor or brand tokens; the whole-ancestry anchored census
+remains **177** for the trailer and **177** for the vendor token. `git config`
+untouched; nothing pushed; `git status --porcelain` stays at 28 paths.
