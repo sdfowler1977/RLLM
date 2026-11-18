@@ -24,6 +24,7 @@ mod har_evidence;
 mod dotnet_evidence;
 #[path="js_evidence.rs"] mod js_evidence;
 use std::{collections::BTreeMap, ffi::CString, os::raw::c_char};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Json {
@@ -378,8 +379,19 @@ fn response(v: &Json) -> Result<Json> {
     Ok(s(&reply.text))
 }
 
-fn turn_lease(window: i64) -> i64 {
-    window.min(600000).max(30000)
+/// The window of a turn: the end-to-end bound of the request it carries. The
+/// upper bound is the horizon of the platform transport, so every window the
+/// core states can be carried by the request it protects. A longer transport
+/// would be refused by the platform and the promotion would outlive the
+/// request it protects.
+fn turn_window(window_ms: i64) -> i64 {
+    window_ms.min(120000).max(30000)
+}
+/// The time a turn has left against its own window. The promotion of a turn
+/// lasts exactly as long as the request it protects, so it can neither outlive
+/// the request nor end before it.
+fn turn_remaining(window: i64, elapsed_ms: i64) -> i64 {
+    (window - elapsed_ms.max(0)).max(0)
 }
 fn turn_elapsed(elapsed_ms: i64) -> String {
     let total = (elapsed_ms / 1000).max(0);
@@ -396,18 +408,409 @@ fn whole_ms(v: &Json, key: &str) -> Result<i64> {
     };
     text.parse::<i64>().map_err(|_| format!("Invalid {key}"))
 }
-fn turn_clock(v: &Json) -> Result<Json> {
-    let mut fields = Vec::new();
-    if v.get("window_ms").is_ok() {
-        fields.push(("lease_ms", Num(turn_lease(whole_ms(v, "window_ms")?).to_string())));
+// --- The turn owner -----------------------------------------------------------------
+// One typed operation holds the whole policy of a model turn: admission, the
+// lease, the cadence, the expiry notice, the reply text, the title and channel
+// defaults and the durable request identity. The Android side keeps only the
+// platform calls, so no turn policy is duplicated in Java.
+//
+// The durable identity of a turn is the pair of its request ticket and the
+// holder token this core issued for it. Only the holder may extend the lease
+// or retire the identity, so a turn that is already over cannot strip the
+// lease, the notification or the identity of a newer live turn.
+//
+// A turn has one window: the end-to-end bound of the request it carries. The
+// promotion of the turn lasts the time the request has left, so the promotion
+// can neither outlive the request nor end before it. The window is the only
+// bound the product states, and it is stated here.
+//
+// Two clocks meet in a turn and they are not the same clock. The request runs
+// on the elapsed time since the turn started; the promotion runs on the
+// elapsed time since its own lease was decided. A renewal of the lease never
+// rewinds the request's clock, so the progress a user reads is the progress
+// the turn really made.
+//
+// The actions are begin, extend, tick, expire, finish, publish and rebind.
+// begin is the only writer of the identity. extend decides the lease, tick
+// decides the progress and the expiry, expire produces the notice that the
+// refused start also produces, finish retires the identity, publish composes
+// and holds the reply, and rebind restores the model identity of a turn that
+// this process still owns.
+
+/// How often a running turn reports its progress.
+const TURN_CADENCE_MS: i64 = 1000;
+/// The longest reply text a notification may carry.
+const TURN_REPLY_LIMIT: usize = 600;
+/// The default label of a running turn.
+const TURN_LABEL: &str = "Replying";
+/// The title of the progress notification.
+const TURN_PROGRESS_TITLE: &str = "RLLM is working";
+/// The title of a published reply.
+const TURN_REPLY_TITLE: &str = "RLLM reply";
+/// The title of a turn that failed.
+const TURN_FAILED_TITLE: &str = "RLLM turn failed";
+/// The notification channel of a running turn.
+const TURN_PROGRESS_CHANNEL: &str = "turn";
+/// The notification channel of a published reply.
+const TURN_REPLY_CHANNEL: &str = "replies";
+/// The display name of the running turn's channel.
+const TURN_PROGRESS_CHANNEL_NAME: &str = "Working";
+/// The display name of the reply channel.
+const TURN_REPLY_CHANNEL_NAME: &str = "Replies";
+/// The notice a turn shows when its background protection is lost. The refused
+/// start path and the lease expiry path both reach the user through this text.
+const TURN_PROTECTION_LOST: &str = "Background protection was lost. The turn still runs.";
+/// The notice a turn shows when its outcome cannot be established. Nothing is
+/// replayed, because the remote completion of the request is uncertain.
+const TURN_UNCERTAIN: &str = "The previous turn did not finish. Nothing was replayed.";
+/// The holder tokens of the admitted turns. The counter is process local; the
+/// request ticket keeps the pair of ticket and holder unique across a restart.
+static TURN_HOLDERS: AtomicU64 = AtomicU64::new(0);
+
+/// A state field. An absent field has no value.
+fn state_get<'a>(st: &'a Json, k: &str) -> Option<&'a Json> {
+    match st {
+        Obj(o) => o.get(k),
+        _ => None,
     }
-    if v.get("elapsed_ms").is_ok() {
-        fields.push(("text", s(&turn_elapsed(whole_ms(v, "elapsed_ms")?))));
+}
+/// A state field as text. An absent or null field reads as empty.
+fn state_text(st: &Json, k: &str) -> String {
+    match state_get(st, k) {
+        Some(value) => value.text().unwrap_or("").into(),
+        None => String::new(),
     }
-    if fields.is_empty() {
-        return Err("Turn clock needs a window or an elapsed time".into());
+}
+/// A state field as a flag.
+fn state_bool(st: &Json, k: &str) -> bool {
+    match state_get(st, k) {
+        Some(Bool(true)) => true,
+        Some(Str(text)) => text.trim() == "true",
+        _ => false,
     }
-    Ok(obj(fields))
+}
+fn state_put(st: &mut Json, k: &str, v: Json) {
+    if let Obj(o) = st {
+        o.insert(k.into(), v);
+    }
+}
+/// A field of a nested state object.
+fn nested_text(st: &Json, outer: &str, inner: &str) -> String {
+    match state_get(st, outer) {
+        Some(value) => state_text(value, inner),
+        None => String::new(),
+    }
+}
+/// An optional request field as text.
+fn opt_text<'a>(v: &'a Json, k: &str) -> Option<&'a str> {
+    match v.get(k) {
+        Ok(value) => value.text().ok(),
+        Err(_) => None,
+    }
+}
+
+/// The durable identity of an in-flight model turn. It lives in the encrypted
+/// application state, so it survives a process kill and is the only handle a
+/// recreated Activity may re-bind to. Nothing else writes it.
+fn turn_identity(st: &Json) -> String {
+    nested_text(st, "turn_expected", "ticket")
+}
+/// The holder token of the durable identity. Only this holder may extend the
+/// lease or retire the identity.
+fn turn_holder_identity(st: &Json) -> String {
+    nested_text(st, "turn_expected", "holder")
+}
+/// The holder token of a new admission. It is issued here, so the caller never
+/// invents one and a stale turn cannot claim the lease of a newer turn.
+fn turn_holder() -> String {
+    format!("h{}", TURN_HOLDERS.fetch_add(1, Ordering::Relaxed))
+}
+/// Write the durable turn identity.
+fn turn_record(st: &mut Json, ticket: &str, holder: &str, started_ms: i64, window_ms: i64, lease_ms: i64) {
+    state_put(
+        st,
+        "turn_expected",
+        obj(vec![
+            ("ticket", s(ticket)),
+            ("holder", s(holder)),
+            ("started_ms", Num(started_ms.to_string())),
+            ("window_ms", Num(window_ms.to_string())),
+            ("lease_ms", Num(lease_ms.to_string())),
+            ("phase", s("running")),
+        ]),
+    );
+}
+/// Retire the durable turn identity. Only a decided end of the turn does this:
+/// an uncertain remote completion is never adopted and never replayed.
+fn turn_retire(st: &mut Json) {
+    state_put(st, "turn_expected", Null);
+}
+/// The label of a running turn.
+fn turn_label(v: &Json) -> String {
+    let label = opt_text(v, "label").unwrap_or("");
+    if label.trim().is_empty() {
+        TURN_LABEL.into()
+    } else {
+        label.trim().into()
+    }
+}
+/// The text a notification may carry. The limit is owned here, so a fresh reply
+/// and a drained one are composed by the same rule.
+fn turn_text(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.chars().count() <= TURN_REPLY_LIMIT {
+        return trimmed.into();
+    }
+    let mut out: String = trimmed.chars().take(TURN_REPLY_LIMIT).collect();
+    out.push('…');
+    out
+}
+/// The application state a turn operation works on. A missing state is an
+/// empty one, so a turn can be decided before the first state exists.
+fn turn_state(v: &Json) -> Json {
+    match v.get("state") {
+        Ok(value) if matches!(value, Obj(_)) => value.clone(),
+        _ => obj(vec![]),
+    }
+}
+fn turn_begin(v: &Json) -> Result<Json> {
+    let ticket = field(v, "ticket")?.trim().to_string();
+    let window = turn_window(whole_ms(v, "window_ms")?);
+    // The elapsed time of the request is measured by the platform. The lease is
+    // the time the request has left, so the promotion cannot outlive it.
+    let elapsed = whole_ms(v, "elapsed_ms").unwrap_or(0);
+    let lease = turn_remaining(window, elapsed);
+    let started = whole_ms(v, "started_ms").unwrap_or(0);
+    let label = turn_label(v);
+    let live = opt_text(v, "live_ticket").unwrap_or("").trim().to_string();
+    let mut st = turn_state(v);
+    if ticket.is_empty() {
+        // A turn without a request identity is refused and no identity is kept.
+        turn_retire(&mut st);
+        return Ok(obj(vec![
+            ("decision", s("refused")),
+            ("holder", s("")),
+            ("lease_ms", Num(lease.to_string())),
+            ("window_ms", Num(window.to_string())),
+            ("cadence_ms", Num(TURN_CADENCE_MS.to_string())),
+            ("title", s(TURN_PROGRESS_TITLE)),
+            ("channel", s(TURN_PROGRESS_CHANNEL)),
+            ("channel_name", s(TURN_PROGRESS_CHANNEL_NAME)),
+            ("label", s(&label)),
+            ("state", st),
+        ]));
+    }
+    // A turn that begins while another one is live takes the lease scope over
+    // from it. The holder token of the new turn is the only one that may
+    // extend that lease or retire the identity afterwards.
+    let decision = if live.is_empty() { "queued" } else { "held" };
+    let holder = turn_holder();
+    turn_record(&mut st, &ticket, &holder, started, window, lease);
+    Ok(obj(vec![
+        ("decision", s(decision)),
+        ("holder", s(&holder)),
+        ("lease_ms", Num(lease.to_string())),
+        ("window_ms", Num(window.to_string())),
+        ("cadence_ms", Num(TURN_CADENCE_MS.to_string())),
+        ("title", s(TURN_PROGRESS_TITLE)),
+        ("channel", s(TURN_PROGRESS_CHANNEL)),
+        ("channel_name", s(TURN_PROGRESS_CHANNEL_NAME)),
+        ("label", s(&label)),
+        ("state", st),
+    ]))
+}
+fn turn_extend(v: &Json) -> Result<Json> {
+    let ticket = opt_text(v, "ticket").unwrap_or("").trim().to_string();
+    let holder = opt_text(v, "holder").unwrap_or("").trim().to_string();
+    let window = turn_window(whole_ms(v, "window_ms")?);
+    // The lease of a turn that is already running is the time its request has
+    // left. The elapsed time is measured by the platform, the lease is decided
+    // here.
+    let elapsed = whole_ms(v, "elapsed_ms").unwrap_or(0);
+    let lease = turn_remaining(window, elapsed);
+    let label = turn_label(v);
+    let st = turn_state(v);
+    // The lease belongs to the holder that was admitted for it. A turn that is
+    // no longer the holder is refused the lease, so a stale teardown cannot
+    // keep the wake lock of a newer live turn. This action decides the lease
+    // and writes nothing: begin is the only writer of the identity.
+    let extended = !ticket.is_empty()
+        && !holder.is_empty()
+        && turn_identity(&st) == ticket
+        && turn_holder_identity(&st) == holder;
+    Ok(obj(vec![
+        ("extended", Bool(extended)),
+        ("lease_ms", Num(lease.to_string())),
+        ("window_ms", Num(window.to_string())),
+        ("cadence_ms", Num(TURN_CADENCE_MS.to_string())),
+        ("title", s(TURN_PROGRESS_TITLE)),
+        ("channel", s(TURN_PROGRESS_CHANNEL)),
+        ("channel_name", s(TURN_PROGRESS_CHANNEL_NAME)),
+        ("label", s(&label)),
+        ("state", st),
+    ]))
+}
+fn turn_tick(v: &Json) -> Result<Json> {
+    // The request's own clock: the elapsed time since the turn started. It is
+    // what the progress a user reads is measured from.
+    let elapsed = whole_ms(v, "elapsed_ms")?;
+    // The promotion's own clock: the elapsed time since its lease was decided.
+    // The two clocks are separate, so a decision about the promotion never
+    // rewinds the request's progress.
+    let lease_elapsed = whole_ms(v, "lease_elapsed_ms").unwrap_or(elapsed);
+    let lease = whole_ms(v, "lease_ms")?;
+    let label = turn_label(v);
+    Ok(obj(vec![
+        ("expired", Bool(lease_elapsed >= lease)),
+        ("progress_text", s(&format!("{label} · {}", turn_elapsed(elapsed)))),
+        ("elapsed_text", s(&turn_elapsed(elapsed))),
+        ("cadence_ms", Num(TURN_CADENCE_MS.to_string())),
+        ("title", s(TURN_PROGRESS_TITLE)),
+        ("channel", s(TURN_PROGRESS_CHANNEL)),
+        ("channel_name", s(TURN_PROGRESS_CHANNEL_NAME)),
+        ("label", s(&label)),
+    ]))
+}
+fn turn_expire(_v: &Json) -> Result<Json> {
+    Ok(obj(vec![
+        ("notice", s(TURN_PROTECTION_LOST)),
+        ("title", s(TURN_PROGRESS_TITLE)),
+        ("channel", s(TURN_PROGRESS_CHANNEL)),
+        ("channel_name", s(TURN_PROGRESS_CHANNEL_NAME)),
+        ("cadence_ms", Num(TURN_CADENCE_MS.to_string())),
+    ]))
+}
+fn turn_finish(v: &Json) -> Result<Json> {
+    let mut st = turn_state(v);
+    let ticket = opt_text(v, "ticket").unwrap_or("").trim().to_string();
+    let holder = opt_text(v, "holder").unwrap_or("").trim().to_string();
+    let held = turn_identity(&st);
+    let held_holder = turn_holder_identity(&st);
+    // The identity belongs to the holder that was admitted for it. A turn that
+    // is not the holder is a stale teardown and leaves the identity of the
+    // newer live turn alone.
+    let retired = !held.is_empty()
+        && !ticket.is_empty()
+        && held == ticket
+        && held_holder == holder;
+    if retired {
+        turn_retire(&mut st);
+    }
+    Ok(obj(vec![("retired", Bool(retired)), ("state", st)]))
+}
+fn turn_publish(v: &Json) -> Result<Json> {
+    let mut st = turn_state(v);
+    let drain = state_bool(v, "drain");
+    let allowed = state_bool(v, "notifications_allowed");
+    let backgrounded = state_bool(v, "backgrounded");
+    let failed = state_bool(v, "failed");
+    let chat = opt_text(v, "chat").unwrap_or("").trim().to_string();
+    let title = match opt_text(v, "title") {
+        Some(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => {
+            if failed {
+                TURN_FAILED_TITLE.into()
+            } else {
+                TURN_REPLY_TITLE.into()
+            }
+        }
+    };
+    let reply = |st: Json, decision: &str, title: &str, text: &str, chat: &str| {
+        obj(vec![
+            ("decision", s(decision)),
+            ("title", s(title)),
+            ("text", s(text)),
+            ("chat", s(chat)),
+            ("channel", s(TURN_REPLY_CHANNEL)),
+            ("channel_name", s(TURN_REPLY_CHANNEL_NAME)),
+            ("state", st),
+        ])
+    };
+    if drain {
+        let pending = state_get(&st, "turn_pending").cloned().unwrap_or(Null);
+        let body = state_text(&pending, "text");
+        if body.is_empty() {
+            return Ok(reply(st, "suppress", &title, "", &chat));
+        }
+        let pending_chat = state_text(&pending, "chat");
+        let pending_title = state_text(&pending, "title");
+        let held_chat = if pending_chat.is_empty() { chat } else { pending_chat };
+        let held_title = if pending_title.is_empty() {
+            title
+        } else {
+            pending_title
+        };
+        // The announcement is delivered when the platform shows it, and surfaced
+        // in the app when it cannot be shown. A held reply is cleared only when
+        // it was really delivered, so a later grant still announces it.
+        if allowed {
+            state_put(&mut st, "turn_pending", Null);
+            return Ok(reply(st, "publish", &held_title, &body, &held_chat));
+        }
+        return Ok(reply(st, "surface", &held_title, &body, &held_chat));
+    }
+    let body = opt_text(v, "body").unwrap_or("");
+    let text = turn_text(body);
+    if text.is_empty() {
+        return Ok(reply(st, "suppress", &title, "", &chat));
+    }
+    if !backgrounded {
+        return Ok(reply(st, "suppress", &title, &text, &chat));
+    }
+    let ticket = opt_text(v, "ticket").unwrap_or("").trim().to_string();
+    state_put(
+        &mut st,
+        "turn_pending",
+        obj(vec![
+            ("ticket", s(&ticket)),
+            ("chat", s(&chat)),
+            ("title", s(&title)),
+            ("text", s(&text)),
+        ]),
+    );
+    if allowed {
+        state_put(&mut st, "turn_pending", Null);
+        return Ok(reply(st, "publish", &title, &text, &chat));
+    }
+    Ok(reply(st, "hold", &title, &text, &chat))
+}
+fn turn_rebind(v: &Json) -> Result<Json> {
+    let mut st = turn_state(v);
+    let live = opt_text(v, "live_ticket").unwrap_or("").trim().to_string();
+    let live_holder = opt_text(v, "live_holder").unwrap_or("").trim().to_string();
+    let held = turn_identity(&st);
+    let held_holder = turn_holder_identity(&st);
+    if held.is_empty() {
+        return Ok(obj(vec![("decision", s("none")), ("state", st)]));
+    }
+    if !live.is_empty() && held == live && held_holder == live_holder {
+        // The request identity matches the turn this process still owns, so the
+        // model identity is restored and the turn continues under its own name.
+        state_put(&mut st, "model_expected", s(&live));
+        return Ok(obj(vec![
+            ("decision", s("rebound")),
+            ("ticket", s(&live)),
+            ("holder", s(&live_holder)),
+            ("state", st),
+        ]));
+    }
+    // The turn is not owned by this process any more. Its remote completion is
+    // uncertain, so nothing is adopted and nothing is replayed.
+    turn_retire(&mut st);
+    state_put(&mut st, "notice", s(TURN_UNCERTAIN));
+    Ok(obj(vec![("decision", s("uncertain")), ("state", st)]))
+}
+fn turn_operation(v: &Json) -> Result<Json> {
+    match field(v, "action")? {
+        "begin" => turn_begin(v),
+        "extend" => turn_extend(v),
+        "tick" => turn_tick(v),
+        "expire" => turn_expire(v),
+        "finish" => turn_finish(v),
+        "publish" => turn_publish(v),
+        "rebind" => turn_rebind(v),
+        _ => Err("Unknown turn action".into()),
+    }
 }
 fn operation(input: &str) -> Result<Json> {
     let v = parse(input)?;
@@ -474,7 +877,7 @@ fn operation(input: &str) -> Result<Json> {
         "self_handoff" => self_build::handoff(&v),
         "self_commit" => self_build::commit(&v),
         "self_resume" => self_build::resume(&v),
-        "turn_clock" => turn_clock(&v),
+        "turn" => turn_operation(&v),
         _ => Err("Unknown operation".into()),
     }
 }
@@ -585,41 +988,643 @@ mod checks {
         );
     }
     #[test]
-    fn turn_clock_clamps_the_lease_and_formats_elapsed_time() {
-        let low = operation(r#"{"op":"turn_clock","window_ms":1,"elapsed_ms":0}"#).unwrap();
+    fn the_turn_window_is_clamped_and_the_elapsed_time_is_formatted() {
+        // The window is reachable only through the turn operation, so the
+        // clamp and the elapsed text cannot be reached by a second path.
+        let low = operation(r#"{"op":"turn","action":"begin","ticket":"t","window_ms":1}"#).unwrap();
+        assert_eq!(low.get("window_ms").unwrap(), &Num("30000".into()));
         assert_eq!(low.get("lease_ms").unwrap(), &Num("30000".into()));
-        assert_eq!(low.get("text").unwrap().text().unwrap(), "0s");
-        let high = operation(r#"{"op":"turn_clock","window_ms":9000000,"elapsed_ms":125000}"#).unwrap();
-        assert_eq!(high.get("lease_ms").unwrap(), &Num("600000".into()));
-        assert_eq!(high.get("text").unwrap().text().unwrap(), "2m 5s");
-        let mid = operation(r#"{"op":"turn_clock","window_ms":120000,"elapsed_ms":59000}"#).unwrap();
+        let high = operation(r#"{"op":"turn","action":"begin","ticket":"t","window_ms":9000000}"#).unwrap();
+        assert_eq!(high.get("window_ms").unwrap(), &Num("120000".into()));
+        assert_eq!(high.get("lease_ms").unwrap(), &Num("120000".into()));
+        let mid = operation(r#"{"op":"turn","action":"begin","ticket":"t","window_ms":120000}"#).unwrap();
+        assert_eq!(mid.get("window_ms").unwrap(), &Num("120000".into()));
         assert_eq!(mid.get("lease_ms").unwrap(), &Num("120000".into()));
-        assert_eq!(mid.get("text").unwrap().text().unwrap(), "59s");
-        let minute = operation(r#"{"op":"turn_clock","elapsed_ms":60000}"#).unwrap();
-        assert_eq!(minute.get("text").unwrap().text().unwrap(), "1m 0s");
-        assert!(minute.get("lease_ms").is_err());
-        let edge = operation(r#"{"op":"turn_clock","window_ms":30000}"#).unwrap();
-        assert_eq!(edge.get("lease_ms").unwrap(), &Num("30000".into()));
-        let cap = operation(r#"{"op":"turn_clock","window_ms":600000}"#).unwrap();
-        assert_eq!(cap.get("lease_ms").unwrap(), &Num("600000".into()));
-        let over = operation(r#"{"op":"turn_clock","window_ms":600001}"#).unwrap();
-        assert_eq!(over.get("lease_ms").unwrap(), &Num("600000".into()));
+        let edge = operation(r#"{"op":"turn","action":"begin","ticket":"t","window_ms":30000}"#).unwrap();
+        assert_eq!(edge.get("window_ms").unwrap(), &Num("30000".into()));
+        let cap = operation(r#"{"op":"turn","action":"begin","ticket":"t","window_ms":600000}"#).unwrap();
+        assert_eq!(cap.get("window_ms").unwrap(), &Num("120000".into()));
+        let over = operation(r#"{"op":"turn","action":"begin","ticket":"t","window_ms":600001}"#).unwrap();
+        assert_eq!(over.get("window_ms").unwrap(), &Num("120000".into()));
         assert_eq!(
-            operation(r#"{"op":"turn_clock","elapsed_ms":-1500}"#).unwrap().get("text").unwrap().text().unwrap(),
+            operation(r#"{"op":"turn","action":"tick","elapsed_ms":0,"lease_ms":120000}"#).unwrap().get("elapsed_text").unwrap().text().unwrap(),
             "0s"
         );
         assert_eq!(
-            operation(r#"{"op":"turn_clock"}"#).unwrap_err(),
-            "Turn clock needs a window or an elapsed time"
+            operation(r#"{"op":"turn","action":"tick","elapsed_ms":60000,"lease_ms":120000}"#).unwrap().get("elapsed_text").unwrap().text().unwrap(),
+            "1m 0s"
         );
         assert_eq!(
-            operation(r#"{"op":"turn_clock","window_ms":"no"}"#).unwrap_err(),
+            operation(r#"{"op":"turn","action":"tick","elapsed_ms":125000,"lease_ms":120000}"#).unwrap().get("elapsed_text").unwrap().text().unwrap(),
+            "2m 5s"
+        );
+        assert_eq!(
+            operation(r#"{"op":"turn","action":"tick","elapsed_ms":-1500,"lease_ms":120000}"#).unwrap().get("elapsed_text").unwrap().text().unwrap(),
+            "0s"
+        );
+        assert_eq!(
+            operation(r#"{"op":"turn","action":"begin","ticket":"t","window_ms":"no"}"#).unwrap_err(),
             "Invalid window_ms"
         );
     }
     #[test]
     fn depth_limit() {
         assert!(parse(&("[".repeat(66) + "0" + &"]".repeat(66))).is_err());
+    }
+    fn turn_request(fields: Vec<(&str, Json)>) -> Json {
+        let mut all = vec![("op", s("turn"))];
+        all.extend(fields);
+        obj(all)
+    }
+    #[test]
+    fn a_turn_keeps_a_durable_identity_and_the_core_lease() {
+        let begun = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("ticket-1")),
+                ("window_ms", Num("120000".into())),
+                ("started_ms", Num("7".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(begun.get("decision").unwrap().text().unwrap(), "queued");
+        assert_eq!(begun.get("lease_ms").unwrap(), &Num("120000".into()));
+        assert_eq!(begun.get("window_ms").unwrap(), &Num("120000".into()));
+        assert_eq!(begun.get("cadence_ms").unwrap(), &Num("1000".into()));
+        assert_eq!(begun.get("label").unwrap().text().unwrap(), "Replying");
+        assert_eq!(begun.get("title").unwrap().text().unwrap(), "RLLM is working");
+        assert_eq!(begun.get("channel").unwrap().text().unwrap(), "turn");
+        let holder = begun.get("holder").unwrap().text().unwrap().to_string();
+        assert!(!holder.is_empty());
+        assert_eq!(
+            begun
+                .get("state")
+                .unwrap()
+                .get("turn_expected")
+                .unwrap()
+                .get("ticket")
+                .unwrap()
+                .text()
+                .unwrap(),
+            "ticket-1"
+        );
+        assert_eq!(
+            begun
+                .get("state")
+                .unwrap()
+                .get("turn_expected")
+                .unwrap()
+                .get("holder")
+                .unwrap()
+                .text()
+                .unwrap(),
+            holder
+        );
+        let clamped = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("ticket-2")),
+                ("window_ms", Num("9000000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(clamped.get("lease_ms").unwrap(), &Num("120000".into()));
+        assert_eq!(clamped.get("window_ms").unwrap(), &Num("120000".into()));
+    }
+    #[test]
+    fn the_promotion_of_a_turn_is_the_time_its_request_has_left() {
+        // A request that has already spent part of its window gets a promotion
+        // that ends with it, never one that outlives it.
+        let late = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("ticket-late")),
+                ("window_ms", Num("120000".into())),
+                ("elapsed_ms", Num("30000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(late.get("lease_ms").unwrap(), &Num("90000".into()));
+        assert_eq!(late.get("window_ms").unwrap(), &Num("120000".into()));
+        // A request whose window is spent gets no promotion at all.
+        let spent = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("ticket-spent")),
+                ("window_ms", Num("120000".into())),
+                ("elapsed_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(spent.get("lease_ms").unwrap(), &Num("0".into()));
+        // The extension of a running turn is decided the same way.
+        let admitted = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("ticket-run")),
+                ("window_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        let holder = admitted.get("holder").unwrap().text().unwrap().to_string();
+        let state = admitted.get("state").unwrap().clone();
+        let extended = operation(
+            &turn_request(vec![
+                ("action", s("extend")),
+                ("state", state),
+                ("ticket", s("ticket-run")),
+                ("holder", s(&holder)),
+                ("window_ms", Num("120000".into())),
+                ("elapsed_ms", Num("45000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(extended.get("extended").unwrap(), &Bool(true));
+        assert_eq!(extended.get("lease_ms").unwrap(), &Num("75000".into()));
+        assert_eq!(extended.get("window_ms").unwrap(), &Num("120000".into()));
+    }
+    #[test]
+    fn a_turn_reads_two_clocks_and_never_rewinds_its_own_progress() {
+        // The request has run for a minute. The promotion was decided a quarter
+        // of a minute ago and its lease is thirty seconds.
+        let tick = operation(
+            &turn_request(vec![
+                ("action", s("tick")),
+                ("elapsed_ms", Num("60000".into())),
+                ("lease_elapsed_ms", Num("15000".into())),
+                ("lease_ms", Num("30000".into())),
+                ("label", s("Replying")),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(tick.get("expired").unwrap(), &Bool(false));
+        assert_eq!(
+            tick.get("progress_text").unwrap().text().unwrap(),
+            "Replying · 1m 0s"
+        );
+        assert_eq!(tick.get("elapsed_text").unwrap().text().unwrap(), "1m 0s");
+        // The promotion's own clock expires while the request is still running,
+        // and the request's progress is still the request's own.
+        let expired = operation(
+            &turn_request(vec![
+                ("action", s("tick")),
+                ("elapsed_ms", Num("60000".into())),
+                ("lease_elapsed_ms", Num("30000".into())),
+                ("lease_ms", Num("30000".into())),
+                ("label", s("Replying")),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(expired.get("expired").unwrap(), &Bool(true));
+        assert_eq!(
+            expired.get("progress_text").unwrap().text().unwrap(),
+            "Replying · 1m 0s"
+        );
+        assert_eq!(expired.get("elapsed_text").unwrap().text().unwrap(), "1m 0s");
+    }
+    #[test]
+    fn a_turn_without_an_identity_is_refused_and_a_live_turn_is_held() {
+        let refused = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("")),
+                ("window_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(refused.get("decision").unwrap().text().unwrap(), "refused");
+        assert_eq!(refused.get("state").unwrap().get("turn_expected").unwrap(), &Null);
+        let held = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("ticket-3")),
+                ("live_ticket", s("ticket-1")),
+                ("window_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(held.get("decision").unwrap().text().unwrap(), "held");
+    }
+    #[test]
+    fn a_turn_reports_its_progress_and_its_expiry_from_the_core() {
+        let tick = operation(
+            &turn_request(vec![
+                ("action", s("tick")),
+                ("elapsed_ms", Num("59000".into())),
+                ("lease_ms", Num("60000".into())),
+                ("label", s("Replying")),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(tick.get("expired").unwrap(), &Bool(false));
+        assert_eq!(tick.get("progress_text").unwrap().text().unwrap(), "Replying · 59s");
+        assert_eq!(tick.get("elapsed_text").unwrap().text().unwrap(), "59s");
+        let late = operation(
+            &turn_request(vec![
+                ("action", s("tick")),
+                ("elapsed_ms", Num("60000".into())),
+                ("lease_ms", Num("60000".into())),
+                ("label", s("Replying")),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(late.get("expired").unwrap(), &Bool(true));
+    }
+    #[test]
+    fn the_expiry_notice_is_the_refused_start_notice() {
+        let expire = operation(&turn_request(vec![("action", s("expire"))]).string()).unwrap();
+        assert_eq!(
+            expire.get("notice").unwrap().text().unwrap(),
+            "Background protection was lost. The turn still runs."
+        );
+    }
+    #[test]
+    fn the_reply_text_limit_and_the_titles_are_owned_by_the_core() {
+        let body = "x".repeat(900);
+        let published = operation(
+            &turn_request(vec![
+                ("action", s("publish")),
+                ("state", obj(vec![])),
+                ("body", s(&body)),
+                ("chat", s("chat-1")),
+                ("backgrounded", Bool(true)),
+                ("notifications_allowed", Bool(true)),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(published.get("decision").unwrap().text().unwrap(), "publish");
+        assert_eq!(published.get("title").unwrap().text().unwrap(), "RLLM reply");
+        assert_eq!(published.get("channel").unwrap().text().unwrap(), "replies");
+        let text = published.get("text").unwrap().text().unwrap();
+        assert_eq!(text.chars().count(), 601);
+        assert!(text.ends_with('…'));
+        let failed = operation(
+            &turn_request(vec![
+                ("action", s("publish")),
+                ("state", obj(vec![])),
+                ("body", s("boom")),
+                ("failed", Bool(true)),
+                ("backgrounded", Bool(true)),
+                ("notifications_allowed", Bool(true)),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(failed.get("title").unwrap().text().unwrap(), "RLLM turn failed");
+        let foreground = operation(
+            &turn_request(vec![
+                ("action", s("publish")),
+                ("state", obj(vec![])),
+                ("body", s("boom")),
+                ("backgrounded", Bool(false)),
+                ("notifications_allowed", Bool(true)),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(foreground.get("decision").unwrap().text().unwrap(), "suppress");
+    }
+    #[test]
+    fn a_held_reply_is_announced_after_a_resume() {
+        let held = operation(
+            &turn_request(vec![
+                ("action", s("publish")),
+                ("state", obj(vec![])),
+                ("body", s("the answer")),
+                ("chat", s("chat-9")),
+                ("backgrounded", Bool(true)),
+                ("notifications_allowed", Bool(false)),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(held.get("decision").unwrap().text().unwrap(), "hold");
+        let state = held.get("state").unwrap().clone();
+        assert_eq!(
+            state.get("turn_pending").unwrap().get("text").unwrap().text().unwrap(),
+            "the answer"
+        );
+        let drained = operation(
+            &turn_request(vec![
+                ("action", s("publish")),
+                ("state", state),
+                ("drain", Bool(true)),
+                ("notifications_allowed", Bool(false)),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(drained.get("decision").unwrap().text().unwrap(), "surface");
+        assert_eq!(drained.get("text").unwrap().text().unwrap(), "the answer");
+        assert_eq!(drained.get("chat").unwrap().text().unwrap(), "chat-9");
+        // A reply that could not be shown is still held, so a later grant
+        // announces it instead of dropping it.
+        assert_eq!(
+            drained
+                .get("state")
+                .unwrap()
+                .get("turn_pending")
+                .unwrap()
+                .get("text")
+                .unwrap()
+                .text()
+                .unwrap(),
+            "the answer"
+        );
+        let granted = operation(
+            &turn_request(vec![
+                ("action", s("publish")),
+                ("state", drained.get("state").unwrap().clone()),
+                ("drain", Bool(true)),
+                ("notifications_allowed", Bool(true)),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(granted.get("decision").unwrap().text().unwrap(), "publish");
+        assert_eq!(granted.get("text").unwrap().text().unwrap(), "the answer");
+        assert_eq!(granted.get("state").unwrap().get("turn_pending").unwrap(), &Null);
+        let again = operation(
+            &turn_request(vec![
+                ("action", s("publish")),
+                ("state", granted.get("state").unwrap().clone()),
+                ("drain", Bool(true)),
+                ("notifications_allowed", Bool(true)),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(again.get("decision").unwrap().text().unwrap(), "suppress");
+    }
+    #[test]
+    fn a_recreated_activity_rebinds_to_the_live_turn_by_its_identity() {
+        let begun = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("ticket-7")),
+                ("window_ms", Num("120000".into())),
+                ("started_ms", Num("3".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        let holder = begun.get("holder").unwrap().text().unwrap().to_string();
+        let rebound = operation(
+            &turn_request(vec![
+                ("action", s("rebind")),
+                ("state", begun.get("state").unwrap().clone()),
+                ("live_ticket", s("ticket-7")),
+                ("live_holder", s(&holder)),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(rebound.get("decision").unwrap().text().unwrap(), "rebound");
+        assert_eq!(rebound.get("ticket").unwrap().text().unwrap(), "ticket-7");
+        assert_eq!(
+            rebound.get("state").unwrap().get("model_expected").unwrap().text().unwrap(),
+            "ticket-7"
+        );
+        // A live turn that this process does not hold the lease of is not
+        // adopted, even when the request identity is the same.
+        let foreign = operation(
+            &turn_request(vec![
+                ("action", s("rebind")),
+                ("state", begun.get("state").unwrap().clone()),
+                ("live_ticket", s("ticket-7")),
+                ("live_holder", s("h-foreign")),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(foreign.get("decision").unwrap().text().unwrap(), "uncertain");
+    }
+    #[test]
+    fn an_uncertain_turn_is_never_replayed() {
+        let begun = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("ticket-8")),
+                ("window_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        let uncertain = operation(
+            &turn_request(vec![
+                ("action", s("rebind")),
+                ("state", begun.get("state").unwrap().clone()),
+                ("live_ticket", s("")),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(uncertain.get("decision").unwrap().text().unwrap(), "uncertain");
+        assert_eq!(
+            uncertain.get("state").unwrap().get("notice").unwrap().text().unwrap(),
+            "The previous turn did not finish. Nothing was replayed."
+        );
+        assert_eq!(uncertain.get("state").unwrap().get("turn_expected").unwrap(), &Null);
+    }
+    #[test]
+    fn only_the_turn_that_owns_the_identity_retires_it() {
+        let begun = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("ticket-9")),
+                ("window_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        let holder = begun.get("holder").unwrap().text().unwrap().to_string();
+        let state = begun.get("state").unwrap().clone();
+        let stale = operation(
+            &turn_request(vec![
+                ("action", s("finish")),
+                ("state", state.clone()),
+                ("ticket", s("ticket-8")),
+                ("holder", s("h-other")),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(stale.get("retired").unwrap(), &Bool(false));
+        assert_eq!(
+            stale
+                .get("state")
+                .unwrap()
+                .get("turn_expected")
+                .unwrap()
+                .get("ticket")
+                .unwrap()
+                .text()
+                .unwrap(),
+            "ticket-9"
+        );
+        let own = operation(
+            &turn_request(vec![
+                ("action", s("finish")),
+                ("state", state),
+                ("ticket", s("ticket-9")),
+                ("holder", s(&holder)),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(own.get("retired").unwrap(), &Bool(true));
+        assert_eq!(own.get("state").unwrap().get("turn_expected").unwrap(), &Null);
+    }
+    #[test]
+    fn only_the_holder_may_extend_the_lease() {
+        let begun = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("ticket-10")),
+                ("window_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        let holder = begun.get("holder").unwrap().text().unwrap().to_string();
+        let state = begun.get("state").unwrap().clone();
+        let own = operation(
+            &turn_request(vec![
+                ("action", s("extend")),
+                ("state", state.clone()),
+                ("ticket", s("ticket-10")),
+                ("holder", s(&holder)),
+                ("window_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(own.get("extended").unwrap(), &Bool(true));
+        assert_eq!(own.get("lease_ms").unwrap(), &Num("120000".into()));
+        // The lease decision writes nothing: begin is the only writer of the
+        // identity, so an extension can never take it over.
+        assert_eq!(
+            own.get("state").unwrap().get("turn_expected").unwrap(),
+            state.get("turn_expected").unwrap()
+        );
+        let foreign = operation(
+            &turn_request(vec![
+                ("action", s("extend")),
+                ("state", state.clone()),
+                ("ticket", s("ticket-10")),
+                ("holder", s("h-other")),
+                ("window_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(foreign.get("extended").unwrap(), &Bool(false));
+        assert_eq!(
+            foreign.get("state").unwrap().get("turn_expected").unwrap(),
+            state.get("turn_expected").unwrap()
+        );
+    }
+    #[test]
+    fn a_stale_teardown_leaves_the_newer_live_turn_alone() {
+        let first = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", obj(vec![])),
+                ("ticket", s("ticket-11")),
+                ("window_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        let first_holder = first.get("holder").unwrap().text().unwrap().to_string();
+        let second = operation(
+            &turn_request(vec![
+                ("action", s("begin")),
+                ("state", first.get("state").unwrap().clone()),
+                ("ticket", s("ticket-12")),
+                ("live_ticket", s("ticket-11")),
+                ("window_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(second.get("decision").unwrap().text().unwrap(), "held");
+        let second_holder = second.get("holder").unwrap().text().unwrap().to_string();
+        assert_ne!(first_holder, second_holder);
+        let state = second.get("state").unwrap().clone();
+        // The turn that is already over may not retire the identity of the
+        // newer live turn, and it may not extend its lease either.
+        let stale = operation(
+            &turn_request(vec![
+                ("action", s("finish")),
+                ("state", state.clone()),
+                ("ticket", s("ticket-11")),
+                ("holder", s(&first_holder)),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(stale.get("retired").unwrap(), &Bool(false));
+        assert_eq!(
+            stale
+                .get("state")
+                .unwrap()
+                .get("turn_expected")
+                .unwrap()
+                .get("ticket")
+                .unwrap()
+                .text()
+                .unwrap(),
+            "ticket-12"
+        );
+        let stale_lease = operation(
+            &turn_request(vec![
+                ("action", s("extend")),
+                ("state", state.clone()),
+                ("ticket", s("ticket-12")),
+                ("holder", s(&first_holder)),
+                ("window_ms", Num("120000".into())),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(stale_lease.get("extended").unwrap(), &Bool(false));
+        let own = operation(
+            &turn_request(vec![
+                ("action", s("finish")),
+                ("state", state),
+                ("ticket", s("ticket-12")),
+                ("holder", s(&second_holder)),
+            ])
+            .string(),
+        )
+        .unwrap();
+        assert_eq!(own.get("retired").unwrap(), &Bool(true));
+        assert_eq!(own.get("state").unwrap().get("turn_expected").unwrap(), &Null);
     }
     #[test]
     fn binary_network_zip_reaches_import_preview() {

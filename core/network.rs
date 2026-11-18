@@ -163,6 +163,114 @@ pub fn credential_header(name:&str,prefix:&str,key:&str)->Result<(String,String)
     Ok((name.into(),if prefix.is_empty(){key.into()}else{format!("{prefix} {key}")}))
 }
 pub(crate) fn bearer_token(token:&str)->bool{let base=token.trim_end_matches('=');!base.is_empty()&&base.bytes().all(|b|b.is_ascii_alphanumeric()||b"-._~+/".contains(&b))}
+fn strip_prefix_ci<'a>(value:&'a str,prefix:&str)->Option<&'a str>{
+ let bytes=value.as_bytes();
+ if bytes.len()<prefix.len()||!bytes[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes()){return None;}
+ Some(&value[prefix.len()..])
+}
+/// Strip one layer of matching quotes from a pasted credential.
+///
+/// The text outside the closing quote is kept, so a scheme-only paste
+/// ("Bearer ") still carries the separator that tells it apart from a token.
+fn unquote_credential(value:&str)->&str{
+ let end=value.trim_end();
+ if end.len()>=2{
+  let bytes=end.as_bytes();let first=bytes[0];let last=bytes[bytes.len()-1];
+  if (first==b'"'&&last==b'"')||(first==b'\''&&last==b'\''){return &value[1..end.len()-1];}
+ }
+ value
+}
+/// Recognise the bearer scheme in a pasted credential.
+///
+/// The scheme is only a prefix when a separator follows it, so a credential
+/// that is exactly the word "Bearer" stays the token it legally is. A pasted
+/// header line has already proved the intent, so there the scheme word alone
+/// is a scheme with no token behind it.
+fn bearer_scheme<'a>(value:&'a str,header_line:bool)->Option<&'a str>{
+ let rest=strip_prefix_ci(value.trim_start(),"bearer")?;
+ if rest.is_empty(){return if header_line{Some(rest)}else{None};}
+ if rest.as_bytes()[0].is_ascii_whitespace(){return Some(rest);}
+ None
+}
+/// One canonical MCP bearer credential.
+///
+/// A pasted credential arrives in the shapes a clipboard or a copied header
+/// line produces: bare, padded, quoted, scheme-prefixed, or prefixed with the
+/// header name itself. The normaliser returns the bare RFC 6750 b64token that
+/// every MCP request then carries, or no credential at all. A value that cannot
+/// be a token is refused here instead of being sent. A blank value is no
+/// credential, not a malformed one.
+pub(crate) fn mcp_bearer_token(raw:&str)->Result<Option<String>>{
+ if raw.len()>8192||raw.chars().any(char::is_control){return Err("Invalid MCP bearer token format.".into());}
+ if raw.trim().is_empty(){return Ok(None);}
+ // The trailing separator is kept while the scheme is recognised, so a
+ // scheme-only paste stays apart from a token that happens to be the word
+ // "Bearer".
+ let mut value=unquote_credential(raw.trim_start());
+ let mut header_line=false;
+ for _ in 0..12{
+  value=unquote_credential(value);
+  if let Some(rest)=strip_prefix_ci(value.trim_start(),"authorization:"){
+   value=rest.trim_start();
+   header_line=true;
+   continue;
+  }
+  if let Some(rest)=bearer_scheme(value,header_line){
+   value=rest.trim_start();
+   continue;
+  }
+  break;
+ }
+ let token=value.trim();
+ if token.is_empty()||!bearer_token(token){return Err("Invalid MCP bearer token format.".into());}
+ Ok(Some(token.to_string()))
+}
+/// The canonical Authorization header for an MCP credential.
+///
+/// The header name is a fixed literal so a caller can push it into the
+/// request builder the same way it pushes its own literal header names.
+pub(crate) fn mcp_authorization_header(token:&str)->Result<(&'static str,String)>{
+ let (_name,value)=credential_header("Authorization","Bearer",token)?;
+ Ok(("Authorization",value))
+}
+/// The status the product's own decoder refused a response for, when the
+/// refusal was the status.
+///
+/// A diagnostic may name only this status. The decoder refuses a head it
+/// cannot read before it reads a status, so a status the framing rules
+/// rejected never becomes a number a product message could name.
+pub(crate) fn mcp_refused_status(error:&str)->Option<u16>{
+ let rest=error.strip_prefix("HTTP ")?;
+ let digits=rest.as_bytes().iter().take_while(|byte|byte.is_ascii_digit()).count();
+ if digits==0{return None;}
+ let code:u16=rest[..digits].parse().ok()?;
+ let status_refusal=match &rest[digits..]{
+  ". Check server address, credentials, model and permissions."=>true,
+  ": redirects are not followed; enter the final server address"=>true,
+  ": server returned representation metadata."=>true,
+  _=>false,
+ };
+ if status_refusal{Some(code)}else{None}
+}
+/// The header block a peer answered with, read with the product's own
+/// response rules.
+///
+/// The reader skips the informational replies the product's decoder skips, so
+/// a challenge is read from the same head the decoder judged. A head the
+/// response rules reject yields no head at all, never a guessed one.
+pub(crate) fn mcp_response_head(raw:&[u8])->Option<&str>{
+ let mut start=0;
+ for _ in 0..=4{
+  let relative=raw.get(start..)?.windows(4).position(|window|window==b"\r\n\r\n")?;
+  if relative>65536{return None;}
+  let end=start+relative;
+  let head=std::str::from_utf8(&raw[start..end]).ok()?;
+  let code=response_status(head.lines().next()?).ok()?;
+  if (100..200).contains(&code){start=end+4;continue;}
+  return Some(head);
+ }
+ None
+}
 pub(crate) fn storage_oauth_context(connection:&Json)->Json{
     Obj(["url","tls_name","plain","oauth"].into_iter().map(|key|(key.into(),connection.get(key).unwrap_or(&Null).clone())).collect())
 }
@@ -419,10 +527,25 @@ pub(super) fn chunk_size(line: &[u8]) -> Result<u64> {
     }
     Ok(size)
 }
-fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allowed_error: u16, coded:bool) -> Result<(u16, Vec<u8>)> {
-    if bytes.len() > 8 * 1024 * 1024 {
-        return Err("Response exceeds 8 MiB".into());
-    }
+/// The framing facts one response head carries. The shared head scanner reads
+/// every field of a head once, so every buffered surface that routes through
+/// the shared decoder judges the same head from the same facts.
+struct ResponseHead {
+    code: u16,
+    length: Option<usize>,
+    chunked: bool,
+    /// The coding this head applies, when it names one.
+    coding: Option<String>,
+}
+
+/// Read one response head and return its framing facts with the offset just
+/// past the head. Every framing field is counted as it appears, so a repeated
+/// field is refused as a duplicate in the order the fields appear, exactly as
+/// the frame session refuses a repeated framing header. The coding's transport
+/// applicability is left to the caller, because a head that names one coding
+/// twice is ambiguous whatever coding the repeated fields carry, and the
+/// duplicate refusal must not be masked by the coding's own value.
+fn scan_response_head(bytes: &[u8]) -> Result<(ResponseHead, usize)> {
     let end = bytes
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -436,6 +559,9 @@ fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allowed_error: u1
     let code = response_status(status)?;
     let mut chunked = false;
     let mut length = None;
+    // One field per name per head, as the frame session enforces it. A single
+    // field naming several codings is one field and stays legal input.
+    let mut coding: Option<String> = None;
     for line in lines {
         let (k, v) = response_field(line)?;
         match k.to_ascii_lowercase().as_str() {
@@ -456,11 +582,32 @@ fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allowed_error: u1
                 }
             }
             "content-encoding" => {
-                if code != 304 && !coded && !v.trim().eq_ignore_ascii_case("identity") {
-                    return Err("Compressed response not supported by this transport".into());
+                if coding.is_some() {
+                    return Err("Duplicate response coding".into());
                 }
+                coding = Some(v.trim().to_string());
             }
             _ => {}
+        }
+    }
+    Ok((ResponseHead { code, length, chunked, coding }, end + 4))
+}
+fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allowed_error: u16, coded:bool) -> Result<(u16, Vec<u8>)> {
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err("Response exceeds 8 MiB".into());
+    }
+    let (head, body_at) = scan_response_head(bytes)?;
+    let code = head.code;
+    let chunked = head.chunked;
+    let length = head.length;
+    // The head has been read whole, so its framing facts are settled before the
+    // coding's value is judged: a head that names one coding twice is refused
+    // as the duplicate it is, and never as the coding this transport refuses.
+    if code != 304 && !coded {
+        if let Some(coding) = head.coding.as_deref() {
+            if !coding.eq_ignore_ascii_case("identity") {
+                return Err("Compressed response not supported by this transport".into());
+            }
         }
     }
     if chunked && length.is_some() {
@@ -471,9 +618,9 @@ fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allowed_error: u1
         if code == 101 || chunked || length.unwrap_or(0) != 0 {
             return Err("Unsupported informational response".into());
         }
-        return decoded_bytes_with_interim(&bytes[end + 4..], interim_count + 1, allowed_error, coded);
+        return decoded_bytes_with_interim(&bytes[body_at..], interim_count + 1, allowed_error, coded);
     }
-    let data = &bytes[end + 4..];
+    let data = &bytes[body_at..];
     let out = if code == 204 || code == 304 {
         if !data.is_empty() || (code == 204 && (chunked || length.unwrap_or(0) != 0)) {
             return Err("Body on bodyless response".into());
@@ -605,6 +752,44 @@ mod checks {
         );
         assert!(decoded(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabc").is_err());
         assert!(decoded(b"HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n").is_err());
+        // A repeated field is refused on the final head and on a 1xx head; one
+        // field naming several codings is one field and is judged by its value.
+        let repeated = "HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Encoding: identity\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(decoded(repeated.as_bytes()).unwrap_err(), "Duplicate response coding");
+        let repeated_interim = "HTTP/1.1 100 Continue\r\nContent-Encoding: identity\r\nContent-Encoding: identity\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(decoded(repeated_interim.as_bytes()).unwrap_err(), "Duplicate response coding");
+        assert_eq!(decoded("HTTP/1.1 200 OK\r\nContent-Encoding: identity, identity\r\nContent-Length: 0\r\n\r\n".as_bytes()).unwrap_err(), "Compressed response not supported by this transport");
+        assert_eq!(decoded("HTTP/1.1 100 Continue\r\nContent-Encoding: identity\r\n\r\nHTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 0\r\n\r\n".as_bytes()).unwrap(), (200, String::new()));
+    }
+    #[test]
+    fn coded_response_refuses_duplicate_coding_fields() {
+        // Exercise coded=true directly and through informational recursion. A
+        // redirect-local rule cannot satisfy this shared-decoder falsifier.
+        for wire in [
+            b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\ncontent-encoding: identity\r\nContent-Length: 0\r\n\r\n".as_slice(),
+            b"HTTP/1.1 100 Continue\r\nContent-Encoding: identity\r\ncontent-encoding: identity\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".as_slice(),
+            b"HTTP/1.1 304 Not Modified\r\nContent-Encoding: gzip\r\ncontent-encoding: gzip\r\n\r\n".as_slice(),
+        ] {
+            assert_eq!(decoded_coded_bytes(wire).unwrap_err(), "Duplicate response coding");
+        }
+        assert_eq!(decoded_coded_bytes(b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 0\r\n\r\n").unwrap(), (200, Vec::new()));
+    }
+    #[test]
+    fn shared_decoder_refuses_a_repeated_coding_before_judging_its_value() {
+        // The shared decoder reads a head whole before it judges the coding's
+        // transport applicability, so a head that names one coding twice is
+        // refused as the duplicate it is, whatever coding the fields name. The
+        // twin row in verification/http_framing.rs reads this same string back
+        // through the product's own network_binary op.
+        let repeated = "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Encoding: gzip\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(decoded(repeated.as_bytes()).unwrap_err(), "Duplicate response coding");
+        let repeated_interim = "HTTP/1.1 100 Continue\r\nContent-Encoding: gzip\r\nContent-Encoding: gzip\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(decoded(repeated_interim.as_bytes()).unwrap_err(), "Duplicate response coding");
+        // One coding still names the refusal this transport gives it, and one
+        // field naming several codings is one field.
+        assert_eq!(decoded("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 0\r\n\r\n".as_bytes()).unwrap_err(), "Compressed response not supported by this transport");
+        assert_eq!(decoded("HTTP/1.1 200 OK\r\nContent-Encoding: gzip, identity\r\nContent-Length: 0\r\n\r\n".as_bytes()).unwrap_err(), "Compressed response not supported by this transport");
+        assert_eq!(decoded("HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 0\r\n\r\n".as_bytes()).unwrap(), (200, String::new()));
     }
     #[test]
     fn bodyless_representation_metadata_retains_its_actual_status() {
@@ -833,6 +1018,40 @@ pub fn decoded_authorization(bytes: &[u8]) -> Result<(u16, String)> {
             b"HTTP/1.1 400 Bad Request\r\nContent-Length: 3\r\n\r\n{}".as_slice()] {
             assert!(decoded_authorization(raw).is_err());
         }
+    }
+}
+
+#[cfg(test)] mod mcp_status_checks {
+    use super::*;
+    #[test] fn a_diagnostic_names_only_the_status_the_decoder_refused_for() {
+        // The decoder's own status refusals name their status.
+        assert_eq!(mcp_refused_status("HTTP 401. Check server address, credentials, model and permissions."), Some(401));
+        assert_eq!(mcp_refused_status("HTTP 302: redirects are not followed; enter the final server address"), Some(302));
+        assert_eq!(mcp_refused_status("HTTP 304: server returned representation metadata."), Some(304));
+        // A refusal the framing rules made names no status at all, so a
+        // status a head was refused for can never be dressed as a credential
+        // diagnosis.
+        for framing in ["Duplicate response coding", "Duplicate response length", "Duplicate transfer encoding", "Ambiguous response framing", "Compressed response not supported by this transport", "Unsupported transfer encoding", "Invalid response headers"] {
+            assert_eq!(mcp_refused_status(framing), None, "{framing}");
+        }
+        // A refusal that is not the decoder's own is never dressed as a status.
+        assert_eq!(mcp_refused_status("HTTP 401 refused for another reason"), None);
+        assert_eq!(mcp_refused_status("401 Unauthorized"), None);
+        assert_eq!(mcp_refused_status(""), None);
+    }
+    #[test] fn the_head_reader_reads_the_head_the_decoder_judged() {
+        let head = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer error=\"invalid_token\"";
+        let raw = format!("{head}\r\n\r\n");
+        assert_eq!(mcp_response_head(raw.as_bytes()), Some(head));
+        // An informational head is skipped exactly as the decoder skips it.
+        let interim = "HTTP/1.1 103 Early Hints\r\nContent-Encoding: identity";
+        let raw = format!("{interim}\r\n\r\n{head}\r\n\r\n");
+        assert_eq!(mcp_response_head(raw.as_bytes()), Some(head));
+        // A head that is not there is no head, never a guessed one.
+        assert_eq!(mcp_response_head(b"HTTP/1.1 401 Unauthorized\r\n"), None);
+        assert_eq!(mcp_response_head(b""), None);
+        // A status line the product cannot read is no head either.
+        assert_eq!(mcp_response_head(b"NOTHTTP\r\n\r\n"), None);
     }
 }
 

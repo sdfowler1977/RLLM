@@ -111,13 +111,254 @@ fn json_field<'a>(mut value: &'a Json, path: &str) -> Option<&'a Json> {
 }
 
 pub(super) fn refinement_rounds(input: &Json, checks: &Json) -> Result<usize> {
-    match input {
-        Null => Ok(1),
-        Str(value) if value == "1" => Ok(1),
-        Str(value) if value == "2" && checks != &Null => Ok(2),
-        Str(value) if value == "3" && checks != &Null => Ok(3),
-        Str(value) if value == "2" || value == "3" => Err("Add response checks before selecting a second refinement round".into()),
-        _ => Err("Select one, two, or three refinement rounds".into()),
+    // Accept saved numeric settings for compatibility, never as a termination condition.
+    let rounds = match input {
+        Null => 1,
+        Str(value) | Num(value) => value.trim().parse::<usize>()
+            .ok().filter(|rounds| *rounds > 0).ok_or("Enter a positive refinement interval")?,
+        _ => return Err("Enter a positive refinement interval".into()),
+    };
+    if rounds > 1 && checks == &Null {
+        return Err("Add response checks before selecting a second refinement round".into());
+    }
+    Ok(rounds)
+}
+
+pub(super) fn refinement_goal(run: &Json) -> bool {
+    if get(run, "response_checks") == &Null { return false; }
+    let selected = get(run, "selected_score");
+    let retained = get(get(run, "first_refinement"), "score");
+    let baseline = get(run, "baseline_score");
+    [selected, retained, baseline].into_iter().any(|score|
+        boolean(score, "strict") && number(score, "total") > 0)
+}
+
+pub(super) fn retain_incumbent(run: &mut Json, score: &Json, instructions: &str) {
+    put(run, "composition", s(instructions));
+    put(run, "selected_score", score.clone());
+    put(run, "incumbent_kept", Bool(true));
+}
+
+pub(super) fn retain_reference(run: &mut Json) {
+    let first = get(run, "first_refinement");
+    let (score, instructions) = if first == &Null {
+        (get(run, "baseline_score").clone(), text(get(run, "agent"), "instructions"))
+    } else { (get(first, "score").clone(), text(first, "instructions")) };
+    retain_incumbent(run, &score, &instructions);
+}
+
+/// Resource ceilings belong to the local orchestrator, never to model arguments
+/// or the reward policy. Direct answers intentionally have no tool authority.
+pub(super) fn operation_limit(st: &Json) -> usize {
+    if matches!(answer_mode::current(st), answer_mode::Mode::Direct) { return 0; }
+    match get(get(st, "orchestrator"), "operation_limit") {
+        Num(value) => value.parse::<usize>().unwrap_or(usize::MAX),
+        _ => usize::MAX,
+    }
+}
+
+#[cfg(test)]
+mod policy_checks {
+    use super::*;
+    const RUN: &str = "abababababababababababababababababababababababababababababababab";
+
+    fn score(passed: usize, total: usize) -> Json {
+        obj(vec![("passed", Num(passed.to_string())), ("total", Num(total.to_string())),
+            ("strict", Bool(passed == total)), ("route", s("same")), ("context", s("same"))])
+    }
+
+    /// A score that carries the verifier's own rows, so two runs of one verifier can be
+    /// measured head to head. The mask names the passing rows the way the verifier
+    /// does; a verifier with more rows than the mask holds keeps only the count.
+    fn row_score(rows: &[bool]) -> Json {
+        let passed = rows.iter().filter(|row| **row).count();
+        let mut score = obj(vec![("passed", Num(passed.to_string())), ("total", Num(rows.len().to_string())),
+            ("strict", Bool(passed == rows.len())), ("route", s("same")), ("context", s("same")),
+            ("rows", Arr(rows.iter().map(|row| Num(u8::from(*row).to_string())).collect()))]);
+        if rows.len() <= 8 {
+            let mask = rows.iter().enumerate().fold(0u8, |mask, (index, row)|
+                mask | (u8::from(*row) << index));
+            put(&mut score, "passed_checks", Num(mask.to_string()));
+        }
+        score
+    }
+
+    fn configured_run() -> (Json, Json) {
+        let mut state = blank();
+        let connection = crate::provider::normalized(&obj(vec![("protocol", s("chat")),
+            ("endpoint", s("http://model.test/v1")), ("model", s("local"))])).unwrap();
+        put(&mut state, "profiles", Arr(vec![connection]));
+        new_chat(&mut state).unwrap();
+        let checks = Arr(vec![s("alpha"), s("beta"), s("gamma")]);
+        let mut baseline = evaluate(&state, &checks, "alpha");
+        put(&mut baseline, "context", s("same"));
+        let root = std::env::temp_dir().join(format!("sr1-policy-{}-{}", std::process::id(), stamp()));
+        let run = obj(vec![("mode", s("refine")), ("phase", s("verify")),
+            ("task", s("Explain a process")), ("chat", get(&state, "active").clone()),
+            ("agent", obj(vec![("name", s("General")), ("instructions", s("incumbent")), ("tools", s("read"))])),
+            ("baseline_score", baseline.clone()), ("probe_score", baseline), ("response_context", s("same")),
+            ("baseline", s("alpha")), ("probe", s("alpha")), ("candidate", s("candidate")),
+            ("composition", s("short")), ("response_checks", checks),
+            ("refinement_rounds", Num("1".into())), ("round_index", Num("10000".into())),
+            ("run_digest", s(RUN)), ("edit_ledger", s("")), ("edit_ledger_root", s(root.to_str().unwrap())),
+            ("edit_ledger_path", s("edits.jsonl")), ("first_refinement", Null)]);
+        (state, run)
+    }
+
+    #[test]
+    fn sr1_signed_reward_distinguishes_gain_flat_rounds_and_regression() {
+        let before = score(2, 4);
+        let diff = "cd".repeat(32);
+        let shape = CandidateShape { component: "prompt", hypothesis: "wording only", diff_digest: &diff };
+        for (label, after, cost) in [("shorter wording", 2, 10), ("comment only", 2, 40),
+            ("audit only", 2, 50), ("regression", 1, 1)] {
+            let decision = acceptance(&before, &score(after, 4), 3, Some(40), Some(cost), Some(shape), &[], COST_BETA0, COST_BETA1);
+            assert!(!boolean(&decision, "admit"), "{label}: {}", decision.string());
+            let reward = get(&decision, "reward").string().parse::<i64>().unwrap();
+            assert!(reward < 0, "{}", decision.string());
+            if after < 2 { assert!(reward < -10, "a measured regression must score below a flat round"); }
+            println!("SR1-P1 {label}: admit=false reward={reward} tenths");
+        }
+        let gained = acceptance(&before, &score(4, 4), 0, Some(40), Some(45), Some(shape), &[], COST_BETA0, COST_BETA1);
+        assert!(boolean(&gained, "admit"));
+        assert_eq!(get(&gained, "reward"), &Num("20".into()));
+        let row = crate::rrsi::edit("prompt", "regression", &diff, 2, 1, 40, 10, "rejected", 1, RUN).unwrap();
+        let row = crate::rrsi::attach(row, &obj(vec![("reward", Num("-20".into()))])).unwrap();
+        let sealed = crate::rrsi::append_document("", &row, RUN).unwrap();
+        let rows = crate::rrsi::records_of(&text(&sealed, "document")).unwrap();
+        assert_eq!(get(&rows[0], "reward"), &Num("-20".into()));
+        println!("SR1-P1 measured regression ledger reward=-20 tenths survives policy attachment and sealing");
+        println!("SR1-P1 measured gain: admit=true reward=20 tenths = 2 points");
+    }
+
+    #[test]
+    fn sr1_refinement_continues_past_round_cap_and_keeps_flat_incumbent() {
+        let (mut state, run) = configured_run();
+        put(&mut state, "task_run", run);
+        harness::model_reply(&mut state, "alpha").unwrap();
+        let next = get(&state, "task_run");
+        assert_ne!(next, &Null);
+        assert_eq!(get(next, "round_index"), &Num("10001".into()));
+        assert!(get(&state, "refinement_pending") == &Null);
+        let records = crate::rrsi::records_of(&text(next, "edit_ledger")).unwrap();
+        let row = records.last().unwrap();
+        assert_eq!(text(row, "verdict"), "rejected");
+        assert_eq!(get(row, "reward"), &Num("-10".into()));
+        assert_eq!(text(get(next, "agent"), "instructions"), "incumbent");
+        assert_eq!(get(next, "first_refinement"), &Null);
+        println!("SR1-P1/P3 public verify: zero-gain reward=-10 tenths rejected; incumbent retained; round 10000 -> 10001");
+    }
+
+    #[test]
+    fn sr1_goal_ends_refinement_and_operations_use_orchestrator_configuration() {
+        let (mut state, mut run) = configured_run();
+        let mut ledger = String::new();
+        for index in 0..4 {
+            let edit = crate::rrsi::edit("skills", &format!("earlier effort {index}"),
+                &crate::rrsi::diff_digest("old", &index.to_string()), 1, 1, 40, 40, "rejected", 10000, RUN).unwrap();
+            ledger = text(&crate::rrsi::append_document(&ledger, &edit, RUN).unwrap(), "document");
+        }
+        put(&mut run, "edit_ledger", s(&ledger));
+        let mut probe = evaluate(&state, get(&run, "response_checks"), "alpha beta gamma");
+        put(&mut probe, "context", s("same"));
+        put(&mut run, "probe_score", probe);
+        put(&mut run, "probe", s("alpha beta gamma"));
+        put(&mut state, "task_run", run);
+        harness::model_reply(&mut state, "alpha beta gamma").unwrap();
+        assert_eq!(get(&state, "task_run"), &Null);
+        let finished = get(&state, "refinement_pending");
+        assert_eq!(text(finished, "phase"), "review");
+        let rows = crate::rrsi::records_of(&text(finished, "edit_ledger")).unwrap();
+        assert_eq!(text(rows.last().unwrap(), "verdict"), "accepted");
+        assert_eq!(get(rows.last().unwrap(), "reward"), &Num("20".into()));
+        assert_eq!(get(rows.last().unwrap(), "budget_penalty"), &Num("-1".into()));
+        put(&mut state, "answer_mode", s("agent"));
+        put(&mut state, "steps", Num("10000".into()));
+        assert!(harness::has_operation_room(&state));
+        put(&mut state, "orchestrator", obj(vec![("operation_limit", Num("10001".into()))]));
+        assert!(harness::has_operation_room(&state));
+        put(&mut state, "steps", Num("10001".into()));
+        assert!(!harness::has_operation_room(&state));
+        println!("SR1-P3 spent edit budget still accepts measured goal (reward=20 tenths = 2 points, budget_penalty=-1 point) -> review; 10000 operations allowed by default; explicit controller bound enforced");
+    }
+
+    #[test]
+    fn sr1_harness_rejection_uses_normalized_shape_and_keeps_running() {
+        for reply in ["component: Prompt\nhypothesis: TIGHTEN  the\t greeting\nnew body",
+            "component: system prompt\nhypothesis: a different claim\nrejected body"] {
+            let (mut state, mut run) = configured_run();
+            let row = crate::rrsi::edit("prompt", "tighten the greeting",
+                &crate::rrsi::diff_digest("incumbent", "rejected body"), 1, 1, 40, 40, "rejected", 9999, RUN).unwrap();
+            let ledger = crate::rrsi::append_document("", &row, RUN).unwrap();
+            put(&mut run, "edit_ledger", get(&ledger, "document").clone());
+            put(&mut run, "phase", s("propose"));
+            put(&mut state, "task_run", run);
+            harness::model_reply(&mut state, reply).unwrap();
+            let continuing = get(&state, "task_run");
+            let rows = crate::rrsi::records_of(&text(continuing, "edit_ledger")).unwrap();
+            assert_eq!(rows.len(), 2);
+            assert!(text(rows.last().unwrap(), "decision").contains("already rejected in round 9999"));
+            assert_eq!(get(rows.last().unwrap(), "reward"), &Num("-10".into()));
+            assert_eq!(get(continuing, "round_index"), &Num("10001".into()));
+            assert_eq!(get(&state, "refinement_pending"), &Null);
+        }
+        println!("SR1-P4 public propose: normalized hypothesis and relabeled identical diff refused; goal search continues");
+    }
+
+    /// The head-to-head row score. A row that now passes is worth a point, a row that
+    /// now fails costs a point, and a run measured without a verifier keeps the check
+    /// count.
+    #[test]
+    fn sr1_row_scorer_measures_the_verifier_rows_head_to_head() {
+        let before = row_score(&[true, true, true, true, true, true, false, false]);
+        let fixed = row_score(&[true, true, true, true, true, true, true, false]);
+        let decision = acceptance(&before, &fixed, 0, None, None, None, &[], COST_BETA0, COST_BETA1);
+        assert!(boolean(&decision, "admit"), "{}", decision.string());
+        assert!(boolean(&decision, "rows_known"), "{}", decision.string());
+        assert_eq!(number(&decision, "rows_fixed"), 1);
+        assert_eq!(number(&decision, "rows_broken"), 0);
+        assert_eq!(get(&decision, "reward"), &Num("10".into()));
+        let gained = get(&decision, "reward").string().parse::<i64>().unwrap();
+        // A planted newly failing row lowers the score.
+        let broken = row_score(&[true, true, true, true, true, false, false, false]);
+        let regressed = acceptance(&before, &broken, 0, None, None, None, &[], COST_BETA0, COST_BETA1);
+        assert!(!boolean(&regressed, "admit"), "{}", regressed.string());
+        assert!(boolean(&regressed, "rows_known"), "{}", regressed.string());
+        assert_eq!(number(&regressed, "rows_broken"), 1);
+        assert_eq!(number(&regressed, "rows_fixed"), 0);
+        let lost = get(&regressed, "reward").string().parse::<i64>().unwrap();
+        assert!(lost < 0, "{}", regressed.string());
+        assert!(lost < gained, "a planted newly failing row must lower the score");
+        // A score measured without a verifier keeps the check count.
+        let counted = acceptance(&score(6, 8), &score(7, 8), 0, None, None, None, &[], COST_BETA0, COST_BETA1);
+        assert!(!boolean(&counted, "rows_known"), "{}", counted.string());
+        assert_eq!(get(&counted, "reward"), &Num("10".into()));
+        // Two runs of different shapes are not a head-to-head comparison.
+        let reshaped = acceptance(&before, &row_score(&[true, true, true, true, true, true, true, false, false]), 0, None, None, None, &[], COST_BETA0, COST_BETA1);
+        assert!(!boolean(&reshaped, "rows_known"), "{}", reshaped.string());
+        println!("SR1-B1 row scorer: fixed row +{gained} tenths, planted newly failing row {lost} tenths, check count 10 tenths");
+    }
+
+    /// Twenty rows failing together carry the chained-test signal. The check count
+    /// alone cannot see it.
+    #[test]
+    fn sr1_twenty_failing_rows_carry_the_chained_test_signal() {
+        let before = row_score(&vec![true; 24]);
+        let mut rows = vec![true; 24];
+        for row in rows.iter_mut().take(20) { *row = false; }
+        let after = row_score(&rows);
+        let decision = acceptance(&before, &after, 0, None, None, None, &[], COST_BETA0, COST_BETA1);
+        assert!(!boolean(&decision, "admit"), "{}", decision.string());
+        assert!(boolean(&decision, "rows_known"), "{}", decision.string());
+        assert_eq!(number(&decision, "rows_broken"), 20);
+        assert!(boolean(&decision, "chained_rows"), "{}", decision.string());
+        assert_eq!(get(&decision, "reward"), &Num("-230".into()));
+        // The same two scores measured by count carry no chained signal.
+        let counted = acceptance(&score(24, 24), &score(4, 24), 0, None, None, None, &[], COST_BETA0, COST_BETA1);
+        assert!(!boolean(&counted, "rows_known"), "{}", counted.string());
+        assert!(!boolean(&counted, "chained_rows"), "{}", counted.string());
+        assert_eq!(get(&counted, "reward"), &Num("-210".into()));
+        println!("SR1-B1 chained rows: row score -230 tenths, check count -210 tenths");
     }
 }
 
@@ -156,20 +397,17 @@ fn named_shape(shape: &CandidateShape) -> bool {
 
 fn shape_recorded(records: &[Json], shape: &CandidateShape) -> bool {
     records.iter().any(|row| {
-        text(row, "component") == shape.component
-            && text(row, "hypothesis") == shape.hypothesis
+        crate::rrsi::component_key(&text(row, "component")) == crate::rrsi::component_key(shape.component)
+            && crate::rrsi::normalized_key(&text(row, "hypothesis")) == crate::rrsi::normalized_key(shape.hypothesis)
             && text(row, "diff_digest") == shape.diff_digest
     })
 }
 
 /// `floor` is the largest base-to-base spread already recorded for this task and verifier.
 /// A floor of 0 is one observation: the legacy comparison is unchanged.
-/// Equal scores are not a gain. A lower recorded cost can still admit them, and a higher
-/// recorded cost refuses a score that did not rise. Those two arms are the bound
-/// cost change <= beta0 + beta1 * score gain when the gain is not positive.
+/// Equal scores are not a gain, even when wording is shorter or a shape is new.
 /// A positive gain whose cost increase exceeds that bound is refused as "cost bound".
-/// Missing cost leaves the legacy bit. Inside a measured band (floor > 0) a flat score
-/// that is not a cost saving is admitted only when its shape is absent from `seen`.
+/// Missing cost leaves the score comparison. Rejected rounds carry a signed penalty.
 /// `beta0` and `beta1` are the cost bound for this judgement. The live refine path
 /// passes `COST_BETA0` and `COST_BETA1`. Rejudge passes the pair stored on the row.
 pub(super) fn acceptance(
@@ -187,6 +425,9 @@ pub(super) fn acceptance(
     let before = number(baseline, "passed") as i64;
     let after = number(candidate, "passed") as i64;
     let gain = after - before;
+    // The verifier's own rows, when both sides carry them. A score measured without a
+    // verifier keeps the check count.
+    let rows = row_measurement(baseline, candidate);
     let mut admit = legacy;
     let mut reason = "score";
     if floor > 0 && legacy && gain <= floor as i64 {
@@ -200,10 +441,7 @@ pub(super) fn acceptance(
             Some(delta) => delta > cost_limit(gain, beta0, beta1),
             None => true,
         };
-        if after == before && cost_after < cost_before && preserves_checks(baseline, candidate) {
-            admit = true;
-            reason = "lower cost";
-        } else if cost_after > cost_before && after <= before {
+        if cost_after > cost_before && after <= before {
             admit = false;
             reason = "cost rose";
         } else if admit && reason == "score" && over {
@@ -211,8 +449,7 @@ pub(super) fn acceptance(
             reason = "cost bound";
         }
     }
-    // A positive gain that does not clear the floor stays a floor refusal.
-    // Novelty admits only a flat, check-preserving score inside that band.
+    // Shape novelty alone cannot substitute for measured improvement.
     let flat = gain == 0 && preserves_checks(baseline, candidate);
     let in_band = floor > 0 && gain <= floor as i64;
     if in_band && flat && reason == "score" {
@@ -222,21 +459,51 @@ pub(super) fn acceptance(
                     admit = false;
                     reason = "duplicate shape";
                 } else {
-                    admit = true;
-                    reason = "structural novelty";
+                    admit = false;
+                    reason = "no gain";
                 }
             }
         }
     }
+    if gain <= 0 {
+        admit = false;
+        if reason == "score" { reason = if gain < 0 { "regression" } else { "no gain" }; }
+    }
+    // The reward follows the rows when the verifier measured them: a fixed row is
+    // worth a point, a newly failing row costs a point, an added passing row is worth
+    // a tenth, and rows that fail together cost two more points. Every reward is an
+    // integer count of tenths of a point, so the same reward reads ten times its old
+    // whole-point value. Without rows the check count is the reward, unchanged.
+    let rows_known=rows.is_some();
+    let (reward, fixed, broken, added, added_passing, chained) = match rows {
+        Some(delta) => {
+            let tenths = delta.tenths();
+            let reward = if admit { tenths } else { tenths.min(0).saturating_sub(10) };
+            (reward, delta.fixed as i64, delta.broken as i64, delta.added as i64,
+                delta.added_passing as i64, delta.chained())
+        }
+        None => {
+            let tenths = gain.saturating_mul(10);
+            let reward = if admit { tenths } else { tenths.min(0).saturating_sub(10) };
+            (reward, 0, 0, 0, 0, false)
+        }
+    };
     obj(vec![
         ("admit", Bool(admit)),
         ("legacy", Bool(legacy)),
         ("reason", s(reason)),
         ("gain", s(&gain.to_string())),
+        ("reward", Num(reward.to_string())),
         ("noise_floor", Num(floor.to_string())),
         ("cost_known", Bool(cost_known)),
         ("beta0", Num(beta0.to_string())),
         ("beta1", Num(beta1.to_string())),
+        ("rows_known", Bool(rows_known)),
+        ("rows_fixed", Num(fixed.to_string())),
+        ("rows_broken", Num(broken.to_string())),
+        ("rows_added", Num(added.to_string())),
+        ("rows_added_passing", Num(added_passing.to_string())),
+        ("chained_rows", Bool(chained)),
     ])
 }
 
@@ -289,6 +556,89 @@ fn field_number(value: &Json, key: &str) -> Option<u8> {
         Num(number) => number.parse().ok(),
         _ => None,
     }
+}
+
+/// The most rows one score may carry. A verifier with more rows than this is not measured.
+pub(super) const ROW_LIMIT: usize = 4096;
+
+/// Twenty rows failing together after one change is a chained-test signal.
+pub(super) const CHAINED_ROWS: usize = 20;
+
+/// What one change did to the verifier's rows, measured head to head.
+pub(super) struct RowDelta {
+    /// Rows that failed and now pass.
+    pub fixed: usize,
+    /// Rows that passed and now fail.
+    pub broken: usize,
+    /// Baseline rows the later run no longer runs.
+    pub dropped: usize,
+    /// Rows only the later run has.
+    pub added: usize,
+    /// Added rows that pass.
+    pub added_passing: usize,
+}
+
+impl RowDelta {
+    /// The signed score of this delta in tenths of a point.
+    /// A fixed row is worth one point, a newly failing row costs one point, a dropped
+    /// row costs one point, a passing row that was added is worth a tenth, and twenty
+    /// or more rows failing together cost two more points: a chained-test signal.
+    pub(super) fn tenths(&self) -> i64 {
+        let mut tenths = 10i64 * self.fixed as i64 - 10i64 * self.broken as i64
+            - 10i64 * self.dropped as i64 + self.added_passing as i64;
+        if self.chained() { tenths -= 20; }
+        tenths
+    }
+
+    /// True when twenty or more rows fail together after the change.
+    pub(super) fn chained(&self) -> bool { self.broken >= CHAINED_ROWS }
+}
+
+/// Compare two runs of the same verifier head to head, row by row.
+/// Rows are compared in order. A row only the later run has was added, and a baseline
+/// row the later run dropped can never pay for the change.
+pub(super) fn row_delta(before: &[bool], after: &[bool]) -> RowDelta {
+    let common = before.len().min(after.len());
+    let mut fixed = 0usize;
+    let mut broken = 0usize;
+    for index in 0..common {
+        match (before[index], after[index]) {
+            (false, true) => fixed += 1,
+            (true, false) => broken += 1,
+            _ => {}
+        }
+    }
+    let dropped = before.len() - common;
+    let added = after.len() - common;
+    let added_passing = after[common..].iter().filter(|passed| **passed).count();
+    RowDelta { fixed, broken, dropped, added, added_passing }
+}
+
+/// The rows a score carries, when it carries them.
+/// `None` means the score was measured without a verifier: the check count applies.
+pub(super) fn score_rows(score: &Json) -> Option<Vec<bool>> {
+    let Arr(items) = get(score, "rows") else { return None; };
+    if items.len() > ROW_LIMIT { return None; }
+    let mut rows = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            Num(value) if value == "1" => rows.push(true),
+            Num(value) if value == "0" => rows.push(false),
+            _ => return None,
+        }
+    }
+    Some(rows)
+}
+
+/// The row delta between two measured runs, when both carry their rows and the two
+/// runs have the same shape. One verifier runs the same rows, so two runs of it are
+/// compared row against row. Runs of different shapes are not a head-to-head
+/// comparison: the check count scores them instead, and the decision says so.
+pub(super) fn row_measurement(baseline: &Json, candidate: &Json) -> Option<RowDelta> {
+    let before = score_rows(baseline)?;
+    let after = score_rows(candidate)?;
+    if before.len() != after.len() { return None; }
+    Some(row_delta(&before, &after))
 }
 
 pub(super) fn json_envelope<'a>(criteria: &Json, reply: &'a str) -> Option<&'a str> {
@@ -346,6 +696,9 @@ pub(super) fn evaluate(st: &Json, criteria: &Json, reply: &str) -> Json {
         }
     };
     let total = outcomes.len();
+    // The verifier's own rows, kept so a later comparison can measure those rows
+    // head to head instead of only counting the checks that passed.
+    let rows: Vec<Json> = outcomes.iter().map(|passed| Num(u8::from(*passed).to_string())).collect();
     let mask = outcomes.into_iter().enumerate().fold(0u8, |mask, (index, passed)|
         mask | (u8::from(passed) << index));
     let passed = mask.count_ones() as usize;
@@ -354,7 +707,7 @@ pub(super) fn evaluate(st: &Json, criteria: &Json, reply: &str) -> Json {
         let scope = obj(vec![("index", Num(index.to_string())), ("profile", profile.clone()), ("model", get(st, "request_model").clone())]);
         s(&harness_rules::digest(&scope))
     }).unwrap_or(Null);
-    let mut score = obj(vec![("passed", Num(passed.to_string())), ("total", Num(total.to_string())), ("strict", Bool(passed == total)), ("route", route), ("kind", s(kind)), ("passed_checks", Num(mask.to_string()))]);
+    let mut score = obj(vec![("passed", Num(passed.to_string())), ("total", Num(total.to_string())), ("strict", Bool(passed == total)), ("route", route), ("kind", s(kind)), ("passed_checks", Num(mask.to_string())), ("rows", Arr(rows))]);
     if repaired { put(&mut score, "json_unwrapped", Bool(true)); }
     score
 }
@@ -477,6 +830,61 @@ pub(super) fn comparable(base: &Json, candidate: &Json) -> bool {
         && get(base,"context") == get(candidate,"context")
 }
 
+/// What the retained candidate did on the two separate evaluation tasks.
+/// The first task is the held-out leg the split already scores; the second is the
+/// out-of-distribution leg. Both legs are measured from the original instructions and
+/// the retained instructions on the same task, so each leg has a real before and after.
+pub(super) struct HoldMeasurement {
+    pub held_before: u64,
+    pub held_after: u64,
+    pub held_total: u64,
+    pub held_task_key: String,
+    pub held_verifier: String,
+    pub ood_before: u64,
+    pub ood_after: u64,
+    pub ood_total: u64,
+    pub ood_task_key: String,
+    pub ood_verifier: String,
+}
+
+impl HoldMeasurement {
+    /// True when neither leg fell behind the original instructions.
+    pub(super) fn holds(&self) -> bool {
+        self.held_after >= self.held_before && self.ood_after >= self.ood_before
+    }
+}
+
+/// Measure the held-out and out-of-distribution legs of a finished refinement.
+/// `None` when a leg was not measured, was not comparable, or has no task identity.
+pub(super) fn hold_measurement(run: &Json) -> Option<HoldMeasurement> {
+    let first = get(run, "evaluation_first");
+    if first == &Null { return None; }
+    let held_base = get(first, "original");
+    let held_after = get(first, "retained");
+    let ood_base = get(run, "evaluation_base_score");
+    let ood_after = get(run, "evaluation_candidate_score");
+    if !comparable(held_base, held_after) || !comparable(ood_base, ood_after) { return None; }
+    let held_task_key = text(run, "held_out_task_key");
+    let held_verifier = text(run, "held_out_verifier");
+    let evaluation = get(run, "evaluation");
+    let ood_task_key = task_key(&text(evaluation, "task"));
+    let ood_verifier = verifier_key(get(evaluation, "checks"));
+    if held_task_key.len() != 64 || held_verifier.len() != 64 { return None; }
+    if ood_task_key.len() != 64 || ood_verifier.len() != 64 { return None; }
+    Some(HoldMeasurement {
+        held_before: number(held_base, "passed") as u64,
+        held_after: number(held_after, "passed") as u64,
+        held_total: number(held_after, "total") as u64,
+        held_task_key,
+        held_verifier,
+        ood_before: number(ood_base, "passed") as u64,
+        ood_after: number(ood_after, "passed") as u64,
+        ood_total: number(ood_after, "total") as u64,
+        ood_task_key,
+        ood_verifier,
+    })
+}
+
 fn repair_note(score: &Json) -> &str {
     if boolean(score, "json_unwrapped") { " (JSON code block unwrapped locally)" } else { "" }
 }
@@ -577,7 +985,7 @@ pub(super) fn stored_hypothesis(hypothesis: &str, run: &Json) -> String {
     let leaked = recorded_tasks(run).iter().any(|task| copies_secret(hypothesis, task))
         || recorded_expected(run).iter().any(|value| copies_secret(hypothesis, value));
     if leaked {
-        harness_rules::digest(&s(hypothesis))
+        harness_rules::digest(&s(&crate::rrsi::normalized_key(hypothesis)))
     } else {
         hypothesis.to_string()
     }
@@ -833,7 +1241,8 @@ mod checks {
         assert_eq!(boolean(&equal, "admit"), false);
         assert_eq!(boolean(&equal, "admit"), check_gain(&before, &before));
         assert_eq!(boolean(&equal, "legacy"), boolean(&equal, "admit"));
-        assert_eq!(text(&equal, "reason"), "score");
+        assert_eq!(text(&equal, "reason"), "no gain");
+        assert_eq!(get(&equal, "reward"), &Num("-10".into()));
         assert_eq!(boolean(&equal, "cost_known"), false);
     }
 
@@ -890,7 +1299,7 @@ mod checks {
     }
 
     #[test]
-    fn three_refinement_rounds_are_accepted_and_four_are_refused() {
+    fn refinement_intervals_accept_values_past_the_old_cap() {
         let checks = Arr(vec![s("phrase")]);
         assert_eq!(refinement_rounds(&s("1"), &checks).unwrap(), 1);
         assert_eq!(refinement_rounds(&s("2"), &checks).unwrap(), 2);
@@ -904,10 +1313,10 @@ mod checks {
             refinement_rounds(&s("3"), &Null).unwrap_err(),
             "Add response checks before selecting a second refinement round"
         );
-        assert_eq!(
-            refinement_rounds(&s("4"), &checks).unwrap_err(),
-            "Select one, two, or three refinement rounds"
-        );
+        assert_eq!(refinement_rounds(&s("4"), &checks).unwrap(), 4);
+        assert_eq!(refinement_rounds(&s("10000"), &checks).unwrap(), 10000);
+        assert!(refinement_rounds(&s("0"), &checks).is_err());
+        assert!(refinement_rounds(&s("three"), &checks).is_err());
     }
 
     fn paired(passed: &str) -> Json {
@@ -941,8 +1350,9 @@ mod checks {
         assert_eq!(get(&inside, "beta1"), &Num("64".into()));
         let tied = paired("2");
         let saved = acceptance(&tied, &tied, 0, Some(50), Some(40), None, &[], COST_BETA0, COST_BETA1);
-        assert_eq!(text(&saved, "reason"), "lower cost");
-        assert!(boolean(&saved, "admit"));
+        assert_eq!(text(&saved, "reason"), "no gain");
+        assert!(!boolean(&saved, "admit"));
+        assert_eq!(get(&saved, "reward"), &Num("-10".into()));
         assert!(40 - 50 <= COST_BETA0 + COST_BETA1 * 0);
         let costly = acceptance(&tied, &tied, 0, Some(40), Some(50), None, &[], COST_BETA0, COST_BETA1);
         assert_eq!(text(&costly, "reason"), "cost rose");
@@ -951,7 +1361,7 @@ mod checks {
     }
 
     #[test]
-    fn noise_band_admits_a_new_shape_and_refuses_the_duplicate() {
+    fn noise_band_penalizes_flat_shapes_including_new_ones() {
         let digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let other = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
         let score = paired("2");
@@ -961,8 +1371,9 @@ mod checks {
             diff_digest: digest,
         };
         let first = acceptance(&score, &score, 3, None, None, Some(shape), &[], COST_BETA0, COST_BETA1);
-        assert!(boolean(&first, "admit"));
-        assert_eq!(text(&first, "reason"), "structural novelty");
+        assert!(!boolean(&first, "admit"));
+        assert_eq!(text(&first, "reason"), "no gain");
+        assert_eq!(get(&first, "reward"), &Num("-10".into()));
         assert_eq!(text(&first, "gain"), "0");
         let seen = obj(vec![
             ("component", s("skills")),
@@ -982,11 +1393,11 @@ mod checks {
             ("hypothesis", s("try a cache")),
             ("diff_digest", s(digest)),
         ])], COST_BETA0, COST_BETA1);
-        assert!(boolean(&third, "admit"));
-        assert_eq!(text(&third, "reason"), "structural novelty");
+        assert!(!boolean(&third, "admit"));
+        assert_eq!(text(&third, "reason"), "no gain");
         let unmeasured = acceptance(&score, &score, 0, None, None, Some(novel), &[], COST_BETA0, COST_BETA1);
         assert!(!boolean(&unmeasured, "admit"));
-        assert_eq!(text(&unmeasured, "reason"), "score");
+        assert_eq!(text(&unmeasured, "reason"), "no gain");
         let noisy = acceptance(&paired("1"), &paired("2"), 3, None, None, Some(novel), &[], COST_BETA0, COST_BETA1);
         assert!(!boolean(&noisy, "admit"));
         assert_eq!(text(&noisy, "reason"), "floor");

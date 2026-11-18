@@ -138,6 +138,105 @@ fn note_refinement_edit(run:&mut Json,hypothesis:&str,verdict:&str,before:usize,
  }
  commit_edit(run,&edit);
 }
+/// One hold that earned a credit. The held-out leg and the out-of-distribution leg
+/// are measured from the original instructions and the retained instructions on
+/// their own tasks, so each leg has a real before and after.
+struct HoldCredit{
+ name:&'static str,
+ reason:String,
+ points:i64,
+}
+/// The credits a finished refinement earned. A leg that fell behind earns nothing,
+/// and a refinement that measured no hold earns nothing. Each credit names itself.
+fn hold_credits(run:&Json)->Vec<HoldCredit>{
+ let Some(measurement)=improvement::hold_measurement(run) else {return Vec::new();};
+ if !measurement.holds(){return Vec::new();}
+ vec![
+  HoldCredit{name:"held-out",points:1,reason:format!("held-out task held with no regression: {}/{} checks pass against the original {}/{}",
+   measurement.held_after,measurement.held_total,measurement.held_before,measurement.held_total)},
+  HoldCredit{name:"out-of-distribution",points:1,reason:format!("out-of-distribution task held with no regression: {}/{} checks pass against the original {}/{}",
+   measurement.ood_after,measurement.ood_total,measurement.ood_before,measurement.ood_total)},
+ ]
+}
+/// Write the hold credit rows of a finished refinement. Each leg that held earns one
+/// point and names itself in its own reason. A row carries the change's own measured
+/// gain, so the ledger can re-derive its verdict, and the hold's own numbers travel
+/// in the row's split fields and in its reason.
+fn note_hold_credit(run:&mut Json)->Vec<HoldCredit>{
+ let credits=hold_credits(run);
+ if credits.is_empty(){return credits;}
+ let Some(measurement)=improvement::hold_measurement(run) else {return Vec::new();};
+ let digest=refinement_digest(run);
+ let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
+ let Some(accepted)=records.iter().rev().find(|row|text(row,"verdict")=="accepted"&&text(row,"run_digest")==digest).cloned() else {return Vec::new();};
+ if get(&accepted,"edit_budget")==&Null||get(&accepted,"noise_floor")==&Null||!matches!(get(&accepted,"cost_known"),Bool(_)){
+  put(run,"edit_ledger_error",s("the accepted row did not record its budget, floor and cost"));return Vec::new();
+ }
+ let component=text(&accepted,"component");
+ let hypothesis=text(&accepted,"hypothesis");
+ let diff=text(&accepted,"diff_digest");
+ let before=row_u64(&accepted,"score_before").unwrap_or(0);
+ let after=row_u64(&accepted,"score_after").unwrap_or(0);
+ let cost_before=row_u64(&accepted,"cost_before").unwrap_or(0);
+ let cost_after=row_u64(&accepted,"cost_after").unwrap_or(0);
+ let round=round_index_of(run);
+ for credit in &credits{
+  let mut edit=match crate::rrsi::edit(&component,&hypothesis,&diff,before,after,cost_before,cost_after,"accepted",round,&digest){
+   Ok(edit)=>edit,
+   Err(error)=>{put(run,"edit_ledger_error",s(&error));break;}
+  };
+  put(&mut edit,"edit_budget",get(&accepted,"edit_budget").clone());
+  put(&mut edit,"noise_floor",get(&accepted,"noise_floor").clone());
+  put(&mut edit,"cost_known",get(&accepted,"cost_known").clone());
+  put(&mut edit,"decision",s(&credit.reason));
+  let edit=match crate::rrsi::annotate(edit,"clean"){
+   Ok(edit)=>edit,
+   Err(error)=>{put(run,"edit_ledger_error",s(&error));break;}
+  };
+  let policy=obj(vec![
+   ("beta0",if get(&accepted,"beta0")==&Null{Num(improvement::COST_BETA0.to_string())}else{get(&accepted,"beta0").clone()}),
+   ("beta1",if get(&accepted,"beta1")==&Null{Num(improvement::COST_BETA1.to_string())}else{get(&accepted,"beta1").clone()}),
+   ("accept_reason",s("score")),
+   ("reward",Num((credit.points*10).to_string())),
+   ("evolve_passed",Num(after.to_string())),
+   ("held_out_known",Bool(true)),
+   ("held_out_passed",Num(measurement.held_after.to_string())),
+   ("held_out_task_key",s(&measurement.held_task_key)),
+   ("held_out_verifier",s(&measurement.held_verifier)),
+   ("ood_known",Bool(true)),
+   ("ood_passed",Num(measurement.ood_after.to_string())),
+   ("ood_task_key",s(&measurement.ood_task_key)),
+   ("ood_verifier",s(&measurement.ood_verifier)),
+  ]);
+  let edit=match crate::rrsi::attach(edit,&policy){
+   Ok(edit)=>edit,
+   Err(error)=>{put(run,"edit_ledger_error",s(&error));break;}
+  };
+  commit_edit(run,&edit);
+ }
+ credits
+}
+/// The reward the accepted row of this run earned, in tenths. It is read before the
+/// hold rows are written, so the hold credits never count as the plain gain.
+fn plain_gain(run:&Json)->i64{
+ let digest=text(run,"run_digest");
+ let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
+ records.iter().rev().find(|row|text(row,"verdict")=="accepted"&&text(row,"run_digest")==digest)
+  .map(|row|get(row,"reward").string().parse::<i64>().unwrap_or(0)).unwrap_or(0)
+}
+/// The round's score in points: the plain gain of the accepted row and the credits
+/// the holds earned. A hold that did not hold earns nothing, and the line says so.
+fn reward_line(plain:i64,credits:&[HoldCredit])->String{
+ let mut total=plain;
+ let mut parts=vec![format!("plain gain {}",points_text(plain))];
+ for credit in credits{
+  parts.push(format!("{} hold {}",credit.name,points_text(credit.points*10)));
+  total=total.saturating_add(credit.points*10);
+ }
+ if credits.is_empty(){parts.push("no hold credit".into());}
+ parts.push(format!("total {}",points_text(total)));
+ format!("Reward: {}.",parts.join(", "))
+}
 fn record_unscored(run:&mut Json,component:&str,claim:&str,reply:&str,diff:&str,leakage:&str,decision:&str)->Result<()>{
  let stored=improvement::stored_hypothesis(claim,run);
  let prior=incumbent_text(run);
@@ -1005,6 +1104,14 @@ fn judged_acceptance(run:&Json,reference:&Json,selected:&Json,reply:&str,prior:&
  // rejudge passes that same prefix, `records[0..i]`, when it judges row i.
  improvement::acceptance(reference,selected,floor,cost_before,cost_after,Some(improvement::CandidateShape{component:&component,hypothesis:&hypothesis,diff_digest:&diff}),records,improvement::COST_BETA0,improvement::COST_BETA1)
 }
+/// A reward is an integer count of tenths of a point. Text reads points.
+fn points_text(tenths:i64)->String{
+ let whole=tenths.abs()/10;
+ let tenth=tenths.abs()%10;
+ let sign=if tenths<0{"-"}else{""};
+ if tenth==0{format!("{sign}{whole} point{}",if whole==1{""}else{"s"})}
+ else{format!("{sign}{whole}.{tenth} points")}
+}
 fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:&str,round:u64,measure_cost:bool)->Json{
  let digest=refinement_digest(run);
  let records=crate::rrsi::records_of(&text(run,"edit_ledger")).unwrap_or_default();
@@ -1040,7 +1147,7 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
  }else if reason=="duplicate shape"{
   (Some("rejected"),"refused because the duplicate shape was already recorded".into())
  }else if !boolean(&decision,"admit"){
-  (Some("rejected"),format!("refused because {}; signed reward {}",if reason=="no gain"{"the score did not rise"}else{&reason},get(&decision,"reward").string()))
+  (Some("rejected"),format!("refused because {}; signed reward {}",if reason=="no gain"{"the score did not rise"}else{&reason},points_text(get(&decision,"reward").string().parse::<i64>().unwrap_or(0))))
  }else if !cost_known{
   (None,"cost not recorded".into())
  }else{
@@ -1060,6 +1167,21 @@ fn acceptance_policy(run:&mut Json,reference:&Json,selected:&Json,selected_text:
   }
   split=judgement;
  }
+ // The decision names what the change did to the verifier's own rows, not only how
+ // many checks passed. The rows are measured head to head when the verifier measured
+ // them; a score measured without a verifier keeps the check count and says so.
+ let row_note=if boolean(&decision,"rows_known"){
+  let fixed=number(&decision,"rows_fixed");
+  let broken=number(&decision,"rows_broken");
+  let added=number(&decision,"rows_added");
+  let added_passing=number(&decision,"rows_added_passing");
+  let mut note=format!("rows {fixed} fixed, {broken} newly failing");
+  if added>0{note.push_str(&format!(", {added} added ({added_passing} passing)"));}
+  if boolean(&decision,"chained_rows"){note.push_str(", chained-test signal");}
+  note
+ }else{"scored by check count; no earlier run of this verifier and task".into()};
+ decision_text=format!("{decision_text}; {row_note}");
+ if decision_text.len()>240{let mut end=240;while end>0&&!decision_text.is_char_boundary(end){end-=1;}decision_text.truncate(end);}
  let mut policy=obj(vec![
   ("edit_budget",Num(budget.to_string())),
   ("noise_floor",Num(floor.to_string())),
@@ -1442,6 +1564,9 @@ fn finish_refinement(st:&mut Json,mut run:Json)->Result<Option<Json>>{
   let line=crate::rrsi::budget_line(&records,&digest,round_index_of(&run).saturating_add(1));
   if line.contains("Pruned:"){evidence.push_str(&line);}
  }
+ let plain=plain_gain(&run);
+ let credits=note_hold_credit(&mut run);
+ evidence.push_str(&reward_line(plain,&credits));
  put(&mut run,"evidence",s(&evidence));record_settled_library(&mut run);put(&mut run,"phase",s("review"));put(&mut run,"evaluation",Null);put(&mut run,"evaluation_next",Null);put(&mut run,"evaluation_context",Null);put(&mut run,"response_checks",Null);
  let mut next=st.clone();put(&mut next,"refinement_pending",run);reset_task(&mut next);
  put(&mut next,"dialog",s("refinement_review"));put(&mut next,"notice",s("Refinement ready for review; existing agent unchanged"));
@@ -2097,6 +2222,76 @@ pub(super) fn mcp_client_tool_effect(st:&mut Json,args:&Json)->Result<Json>{
  fn decision_of(run:&Json)->(String,String,String,bool){
   let row=last_edit(run);
   (text(&row,"verdict"),text(run,"round_note"),text(&row,"decision"),get(run,"first_refinement")!=&Null)
+ }
+ /// One evaluation leg, measured on its own task with its own checks.
+ fn leg_score(passed:usize,total:usize)->Json{obj(vec![("passed",Num(passed.to_string())),("total",Num(total.to_string())),("strict",Bool(passed==total)),("route",s("same-route")),("kind",s("required phrases")),("context",s("same-context"))])}
+ /// A finished refinement that earned one accepted row, with the two evaluation legs
+ /// measured against the original instructions.
+ fn hold_run(held:&Json,held_after:&Json,ood:&Json,ood_after:&Json)->Json{
+  let mut run=obj(vec![
+   ("mode",s("refine")),("phase",s("review")),("task",s("acceptance task")),("run_digest",s(POLICY_RUN)),
+   ("edit_ledger",s("")),("edit_ledger_root",s(&ledger_root())),("edit_ledger_path",s("edits.jsonl")),
+   ("evaluation_requested",Bool(true)),("round_index",Num("1".into())),
+   ("evaluation_first",obj(vec![("original",held.clone()),("retained",held_after.clone())])),
+   ("evaluation_base_score",ood.clone()),("evaluation_candidate_score",ood_after.clone()),
+   ("evaluation",obj(vec![("task",s("OOD task.")),("checks",Arr(vec![s("OOD-TOKEN")]))])),
+   ("held_out_task_key",s(&improvement::task_key("Held out task."))),
+   ("held_out_verifier",s(&improvement::verifier_key(&Arr(vec![s("HELD-TOKEN")]))))]);
+  let mut row=crate::rrsi::edit("prompt","hold the legs",&crate::rrsi::diff_digest("a","b"),1,2,40,45,"accepted",1,POLICY_RUN).unwrap();
+  put(&mut row,"edit_budget",Num("4".into()));
+  put(&mut row,"noise_floor",Num("0".into()));
+  put(&mut row,"cost_known",Bool(true));
+  put(&mut row,"beta0",Num("0".into()));
+  put(&mut row,"beta1",Num("64".into()));
+  put(&mut row,"decision",s("score"));
+  put(&mut row,"accept_reason",s("score"));
+  put(&mut row,"reward",Num("10".into()));
+  put(&mut run,"edit_ledger",s(&text(&crate::rrsi::append_document("",&row,POLICY_RUN).unwrap(),"document")));
+  run
+ }
+ /// A refinement that held both evaluation legs earns a point for each leg, above
+ /// the plain gain, and each leg names itself. A leg that fell behind earns nothing.
+ #[test] fn hold_credits_reward_a_held_out_and_out_of_distribution_hold(){
+  let mut run=hold_run(&leg_score(2,2),&leg_score(2,2),&leg_score(3,3),&leg_score(3,3));
+  let credits=hold_credits(&run);
+  assert_eq!(credits.len(),2,"{:?}",credits.iter().map(|credit|credit.reason.clone()).collect::<Vec<_>>());
+  assert!(credits[0].reason.contains("held-out task held with no regression"),"{}",credits[0].reason);
+  assert!(credits[1].reason.contains("out-of-distribution task held with no regression"),"{}",credits[1].reason);
+  assert_eq!(credits[0].points,1);
+  assert_eq!(credits[1].points,1);
+  let plain=plain_gain(&run);
+  assert_eq!(plain,10);
+  let credited=note_hold_credit(&mut run);
+  assert_eq!(credited.len(),2);
+  let rows=crate::rrsi::records_of(&text(&run,"edit_ledger")).unwrap();
+  assert_eq!(rows.len(),3,"{}",rows.len());
+  let holds:Vec<Json>=rows.iter().filter(|row|text(row,"decision").contains("held with no regression")).cloned().collect();
+  assert_eq!(holds.len(),2);
+  for row in &holds{
+   assert_eq!(text(row,"verdict"),"accepted","{}",row.string());
+   assert_eq!(get(row,"reward"),&Num("10".into()),"{}",row.string());
+   assert_eq!(text(row,"accept_reason"),"score","{}",row.string());
+   assert_eq!(get(row,"held_out_known"),&Bool(true),"{}",row.string());
+   assert_eq!(get(row,"ood_known"),&Bool(true),"{}",row.string());
+   assert_eq!(text(row,"held_out_task_key"),improvement::task_key("Held out task."));
+   assert_eq!(text(row,"ood_task_key"),improvement::task_key("OOD task."));
+  }
+  // The row the change earned is still the plain gain; the hold rows carry their own.
+  let change=rows.iter().find(|row|text(row,"decision")=="score").expect("the change row");
+  assert_eq!(get(change,"reward"),&Num("10".into()));
+  let line=reward_line(plain,&credited);
+  assert!(line.contains("plain gain 1 point"),"{line}");
+  assert!(line.contains("held-out hold 1 point"),"{line}");
+  assert!(line.contains("out-of-distribution hold 1 point"),"{line}");
+  assert!(line.contains("total 3 points"),"{line}");
+  // The control: a leg that fell behind earns no credit at all.
+  let mut regressed=hold_run(&leg_score(2,2),&leg_score(1,2),&leg_score(3,3),&leg_score(3,3));
+  assert!(hold_credits(&regressed).is_empty());
+  let none=note_hold_credit(&mut regressed);
+  assert!(none.is_empty());
+  assert_eq!(crate::rrsi::records_of(&text(&regressed,"edit_ledger")).unwrap().len(),1);
+  assert!(reward_line(plain_gain(&regressed),&none).contains("no hold credit"));
+  println!("SR1-B2 hold credits: both legs held, total 3 points; a fallen leg earns nothing");
  }
  #[test] fn annealed_budget_refuses_the_next_edit_through_the_round(){
   let mut seen=Vec::new();

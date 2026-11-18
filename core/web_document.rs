@@ -45,8 +45,10 @@ fn metadata(raw:&[u8])->Result<Metadata>{
 struct Decoded {code:u16,body:String,html:bool,encoding:&'static str,media:Option<String>,gzip:bool}
 fn decode(raw:&[u8],limit:usize,room:usize)->std::result::Result<Decoded,PageError>{
  let allowance=admission(raw.len(),room)?;
- // The existing authoritative decoder validates complete framing/status first.
- let(code,bytes)=network::decoded_coded_bytes(raw)?;let meta=metadata(raw)?;let gzip=http_content_coding::header(raw)?;
+ // This surface judges its own representation metadata before the authoritative
+ // decoder, so a refusal on a page head keeps the page's own diagnostic; the
+ // decoder still validates complete framing and status for every head accepted.
+ let meta=metadata(raw)?;let(code,bytes)=network::decoded_coded_bytes(raw)?;let gzip=http_content_coding::header(raw)?;
  let bytes=if gzip{http_content_coding::decode_classified(&bytes,true,allowance).map_err(|e|match e.kind{http_content_coding::ErrorKind::Resource=>PageError::Resource(e.message),http_content_coding::ErrorKind::OutputLimit if allowance<2*1024*1024=>PageError::Resource(e.message),_=>PageError::Response(e.message)})?}else{if bytes.len()>allowance{return Err(if allowance<2*1024*1024{PageError::Resource("Page representation exceeds current memory allowance".into())}else{PageError::Response("Page representation exceeds 2 MiB".into())});}bytes};
  let media=meta.media.as_deref();
  let legacy_allowed=media.is_some_and(|m|m.starts_with("text/")&&!m.ends_with("xml")&&!m.ends_with("json"));

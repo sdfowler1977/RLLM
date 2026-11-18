@@ -1,6 +1,6 @@
 //! Fingerprint, bounded rebuild plan, content-addressed revision journal, re-exec, commit, and resume.
 //! Reads and previews do not write or spawn. A journal append, a git commit, or a successor
-//! exec runs only when the caller sets review_confirmed.
+//! exec requires review; source commits additionally require a local orchestrator permit.
 use super::*;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -36,6 +36,56 @@ const GATE_WALL: u64 = 300;
 const PROBE_WALL: u64 = 5;
 const GATE_REL: &str = "output/tools/gate";
 const SKIP_DIRS: &[&str] = &[".git", "output", "target", "tooling", ".qwen"];
+
+// Local orchestrator authority; proposals cannot edit their own judge,
+// ledger, dispatch permits, or resource policy through either write surface.
+const POLICY_PATHS: &[&str] = &[
+    "core/improvement.rs", "core/rrsi.rs", "core/harness.rs",
+    "core/self_build.rs", "core/application.rs", "core/lib.rs",
+    "core/harness_rules.rs", "core/operation.rs", "core/approval_rules.rs",
+    "core/resources.rs",
+    // The crate roots the sanctioned runners compile and the entry modules
+    // those roots wire. A rewrite of a root decides which modules the crate
+    // has; a rewrite of an entry module decides what the crate runs. Both
+    // live in this one set: the write surfaces read it, never a path.
+    "core/console.rs", "core/desktop.rs", "core/stdio.rs",
+    "core/http.rs", "core/acp.rs",
+];
+
+fn policy_path(path: &Path) -> bool {
+    let key = path.components().filter_map(|part| match part {
+        std::path::Component::Normal(name) => name.to_str(),
+        _ => None,
+    }).collect::<Vec<_>>().join("/");
+    POLICY_PATHS.contains(&key.as_str())
+}
+
+pub(crate) fn write_set(root: &Path, target: &Path) -> Result<()> {
+    let root = root.canonicalize().map_err(|error| error.to_string())?;
+    // Canonicalize the longest existing ancestor, retaining only the missing
+    // suffix. This covers an in-root directory alias and a not-yet-created file.
+    let mut ancestor = target.to_path_buf();
+    let mut suffix = Vec::new();
+    loop {
+        match ancestor.canonicalize() {
+            Ok(mut resolved) => {
+                for name in suffix.iter().rev() { resolved.push(name); }
+                let relative = resolved.strip_prefix(&root).map_err(|_| "write target leaves the project")?;
+                if policy_path(relative) { return Err("orchestrator policy path".into()); }
+                return Ok(());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                suffix.push(ancestor.file_name().ok_or("write target has no parent")?.to_os_string());
+                if !ancestor.pop() { return Err("write target has no parent".into()); }
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
+
+fn self_write_set(root: &Path, target: &Path) -> Result<()> {
+    write_set(root, target).map_err(|reason| format!("Self-build refuses protected policy source: {reason}"))
+}
 
 fn sha256(bytes: &[u8]) -> String {
     super::application::workspace_digest(bytes)
@@ -1358,11 +1408,71 @@ fn commit_receipt(
     obj(fields)
 }
 
+struct CommitPermit {
+    binding: String,
+    head: String,
+    created: std::time::Instant,
+}
+static COMMIT_PERMITS: OnceLock<Mutex<BTreeMap<String, CommitPermit>>> = OnceLock::new();
+
+fn commit_binding(value: &Json) -> Result<String> {
+    use std::os::unix::fs::MetadataExt;
+    let root = root_of(value)?.canonicalize().map_err(|error| error.to_string())?;
+    let meta = fs::metadata(&root).map_err(|error| error.to_string())?;
+    let mut bound = value.clone();
+    if let Obj(fields) = &mut bound {
+        for key in ["op", "commit_permit", "review_confirmed"] { fields.remove(key); }
+    }
+    put(&mut bound, "root", s(&utf8_path(&root)?));
+    Ok(sha256(format!("{}:{}:{}", meta.dev(), meta.ino(), bound.string()).as_bytes()))
+}
+
+/// Called only by the local controller's review action. There is deliberately
+/// no model tool or public self-operation that mints this capability.
+pub(crate) fn orchestrator_commit_permit(state: &Json, value: &Json) -> Result<Json> {
+    if get(state, "task_run") != &Null || flag(state, "agent_running")
+        || flag(state, "agent_pending") || flag(state, "busy")
+    {
+        return Err("Commit review requires an idle local orchestrator".into());
+    }
+    only(value, &["root", "binary", "revision", "journal", "parent", "review_confirmed"])?;
+    let root = root_of(value)?.canonicalize().map_err(|error| error.to_string())?;
+    let approved = PathBuf::from(text(state, "approval_root")).canonicalize()
+        .map_err(|_| "Commit review requires the selected workspace")?;
+    if root != approved { return Err("Commit review workspace differs from the selected workspace".into()); }
+    let binding = commit_binding(value)?;
+    let head = read_head_commit(&require_git_dir(&root)?)?;
+    let mut entropy = [0u8; 32];
+    File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut entropy))
+        .map_err(|error| format!("Commit permit entropy unavailable: {error}"))?;
+    let token = sha256(&entropy);
+    let mut permits = COMMIT_PERMITS.get_or_init(|| Mutex::new(BTreeMap::new())).lock()
+        .map_err(|_| "Commit permit ownership unavailable")?;
+    permits.retain(|_, permit| permit.created.elapsed() < Duration::from_secs(120));
+    if permits.len() >= 64 { return Err("Commit review capacity is occupied".into()); }
+    permits.insert(token.clone(), CommitPermit { binding, head, created: std::time::Instant::now() });
+    Ok(obj(vec![("commit_permit", s(&token)), ("expires_in_seconds", n(120))]))
+}
+
+fn consume_commit_permit(value: &Json, head: &str) -> Result<()> {
+    let token = text(value, "commit_permit");
+    if !hex64(&token) { return Err("Source commit requires an orchestrator-issued permit".into()); }
+    let binding = commit_binding(value)?;
+    let permit = COMMIT_PERMITS.get_or_init(|| Mutex::new(BTreeMap::new())).lock()
+        .map_err(|_| "Commit permit ownership unavailable")?.remove(&token)
+        .ok_or("Commit permit is unknown, consumed or belongs to another process")?;
+    if permit.created.elapsed() >= Duration::from_secs(120) { return Err("Commit permit expired".into()); }
+    if permit.binding != binding || permit.head != head {
+        return Err("Commit permit does not match this request, workspace or head".into());
+    }
+    Ok(())
+}
+
 /// Commit the room's tracked source tree for one journalled revision.
 /// `review_confirmed` false journals the intent and leaves every git ref untouched.
-/// A later permit for the same revision returns the commit already created for it.
+/// An execution requires a single-use capability issued by the local orchestrator.
 pub(crate) fn commit(value: &Json) -> Result<Json> {
-    only(value, &["root", "binary", "revision", "journal", "review_confirmed", "parent"])?;
+    only(value, &["root", "binary", "revision", "journal", "review_confirmed", "parent", "commit_permit"])?;
     let root = root_of(value)?;
     let binary = resolve_file(&root, field(value, "binary")?)?;
     let journal_rel = text(value, "journal");
@@ -1397,6 +1507,7 @@ pub(crate) fn commit(value: &Json) -> Result<Json> {
         append_commit_intent(&journal_path, &revision, &source_digest, &parent)?;
         return Ok(commit_receipt(None, &revision, &parent_commit, &source_digest, &[], false));
     }
+    consume_commit_permit(value, &parent_commit)?;
     let paths = tracked_source_paths(&root, &git_dir, &skip)?;
     if paths.is_empty() {
         return Err("tracked source tree is empty".into());
@@ -1480,6 +1591,9 @@ pub(crate) fn permission_subject(pending: &Json) -> Json {
 fn validate_with(args: &Json, carried_job: &str, carried_instruction: &str) -> Result<()> {
     let path = text(args, "path");
     relative(&path)?;
+    if policy_path(Path::new(&path)) {
+        return Err("Self-build refuses protected policy source: orchestrator policy path".into());
+    }
     if text(args, "content").len() > MAX_FILE as usize {
         return Err("self-build content exceeds 4 MiB".into());
     }
@@ -1503,7 +1617,8 @@ pub(crate) fn approve(pending: &Json) -> Result<()> {
 pub(crate) fn prepare(root: &Path, pending: &mut Json) -> Result<()> {
     let mut args = get(pending, "args").clone();
     validate(&args)?;
-    let file = root.join(relative(&text(&args, "path"))?);
+    let file = locate(root, &text(&args, "path"), false)?;
+    self_write_set(root, &file)?;
     match fs::symlink_metadata(&file) {
         Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
             Err("self-build path must be a regular file".into())
@@ -1542,6 +1657,8 @@ fn apply_reviewed_edit(root: &Path, args: &Json) -> Result<(String, usize)> {
     if get(args, "previous_exists") == &Null {
         return Err("self-build operation has not been reviewed".into());
     }
+    let target = locate(root, &path, false)?;
+    self_write_set(root, &target)?;
     let target = locate(root, &path, true)?;
     let previous = match fs::symlink_metadata(&target) {
         Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
@@ -5545,7 +5662,7 @@ mv "$tmp" "$1.done"
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    fn prepare_committed(root: &Path) -> (String, String) {
+    fn prepare_commit_request(root: &Path) -> (String, Json) {
         write(&root.join("src/lib.rs"), b"fn marker() {}\n");
         write(&root.join("notes/base.txt"), b"base\n");
         executable(&root.join("bin"), b"#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$2\"\n");
@@ -5569,19 +5686,378 @@ mv "$tmp" "$1.done"
         git_room(root, &["add", "--", "notes/base.txt"]);
         git_room(root, &["commit", "-m", "base", "--", "notes/base.txt"]);
         git_room(root, &["add", "--", "src/lib.rs"]);
-        let committed = commit(&obj(vec![
+        let request = obj(vec![
             ("root", s(root_text)),
             ("binary", s(&binary)),
             ("revision", s(&revision)),
             ("journal", s("self/journal.jsonl")),
             ("parent", s("")),
             ("review_confirmed", Bool(true)),
-        ]))
+        ]);
+        (revision, request)
+    }
+    fn review_commit(root: &Path, request: &mut Json) {
+        let state = obj(vec![("approval_root", s(root.to_str().unwrap()))]);
+        let permit = orchestrator_commit_permit(&state, request).unwrap();
+        put(request, "commit_permit", get(&permit, "commit_permit").clone());
+    }
+    fn prepare_committed(root: &Path) -> (String, String) {
+        let (revision, mut request) = prepare_commit_request(root);
+        review_commit(root, &mut request);
+        let committed = commit(&request)
         .unwrap_or_else(|error| panic!("commit: {error}"));
         let digest = text(&committed, "commit");
         assert!(hex40(&digest), "{digest}");
         assert_eq!(text(&committed, "revision"), revision);
         (revision, digest)
+    }
+
+    #[test]
+    fn sr1_policy_sources_are_denied_on_both_write_surfaces_and_aliases() {
+        let scratch = Scratch::new("policy-writes");
+        let root = scratch.path();
+        for name in POLICY_PATHS {
+            write(&root.join(name), b"original judge\n");
+            for spelling in [name.to_string(), name.replacen("core/", "core/./", 1)] {
+                let args = obj(vec![("path", s(&spelling)), ("content", s("changed judge\n")),
+                    ("previous_exists", Bool(true)), ("approved_previous", s("original judge\n"))]);
+                let mut pending = obj(vec![("tool", s("self_build")), ("args", args.clone())]);
+                let lexical = validate(&args).unwrap_err();
+                assert!(lexical.starts_with("Self-build refuses protected policy source:"), "{lexical}");
+                assert!(prepare(root, &mut pending).unwrap_err().starts_with("Self-build refuses protected policy source:"));
+                assert!(apply_reviewed_edit(root, &args).unwrap_err().starts_with("Self-build refuses protected policy source:"));
+                let request = obj(vec![("tool", s("write")), ("root", s(root.to_str().unwrap())), ("args", args)]);
+                let refusal = crate::application::tool(&request).unwrap_err();
+                assert!(refusal.starts_with("Workspace write refuses protected policy source:"), "{refusal}");
+                assert_eq!(fs::read(root.join(name)).unwrap(), b"original judge\n");
+                println!("SR1-P2 {spelling}: self-build and workspace write denied; original unchanged");
+            }
+        }
+        std::os::unix::fs::symlink(root.join("core"), root.join("alias")).unwrap();
+        let alias = obj(vec![("tool", s("write")), ("root", s(root.to_str().unwrap())),
+            ("args", obj(vec![("path", s("alias/improvement.rs")), ("content", s("bad")),
+                ("previous_exists", Bool(true)), ("approved_previous", s("original judge\n"))]))]);
+        let refusal = crate::application::tool(&alias).unwrap_err();
+        assert!(refusal.starts_with("Workspace write refuses protected policy source:"), "{refusal}");
+        for name in ["../core/improvement.rs", "/etc/passwd", "core\\improvement.rs"] {
+            assert!(validate(&obj(vec![("path", s(name)), ("content", s("bad"))])).is_err());
+        }
+    }
+
+    #[test]
+    fn sr1_protected_failure_leaves_artifact_free_ordinary_writes_available() {
+        let scratch = Scratch::new("policy-isolation");
+        let root = scratch.path();
+        let request = |path: &str, content: &str| obj(vec![("root", s(root.to_str().unwrap())),
+            ("tool", s("write")), ("args", obj(vec![("path", s(path)), ("content", s(content)), ("previous_exists", Bool(false))]))]);
+        crate::application::tool(&request("notes/first.txt", "first")).unwrap();
+        let denied = crate::application::tool(&request("core/rrsi.rs", "bad")).unwrap_err();
+        assert!(denied.starts_with("Workspace write refuses protected policy source:"), "{denied}");
+        crate::application::tool(&request("notes/second.txt", "second")).unwrap();
+        assert_eq!(fs::read_to_string(root.join("notes/second.txt")).unwrap(), "second");
+        assert!(!root.join("core/rrsi.rs").exists());
+        assert!(!root.join("closure_ledger.json").exists());
+        println!("SR1-P2 artifact-free writes before and after protected-path refusal succeeded");
+    }
+
+    /// The sanctioned runners and the crate roots they compile. The runner
+    /// scripts and the crate roots are embedded at compile time, so a scratch
+    /// copy of the tree rebuilds with the scratch's own runners and roots:
+    /// this check follows the tree it was compiled from, not a captured list.
+    const RUNNER_BUILD_UNITS: &str = include_str!("../tools/build-units.sh");
+    const RUNNER_BUILD_TOOLS: &str = include_str!("../tools/build-tools.sh");
+    const RUNNER_BUILD_VERIFICATION: &str = include_str!("../tools/build-verification.sh");
+    const RUNNER_HEADLESS: &str = include_str!("../headless.sh");
+    const RUNNER_DESKTOP: &str = include_str!("../desktop.sh");
+    const RUNNER_PACKAGE: &str = include_str!("../package.sh");
+    const CRATE_ROOT_CONSOLE: &str = include_str!("console.rs");
+    const CRATE_ROOT_DESKTOP: &str = include_str!("desktop.rs");
+    const CRATE_LIBRARY: &str = include_str!("lib.rs");
+
+    /// The `.rs` roots a runner script compiles, with the crate each root is
+    /// compiled as. A `for` list expands the variable a path carries, so the
+    /// tool loop yields one root per tool.
+    fn runner_sources(script: &str) -> Vec<(String, String)> {
+        let mut lists: Vec<(String, Vec<String>)> = Vec::new();
+        for line in script.lines() {
+            let trimmed = line.trim();
+            let Some(rest) = trimmed.strip_prefix("for ") else { continue };
+            let Some((head, tail)) = rest.split_once(" in ") else { continue };
+            let tail = tail.split(';').next().unwrap_or("");
+            lists.push((
+                head.trim().to_string(),
+                tail.split_whitespace().map(|item| item.trim_matches('"').to_string()).collect(),
+            ));
+        }
+        let mut roots = Vec::new();
+        for (position, token) in project_tokens(script) {
+            if !token.ends_with(".rs") { continue; }
+            let crate_name = crate_name_before(script, position);
+            for root in expand(&token, &lists) {
+                roots.push((crate_name.clone(), root));
+            }
+        }
+        roots
+    }
+
+    /// Every `$project_dir`-rooted path a runner script names, with the
+    /// position it was found at.
+    fn project_tokens(script: &str) -> Vec<(usize, String)> {
+        let bytes = script.as_bytes();
+        let mut tokens = Vec::new();
+        let mut index = 0;
+        while let Some(found) = script[index..].find("$project_dir") {
+            let mut cursor = index + found + "$project_dir".len();
+            if bytes.get(cursor) == Some(&b'"') { cursor += 1; }
+            if bytes.get(cursor) == Some(&b'/') { cursor += 1; }
+            let start = cursor;
+            while cursor < bytes.len() {
+                let byte = bytes[cursor];
+                if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/' | b'*') {
+                    cursor += 1;
+                } else if byte == b'$' {
+                    let mut end = cursor + 1;
+                    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') { end += 1; }
+                    if end == cursor + 1 { break; }
+                    cursor = end;
+                } else { break; }
+            }
+            let token = script[start..cursor].trim_end_matches('/').to_string();
+            if !token.is_empty() { tokens.push((start, token)); }
+            index = cursor.max(index + 1);
+        }
+        tokens
+    }
+
+    /// The crate name the nearest preceding `--crate-name` names: a runner
+    /// passes the name before the source path of the same invocation.
+    fn crate_name_before(script: &str, position: usize) -> String {
+        let head = &script[..position];
+        let mut name = String::new();
+        let mut search = 0;
+        while let Some(found) = head[search..].find("--crate-name") {
+            let after = search + found + "--crate-name".len();
+            let rest = head[after..].trim_start();
+            let token: String = rest.chars().take_while(|c| !c.is_whitespace()).collect();
+            name = token.trim_matches('"').to_string();
+            search = after;
+        }
+        name
+    }
+
+    /// A path that carries a shell variable expands over the list the script
+    /// binds that variable to.
+    fn expand(token: &str, lists: &[(String, Vec<String>)]) -> Vec<String> {
+        let Some(variable) = token.split('$').nth(1) else { return vec![token.to_string()] };
+        let name: String = variable.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        match lists.iter().find(|(bound, _)| *bound == name) {
+            Some((_, items)) => items.iter().map(|item| token.replace(&format!("${name}"), item)).collect(),
+            None => vec![token.to_string()],
+        }
+    }
+
+    /// The modules a crate root declares, with the file each one lives in. A
+    /// `#[path = "..."]` attribute names the file; otherwise the module lives
+    /// beside the file that declares it.
+    fn root_modules(source: &str) -> Vec<(String, String)> {
+        let mut modules = Vec::new();
+        for line in source.lines() {
+            let mut trimmed = line.trim();
+            let mut declared = None;
+            if let Some(at) = trimmed.find("#[path") {
+                let attribute = &trimmed[at..];
+                declared = attribute.split('"').nth(1).map(|file| file.to_string());
+                trimmed = attribute.split_once(']').map(|(_, tail)| tail.trim()).unwrap_or("");
+            }
+            trimmed = trimmed
+                .strip_prefix("pub(crate) mod ")
+                .or_else(|| trimmed.strip_prefix("pub mod "))
+                .unwrap_or(trimmed);
+            let Some(rest) = trimmed.strip_prefix("mod ") else { continue };
+            let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+            if name.is_empty() { continue; }
+            if !rest[name.len()..].trim_start().starts_with(';') { continue; }
+            modules.push((declared.unwrap_or(format!("{name}.rs")), name));
+        }
+        modules
+    }
+
+    /// The files a crate root includes. An included file becomes part of the
+    /// crate root, so it decides which modules the crate has.
+    fn included_files(source: &str) -> Vec<String> {
+        let mut files = Vec::new();
+        for line in source.lines() {
+            let trimmed = line.trim();
+            let Some(rest) = trimmed.strip_prefix("include!(") else { continue };
+            let Some(quoted) = rest.split('"').nth(1) else { continue };
+            files.push(quoted.to_string());
+        }
+        files
+    }
+
+    #[test]
+    fn sr1_protected_set_covers_every_client_crate_root_and_entry_module() {
+        let runners = [
+            ("tools/build-units.sh", RUNNER_BUILD_UNITS),
+            ("tools/build-tools.sh", RUNNER_BUILD_TOOLS),
+            ("tools/build-verification.sh", RUNNER_BUILD_VERIFICATION),
+            ("headless.sh", RUNNER_HEADLESS),
+            ("desktop.sh", RUNNER_DESKTOP),
+            ("package.sh", RUNNER_PACKAGE),
+        ];
+        let mut client_roots: Vec<String> = Vec::new();
+        let mut other_roots: Vec<String> = Vec::new();
+        for (name, script) in runners {
+            for (crate_name, root) in runner_sources(script) {
+                if crate_name == "client" {
+                    assert!(!root.contains('*'), "{name} compiles a glob as the client crate root");
+                    client_roots.push(root);
+                } else {
+                    other_roots.push(root);
+                }
+            }
+        }
+        // A scan that found nothing would make every assertion below vacuous:
+        // these three roots are the ones the tree compiles as the client crate.
+        for root in ["core/console.rs", "core/desktop.rs", "core/lib.rs"] {
+            assert!(client_roots.iter().any(|found| found == root),
+                "the sanctioned runners compile {root} as the client crate and the scan did not find it");
+        }
+        let sources = [
+            ("core/console.rs", CRATE_ROOT_CONSOLE),
+            ("core/desktop.rs", CRATE_ROOT_DESKTOP),
+            ("core/lib.rs", CRATE_LIBRARY),
+        ];
+        let mut owned: Vec<String> = Vec::new();
+        for root in &client_roots {
+            assert!(POLICY_PATHS.contains(&root.as_str()),
+                "{root} is a client crate root a sanctioned runner compiles and is not protected");
+            let Some((_, source)) = sources.iter().find(|(path, _)| *path == root.as_str()) else {
+                panic!("{root} is a client crate root this check has no embedded source for");
+            };
+            let dir = root.rsplit_once('/').map(|(head, _)| head).unwrap_or("");
+            // An included file becomes part of the crate root, so a rewrite of
+            // it decides which modules the crate has.
+            for included in included_files(source) {
+                let path = format!("{dir}/{included}");
+                assert!(POLICY_PATHS.contains(&path.as_str()),
+                    "{path} is included by {root} and is not protected");
+                owned.push(path);
+            }
+            // The entry modules a root wires are the surfaces the crate runs.
+            // A module of an included file belongs to that file, which is
+            // protected itself, so its module list cannot be rewritten.
+            if source.contains("fn main") {
+                for (file, name) in root_modules(source) {
+                    let path = format!("{dir}/{file}");
+                    assert!(POLICY_PATHS.contains(&path.as_str()),
+                        "{path} is an entry module of {root} ({name}) and is not protected");
+                    owned.push(path);
+                }
+            }
+        }
+        // The other sanctioned roots are separate crates: the tool crates and
+        // the verification twins are not modules of the client crate.
+        for other in &other_roots {
+            assert!(other.starts_with("tools/") || other.starts_with("verification/"),
+                "{other} is a root of another crate that is neither a tool nor a verification twin");
+            assert!(!owned.contains(other), "{other} is a module of the client crate");
+        }
+        println!("SR1-RA1-01 client crate roots {client_roots:?} are protected with entry modules {owned:?}");
+    }
+
+    #[test]
+    fn sr1_crate_root_and_entry_modules_are_refused_by_both_write_surfaces() {
+        let scratch = Scratch::new("crate-root-writes");
+        let root = scratch.path();
+        let protected = ["core/console.rs", "core/desktop.rs", "core/stdio.rs", "core/http.rs", "core/acp.rs"];
+        for name in protected {
+            write(&root.join(name), b"original crate root\n");
+        }
+        for name in protected {
+            // A dot segment and a duplicate slash are the same file to the
+            // surfaces, so the refusal cannot be dodged by spelling.
+            for spelling in [name.to_string(), name.replacen("core/", "core/./", 1), name.replacen('/', "//", 1)] {
+                let args = obj(vec![("path", s(&spelling)), ("content", s("rewritten crate root\n")),
+                    ("previous_exists", Bool(true)), ("approved_previous", s("original crate root\n"))]);
+                // The workspace write surface refuses in its own words.
+                let request = obj(vec![("tool", s("write")), ("root", s(root.to_str().unwrap())), ("args", args.clone())]);
+                let refusal = crate::application::tool(&request).unwrap_err();
+                assert!(refusal.starts_with("Workspace write refuses protected policy source:"), "{refusal}");
+                assert!(!refusal.starts_with("Self-build refuses"), "workspace refusal borrowed the other surface wording: {refusal}");
+                // The self-build surface refuses in its own words.
+                let refusal = apply_reviewed_edit(root, &args).unwrap_err();
+                assert!(refusal.starts_with("Self-build refuses protected policy source:"), "{refusal}");
+                assert!(!refusal.starts_with("Workspace write refuses"), "self-build refusal borrowed the other surface wording: {refusal}");
+                assert_eq!(fs::read(root.join(name)).unwrap(), b"original crate root\n");
+            }
+        }
+        // An ordinary file stays writable on both surfaces, so the refusals
+        // above discriminate the protected set instead of refusing everything.
+        write(&root.join("notes/ordinary.rs"), b"keep me\n");
+        let control = obj(vec![("path", s("notes/ordinary.rs")), ("content", s("changed\n")),
+            ("previous_exists", Bool(true)), ("approved_previous", s("keep me\n"))]);
+        let request = obj(vec![("tool", s("write")), ("root", s(root.to_str().unwrap())), ("args", control.clone())]);
+        crate::application::tool(&request).unwrap();
+        assert_eq!(fs::read_to_string(root.join("notes/ordinary.rs")).unwrap(), "changed\n");
+        write(&root.join("notes/ordinary.rs"), b"keep me\n");
+        apply_reviewed_edit(root, &control).unwrap();
+        assert_eq!(fs::read_to_string(root.join("notes/ordinary.rs")).unwrap(), "changed\n");
+        println!("SR1-RA1-01 crate roots and entry modules refused by both write surfaces; an ordinary file stays writable on both");
+    }
+
+    #[test]
+    fn sr1_commit_boolean_and_forgery_fail_valid_permit_is_single_use() {
+        let scratch = Scratch::new("commit-authority");
+        let root = scratch.path();
+        let (_, mut request) = prepare_commit_request(root);
+        let git = require_git_dir(root).unwrap();
+        let before = read_head_commit(&git).unwrap();
+        assert_eq!(commit(&request).unwrap_err(), "Source commit requires an orchestrator-issued permit");
+        put(&mut request, "commit_permit", s(&"0".repeat(64)));
+        assert_eq!(commit(&request).unwrap_err(), "Commit permit is unknown, consumed or belongs to another process");
+        assert_eq!(read_head_commit(&git).unwrap(), before);
+        if let Obj(fields) = &mut request { fields.remove("commit_permit"); }
+        let denied_state = obj(vec![("approval_root", s(root.to_str().unwrap())), ("agent_running", Bool(true))]);
+        assert_eq!(orchestrator_commit_permit(&denied_state, &request).unwrap_err(), "Commit review requires an idle local orchestrator");
+        // Drive the actual controller action; it is absent from the model tool catalog.
+        let state = obj(vec![("version", n(1)), ("approval_root", s(root.to_str().unwrap()))]);
+        let issued = crate::application::event(&obj(vec![("state", state), ("action", s("self_commit_review")),
+            ("inputs", request.clone()), ("root", s(root.to_str().unwrap()))])).unwrap();
+        let token = text(get(&issued, "effect"), "commit_permit");
+        assert!(hex64(&token), "{}", issued.string());
+        put(&mut request, "commit_permit", s(&token));
+        let committed = commit(&request).unwrap();
+        let after = read_head_commit(&git).unwrap();
+        assert_ne!(before, after);
+        assert_eq!(text(&committed, "commit"), after);
+        assert_eq!(commit(&request).unwrap_err(), "Commit permit is unknown, consumed or belongs to another process");
+        println!("SR1-P5 boolean and forged token refused; controller permit committed exact revision once; replay refused");
+    }
+
+    #[test]
+    fn sr1_commit_permit_binds_arguments_head_workspace_and_expiry() {
+        let scratch = Scratch::new("commit-binding");
+        let root = scratch.path();
+        let (_, request) = prepare_commit_request(root);
+        let head = read_head_commit(&require_git_dir(root).unwrap()).unwrap();
+        for changed in ["arguments", "head", "expiry"] {
+            let mut candidate = request.clone();
+            review_commit(root, &mut candidate);
+            if changed == "arguments" { put(&mut candidate, "parent", s("different")); }
+            if changed == "expiry" {
+                let token = text(&candidate, "commit_permit");
+                COMMIT_PERMITS.get().unwrap().lock().unwrap().get_mut(&token).unwrap().created -= Duration::from_secs(121);
+            }
+            let answer = consume_commit_permit(&candidate, if changed == "head" { "different" } else { &head }).unwrap_err();
+            assert_eq!(answer, if changed == "expiry" { "Commit permit expired" } else { "Commit permit does not match this request, workspace or head" });
+        }
+        let mut bound = request.clone();
+        review_commit(root, &mut bound);
+        let other = Scratch::new("commit-other-workspace");
+        put(&mut bound, "root", s(other.path().to_str().unwrap()));
+        assert_eq!(consume_commit_permit(&bound, &head).unwrap_err(), "Commit permit does not match this request, workspace or head");
+        println!("SR1-P5 request/head/workspace mismatch and expired permits refused");
     }
     fn resume_request(root: &Path, revision: &str, confirmed: bool) -> Json {
         obj(vec![

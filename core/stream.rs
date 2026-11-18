@@ -258,7 +258,8 @@ impl Transfer {
         let session=if self.mcp_session.is_empty(){configured}else{&self.mcp_session};
         let mut headers=vec![("Content-Type","application/json".into()),("Accept","application/json, text/event-stream".into())];
         if context.get("request").and_then(Json::text)!=Ok("initialize"){headers.push(("MCP-Protocol-Version",version.into()));}
-        let key=context.get("key").and_then(Json::text).unwrap_or("");if !key.is_empty(){headers.push(("Authorization",format!("Bearer {key}")));}
+        let key=context.get("key").and_then(Json::text).unwrap_or("");
+        if let Some(token)=network::mcp_bearer_token(&key)?{headers.push(network::mcp_authorization_header(&token)?);}
         if !session.is_empty(){headers.push(("Mcp-Session-Id",session.into()));}
         let mut effect=network::wire(endpoint,endpoint.starts_with("http://"),"POST",&reply.string(),headers)?;
         let ticket=control_ticket()?;
@@ -484,6 +485,35 @@ impl Transfer {
         }
         Ok(())
     }
+    /// The framing a refused head declares, judged with the streaming rules.
+    ///
+    /// Every head is judged before its status decides the outcome, so a head
+    /// the product's own decoder refuses is refused here too and the two
+    /// surfaces never disagree about a head they both read.
+    fn refused_head_framing<'a>(lines:impl Iterator<Item=&'a str>)->Result<()>{
+        let mut transfer=false;let mut coding=false;let mut length=false;
+        for line in lines{
+            let (name,value)=network::response_field(line)?;
+            match name.to_ascii_lowercase().as_str(){
+                "transfer-encoding"=>{if transfer{return Err("Duplicate streaming framing header".into());}transfer=true;if !value.eq_ignore_ascii_case("chunked"){return Err("Unsupported streaming transfer encoding".into());}}
+                "content-encoding"=>{if coding{return Err("Duplicate streaming framing header".into());}coding=true;if !value.eq_ignore_ascii_case("identity"){return Err("Unsupported streaming content encoding".into());}}
+                "content-length"=>{if length{return Err("Duplicate streaming framing header".into());}length=true;network::response_length(value)?;}
+                _=>{}
+            }
+        }
+        if transfer&&length{return Err("Ambiguous streaming response framing".into());}
+        Ok(())
+    }
+    /// The MCP client's own wording for a refused exchange.
+    ///
+    /// A refused MCP head is refused where the head is read, in the MCP
+    /// client's own words. The shared decoder's sentence belongs to the web
+    /// reader and never reaches an MCP surface.
+    fn mcp_refusal(&self,code:u16,head:&str)->String{
+        let challenge=super::mcp_lifecycle::mcp_challenge(head);
+        let context=self.control.clone().unwrap_or(Null);
+        super::mcp_lifecycle::mcp_refusal(super::mcp_lifecycle::mcp_credential_sent(&context),code,challenge.as_deref(),if self.server_stream{"listen"}else{"connect"})
+    }
     fn feed(&mut self, bytes: &[u8]) -> Result<()> {
         if self.raw.len().saturating_add(bytes.len()) > LIMIT { return Err("Stream response exceeds 2 MiB".into()); }
         self.raw.extend_from_slice(bytes);
@@ -499,13 +529,23 @@ impl Transfer {
                 if self.interim>4{return Err("Too many informational HTTP responses".into());}
                 if code==101 {return Err("Unsupported informational response".into());}
                 let mut length_seen = false;
+                let mut coding_seen = false;
                 for line in lines {
                     let (name, value) = network::response_field(line)?;
                     if name.eq_ignore_ascii_case("transfer-encoding") {
                         return Err("Unsupported informational response".into());
                     }
-                    if name.eq_ignore_ascii_case("content-encoding") && !value.eq_ignore_ascii_case("identity") {
-                        return Err("Unsupported streaming content encoding".into());
+                    if name.eq_ignore_ascii_case("content-encoding") {
+                        // One field per name per head, as the frame session
+                        // enforces it. An informational head is framing too, so
+                        // a repeated coding header is refused here as well.
+                        if coding_seen {
+                            return Err("Duplicate streaming framing header".into());
+                        }
+                        coding_seen = true;
+                        if !value.eq_ignore_ascii_case("identity") {
+                            return Err("Unsupported streaming content encoding".into());
+                        }
                     }
                     if name.eq_ignore_ascii_case("content-length") {
                         if length_seen || network::response_length(value)? != 0 {
@@ -518,7 +558,16 @@ impl Transfer {
                 continue;
             }
             if self.server_stream&&code==405{return Err("This MCP endpoint does not offer an optional server GET stream (HTTP 405); no retry was sent".into());}
-            if !(200..300).contains(&code) { return Ok(()); }
+            if !(200..300).contains(&code) {
+                // A refused head is still a head. Its framing is judged before
+                // the status decides the outcome, so the streaming surface
+                // never accepts a head the product's own decoder refuses.
+                if self.mcp{
+                    Self::refused_head_framing(lines)?;
+                    return Err(self.mcp_refusal(code,header));
+                }
+                return Ok(());
+            }
             if (self.mcp||self.messages||self.content)&&code!=200{return Err("Streaming result requires HTTP 200 with a response body".into());}
             let body_start = end + 4;
             let mut names=std::collections::BTreeSet::new();
@@ -878,7 +927,7 @@ pub fn operation(v: &Json) -> Result<Json> {
         let mut context=lease.context.clone();if let Obj(f)=&mut context{f.insert("owner".into(),v.get("owner")?.clone());f.insert("resumable".into(),Bool(true));f.insert("resume_token".into(),Num(reservation_token.to_string()));}
         let endpoint=field(config,"endpoint")?;let key=field(config,"key")?;
         let mut headers=vec![("Accept","text/event-stream".into()),("MCP-Protocol-Version",field(&context,"version")?.into()),("Last-Event-ID",lease.cursor.clone())];
-        if !key.is_empty(){headers.push(("Authorization",format!("Bearer {key}")));}let session=field(&context,"session")?;if !session.is_empty(){headers.push(("Mcp-Session-Id",session.into()));}
+        if let Some(token)=network::mcp_bearer_token(&key)?{headers.push(network::mcp_authorization_header(&token)?);}let session=field(&context,"session")?;if !session.is_empty(){headers.push(("Mcp-Session-Id",session.into()));}
         let mut e=network::wire(endpoint,endpoint.starts_with("http://"),"GET","",headers)?;
         if let Obj(f)=&mut e{f.insert("mcp_control".into(),context);f.insert("stream".into(),Bool(true));f.insert("stream_protocol".into(),s("mcp_server"));f.insert("purpose".into(),v.get("owner")?.clone());}
         if action=="stream_resume"{sessions.next=reservation_token.checked_add(1).ok_or("MCP reservation ticket exhausted")?;let lease=sessions.lease.as_mut().unwrap();lease.token=reservation_token;lease.reserved=Some(field(v,"owner")?.into());}return Ok(e);
@@ -1324,5 +1373,32 @@ mod content_checks {
   let mut t=transfer("tools/call","2025-03-26");let context=t.control.as_mut().unwrap();if let Obj(fields)=context{fields.insert("endpoint".into(),s(&format!("http://127.0.0.1/{}","r".repeat(8000))));fields.insert("key".into(),s(&"k".repeat(8192)));}
   let rows=(0..8).map(|i|obj(vec![("jsonrpc",s("2.0")),("id",s(&format!("{}{}",i,"\u{0001}".repeat(255)))),("method",s("ping"))])).collect();assert!(t.batch(rows).is_err());assert!(t.controls.is_empty()&&t.control_pending.is_empty()&&t.terminal.is_none());assert_eq!(t.control_count,0);
   let mut t=transfer("GET","2025-06-18");t.control_request(&obj(vec![("jsonrpc",s("2.0")),("id",Num("1.0".into())),("method",s("ping"))])).unwrap();assert_eq!(t.pending_count(),1); // Existing single-message numeric behavior remains unchanged.
+ }
+}
+
+#[cfg(test)] mod mcp_refusal_checks {
+ use super::*;
+ fn transfer(server:bool)->Transfer{Transfer{mcp:true,server_stream:server,control:Some(obj(vec![("request_binding",Num("1".into())),("endpoint",s("https://server.example/proxy/mcp?q=x")),("key",s("REMOTE")),("version",s("2025-06-18")),("session",s("session")),("owner",s("phase")),("request",s("initialize"))])),..Transfer::default()}}
+ fn refused(server:bool,head:&str)->String{let mut t=transfer(server);match t.feed(head.as_bytes()){Ok(())=>panic!("head accepted: {head}"),Err(error)=>error}}
+ const CHALLENGE:&str="WWW-Authenticate: Bearer realm=\"mcp\", error=\"invalid_token\"";
+ #[test]fn refused_mcp_head_is_refused_in_the_mcp_clients_own_words(){
+  let error=refused(false,&format!("HTTP/1.1 401 Unauthorized\r\n{CHALLENGE}\r\nContent-Length: 0\r\n\r\n"));
+  assert_eq!(error,"MCP HTTP 401: the endpoint reported the bearer token RLLM sent as invalid. Save a current token for this server and connect again.");
+  // The shared decoder's sentence belongs to the web reader and never reaches
+  // an MCP surface.
+  assert!(!error.contains("Check server address, credentials, model and permissions."),"{error}");
+ }
+ #[test]fn refused_mcp_server_head_names_the_listen_action(){
+  let error=refused(true,&format!("HTTP/1.1 401 Unauthorized\r\n{CHALLENGE}\r\nContent-Length: 0\r\n\r\n"));
+  assert_eq!(error,"MCP HTTP 401: the endpoint reported the bearer token RLLM sent as invalid. Save a current token for this server and listen again.");
+  assert!(!error.contains("Check server address, credentials, model and permissions."),"{error}");
+ }
+ #[test]fn refused_head_framing_is_judged_before_its_status(){
+  // The same head the request path refuses as framing is refused here as
+  // framing, and never as the status it also carries.
+  let error=refused(false,"HTTP/1.1 401 Unauthorized\r\nContent-Encoding: identity\r\nContent-Encoding: identity\r\nContent-Length: 0\r\n\r\n");
+  assert_eq!(error,"Duplicate streaming framing header");
+  let error=refused(false,"HTTP/1.1 401 Unauthorized\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n");
+  assert_eq!(error,"Ambiguous streaming response framing");
  }
 }

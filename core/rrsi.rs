@@ -2,7 +2,9 @@
 //! library that later tasks read from the same store.
 //! The ledger records the verdict the refine loop already reached. It does not choose that verdict.
 //! Cost is the UTF-8 length of the instructions being replaced and of the proposal.
-//! A full line cap refuses the new record and leaves every existing line in place.
+//! A full edit-ledger segment rolls into a new sealed segment whose first record
+//! links to the last digest of the previous one. No line is dropped, none is
+//! rewritten, and the digest chain stays verifiable across the seam.
 //! The library file `experience.jsonl` is sealed with the same content digest and previous link.
 //! Each line is the index entry for the adopted harness and the lessons the ledger supports.
 use super::*;
@@ -16,6 +18,9 @@ const CLOEXEC: i32 = 524288;
 const PATH_MAX: usize = 1024;
 const NAME_MAX: usize = 128;
 const FILE_MAX: u64 = 4 * 1024 * 1024;
+/// Sealed records in one edit-ledger segment. A segment that is full rolls
+/// into a new sealed segment instead of refusing the next record, so the
+/// ledger keeps its history and the run keeps its memory.
 pub(crate) const LINE_CAP: usize = 64;
 const RECORD_MAX: usize = 48 * 1024;
 const HYPOTHESIS_MAX: usize = 32768;
@@ -31,18 +36,14 @@ const COMPONENTS: &[&str] = &[
     "skills",
     "memory",
     "subagents",
-];
-// Gap 2 names the eight editable harness parts. The older stall list above stays
-// so an existing ledger still renders the same tried and untried lines.
-const EDITABLE: &[&str] = &[
-    "system prompt",
     "guardrails",
-    "memory",
     "tool guidance",
-    "subagents",
-    "skills",
     "scripts",
     "plugins",
+];
+const EDITABLE: &[&str] = &[
+    "system prompt", "guardrails", "memory", "tool guidance",
+    "subagents", "skills", "scripts", "plugins",
 ];
 const LEAKAGE: &[&str] = &["clean", "task_text", "answer_text", "inert"];
 const ROW_EXTRA: &[&str] = &["cost_change", "accepted", "leakage"];
@@ -91,6 +92,8 @@ const SPLIT_KEYS: &[&str] = &[
     "beta0",
     "beta1",
     "accept_reason",
+    "reward",
+    "budget_penalty",
 ];
 /// A control row is sealed with the ledger line and is not a trial.
 /// `stop` is the only marker. The record schema allows it on every row and requires nothing when it is absent.
@@ -156,10 +159,11 @@ fn only_keys(value: &Json, keys: &[&str]) -> Result<()> {
     Ok(())
 }
 fn component_index(name: &str) -> Option<usize> {
-    COMPONENTS.iter().position(|item| *item == name)
+    let key = component_key(name);
+    COMPONENTS.iter().position(|item| *item == key)
 }
 pub(crate) fn known_component(name: &str) -> bool {
-    component_index(name).is_some() || EDITABLE.iter().any(|item| *item == name)
+    component_index(name).is_some()
 }
 fn signed_field(value: &Json, key: &str) -> Result<i64> {
     match get(value, key) {
@@ -189,7 +193,7 @@ fn validate_fields(value: &Json, expected_run: &str) -> Result<()> {
     let round = number_field(value, "round")?;
     // A STOP control row may record round 0. That means the caller closed no
     // round. Writing 1 there would name a round that was never opened.
-    // A trial row stays in 1..=1024.
+    // Trial rows need a positive representable round, with no policy horizon.
     let control_stop = if get(value, "control") == &Null {
         false
     } else if text(value, "control") == "stop" {
@@ -197,12 +201,8 @@ fn validate_fields(value: &Json, expected_run: &str) -> Result<()> {
     } else {
         return Err("control must be stop".into());
     };
-    if control_stop {
-        if round > 1024 {
-            return Err("round is outside 0..=1024".into());
-        }
-    } else if !(1..=1024).contains(&round) {
-        return Err("round is outside 1..=1024".into());
+    if !control_stop && round == 0 {
+        return Err("round must be positive".into());
     }
     for key in ["cost_before", "cost_after"] {
         number_field(value, key)?;
@@ -352,6 +352,15 @@ fn edit_keys(sealed: bool) -> Vec<&'static str> {
     keys
 }
 fn validate_policy(value: &Json) -> Result<()> {
+    if get(value, "reward") != &Null {
+        let reward = signed_field(value, "reward")?;
+        if (text(value, "verdict") == "accepted") != (reward > 0) {
+            return Err("reward sign does not match the verdict".into());
+        }
+    }
+    if get(value, "budget_penalty") != &Null && signed_field(value, "budget_penalty")? > 0 {
+        return Err("budget penalty must not be positive".into());
+    }
     if get(value, "edit_budget") != &Null {
         let budget = number_field(value, "edit_budget")?;
         if budget > 1024 {
@@ -359,10 +368,7 @@ fn validate_policy(value: &Json) -> Result<()> {
         }
     }
     if get(value, "noise_floor") != &Null {
-        let floor = number_field(value, "noise_floor")?;
-        if floor > 1024 {
-            return Err("noise floor is outside the record cap".into());
-        }
+        number_field(value, "noise_floor")?;
     }
     if get(value, "cost_known") != &Null && !matches!(get(value, "cost_known"), Bool(_)) {
         return Err("cost_known must be a boolean".into());
@@ -415,10 +421,11 @@ fn linked_previous(value: &Json, expected: &str) -> Result<String> {
     validate_fields(value, &text(value, "run_digest"))?;
     Ok(revision)
 }
+/// Parse the sealed chain in order. The line count is not a gate: a full
+/// segment rolls into a new sealed segment, so the chain is read whole and the
+/// digest link is checked across the seam. The per-record cap, the blank-line
+/// check and the link check stay.
 fn parse_chain(lines: &[String]) -> Result<Vec<Json>> {
-    if lines.len() > LINE_CAP {
-        return Err("edit ledger exceeds its line cap; history was kept and no line was dropped".into());
-    }
     let mut records = Vec::with_capacity(lines.len());
     let mut previous = String::new();
     for line in lines {
@@ -444,17 +451,17 @@ fn load_text(document: &str) -> Result<Vec<Json>> {
     let lines: Vec<String> = document.lines().map(str::to_string).collect();
     parse_chain(&lines)
 }
-fn seal(lines: &[Json], edit: &Json, expected_run: &str) -> Result<String> {
+/// Seal one record onto the end of the chain. `chain` holds every sealed
+/// record so far, in order, across every segment. The new record links to the
+/// last digest of the chain, so a segment boundary keeps the chain verifiable.
+fn seal(chain: &[Json], edit: &Json, expected_run: &str) -> Result<String> {
     validate_edit(edit, expected_run)?;
-    if lines.len() >= LINE_CAP {
-        return Err("edit ledger line cap reached; history was kept and no line was dropped".into());
-    }
-    if let Some(existing) = lines.first() {
+    if let Some(existing) = chain.first() {
         if text(existing, "run_digest") != expected_run {
             return Err("run_digest does not match the run being recorded".into());
         }
     }
-    let previous = match lines.last() {
+    let previous = match chain.last() {
         Some(tail) => text(tail, "revision"),
         None => String::new(),
     };
@@ -518,6 +525,76 @@ fn ledger_path(root: &str, name: &str) -> Result<PathBuf> {
         return Err("ledger path must stay inside its root".into());
     }
     Ok(path)
+}
+/// One sealed segment of the edit ledger. The base file is the first segment
+/// and every later segment is `<base>.<n>`, so the chain is read in order and
+/// the active segment is the last one.
+fn segment_path(root: &Path, name: &str, index: usize) -> Result<PathBuf> {
+    let file = if index == 0 { name.to_string() } else { format!("{name}.{index}") };
+    let file = file_name(&file)?;
+    let path = root.join(&file);
+    if path.parent() != Some(root) {
+        return Err("ledger path must stay inside its root".into());
+    }
+    Ok(path)
+}
+/// Every sealed segment of one ledger, in read order. The base file comes
+/// first and the numbered segments follow it. A gap in the numbering is a
+/// missing segment, and reading past one would drop history, so it is refused.
+fn segment_paths(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
+    let prefix = format!("{name}.");
+    let mut indices: Vec<usize> = Vec::new();
+    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file = entry.file_name().to_string_lossy().into_owned();
+        if let Some(rest) = file.strip_prefix(prefix.as_str()) {
+            if let Ok(index) = rest.parse::<usize>() {
+                // `01` is not the first segment, and a second spelling of one
+                // index is not a second segment.
+                if index > 0 && rest == index.to_string() {
+                    indices.push(index);
+                }
+            }
+        }
+    }
+    indices.sort_unstable();
+    indices.dedup();
+    let mut chain = Vec::new();
+    let base = segment_path(root, name, 0)?;
+    if fs::symlink_metadata(&base).is_ok() {
+        chain.push(base);
+    }
+    for (position, index) in indices.iter().enumerate() {
+        if *index != position + 1 {
+            return Err(
+                "edit ledger segment chain is not contiguous; history was kept and no line was dropped".into(),
+            );
+        }
+        chain.push(segment_path(root, name, *index)?);
+    }
+    Ok(chain)
+}
+/// The sealed segments of one ledger and their contents, in read order.
+fn chain_documents(root: &Path, name: &str) -> Result<(Vec<PathBuf>, Vec<String>)> {
+    let chain = segment_paths(root, name)?;
+    let mut documents = Vec::with_capacity(chain.len());
+    for path in &chain {
+        documents.push(read_bounded(path)?);
+    }
+    Ok((chain, documents))
+}
+/// The whole chain as one document, in segment order. Every segment is checked
+/// on its own so a torn segment is refused, and the chain is parsed as one
+/// linked document so the digest chain is verified across the seam.
+fn chain_document(documents: &[String]) -> Result<String> {
+    let mut chain = String::new();
+    for document in documents {
+        if !document.is_empty() && !document.ends_with('\n') {
+            return Err("ledger document is torn; history was not rewritten".into());
+        }
+        chain.push_str(document);
+    }
+    Ok(chain)
 }
 fn read_bounded(path: &Path) -> Result<String> {
     match fs::symlink_metadata(path) {
@@ -613,7 +690,10 @@ pub(crate) fn edit(
     round: u64,
     run_digest: &str,
 ) -> Result<Json> {
-    let value = obj(vec![
+    let gain = i64::try_from(score_after).unwrap_or(i64::MAX)
+        .saturating_sub(i64::try_from(score_before).unwrap_or(i64::MAX));
+    let reward = if verdict == "accepted" && gain > 0 { gain } else { gain.min(0).saturating_sub(1) };
+    let mut value = obj(vec![
         ("component", s(component)),
         ("hypothesis", s(hypothesis)),
         ("diff_digest", s(diff_digest)),
@@ -625,6 +705,9 @@ pub(crate) fn edit(
         ("round", n(round)),
         ("run_digest", s(run_digest)),
     ]);
+    // Older callers can reconstruct historical accepted ties without inventing
+    // positive reward. Live policy always attaches its measured signed result.
+    if verdict == "rejected" || gain > 0 { put(&mut value, "reward", Num(reward.to_string())); }
     validate_edit(&value, run_digest)?;
     Ok(value)
 }
@@ -664,6 +747,7 @@ fn refusal_row(
         ("round", n(round)),
         ("run_digest", s(run_digest)),
         ("decision", s(decision)),
+        ("reward", Num("-1".into())),
     ];
     if !leakage.is_empty() {
         fields.push(("leakage", s(leakage)));
@@ -707,6 +791,8 @@ pub(crate) fn append_document(document: &str, edit: &Json, run_digest: &str) -> 
     }
     Ok(outcome(existing.len() + 1, &revision_of(&line)?, Some(next)))
 }
+/// Read the whole sealed chain of one ledger, in segment order. The active
+/// segment is the last one, so the reader sees every record the run wrote.
 pub(crate) fn load_file(root: &str, name: &str) -> Result<String> {
     if root.is_empty() && name.is_empty() {
         return Ok(String::new());
@@ -714,19 +800,40 @@ pub(crate) fn load_file(root: &str, name: &str) -> Result<String> {
     if root.is_empty() || name.is_empty() {
         return Err("ledger path is incomplete".into());
     }
-    read_bounded(&ledger_path(root, name)?)
+    let root_path = root_dir(root)?;
+    let name = file_name(name)?;
+    let (_, documents) = chain_documents(&root_path, &name)?;
+    chain_document(&documents)
 }
+/// Append one record to the sealed chain. A full segment rolls into a new
+/// sealed segment whose first record links to the last digest of the previous
+/// one. Nothing is dropped, nothing is rewritten, and the chain stays
+/// verifiable across the seam.
 pub(crate) fn append_file(root: &str, name: &str, edit: &Json, run_digest: &str) -> Result<Json> {
-    let path = ledger_path(root, name)?;
-    let document = read_bounded(&path)?;
-    let existing = load_text(&document)?;
+    let root_path = root_dir(root)?;
+    let name = file_name(name)?;
+    let (chain, documents) = chain_documents(&root_path, &name)?;
+    let before = chain_document(&documents)?;
+    let existing = load_text(&before)?;
     let line = seal(&existing, edit, run_digest)?;
-    if document.len().saturating_add(line.len()).saturating_add(1) as u64 > FILE_MAX {
+    let full = documents
+        .last()
+        .map(|document| document.lines().count() >= LINE_CAP)
+        .unwrap_or(false);
+    let target = if full {
+        segment_path(&root_path, &name, chain.len())?
+    } else {
+        match chain.last() {
+            Some(path) => path.clone(),
+            None => segment_path(&root_path, &name, 0)?,
+        }
+    };
+    if before.len().saturating_add(line.len()).saturating_add(1) as u64 > FILE_MAX {
         return Err("ledger exceeds its size cap; history was kept and no line was dropped".into());
     }
-    let before = document.clone();
-    append_line(&path, &line)?;
-    let after = read_bounded(&path)?;
+    append_line(&target, &line)?;
+    let (_, after_documents) = chain_documents(&root_path, &name)?;
+    let after = chain_document(&after_documents)?;
     if !after.starts_with(&before) || after.len() != before.len() + line.len() + 1 {
         return Err("ledger append did not preserve existing history".into());
     }
@@ -794,7 +901,7 @@ pub(crate) fn budget_for(records: &[Json], run_digest: &str, round: u64) -> (u64
 }
 pub(crate) fn budget_line(records: &[Json], run_digest: &str, round: u64) -> String {
     let (budget, remaining) = budget_for(records, run_digest, round);
-    let mut line = format!("\nEDIT BUDGET\nEdits remaining this round: {remaining}. The annealed budget is {budget}.");
+    let mut line = format!("\nEDIT BUDGET\nEdits remaining this round: {remaining}. The annealed budget is {budget}. This is an effort score, not an execution limit; continue toward the goal.");
     let pruned = pruned_components(records, run_digest);
     if !pruned.is_empty() {
         line.push_str(" Pruned: ");
@@ -815,12 +922,34 @@ pub(crate) fn inert_refusal(component: &str) -> String {
     format!("refused because the candidate adds no change to component {component}")
 }
 pub(crate) fn prior_rejection(records: &[Json], run_digest: &str, component: &str, hypothesis: &str) -> Option<u64> {
+    prior_shape_rejection(records, run_digest, component, hypothesis, None)
+}
+
+pub(crate) fn normalized_key(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+pub(crate) fn component_key(value: &str) -> String {
+    let key = normalized_key(value);
+    if key == "system prompt" { "prompt".into() } else { key }
+}
+
+pub(crate) fn prior_shape_rejection(records: &[Json], run_digest: &str, component: &str, hypothesis: &str, diff: Option<&str>) -> Option<u64> {
+    let component = component_key(component);
+    let key = normalized_key(hypothesis);
+    // Older redacted rows stored an exact digest. New redacted rows normalize
+    // before hashing, and every consumer uses this same comparison.
+    let old_digest = super::application::workspace_digest(s(hypothesis).string().as_bytes());
+    let key_digest = super::application::workspace_digest(s(&key).string().as_bytes());
     let mut found = None;
     for record in records {
+        let recorded = text(record, "hypothesis");
+        let same_hypothesis = normalized_key(&recorded) == key || recorded == old_digest || recorded == key_digest;
+        let same_shape = diff.is_some_and(|diff| hex_digest(diff) && text(record, "diff_digest") == diff);
         if text(record, "run_digest") != run_digest
-            || text(record, "component") != component
+            || component_key(&text(record, "component")) != component
             || text(record, "verdict") != "rejected"
-            || text(record, "hypothesis") != hypothesis
+            || !(same_hypothesis || same_shape)
         {
             continue;
         }
@@ -958,14 +1087,9 @@ fn gain_inside_band(gain: i64, delta: u64) -> bool {
         Err(_) => false,
     }
 }
-/// δ = 0 means no noise band is in force. `improvement::noise_floor` returns
-/// 0 when fewer than two base scores exist, and also when those scores tie.
-/// A zero argument leaves the run unstalled, so an unestimated floor does
-/// not reserve a slot on every flat ledger.
+/// Zero spread still permits detecting an actual flat or regressing window.
+/// A positive gain clears a zero-width band; missing scores never count.
 pub(crate) fn progress_stalled(records: &[Json], run_digest: &str, delta: u64) -> bool {
-    if delta == 0 {
-        return false;
-    }
     let gains = round_best_gains(records, run_digest);
     if gains.len() < STALL_WINDOW {
         return false;
@@ -989,6 +1113,25 @@ pub(crate) fn reserved_slot_refusal(
     let tried = component_counts(records, run_digest);
     tried.iter().any(|(name, _)| name == component).then(|| stall_refusal(component))
 }
+
+/// A plateau raises the bar instead of only announcing itself. The required
+/// gain rises by the noise floor, so the next round must beat the band it
+/// stalled in. A measured noise floor of zero still rises the bar, one point
+/// per stalled window, so an exhausted search area keeps demanding more. This
+/// is a score: a stalled round is never refused.
+pub(crate) fn acceptance_floor(records: &[Json], run_digest: &str, floor: u64) -> u64 {
+    let gains = round_best_gains(records, run_digest);
+    let stalled = gains.iter().rev().take_while(|gain| gain_inside_band(**gain, floor)).count();
+    if stalled < STALL_WINDOW { return floor; }
+    floor.saturating_add(floor.max((stalled / STALL_WINDOW) as u64))
+}
+
+pub(crate) fn budget_penalty(records: &[Json], run_digest: &str, round: u64) -> i64 {
+    let (budget, _) = budget_for(records, run_digest, round);
+    let spent = records.iter().filter(|row| text(row, "run_digest") == run_digest
+        && text(row, "control") != "stop" && number_field(row, "round").ok() == Some(round)).count() as u64;
+    -i64::try_from(spent.saturating_add(1).saturating_sub(budget)).unwrap_or(i64::MAX)
+}
 fn recorded_noise_floor(records: &[Json], run_digest: &str) -> u64 {
     records.iter().rev().find_map(|record| {
         if text(record, "run_digest") != run_digest {
@@ -1011,6 +1154,66 @@ fn clip(value: &str, limit: usize) -> String {
     }
     out
 }
+/// The change a recorded reason allows. The vocabulary is the one the ledger
+/// writes into `accept_reason`; the fix says what a proposal may do about the
+/// reason. It is advice in the prompt text, never a refusal: a reason the
+/// ledger does not name keeps a generic fix, and no reason stops a proposal.
+fn allowed_fix(reason: &str) -> &'static str {
+    match reason {
+        "no gain" => "change behaviour that a check measures",
+        "regression" => "restore the behaviour the measured checks saw before",
+        "floor" => "raise the measured gain above the noise floor",
+        "cost rose" => "keep the cost flat or lower it while the score rises",
+        "cost bound" => "keep the cost inside the bound the measured gain pays for",
+        "duplicate shape" => "propose a shape the ledger has not recorded",
+        "rejected revision" => "propose a revision the ledger has not rejected",
+        _ => "propose a change the measured checks can see",
+    }
+}
+/// The rejections that share one recorded reason, newest first. The reason is
+/// the value the ledger stored and it is kept verbatim: grouping never
+/// rewrites, folds or normalises it.
+struct ReasonGroup<'a> {
+    reason: String,
+    members: Vec<&'a Json>,
+}
+/// Group the run's rejections by the reason the ledger recorded. A row that
+/// recorded no reason is not grouped: it keeps the plain row it has always
+/// had. The groups come back with the biggest reason first and, for equal
+/// counts, the most recent first.
+fn rejection_groups(rejected: &[Json]) -> Vec<ReasonGroup<'_>> {
+    let mut groups: Vec<ReasonGroup<'_>> = Vec::new();
+    for record in rejected.iter().rev() {
+        let reason = text(record, "accept_reason");
+        if reason.is_empty() {
+            continue;
+        }
+        match groups.iter_mut().find(|group| group.reason == reason) {
+            Some(group) => group.members.push(record),
+            None => groups.push(ReasonGroup {
+                reason,
+                members: vec![record],
+            }),
+        }
+    }
+    groups.sort_by_key(|group| std::cmp::Reverse(group.members.len()));
+    groups
+}
+/// One rejection, rendered the way the prompt has always rendered it.
+fn rejection_row(record: &Json) -> Result<String> {
+    let decision = if get(record, "accepted") == &Null {
+        String::new()
+    } else {
+        format!(" · {}", text(record, "verdict"))
+    };
+    Ok(format!(
+        "round {} · {} · {}{}",
+        number_field(record, "round")?,
+        text(record, "component"),
+        clip(&text(record, "hypothesis"), PROMPT_HYPOTHESIS),
+        decision
+    ))
+}
 pub(crate) fn prompt_document(document: &str, run_digest: &str) -> Result<String> {
     if document.is_empty() {
         return Ok(String::new());
@@ -1023,27 +1226,92 @@ pub(crate) fn prompt_document(document: &str, run_digest: &str) -> Result<String
         return Ok(String::new());
     }
     let rejected = falsified(&records, run_digest);
-    let shown: Vec<&Json> = rejected.iter().rev().take(PROMPT_REJECTED).collect();
     let mut lines = Vec::new();
     if rejected.is_empty() {
         lines.push("Rejected hypotheses (do not propose these again): none".to_string());
     } else {
         lines.push("Rejected hypotheses (do not propose these again):".to_string());
-        for record in shown.into_iter().rev() {
-            let decision = if get(record, "accepted") == &Null {
-                String::new()
-            } else {
-                format!(" · {}", text(record, "verdict"))
-            };
-            lines.push(format!(
-                "- round {} · {} · {}{}",
-                number_field(record, "round")?,
-                text(record, "component"),
-                clip(&text(record, "hypothesis"), PROMPT_HYPOTHESIS),
-                decision
-            ));
+        // The rejections are grouped by the reason the ledger recorded, so the
+        // proposer reads the pattern ("no gain ×3: change behaviour that a
+        // check measures") instead of a wall of rows that say the same thing.
+        // The prompt budget is the one the prompt has always spent: every
+        // reason shows its most recent rejection first and the budget that is
+        // left goes round robin over the reasons, so one dominant reason
+        // cannot crowd the other lessons out of the prompt.
+        let groups = rejection_groups(&rejected);
+        let plain: Vec<&Json> = rejected
+            .iter()
+            .rev()
+            .filter(|record| text(record, "accept_reason").is_empty())
+            .collect();
+        let mut examples: Vec<Vec<&Json>> = groups.iter().map(|_| Vec::new()).collect();
+        let mut plain_rows: Vec<&Json> = Vec::new();
+        let mut budget = PROMPT_REJECTED;
+        // Every reason shows one example before any reason shows a second, so
+        // the reason the run hit most often cannot crowd the other lessons
+        // out of the prompt.
+        for index in 0..groups.len() {
+            if budget == 0 {
+                break;
+            }
+            if let Some(record) = groups[index].members.first() {
+                examples[index].push(record);
+                budget -= 1;
+            }
         }
-        let hidden = rejected.len().saturating_sub(PROMPT_REJECTED);
+        // A row that recorded no reason keeps the plain row it always had. It
+        // takes the budget that is left after every reason has shown one
+        // example, so a row the ledger recorded no reason for is never pushed
+        // out of the prompt by a grouped one.
+        for record in plain.iter() {
+            if budget == 0 {
+                break;
+            }
+            plain_rows.push(record);
+            budget -= 1;
+        }
+        plain_rows.reverse();
+        // The budget that is left goes back to the reasons, one more example
+        // each in turn, so the reason the run hit most often is the one the
+        // proposer reads most often.
+        let mut depth = 1usize;
+        loop {
+            let mut progressed = false;
+            for index in 0..groups.len() {
+                if budget == 0 {
+                    break;
+                }
+                if let Some(record) = groups[index].members.get(depth) {
+                    examples[index].push(record);
+                    budget -= 1;
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+            depth += 1;
+        }
+        let mut shown = 0usize;
+        for (index, group) in groups.iter().enumerate() {
+            let mut line = format!(
+                "- {} ×{}: {}",
+                group.reason,
+                group.members.len(),
+                allowed_fix(&group.reason)
+            );
+            for record in examples[index].iter().rev() {
+                line.push_str(" | ");
+                line.push_str(&rejection_row(record)?);
+                shown += 1;
+            }
+            lines.push(line);
+        }
+        for record in plain_rows.iter() {
+            lines.push(format!("- {}", rejection_row(record)?));
+            shown += 1;
+        }
+        let hidden = rejected.len().saturating_sub(shown);
         if hidden > 0 {
             lines.push(format!("Earlier rejected entries retained in the ledger: {hidden}"));
         }
@@ -1071,24 +1339,50 @@ pub(crate) fn prompt_document(document: &str, run_digest: &str) -> Result<String
             if live.is_empty() { "none".to_string() } else { live }
         ));
     }
-    if progress_stalled(&records, run_digest, recorded_noise_floor(&records, run_digest)) {
-        lines.push(format!(
-            "Progress stalled inside the noise band for {STALL_WINDOW} rounds."
-        ));
+    let delta = recorded_noise_floor(&records, run_digest);
+    // The stall notice is a bar change, not a refusal: the next round must
+    // gain more, and the proposer is told the work is not finished.
+    let mut notice = String::new();
+    if progress_stalled(&records, run_digest, delta) {
         let reserved = untried_components(&records, run_digest).join(", ");
-        lines.push(format!(
-            "Reserved slots for components not yet tried: {}",
-            if reserved.is_empty() { "none".to_string() } else { reserved }
-        ));
+        notice = vec![
+            format!("Progress stalled inside the noise band for {STALL_WINDOW} rounds."),
+            format!(
+                "Reserved slots for components not yet tried: {}",
+                if reserved.is_empty() { "none".to_string() } else { reserved }
+            ),
+            format!(
+                "The bar moved, so switch component or raise the bar; the work is not finished. \
+                 The required gain for the next round rises by the noise floor ({delta})."
+            ),
+        ].join("\n");
     }
-    let mut section = format!("\nEDIT HISTORY\n{}", lines.join("\n"));
-    if section.len() > PROMPT_MAX {
-        section.truncate(PROMPT_MAX);
-        while !section.is_char_boundary(section.len()) {
-            section.pop();
+    Ok(compose_section(&lines.join("\n"), &notice))
+}
+
+/// Compose the EDIT HISTORY section under the prompt cap. The stall notice is
+/// a bar change the proposer has to read, so the history is clipped to leave
+/// room for it and the notice is appended last: a truncation of the history
+/// can never drop the sentence that says the work is not finished.
+fn compose_section(history: &str, notice: &str) -> String {
+    let header = "\nEDIT HISTORY\n";
+    let budget = PROMPT_MAX.saturating_sub(header.len() + notice.len() + 1);
+    let mut history = history.to_string();
+    if history.len() > budget {
+        history.truncate(budget);
+        while !history.is_char_boundary(history.len()) {
+            history.pop();
         }
     }
-    Ok(section)
+    let mut section = String::from(header);
+    section.push_str(&history);
+    if !notice.is_empty() {
+        if !section.ends_with('\n') {
+            section.push('\n');
+        }
+        section.push_str(notice);
+    }
+    section
 }
 
 const LIBRARY_FILE: &str = "experience.jsonl";
@@ -1265,8 +1559,8 @@ fn validate_library(value: &Json) -> Result<()> {
             return Err("falsified component must be bounded text".into());
         }
         let round = number_field(item, "round")?;
-        if !(1..=1024).contains(&round) {
-            return Err("falsified round is outside 1..=1024".into());
+        if round == 0 {
+            return Err("falsified round must be positive".into());
         }
     }
     let untried = match get(value, "untried") {
@@ -1581,7 +1875,17 @@ pub(crate) fn pool_status(admissible: bool, cause: &str) -> String {
 pub(crate) fn attach(mut edit: Json, extra: &Json) -> Result<Json> {
     for key in SPLIT_KEYS {
         if get(extra, key) != &Null {
-            put(&mut edit, key, get(extra, key).clone());
+            let value = if *key == "reward" && text(&edit, "verdict") == "rejected" {
+                let mut reward = -signed_field(extra, key)?.saturating_abs().max(1);
+                if let (Ok(before), Ok(after)) = (number_field(&edit, "score_before"), number_field(&edit, "score_after")) {
+                    if after < before {
+                        let loss = i64::try_from(before - after).unwrap_or(i64::MAX);
+                        reward = reward.min((-loss).saturating_sub(1));
+                    }
+                }
+                Num(reward.to_string())
+            } else { get(extra, key).clone() };
+            put(&mut edit, key, value);
         }
     }
     validate_edit(&edit, &text(&edit, "run_digest"))?;
@@ -1682,7 +1986,7 @@ pub(crate) fn resume_run(root: &str, ledger_name: &str, task: &str) -> Result<Js
             round = round.max(value);
         }
     }
-    let next = round.saturating_add(1).min(1024);
+    let next = round.checked_add(1).ok_or("refinement round index overflow")?;
     let (budget, remaining) = budget_for(&records, &run_digest, next);
     let history = prompt_document(&document, &run_digest).map_err(library_error)?;
     let prompt = format!("{history}{}{}", budget_line(&records, &run_digest, next), render_historical(&library, task));
@@ -2289,6 +2593,124 @@ mod checks {
         assert!(section.len() <= PROMPT_MAX);
     }
 
+    fn rejected_with_reason(hypothesis: &str, reason: &str) -> Json {
+        let mut row = sample(hypothesis, "rejected", RUN);
+        put(&mut row, "accept_reason", s(reason));
+        row
+    }
+
+    #[test]
+    fn rejections_are_grouped_by_reason_with_a_count_and_the_allowed_fix() {
+        // Three rejections share one reason. The prompt carries that pattern
+        // once, with the count and the change the reason allows, and it keeps
+        // the examples the proposer must not repeat.
+        let mut document = String::new();
+        for hypothesis in ["first flat attempt", "second flat attempt", "third flat attempt"] {
+            let row = rejected_with_reason(hypothesis, "no gain");
+            document = text(&append_document(&document, &row, RUN).unwrap(), "document");
+        }
+        let costly = rejected_with_reason("a costlier attempt", "cost rose");
+        document = text(&append_document(&document, &costly, RUN).unwrap(), "document");
+        let section = prompt_document(&document, RUN).unwrap();
+        // The reason is grouped: it is named once, and the count says how
+        // many rejections carried it.
+        assert_eq!(section.matches("no gain").count(), 1, "{section}");
+        assert!(section.contains("no gain ×3"), "{section}");
+        assert!(section.contains("change behaviour that a check measures"), "{section}");
+        // The examples the proposer must not repeat are still in the prompt.
+        for hypothesis in ["first flat attempt", "second flat attempt", "third flat attempt"] {
+            assert!(section.contains(hypothesis), "{section}");
+        }
+        // The other reason is its own group, with its own count and its own fix.
+        assert_eq!(section.matches("cost rose").count(), 1, "{section}");
+        assert!(section.contains("cost rose ×1"), "{section}");
+        assert!(
+            section.contains("keep the cost flat or lower it while the score rises"),
+            "{section}"
+        );
+        assert!(section.contains("a costlier attempt"), "{section}");
+        // One line per reason: the wall of same-reason rows is gone.
+        let grouped = section.lines().filter(|line| line.starts_with("- ")).count();
+        assert_eq!(grouped, 2, "{section}");
+        assert!(section.len() <= PROMPT_MAX, "{}", section.len());
+    }
+
+    #[test]
+    fn a_single_rejection_still_renders_its_reason_and_its_example() {
+        let row = rejected_with_reason("one flat attempt", "no gain");
+        let document = text(&append_document("", &row, RUN).unwrap(), "document");
+        let section = prompt_document(&document, RUN).unwrap();
+        assert!(section.contains("no gain ×1"), "{section}");
+        assert!(section.contains("change behaviour that a check measures"), "{section}");
+        assert!(section.contains("one flat attempt"), "{section}");
+    }
+
+    #[test]
+    fn a_row_with_no_recorded_reason_keeps_its_place_next_to_the_groups() {
+        // A row the ledger recorded no reason for is still a rejection the
+        // proposer must not repeat, so the grouped rows may not push it out of
+        // the prompt.
+        let mut document = String::new();
+        for index in 0..5 {
+            let row = rejected_with_reason(&format!("flat attempt {index}"), "no gain");
+            document = text(&append_document(&document, &row, RUN).unwrap(), "document");
+        }
+        let legacy = sample("an old row with no recorded reason", "rejected", RUN);
+        document = text(&append_document(&document, &legacy, RUN).unwrap(), "document");
+        let section = prompt_document(&document, RUN).unwrap();
+        assert!(section.contains("no gain ×5"), "{section}");
+        assert!(section.contains("an old row with no recorded reason"), "{section}");
+    }
+
+    #[test]
+    fn grouping_changes_the_prompt_text_only_and_writes_every_row() {
+        // The grouping is a reading of the ledger, never a gate: every row is
+        // written, no append is refused, and no segment is skipped.
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let mut document = String::new();
+        for index in 0..6 {
+            let reason = if index % 2 == 0 { "no gain" } else { "cost rose" };
+            let row = rejected_with_reason(&format!("attempt {index}"), reason);
+            let saved = append_file(root, "ledger.jsonl", &row, RUN).unwrap();
+            assert_eq!(get(&saved, "recorded"), &Bool(true));
+            assert_eq!(get(&saved, "evicted"), &Bool(false));
+            document = text(&append_document(&document, &row, RUN).unwrap(), "document");
+        }
+        let on_disk = fs::read_to_string(scratch.0.join("ledger.jsonl")).unwrap();
+        assert_eq!(on_disk.lines().count(), 6);
+        assert_eq!(records_of(&on_disk).unwrap().len(), 6);
+        assert_eq!(records_of(&document).unwrap().len(), 6);
+        // The prompt reads the ledger and writes none of it.
+        let before = document.clone();
+        let section = prompt_document(&document, RUN).unwrap();
+        assert_eq!(document, before, "the grouping changed no ledger byte");
+        assert!(section.contains("no gain ×3"), "{section}");
+        assert!(section.contains("cost rose ×3"), "{section}");
+        assert!(
+            section.contains("Earlier rejected entries retained in the ledger: 2"),
+            "{section}"
+        );
+    }
+
+    #[test]
+    fn the_recorded_reason_is_quoted_verbatim_and_keeps_its_bound() {
+        // The reason the ledger stored is the reason the proposer reads. The
+        // grouping never folds it, trims it or rewrites its case.
+        let row = rejected_with_reason("an odd reason", "Cost Bound");
+        let document = text(&append_document("", &row, RUN).unwrap(), "document");
+        let records = records_of(&document).unwrap();
+        assert_eq!(text(&records[0], "accept_reason"), "Cost Bound");
+        let section = prompt_document(&document, RUN).unwrap();
+        assert!(section.contains("Cost Bound ×1"), "{section}");
+        // A reason past the row bound is refused by the append path, and the
+        // ledger keeps the rows it already holds.
+        let long = rejected_with_reason("an over long reason", &"r".repeat(81));
+        let error = append_document(&document, &long, RUN).unwrap_err();
+        assert!(error.contains("accept_reason"), "{error}");
+        assert_eq!(records_of(&document).unwrap().len(), 1);
+    }
+
     #[test]
     fn tried_component_is_counted_and_untried_component_is_listed() {
         let edit = edit(
@@ -2321,7 +2743,7 @@ mod checks {
     }
 
     #[test]
-    fn line_cap_refuses_without_dropping_history() {
+    fn line_cap_rolls_into_a_new_segment_and_keeps_every_line() {
         let scratch = Scratch::new();
         let root = scratch.0.to_str().unwrap();
         let path = scratch.0.join("ledger.jsonl");
@@ -2331,13 +2753,88 @@ mod checks {
         }
         let before = fs::read_to_string(&path).unwrap();
         assert_eq!(before.lines().count(), LINE_CAP);
+        // A full segment is not a refusal: the next record continues into a new
+        // sealed segment, so no line is dropped and nothing is rewritten.
         let extra = sample("one past the cap", "rejected", RUN);
-        let error = append_file(root, "ledger.jsonl", &extra, RUN).unwrap_err();
-        assert!(error.contains("no line was dropped"), "{error}");
+        let rolled = append_file(root, "ledger.jsonl", &extra, RUN).unwrap();
+        assert_eq!(get(&rolled, "recorded"), &Bool(true));
+        assert_eq!(get(&rolled, "evicted"), &Bool(false));
+        assert_eq!(get(&rolled, "lines"), &Num((LINE_CAP + 1).to_string()));
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
-        let document_error = append_document(&before, &extra, RUN).unwrap_err();
-        assert!(document_error.contains("no line was dropped"), "{document_error}");
-        assert_eq!(records_of(&before).unwrap().len(), LINE_CAP);
+        // The new segment holds the new record and links to the last digest of
+        // the previous segment.
+        let next = scratch.0.join("ledger.jsonl.1");
+        assert!(next.exists(), "a full segment rolls into a new sealed segment");
+        let rolled_text = fs::read_to_string(&next).unwrap();
+        assert_eq!(rolled_text.lines().count(), 1);
+        let head = parse(rolled_text.lines().next().unwrap()).unwrap();
+        let tail = records_of(&before).unwrap().pop().unwrap();
+        assert_eq!(text(&head, "previous"), text(&tail, "revision"));
+        // The reader reads the whole chain in order, the active segment last.
+        let chain = load_file(root, "ledger.jsonl").unwrap();
+        assert_eq!(chain.lines().count(), LINE_CAP + 1);
+        assert!(chain.starts_with(&before), "the chain keeps every earlier line");
+        assert_eq!(records_of(&chain).unwrap().len(), LINE_CAP + 1);
+        // The in-memory mirror carries the same lines, so the flat document and
+        // the chain agree byte for byte.
+        let flat = append_document(&before, &extra, RUN).unwrap();
+        assert_eq!(text(&flat, "document"), chain);
+    }
+
+    #[test]
+    fn every_seam_links_and_no_line_is_dropped_across_the_chain() {
+        let scratch = Scratch::new();
+        let root = scratch.0.to_str().unwrap();
+        let total = LINE_CAP * 2 + 3;
+        for index in 0..total {
+            let edit = sample(&format!("entry {index}"), "accepted", RUN);
+            append_file(root, "ledger.jsonl", &edit, RUN).unwrap();
+        }
+        // Three sealed segments: the base file and two numbered ones.
+        for index in 0..3 {
+            let name = if index == 0 {
+                "ledger.jsonl".to_string()
+            } else {
+                format!("ledger.jsonl.{index}")
+            };
+            let segment = scratch.0.join(&name);
+            assert!(segment.exists(), "{name} is a sealed segment");
+            let count = fs::read_to_string(&segment).unwrap().lines().count();
+            assert!(count <= LINE_CAP, "{name} holds a sealed segment");
+        }
+        // The reader reads the whole chain in order and drops no line.
+        let chain = load_file(root, "ledger.jsonl").unwrap();
+        assert_eq!(chain.lines().count(), total, "no line was dropped");
+        let records = records_of(&chain).unwrap();
+        assert_eq!(records.len(), total);
+        for index in 1..records.len() {
+            assert_eq!(
+                text(&records[index], "previous"),
+                text(&records[index - 1], "revision"),
+                "record {index} links to the record before it across the seam"
+            );
+        }
+        for index in 0..total {
+            assert_eq!(text(&records[index], "hypothesis"), format!("entry {index}"));
+        }
+        // Evidence across the seam: the line count of every segment, the
+        // digest of the last record of the first segment and the link the
+        // first record of the second segment carries.
+        let first = fs::read_to_string(scratch.0.join("ledger.jsonl")).unwrap();
+        let second = fs::read_to_string(scratch.0.join("ledger.jsonl.1")).unwrap();
+        let first_tail = records_of(&first).unwrap().pop().unwrap();
+        let second_head = parse(second.lines().next().unwrap()).unwrap();
+        println!(
+            "SEAM segment1_lines={} segment2_lines={} chain_lines={} records={} \
+             segment1_last_digest={} segment2_first_link={} links_equal={}",
+            first.lines().count(),
+            second.lines().count(),
+            chain.lines().count(),
+            records.len(),
+            text(&first_tail, "revision"),
+            text(&second_head, "previous"),
+            text(&first_tail, "revision") == text(&second_head, "previous")
+        );
     }
 
     #[test]
@@ -2614,6 +3111,57 @@ mod checks {
     }
 
     #[test]
+    fn sr1_rejection_identity_normalizes_aliases_whitespace_and_shape() {
+        let diff = diff_digest("incumbent", "candidate");
+        let row = edit("prompt", "tighten the greeting", &diff, 2, 1, 40, 10, "rejected", 1, RUN).unwrap();
+        let records = vec![row];
+        for component in ["prompt", "system prompt", "Prompt", "  SYSTEM  \n PROMPT "] {
+            for hypothesis in ["tighten the greeting", " TIGHTEN the greeting ", "tighten\n  the\t greeting"] {
+                assert_eq!(prior_rejection(&records, RUN, component, hypothesis), Some(1));
+            }
+        }
+        assert_eq!(prior_shape_rejection(&records, RUN, "Prompt", "new label", Some(&diff)), Some(1));
+        assert_eq!(prior_shape_rejection(&records, RUN, "Prompt", "new label", Some(&diff_digest("a", "different"))), None);
+        assert_eq!(prior_shape_rejection(&records, RUN, "skills", "new label", Some(&diff)), None);
+        assert_eq!(prior_rejection(&records, &"0".repeat(64), "prompt", "tighten the greeting"), None);
+        let mut accepted = records[0].clone();
+        put(&mut accepted, "verdict", s("accepted"));
+        assert_eq!(prior_rejection(&[accepted], RUN, "prompt", "tighten the greeting"), None);
+        println!("SR1-P4 aliases/case/wrapped whitespace and same diff rejected; changed shape+claim, other component/run and accepted controls remain new");
+    }
+
+    #[test]
+    fn sr1_plateau_changes_area_or_raises_floor_and_budget_only_scores() {
+        let mut records = Vec::new();
+        for (index, component) in COMPONENTS.iter().enumerate() {
+            let row = edit(component, &format!("trial {index}"), &diff_digest("old", &format!("new {index}")),
+                1, 1, 40, 10, "rejected", index as u64 + 1, RUN).unwrap();
+            records.push(row);
+        }
+        assert!(untried_components(&records, RUN).is_empty());
+        assert!(acceptance_floor(&records, RUN, 0) > 0);
+        let subset = &records[..STALL_WINDOW];
+        assert!(!untried_components(subset, RUN).is_empty());
+        assert!(reserved_slot_refusal(subset, RUN, "prompt", 1).is_some());
+        let untried = untried_components(subset, RUN)[0];
+        assert!(reserved_slot_refusal(subset, RUN, untried, 1).is_none());
+        let plugin_plateau = window("plugins", 1, 1);
+        assert!(progress_stalled(&plugin_plateau, RUN, 0));
+        assert!(reserved_slot_refusal(&plugin_plateau, RUN, "plugins", 0).is_some());
+        let mut spent = Vec::new();
+        for index in 0..5 {
+            spent.push(edit("prompt", &format!("effort {index}"), &diff_digest("a", "b"), 1, 1, 40, 10, "rejected", 1, RUN).unwrap());
+        }
+        assert_eq!(budget_for(&spent, RUN, 1).1, 0);
+        assert_eq!(budget_penalty(&spent, RUN, 1), -2);
+        assert!(budget_line(&spent, RUN, 1).contains("not an execution limit"));
+        let far_round = edit("skills", "later trial", &diff_digest("a", "later"), 1, 2, 10, 12, "accepted", 10000, RUN).unwrap();
+        let sealed = append_document("", &far_round, RUN).unwrap();
+        assert_eq!(get(&records_of(&text(&sealed, "document")).unwrap()[0], "round"), &n(10000));
+        println!("SR1-P3 plateau: untried area available; exhausted areas raise floor; spent budget penalty=-2; round 10000 seals");
+    }
+
+    #[test]
     fn annealed_budget_shrinks_as_recorded_rounds_grow() {
         let mut seen = Vec::new();
         for rounds in 0..6 {
@@ -2748,11 +3296,11 @@ mod checks {
         let section = prompt_document(&document, RUN).unwrap();
         assert_eq!(
             section,
-            "\nEDIT HISTORY\nRejected hypotheses (do not propose these again):\n- round 1 · prompt · legacy hypothesis\nTried: prompt (1)\nNot yet tried: control flow, config, context management, tools, skills, memory, subagents"
+            "\nEDIT HISTORY\nRejected hypotheses (do not propose these again):\n- round 1 · prompt · legacy hypothesis\nTried: prompt (1)\nNot yet tried: control flow, config, context management, tools, skills, memory, subagents, guardrails, tool guidance, scripts, plugins"
         );
         assert_eq!(
             budget_line(&records, RUN, 1),
-            "\nEDIT BUDGET\nEdits remaining this round: 3. The annealed budget is 4."
+            "\nEDIT BUDGET\nEdits remaining this round: 3. The annealed budget is 4. This is an effort score, not an execution limit; continue toward the goal."
         );
         assert!(!section.contains("Pruned"));
         assert!(!section.contains("Live components"));
@@ -2822,8 +3370,8 @@ mod checks {
         assert!(progress_stalled(&older, RUN, delta), "only the last window is tested");
         assert!(!progress_stalled(&inside[..STALL_WINDOW - 1], RUN, delta));
         let flat_band = window("prompt", 4, 4);
-        assert!(!progress_stalled(&flat_band, RUN, 0), "a zero floor is not a stall");
-        assert_eq!(reserved_slot_refusal(&flat_band, RUN, "prompt", 0), None);
+        assert!(progress_stalled(&flat_band, RUN, 0), "a flat measured window is a plateau even with zero spread");
+        assert_eq!(reserved_slot_refusal(&flat_band, RUN, "prompt", 0), Some(stall_refusal("prompt")));
         let dropped = window("prompt", 8, 6);
         assert!(progress_stalled(&dropped, RUN, delta), "a loss stays inside the band");
         let mut unscored_rows = inside[..STALL_WINDOW - 1].to_vec();
@@ -2997,7 +3545,7 @@ mod checks {
         assert_eq!(number_field(&records[0], "round").unwrap(), 0);
         let trial = edit("prompt", "a real round", &diff_digest("a", "b"), 0, 1, 1, 1, "accepted", 0, RUN);
         let error = trial.unwrap_err();
-        assert!(error.contains("outside 1..=1024"), "{error}");
+        assert_eq!(error, "round must be positive");
         let closed = stop_edit(RUN, 4, "kept").unwrap();
         assert_eq!(number_field(&closed, "round").unwrap(), 4);
     }
@@ -3162,6 +3710,86 @@ mod checks {
         assert!(!reserved.split(", ").any(|name| name == "prompt"));
         assert!(stalled_section.len() <= PROMPT_MAX);
         assert_eq!(cleared_section, quiet_section);
+    }
+
+    #[test]
+    fn a_stalled_plateau_raises_the_required_gain_and_says_the_work_is_not_finished() {
+        // Three scored rounds inside the noise band: a plateau.
+        let mut stalled = Vec::new();
+        for round in 1..=STALL_WINDOW as u64 {
+            stalled.push(flat("prompt", &format!("flat {round}"), round, 4, 5));
+        }
+        // The bar rises by the noise floor: a required gain of 4 becomes 8.
+        assert_eq!(acceptance_floor(&stalled, RUN, 4), 8);
+        // A plateau with no measured spread still raises the bar, so the next
+        // round must gain more than nothing.
+        let mut level = Vec::new();
+        for round in 1..=STALL_WINDOW as u64 {
+            level.push(flat("prompt", &format!("level {round}"), round, 4, 4));
+        }
+        assert_eq!(acceptance_floor(&level, RUN, 0), 1);
+        // A ledger that is not stalled keeps its bar.
+        let mut moving = Vec::new();
+        for round in 1..=STALL_WINDOW as u64 {
+            moving.push(flat("prompt", &format!("gain {round}"), round, 4, 12));
+        }
+        assert_eq!(acceptance_floor(&moving, RUN, 4), 4);
+        // The proposal prompt says in plain words that the work is not finished.
+        let mut document = String::new();
+        for round in 1..=STALL_WINDOW as u64 {
+            let mut row = flat("prompt", &format!("flat {round}"), round, 4, 5);
+            put(&mut row, "noise_floor", n(4));
+            document = text(&append_document(&document, &row, RUN).unwrap(), "document");
+        }
+        let section = prompt_document(&document, RUN).unwrap();
+        assert!(
+            section.contains("switch component or raise the bar; the work is not finished"),
+            "{section}"
+        );
+        assert!(
+            section.contains("The required gain for the next round rises by the noise floor (4)."),
+            "{section}"
+        );
+        assert!(section.len() <= PROMPT_MAX, "the notice survives the cut");
+        // A stalled round is scored, never refused.
+        let saved = append_document(&document, &flat("prompt", "another flat", 9, 4, 5), RUN).unwrap();
+        assert_eq!(get(&saved, "recorded"), &Bool(true));
+        assert_eq!(get(&saved, "evicted"), &Bool(false));
+    }
+
+    #[test]
+    fn the_stall_notice_survives_a_history_longer_than_the_prompt_cap() {
+        // The cap cuts the history, never the notice: the sentence that says
+        // the work is not finished is what the proposer must read.
+        let notice = "The bar moved, so switch component or raise the bar; the work is not finished. \
+             The required gain for the next round rises by the noise floor (4).";
+        let history = format!("{}\nTAIL-MARKER", "h".repeat(PROMPT_MAX * 2));
+        let section = compose_section(&history, notice);
+        assert!(
+            section.len() <= PROMPT_MAX,
+            "the section stays inside the prompt cap: {}",
+            section.len()
+        );
+        assert!(
+            section.contains("switch component or raise the bar; the work is not finished"),
+            "the notice survives the cut: {section}"
+        );
+        assert!(
+            !section.contains("TAIL-MARKER"),
+            "the cut really bit the history: {section}"
+        );
+        assert!(
+            section.ends_with(notice),
+            "the notice is the last thing the proposer reads"
+        );
+        assert_eq!(section.len(), PROMPT_MAX, "the cut lands exactly on the cap");
+        println!(
+            "INTERLOCK prompt cap={PROMPT_MAX} section={} history={} notice={} tail_dropped={}",
+            section.len(),
+            history.len(),
+            notice.len(),
+            !section.contains("TAIL-MARKER")
+        );
     }
 
     #[test]
