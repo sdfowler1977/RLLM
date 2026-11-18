@@ -1,5 +1,6 @@
 mod twin;
 
+use std::path::PathBuf;
 use std::process::Command;
 
 use twin::{obj, s, Controller, Value};
@@ -27,8 +28,9 @@ fn main() {
         .to_str()
         .unwrap_or_else(|| panic!("project root is not UTF-8"))
         .to_string();
-    let scratch = twin::create_scratch(&project, "live-web");
+    let scratch = Scratch(twin::create_scratch(&project, "live-web"));
     let root = scratch
+        .0
         .to_str()
         .unwrap_or_else(|| panic!("scratch directory is not UTF-8"))
         .to_string();
@@ -261,8 +263,8 @@ fn main() {
     ]);
     twin::report_value_printed("live_web", &body, true);
 
-    std::fs::remove_dir_all(&scratch)
-        .unwrap_or_else(|error| panic!("could not remove {}: {error}", scratch.display()));
+    std::fs::remove_dir_all(&scratch.0)
+        .unwrap_or_else(|error| panic!("could not remove {}: {error}", scratch.0.display()));
 }
 
 // The leg sends its model payloads with json.dumps defaults (", " and ": "), so the
@@ -517,4 +519,29 @@ fn check(passed: &mut Vec<String>, name: &str, value: bool) {
         panic!("{name}");
     }
     passed.push(name.to_string());
+}
+
+/// The scratch directory this leg owns, removed when the leg unwinds.
+///
+/// The retired leg holds its temporary directory in a context manager, so the
+/// directory is removed when the leg ends, including when it aborts. The twin's
+/// own scratch directory was removed on the success path only, so an aborted run
+/// left it behind in the project's output tree. This guard owns the directory
+/// for the whole run and removes it on the way out, and it changes nothing the
+/// leg reports: an abort still aborts with the same diagnostic.
+///
+/// The removal rides on a destructor, so it reaches the exits the process
+/// observes: the normal return, where the leg has already removed the directory
+/// itself, and the unwinding of a panic, where the destructor is what removes
+/// it. A termination the process cannot catch reaches no destructor, so a kill
+/// of the process group with SIGKILL leaves the directory behind. That ceiling
+/// is the runner's and not this leg's: the runner ends a leg that outruns its
+/// deadline by killing the process group, and the directory of a leg killed
+/// that way stays in the output tree.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }

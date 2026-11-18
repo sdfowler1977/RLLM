@@ -2478,6 +2478,12 @@ list: the successor-journal refusals (`core/self_build.rs:1010`, `:1597-1608`, u
 nowhere under `verification/` or `tools/`, so none of those four named refusals reaches the delivered
 record.
 
+The two operator instructions that named a retired Python leg are restated to the delivered native twins
+(2026-11-17): the historical baseline audit's live-verification sentence now reads
+`output/verification/live_web --live`, and the connected-group list in `verification/README.md` now runs
+`output/verification/history_migration --previous-controller ...`. The `.py` legs themselves are gone from the
+tree, so the old invocations named paths that no longer exist.
+
 ### Open finding (2026-11-13): the runner exits 0 for a group name it will never run
 
 `output/harness <name>` selects groups by filtering `const GROUPS` at `tools/harness.rs:1829`, so a requested
@@ -2511,7 +2517,7 @@ Three defects were reproduced against the exact published controller from build 
 
 All 30 connected regression groups pass, comprising 1,230 current checks and three separately identified historical compatibility results. All 194 selected Rust cases pass. The command group includes text and structured catalogs across all four provider formats, disabled and re-enabled sources, retained connection credentials, non-writing roles, actual reviewed file work, operation limits and scoped failures. The diagnostic group includes the five retired platform callbacks and explicit instruction refresh.
 
-An additional live public HTTPS search passed through the actual review and callback path of an assigned child, retained source evidence and returned to the captured parent. The model replies in that test were controlled protocol fixtures; its search response was fetched live. Exact response byte count, digest and endpoint are recorded in verification/RESULTS.json. Optional live verification is available as `python3 verification/live_web.py --live`.
+An additional live public HTTPS search passed through the actual review and callback path of an assigned child, retained source evidence and returned to the captured parent. The model replies in that test were controlled protocol fixtures; its search response was fetched live. Exact response byte count, digest and endpoint are recorded in verification/RESULTS.json. Optional live verification is available as `output/verification/live_web --live`.
 
 The intrinsic investigation method remains in ordinary command, child, baseline, probe, proposal, composition and compaction requests, including requests with optional guidance disabled. Actual file work also passes with an unavailable journal and absent development artifacts. A legitimate missing-file refusal leaves independent local work available.
 

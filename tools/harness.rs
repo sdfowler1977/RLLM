@@ -1682,39 +1682,72 @@ struct PollFd {
     revents: i16,
 }
 
-fn python_group(root: &Path, name: &str, arguments: &[String]) -> Command {
-    let mut command = Command::new("python3");
-    command
-        .arg(root.join(format!("verification/{name}.py")))
-        .args(arguments)
-        .current_dir(root)
-        .process_group(0);
-    command
+// What a group runs, or the reason it does not run. A group's own source file
+// decides which leg the group owns: a native group owns
+// verification/<name>.rs and runs as the twin built from that source, and a
+// python group owns verification/<name>.py and runs as that script. The two
+// are never interchanged, so the runner never reports a result for a group
+// under a leg that group does not own.
+enum GroupLaunch {
+    Ready(Command),
+    Refused(String),
 }
 
+// The source a group's grammar is read from, and the language it is written
+// in. The native source is read when it exists. A group with no native source
+// owns a python script, and that script is read when it exists. A group with
+// no source at all declares nothing in either language, so the empty text is
+// returned and the dispatch refuses the group by name.
 fn leg_source(root: &Path, name: &str) -> (String, SourceLanguage) {
     let native = root.join(format!("verification/{name}.rs"));
     if native.is_file() {
-        (read(&native), SourceLanguage::Rust)
-    } else {
-        (
-            read(&root.join(format!("verification/{name}.py"))),
-            SourceLanguage::Python,
-        )
+        return (read(&native), SourceLanguage::Rust);
     }
+    let script = root.join(format!("verification/{name}.py"));
+    if script.is_file() {
+        return (read(&script), SourceLanguage::Python);
+    }
+    (String::new(), SourceLanguage::Rust)
 }
 
-// A built twin at output/verification/<name> is the group. The python3 script
-// remains the fallback when that binary is absent.
-fn group_command(root: &Path, name: &str, arguments: &[String]) -> Command {
+// The command that runs a group, or the reason the group is not run. A built
+// twin at output/verification/<name> is the group. When no twin is built the
+// group's own source decides: a native group is refused, because the twin is
+// the native leg and the runner does not run a native group under another
+// language's script; a python group runs its own script; a group with no
+// source is refused by name.
+fn group_command(root: &Path, name: &str, arguments: &[String]) -> GroupLaunch {
     let twin = root.join("output/verification").join(name);
     if twin.is_file() {
         let mut command = Command::new(&twin);
         command.args(arguments).current_dir(root).process_group(0);
-        command
-    } else {
-        python_group(root, name, arguments)
+        return GroupLaunch::Ready(command);
     }
+    if root.join(format!("verification/{name}.rs")).is_file() {
+        return GroupLaunch::Refused(format!(
+            "{name} NOT EXECUTED (missing native twin: output/verification/{name}; build it with bash tools/build-verification.sh)"
+        ));
+    }
+    let script = root.join(format!("verification/{name}.py"));
+    if script.is_file() {
+        let mut command = Command::new("python3");
+        command.arg(&script).args(arguments).current_dir(root).process_group(0);
+        return GroupLaunch::Ready(command);
+    }
+    GroupLaunch::Refused(format!(
+        "{name} NOT EXECUTED (no group source: verification/{name}.rs or verification/{name}.py)"
+    ))
+}
+
+// A group that was refused was never started, so the log holds the refusal
+// instead of the group's output. The refusal is the group's own diagnostic:
+// it names the group, what is missing and what produces it.
+fn write_refusal(root: &Path, name: &str, message: &str) {
+    let log = root.join(format!("output/checks/{name}.log"));
+    if let Some(parent) = log.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&log, format!("{message}\n"));
 }
 
 // The scratch name a verification twin publishes: the prefix the twin chose,
@@ -1957,7 +1990,15 @@ fn sweep_run(root: &Path, name: &str, arguments: &[String], seconds: u64) -> (i3
     let started = Instant::now();
     let group_started = now_nanos();
     let drain_deadline = started + std::time::Duration::from_secs(seconds.saturating_add(5));
-    let spawned = group_command(root, name, arguments).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
+    let spawned = match group_command(root, name, arguments) {
+        GroupLaunch::Ready(mut command) => command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn(),
+        GroupLaunch::Refused(message) => {
+            // The group was never started, so the refusal is what the run
+            // reports and what the log holds.
+            write_refusal(root, name, &message);
+            return (-1, message.into_bytes(), 0);
+        }
+    };
     let mut child = match spawned {
         Ok(child) => child,
         Err(error) => return (-1, format!("runner could not start the group: {error}").into_bytes(), 0),
@@ -2603,10 +2644,18 @@ fn run(root: &Path, name: &str, arguments: &[String]) -> (i32, String, u64) {
         Ok(file) => file,
         Err(error) => return (-1, format!("runner could not write the log: {error}"), 0),
     };
-    let spawned = group_command(root, name, arguments)
-        .stdout(Stdio::from(file.try_clone().expect("log handle")))
-        .stderr(Stdio::from(file))
-        .spawn();
+    let spawned = match group_command(root, name, arguments) {
+        GroupLaunch::Ready(mut command) => command
+            .stdout(Stdio::from(file.try_clone().expect("log handle")))
+            .stderr(Stdio::from(file))
+            .spawn(),
+        GroupLaunch::Refused(message) => {
+            // The group was never started, so the refusal is what the run
+            // reports and what the log holds.
+            write_refusal(root, name, &message);
+            return (-1, message, 0);
+        }
+    };
     let mut child = match spawned {
         Ok(child) => child,
         Err(error) => return (-1, format!("runner could not start the group: {error}"), 0),
@@ -3484,18 +3533,90 @@ mod checks {
         assert!(declares_argument(declared, "--previous-controller", SourceLanguage::Python), "the group's own code declares the argument");
         assert!(declares_required(declared, "--previous-controller", SourceLanguage::Python), "the group's own code requires it");
         assert!(!declares_optional_guard(declared, "--previous-controller", SourceLanguage::Python), "the group's own code does not guard it");
-        // The Python script the tree still carries declares its argument after
-        // this change, so the tree's own groups keep their contract.
-        let script = project_root().join("verification/history_migration.py");
-        if !script.is_file() {
-            eprintln!(
-                "not measured: the tree holds no verification/history_migration.py, so this row would measure a fixture instead of the tree's own script"
-            );
-            return;
+        // The tree's own group source declares the argument after this change,
+        // so the tree's own groups keep their contract. The native twin reads
+        // its own arguments, so the flag is read from the twin's own source
+        // rather than from the python spelling the retired leg used.
+        let native = project_root().join("verification/history_migration.rs");
+        assert!(native.is_file(), "the tree carries the native source of the group: {native:?}");
+        let text = read(&native);
+        assert!(native_accepts_flag(&text, "--previous-controller"), "the tree's own native source accepts the argument: {native:?}");
+        // The reference the twin is gated on is derived from the twin's own
+        // source, so the pre-flight names it when the tree holds none.
+        let inputs = required_inputs(root, &text, SourceLanguage::Rust);
+        assert!(inputs.iter().any(|input| input.kind == "path" && !input.present && input.detail.contains("--previous-controller reference at output/previous-controller")), "the tree's own native source is gated on the reference: {:?}", inputs.iter().map(|input| input.detail.clone()).collect::<Vec<String>>());
+    }
+
+    // A group's own source decides the leg that runs it. A native group whose
+    // twin has not been built is refused by name, and the runner never runs a
+    // native group under another language's script. This row measures the run
+    // itself, so it is the row that was red while the runner still fell back
+    // to python3 at a path that does not exist.
+    #[test]
+    fn a_native_group_without_its_twin_is_refused_and_never_runs_a_script() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        std::fs::write(root.join("verification/history_migration.rs"), "fn main(){}\n").unwrap();
+        let (code, stdout, _elapsed) = sweep_run(root, "history_migration", &[], 2);
+        let message = String::from_utf8_lossy(&stdout).to_string();
+        assert_eq!(code, -1, "the group was refused, not run: {message}");
+        assert!(message.contains("history_migration NOT EXECUTED"), "the refusal names the group: {message}");
+        assert!(message.contains("missing native twin: output/verification/history_migration"), "the refusal names the twin that is missing: {message}");
+        assert!(message.contains("bash tools/build-verification.sh"), "the refusal names the command that builds the twin: {message}");
+    }
+
+    // The built twin is the native group.
+    #[test]
+    fn a_native_group_with_its_twin_is_started_as_that_twin() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        std::fs::create_dir_all(root.join("output/verification")).unwrap();
+        std::fs::write(root.join("verification/history_migration.rs"), "fn main(){}\n").unwrap();
+        let twin = root.join("output/verification/history_migration");
+        std::fs::write(&twin, b"twin").unwrap();
+        match group_command(root, "history_migration", &[]) {
+            GroupLaunch::Ready(command) => {
+                assert_eq!(Path::new(command.get_program()), twin, "the twin is the group");
+            }
+            GroupLaunch::Refused(message) => panic!("a native group with its twin was refused: {message}"),
         }
-        let text = read(&script);
-        assert!(declares_argument(&text, "--previous-controller", SourceLanguage::Python), "the tree's own Python script still declares the argument: {script:?}");
-        assert!(declares_required(&text, "--previous-controller", SourceLanguage::Python), "the tree's own Python script still requires it: {script:?}");
+    }
+
+    // A group whose own source is a python leg still runs under python3, and
+    // the script it runs is the one that exists.
+    #[test]
+    fn a_python_group_is_started_with_python3_on_its_own_script() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        let script = root.join("verification/scene.py");
+        std::fs::write(&script, "print(1)\n").unwrap();
+        match group_command(root, "scene", &[]) {
+            GroupLaunch::Ready(command) => {
+                assert_eq!(command.get_program().to_string_lossy(), "python3", "a python group runs under python3");
+                let arguments: Vec<String> = command.get_args().map(|argument| argument.to_string_lossy().to_string()).collect();
+                assert_eq!(arguments, vec![script.display().to_string()], "the python group runs its own script");
+            }
+            GroupLaunch::Refused(message) => panic!("a python group was refused: {message}"),
+        }
+    }
+
+    // A group with no source at all is refused by name, and the refusal names
+    // the files that would have been its source.
+    #[test]
+    fn a_group_with_no_source_is_refused_by_name() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        match group_command(root, "history_migration", &[]) {
+            GroupLaunch::Refused(message) => {
+                assert!(message.contains("history_migration NOT EXECUTED"), "the refusal names the group: {message}");
+                assert!(message.contains("no group source: verification/history_migration.rs or verification/history_migration.py"), "the refusal names the sources it looked for: {message}");
+            }
+            GroupLaunch::Ready(command) => panic!("a group with no source was started: {}", command.get_program().to_string_lossy()),
+        }
     }
 
     // A token written in prose is not the group's grammar. The set of
