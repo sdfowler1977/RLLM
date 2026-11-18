@@ -1751,3 +1751,65 @@ Commit census: subject and body only, 0 anchored attribution trailers, 0
 `Signed-off-by`, 0 vendor or brand tokens; the whole-ancestry anchored census
 remains **177** for the trailer and **177** for the vendor token. `git config`
 untouched; nothing pushed; `git status --porcelain` stays at 28 paths.
+
+## The last two Python group legs retired — verification/ is Python-free in HEAD (2026-11-17)
+
+`c10adcd29478f976e26251b59778062d450ffbd7` lands the retirement as one rename-aware
+leg: 7 paths, **338 insertions and 78 deletions**, with `git show --numstat -M`
+printing `0 0` for both legs —
+
+```
+0  0  verification/history_migration.py => bloat/retired-python-legs/history_migration.py.leg
+0  0  verification/live_web.py => bloat/retired-python-legs/live_web.py.leg
+```
+
+so the move is content-preserving and nothing was deleted: the `.leg` pair keeps
+HEAD~1's bytes exactly (5,343 B `bccf36d2…`, 5,994 B `6152f050…`). The delivered
+ceilings are `VERIFICATION_PY_FILE_CEILING = 0` (`tools/package.rs:2817`) and
+`VERIFICATION_PY_LINE_CEILING = 0` (`:2818`), and HEAD now satisfies them:
+`git ls-tree -r HEAD -- verification/` holds **0** Python files, where HEAD~1 held
+both of these. The only tracked Python left anywhere in HEAD is `tools/package.py`
+(115 lines), which the census buckets under `tools` and the `TOOL_PYTHON` allowlist
+exempts with the role "publisher until a signed candidate is published with the
+native package binary" (`tools/package.rs:2802-2807`); no other bucket carries a line.
+
+Per-file shape, measured `git cat-file blob HEAD~1:<path>` against `HEAD:<path>`:
+`tools/package.rs` 5,498 -> 5,604 lines / 239,155 -> 245,002 bytes; `tools/harness.rs`
+4,325 -> 4,446 lines / 195,806 -> 203,029 bytes; `docs/AUDIT.md` 2,554 -> 2,560 lines;
+`verification/README.md` 55 lines (4,414 -> 4,430 bytes); `verification/live_web.rs`
+520 -> 547 lines / 16,092 -> 17,409 bytes.
+
+What the tree now does, as measured rather than read: the census refuses any
+verification Python above the 0/0 ceiling and its live-tree case is green at HEAD,
+red-able by planting one `.py` under `verification/`; the runner still starts a group
+under `python3` when that group's own source is a Python leg (`tools/harness.rs:1733`,
+asserted at `:3590`), but a group with no twin and no leg in the tree is refused with
+its own diagnostic instead of being started at a path the tree no longer holds; and
+the optional live leg's twin removes its scratch directories on the error path while
+the SIGKILL ceiling stays with the runner.
+
+Gate provenance, all three cards FINAL with their producing seats COMPLETED:
+`PYLEG_D1` (24,304 B, sha256 `aabacd70…`, PASS, `blocking_finding_ids` empty),
+`MANIFEST_A1` (32,856 B, `baa24020…`, PARTIAL, `blocking_finding_ids` empty),
+`COMBINED_A1` (61,724 B, `e4296581…`, PASS, `blocking_finding_ids` empty, C1-C5 PASS).
+The earlier codex re-audit `PYLEG_B1_RA1` (21,973 B, `32ccf823…`) still reads FAIL and
+is recorded as what it measured: the bare relocation with no census restatement in the
+build, whose tools census case panics at `walk missed verification/`. That is superseded
+on these bytes, not overturned.
+
+State the record must not blur. `PUBLICATION-MANIFEST.json` is untouched by this commit
+(`dcdd168a…`) and still pins the two retired paths; the publisher owns that file, its
+dry-run census counts absent pins instead of refusing, and whether the next successful
+publish rewrites those two entries into the `.leg` paths is being measured now.
+`verification/RESULTS.json` is unchanged (`065cb70f…`) and `output/harness sweep`
+remains coordinator-only and HELD, so no group log or delivered record moved with this
+commit. The core suite is still NOT_MEASURED: 21 rustc errors appear identically in a
+plain-HEAD control because the owner's SR1 work (13 `core/*.rs`, two `platform/` java,
+`verification/turn_background.rs`) is uncommitted in the worktree.
+
+Commit census: subject and body only, 0 anchored attribution trailers, 0
+`Signed-off-by`, 0 vendor or brand tokens; the whole-ancestry anchored census remains
+**177** for the trailer and **177** for the vendor token. `git config` untouched;
+nothing pushed; `git status --porcelain` was 35 paths before this leg and **31** after
+it — the seven install paths left the census and one collapsed `?? bloat/` line split
+into four because `bloat/retired-python-legs/` is now tracked.
