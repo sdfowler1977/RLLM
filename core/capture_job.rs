@@ -1,7 +1,7 @@
 //! One process-held approved rendering job; no disk or evidence-file authority.
 use super::*;
 use std::{sync::{Mutex,OnceLock,Arc,atomic::{AtomicBool,AtomicU64,AtomicUsize,Ordering}},time::{Instant,Duration},collections::BTreeMap};
-use std::os::unix::fs::MetadataExt;
+use crate::host_fs::MetadataExt;
 #[path="resource_url.rs"] mod resource_url;
 #[path="resource_plan.rs"] mod resource_plan;
 #[path="resource_session.rs"] mod resource_session;

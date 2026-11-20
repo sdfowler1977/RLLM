@@ -1,7 +1,8 @@
 //! Versioned local Agent2Agent JSON-RPC binding for owned workspace readers.
 //! Request data cannot choose a root, grant permissions, execute code or fetch URLs.
 use super::*;
-use std::{path::PathBuf,os::unix::fs::MetadataExt,sync::{Arc,Mutex,OnceLock,Condvar,atomic::{AtomicBool,AtomicU64,AtomicUsize,Ordering}},time::{Duration,Instant,SystemTime,UNIX_EPOCH}};
+use std::{path::PathBuf,sync::{Arc,Mutex,OnceLock,Condvar,atomic::{AtomicBool,AtomicU64,AtomicUsize,Ordering}},time::{Duration,Instant,SystemTime,UNIX_EPOCH}};
+use crate::host_fs::MetadataExt;
 
 const TASKS:usize=8;
 const REALMS:usize=4;

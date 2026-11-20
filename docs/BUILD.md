@@ -51,6 +51,21 @@ Reuse the current private signing directory for each build so subsequent APKs re
 
 The script reads the password as data, verifies the fixed certificate before compiling, checks that build inputs remain unchanged throughout compilation, signs, verifies v2/v3 signatures and the final certificate, then checks16KiB ZIP alignment. A source change stops that build before signing/delivery and requires a fresh build; no such source/checkpoint dependency is added to application execution. Verify ZIP CRC, both ABI libraries and ELF LOAD alignment as part of delivery. The source catalog records packaged file identities.
 
+## Windows ARM64 desktop
+
+On a Windows ARM64 host, `desktop.cmd` compiles `core/desktop.rs` with the host Rust compiler and the host linker, and writes `output/desktop/RLLM-Desktop.exe`. That executable is the same core as the Android package. Launching with no arguments opens the desktop window. `--stdio` keeps the line protocol, and `--check` runs the desktop self-test against a scratch vault, so it never touches saved history. Both `http` and `https` model endpoints work; HTTPS uses the Windows TLS stack (Schannel) with system certificate validation, in `core/secure.rs`.
+
+`desktop.cmd` signs the executable with the `RLLM` code-signing certificate from the current user's certificate store (SHA-256 file digest, RFC 3161 timestamp). The private key never leaves that store and is not part of the repository. When the certificate is absent the executable is left unsigned and the script says so. The public certificate is published with each release so a machine can trust the signer.
+
+## Android package from a Windows host
+
+`package.cmd` is the Windows route for the same APK `package.sh` builds. It uses the Windows builds of the pinned toolchain (`tooling/windows` for JDK 17, build-tools 35 and NDK r28c; `tooling/platform/android-35` for `android.jar`) and the private signing directory `private/`. It performs the `package.sh` steps in order: it builds and tests the release tools, reads the release floor and refuses a version code at or below it, verifies the fixed certificate before compiling, renders the variant manifest with `tools/manifest.rs` (identical output to the `sed` rendering in `package.sh`), compiles both ABI libraries, links resources, compiles and dexes the Java sources as UTF-8, aligns, refuses if build inputs changed during compilation, signs v2/v3, verifies the final certificate and 16 KiB alignment, and only then advances the release floor.
+
+```bat
+set CLIENT_VERSION_CODE=<a code above the release floor>
+package.cmd
+```
+
 ## Standalone target
 
 ```bash

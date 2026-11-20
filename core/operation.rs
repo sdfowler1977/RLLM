@@ -2,7 +2,7 @@
 //! Tokens describe an outstanding operation, never a grant of tool authority.
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::os::unix::fs::MetadataExt;
+use crate::host_fs::MetadataExt;
 use std::sync::{Mutex, OnceLock};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};

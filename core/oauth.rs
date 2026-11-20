@@ -16,7 +16,7 @@ static FLOWS:OnceLock<Mutex<BTreeMap<String,Flow>>>=OnceLock::new();
 static RENEWALS:OnceLock<Mutex<BTreeMap<String,(String,Instant)>>>=OnceLock::new();
 fn flows()->&'static Mutex<BTreeMap<String,Flow>>{FLOWS.get_or_init(||Mutex::new(BTreeMap::new()))}
 fn epoch()->Result<u64>{SystemTime::now().duration_since(UNIX_EPOCH).map(|d|d.as_secs()).map_err(|_|"System clock is before the supported epoch".into())}
-fn secret()->Result<String>{let mut bytes=[0u8;32];std::fs::File::open("/dev/urandom").and_then(|mut f|f.read_exact(&mut bytes)).map_err(|_|"Secure authorization randomness is unavailable")?;Ok(network::b64(&bytes).trim_end_matches('=').replace('+',"-").replace('/',"_"))}
+fn secret()->Result<String>{let bytes=crate::state_crypto::random_bytes(32).map_err(|_| "Secure authorization randomness is unavailable".to_string())?;Ok(network::b64(&bytes).trim_end_matches('=').replace('+',"-").replace('/',"_"))}
 fn challenge(verifier:&str)->Result<String>{let hex=harness_rules::sha256(verifier.as_bytes());let bytes=(0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16).map_err(|_|"Authorization digest failed".to_string())).collect::<Result<Vec<_>>>()?;Ok(network::b64(&bytes).trim_end_matches('=').replace('+',"-").replace('/',"_"))}
 fn binding(p:&Json)->String{harness_rules::digest(&obj(vec![("config",get(p,"oauth").clone()),("endpoint",get(p,"endpoint").clone()),("protocol",get(p,"protocol").clone())]))}
 fn token_hash(tokens:&Json)->String{let mut t=tokens.clone();if let Obj(m)=&mut t{m.remove("refresh_uncertain");}harness_rules::digest(&t)}

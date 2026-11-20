@@ -1,4 +1,5 @@
 mod application;
+mod host_fs;
 mod self_build;
 mod rrsi;
 mod archive;

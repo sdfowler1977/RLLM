@@ -1,7 +1,7 @@
 //! Complete held-file observations and streaming reproduction of observed bytes.
 use super::*;
 use super::super::js_evidence;
-use std::os::{fd::{AsRawFd,FromRawFd},unix::{ffi::OsStrExt,fs::{MetadataExt,OpenOptionsExt}}};
+use crate::host_fs::{MetadataExt,OpenOptionsExt};
 use std::io::{Seek,SeekFrom};
 use std::time::Instant;
 #[path="clean_room.rs"] mod clean_room;
@@ -9,13 +9,13 @@ const CHUNK:usize=65536;
 const METHOD:&str="SHA-256 of every byte read from the complete held regular file";
 fn u64_value(v:&Json)->Result<u64>{match v{Num(s)=>s.parse().map_err(|_|"Invalid complete-file byte count".into()),_=>Err("Complete-file byte count must be an integer".into())}}
 fn hex(v:&[u8])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
-pub(super) fn normalize(value:&str)->Result<Vec<u8>>{let mut p=PathBuf::new();for c in Path::new(value).components(){match c{std::path::Component::Normal(n)=>p.push(n),std::path::Component::CurDir=>{},_=>return Err("Selected file must stay within the workspace".into())}}let raw=p.as_os_str().as_bytes().to_vec();reconstruction::raw(&hex(&raw))?;Ok(raw)}
+pub(super) fn normalize(value:&str)->Result<Vec<u8>>{let mut p=PathBuf::new();for c in Path::new(value).components(){match c{std::path::Component::Normal(n)=>p.push(n),std::path::Component::CurDir=>{},_=>return Err("Selected file must stay within the workspace".into())}}let raw=p.as_os_str().as_encoded_bytes().to_vec();reconstruction::raw(&hex(&raw))?;Ok(raw)}
 struct Guard<'a>{access:&'a operation::InspectionAccess,policy:String,tool:String,args:Json}
 impl<'a> Guard<'a>{
  fn new(tool:&str,args:&Json,access:&'a operation::InspectionAccess)->Result<Self>{let p=harness_rules::gateway_current(&Null)?;harness_rules::gateway_check(&p,tool,args)?;Ok(Self{access,policy:harness_rules::digest(&p),tool:tool.into(),args:args.clone()})}
  fn check(&self)->Result<()>{if self.access.cancelled(){return Err("Complete-file operation cancelled; no automatic replay".into());}if Instant::now()>=self.access.deadline{return Err("Complete-file operation deadline expired; no completed evidence".into());}let p=harness_rules::gateway_current(&Null)?;if harness_rules::digest(&p)!=self.policy{return Err("Current rules changed during the complete-file operation".into());}harness_rules::gateway_check(&p,&self.tool,&self.args)?;harness_rules::gateway_check(&p,"read",&obj(vec![("path",get(&self.args,"path").clone())]))?;if self.tool=="compare"{harness_rules::gateway_check(&p,"read",&obj(vec![("path",get(&self.args,"other").clone())]))?;}if self.tool=="reconstruct"{harness_rules::gateway_check(&p,"write",&obj(vec![("path",get(&self.args,"output").clone())]))?;}Ok(())}
 }
-fn open_at(parent:&fs::File,name:&[u8],directory:bool)->Result<fs::File>{unsafe extern "C"{fn openat(fd:i32,name:*const std::ffi::c_char,flags:i32,...)->i32;}let name=std::ffi::CString::new(name).map_err(|_|"Invalid selected file component")?;let fd=unsafe{openat(parent.as_raw_fd(),name.as_ptr(),0x80000|0x20000|0x800|if directory{0x10000}else{0})};if fd<0{return Err(format!("Cannot open held selected file: {}",std::io::Error::last_os_error()));}Ok(unsafe{fs::File::from_raw_fd(fd)})}
+fn open_at(parent:&fs::File,name:&[u8],directory:bool)->Result<fs::File>{let flags=0x80000|0x20000|0x800|if directory{0x10000}else{0};crate::host_fs::open_at(parent,name,flags).map_err(|e|format!("Cannot open held selected file: {e}"))}
 struct Held{root_path:PathBuf,root_identity:Json,components:Vec<Vec<u8>>,bindings:Vec<(u64,u64)>,handles:Vec<fs::File>,path:Vec<u8>,identity:Json}
 impl Held{
  fn open(root:&Path,path:Vec<u8>,access:&operation::InspectionAccess)->Result<Self>{
@@ -96,16 +96,12 @@ pub(super) fn is_complete(node:&Json)->bool{text(get(node,"sample"),"method")==M
 pub(super) fn reconstruct(root:&Path,v:&Json,access:&operation::InspectionAccess)->Result<String>{if !access.read{return Err("Streaming reconstruction requires read permission".into());}if access.budget<2*CHUNK+32768{return Err("Current response allowance cannot admit streaming copy/readback buffers".into());}let args=get(v,"args");let bound=get(v,"reconstruction_source");let node=get(bound,"node");let g=Guard::new("reconstruct",args,access)?;if g.policy!=text(bound,"policy"){return Err("Reconstruction policy changed since review".into());}g.check()?;let mut held=Held::open(root,reconstruction::raw(&text(node,"path_hex"))?,access)?;let sample=get(node,"sample");if !is_complete(node)||get(sample,"complete_file")!=&Bool(true)||get(sample,"offset")!=&Num("0".into())||held.identity!=*get(node,"identity")||u64_value(get(sample,"length"))?!=u64_value(get(&held.identity,"size"))?{return Err("Fresh source does not match the complete observed file".into());}
  let(n,hash)=held.scan(&g,|_|Ok(()))?;if hash!=text(sample,"sha256"){return Err("Fresh entire source digest differs; no output created".into());}held.rewind()?;g.check()?;held.binding()?;
  if text(args,"mode")=="clean_room"{return write_clean_room(&mut held,&g,args,bound,n,&hash);}
- let output=text(args,"output");unsafe extern "C"{fn openat(fd:i32,path:*const std::ffi::c_char,flags:i32,...)->i32;}let name=std::ffi::CString::new(output.as_bytes()).map_err(|_|"Invalid output name")?;let fd=unsafe{openat(held.handles[0].as_raw_fd(),name.as_ptr(),0x80000|0x20000|0x80|0x40|2,0o600u32)};if fd<0{return Err(format!("Cannot create new streaming output: {}",std::io::Error::last_os_error()));}let mut target=unsafe{fs::File::from_raw_fd(fd)};
+ let output=text(args,"output");let mut target=create_exclusive(&held.handles[0],&output)?;
  let checked=(||->Result<()>{let(written,second)=held.scan(&g,|chunk|{g.check()?;target.write_all(chunk).map_err(|e|e.to_string())?;g.check()})?;if written!=n||second!=hash{return Err("Selected source changed between verification and copy".into());}g.check()?;target.sync_all().map_err(|e|e.to_string())?;g.check()?;let before=reconstruction::identity(&target.metadata().map_err(|e|e.to_string())?);held.rewind()?;target.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;let mut buffer=[0u8;CHUNK];let(read,third)=held.scan(&g,|chunk|{g.check()?;target.read_exact(&mut buffer[..chunk.len()]).map_err(|e|e.to_string())?;g.check()?;if chunk!=&buffer[..chunk.len()]{return Err("Created file readback differs from the source".into());}Ok(())})?;let mut end=[0u8;1];if target.read(&mut end).map_err(|e|e.to_string())?!=0||read!=n||third!=hash||before!=reconstruction::identity(&target.metadata().map_err(|e|e.to_string())?){return Err("Created file changed during readback".into());}let named=open_at(&held.handles[0],output.as_bytes(),false)?;if before!=reconstruction::identity(&named.metadata().map_err(|e|e.to_string())?){return Err("Created output name binding changed".into());}held.binding()?;g.check()?;Ok(())})();checked.map_err(|e|format!("New file {output} retained but streaming reconstruction unconfirmed: {e}; no automatic replay"))?;
  Ok(format!("Streaming reconstruction created new file {output}; all {n} bytes read back exactly in 64 KiB chunks. SHA-256 {hash}. Complete source record {}, snapshot {}, node {}, raw path {}. Entire fresh source was verified before creation and again across copy/readback. This reproduces observed bytes, not inferred behavior.",text(bound,"record"),get(bound,"snapshot").string(),get(node,"id").string(),text(node,"path_hex")))}
 fn shown_number(v:&Json)->String{match v{Num(n)|Str(n)=>n.clone(),other=>other.string()}}
 fn create_exclusive(root:&fs::File,output:&str)->Result<fs::File>{
- unsafe extern "C"{fn openat(fd:i32,path:*const std::ffi::c_char,flags:i32,...)->i32;}
- let name=std::ffi::CString::new(output.as_bytes()).map_err(|_|"Invalid output name")?;
- let fd=unsafe{openat(root.as_raw_fd(),name.as_ptr(),0x80000|0x20000|0x80|0x40|2,0o600u32)};
- if fd<0{return Err(format!("Cannot create new streaming output: {}",std::io::Error::last_os_error()));}
- Ok(unsafe{fs::File::from_raw_fd(fd)})
+ crate::host_fs::open_at(root,output.as_bytes(),0x80000|0x20000|0x80|0x40|2).map_err(|e|format!("Cannot create new streaming output: {e}"))
 }
 fn write_clean_room(held:&mut Held,g:&Guard,args:&Json,bound:&Json,n:u64,hash:&str)->Result<String>{
  if n>clean_room::SUBJECT_BYTE_CAP as u64{return Err(format!("Refusal: {}. {n} exceeds {}. No output was written.",clean_room::SUBJECT_BYTE_NAME,clean_room::SUBJECT_BYTE_CAP));}

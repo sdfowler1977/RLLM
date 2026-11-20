@@ -1,6 +1,6 @@
 //! Workspace binding for the original static capture engine.
 use super::*;
-use std::os::unix::fs::{OpenOptionsExt,MetadataExt};
+use crate::host_fs::{OpenOptionsExt,MetadataExt};
 fn read_held_using(path:&Path,limit:usize,cancelled:&impl Fn()->bool)->Result<Vec<u8>>{
  let mut file=fs::OpenOptions::new().read(true).custom_flags(0x800|0x20000).open(path).map_err(|e|format!("Cannot open capture input: {e}"))?;
  let before=file.metadata().map_err(|e|e.to_string())?;if !before.is_file()||before.len()>limit as u64{return Err("Capture input must be a regular file within its size bound".into());}

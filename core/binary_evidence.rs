@@ -1,6 +1,6 @@
 //! Source-bound retained encoding facts; interpretations never become policy.
 use super::*;
-use std::os::unix::fs::MetadataExt;
+use crate::host_fs::MetadataExt;
 const CAP:usize=256*1024;
 const REPORT_METHOD:&str="Retained binary inspection report UTF-8";
 const IR_METHOD:&str="Retained AArch64 encoding and local IR UTF-8";

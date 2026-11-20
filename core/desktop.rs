@@ -1,6 +1,6 @@
-//! Linux desktop host: the same application core, a loopback web surface, and
-//! the platform work the Android Activity performs natively. All product logic
-//! stays in the core; this file owns only the window, the transport and the key.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+//! Desktop host: the same application core, the window, the transport and the key.
+//! Product logic stays in the core. This file owns the window and the platform work.
 include!("lib.rs");
 
 use std::io::{Read, Write};
@@ -85,11 +85,15 @@ fn option(args: &[String], flag: &str) -> Option<String> {
 }
 
 fn data_directory() -> PathBuf {
-    let base = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        format!("{home}/.local/share")
-    });
-    PathBuf::from(base).join("rllm")
+    if let Ok(base) = std::env::var("XDG_DATA_HOME") {
+        return PathBuf::from(base).join("rllm");
+    }
+    #[cfg(windows)]
+    if let Ok(base) = std::env::var("LOCALAPPDATA") {
+        return PathBuf::from(base).join("rllm");
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join(".local").join("share").join("rllm")
 }
 
 fn read_key(path: &Path) -> Result<[u8; 32]> {
@@ -105,7 +109,7 @@ fn read_key(path: &Path) -> Result<[u8; 32]> {
         std::fs::create_dir_all(parent).map_err(|error| format!("State directory: {error}"))?;
     }
     let fresh = state_crypto::random_bytes(32)?;
-    use std::os::unix::fs::OpenOptionsExt;
+    use crate::host_fs::OpenOptionsExt;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -146,7 +150,7 @@ impl Vault {
             std::fs::create_dir_all(parent).map_err(|error| format!("State directory: {error}"))?;
         }
         let sealed = state_crypto::seal(state.string().as_bytes(), &self.key)?;
-        use std::os::unix::fs::OpenOptionsExt;
+        use crate::host_fs::OpenOptionsExt;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -197,10 +201,10 @@ fn write_request(sink: &mut impl Write, effect: &Json) -> Result<()> {
     }
 }
 
-/// Plain HTTP to the numeric address the core already resolved. TLS is handed to
+/// HTTP to the address the core named. TLS is handed to
 /// the operating system's crypto stack, exactly as the Android layer hands it to
 /// the platform's own HTTPS client; the core still validates every response byte.
-fn exchange(effect: &Json) -> Result<Vec<u8>> {
+fn exchange(effect: &Json, heard: &mut dyn FnMut(&str, u128)) -> Result<Vec<u8>> {
     let host = text(effect, "host");
     let port = number(effect, "port");
     if host.is_empty() || port == 0 || port > 65535 {
@@ -210,38 +214,158 @@ fn exchange(effect: &Json) -> Result<Vec<u8>> {
     let connect = host.replace('%', "");
     let display = if connect.contains(':') { format!("[{connect}]") } else { connect.clone() };
     if boolean(effect, "tls") {
-        let peer = format!("{display}:{port}");
-        let mut child = Command::new("openssl")
-            .args(["s_client", "-connect", &peer, "-servername", &connect, "-quiet", "-brief"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|_| "TLS needs the openssl client; use an http:// endpoint otherwise".to_string())?;
-        let mut stdin = child.stdin.take().ok_or_else(|| "TLS stdin closed".to_string())?;
-        write_request(&mut stdin, effect)?;
-        drop(stdin);
-        let mut response = Vec::new();
-        child
-            .stdout
-            .take()
-            .ok_or_else(|| "TLS stdout closed".to_string())?
-            .read_to_end(&mut response)
-            .map_err(|_| "TLS read failed".to_string())?;
-        let status = child.wait().map_err(|_| "TLS client did not finish".to_string())?;
-        if response.is_empty() {
-            return Err(format!("TLS peer returned nothing (status {status})"));
+        #[cfg(windows)]
+        {
+            // The certificate is checked against the name the person entered,
+            // as the Android layer does with tls_host.
+            let named = if text(effect, "tls_host").is_empty() { connect.clone() } else { text(effect, "tls_host") };
+            let named = named.trim_start_matches('[').trim_end_matches(']').to_string();
+            let raw = TcpStream::connect((display.as_str(), port as u16)).map_err(|error| format!("{host}:{port}: {error}"))?;
+            raw.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
+            let mut link = secure::Secure::open(raw, &named)?;
+            link.set_read_timeout(Some(std::time::Duration::from_millis(200)));
+            return converse(&mut link, effect, heard);
         }
-        return Ok(response);
+        #[cfg(not(windows))]
+        {
+            let peer = format!("{display}:{port}");
+            let mut child = Command::new("openssl")
+                .args(["s_client", "-connect", &peer, "-servername", &connect, "-quiet", "-brief"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|_| "TLS needs the openssl client; use an http:// endpoint otherwise".to_string())?;
+            let mut stdin = child.stdin.take().ok_or_else(|| "TLS stdin closed".to_string())?;
+            write_request(&mut stdin, effect)?;
+            drop(stdin);
+            let mut response = Vec::new();
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| "TLS stdout closed".to_string())?
+                .read_to_end(&mut response)
+                .map_err(|_| "TLS read failed".to_string())?;
+            let status = child.wait().map_err(|_| "TLS client did not finish".to_string())?;
+            if response.is_empty() {
+                return Err(format!("TLS peer returned nothing (status {status})"));
+            }
+            return Ok(response);
+        }
     }
     let address = (display.as_str(), port as u16);
     let mut stream = TcpStream::connect(address).map_err(|error| format!("{host}:{port}: {error}"))?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(120))).ok();
-    write_request(&mut stream, effect)?;
+    // Short waits keep a cancellation responsive; the silence budget is counted
+    // across them, so a slow model is not cut off between tokens.
+    stream.set_read_timeout(Some(std::time::Duration::from_millis(200))).ok();
+    converse(&mut stream, effect, heard)
+}
+
+/// Sends the request the core built and collects the reply, whole or streamed.
+fn converse<S: Read + Write>(stream: &mut S, effect: &Json, heard: &mut dyn FnMut(&str, u128)) -> Result<Vec<u8>> {
+    write_request(stream, effect)?;
     stream.flush().ok();
+    if boolean(effect, "stream") {
+        return read_stream(stream, effect, heard);
+    }
     let mut response = Vec::new();
-    stream.read_to_end(&mut response).map_err(|_| "peer closed before finishing".to_string())?;
+    let mut chunk = [0u8; 8192];
+    loop {
+        match wait_read(stream, &mut chunk)? {
+            0 => break,
+            read => response.extend_from_slice(&chunk[..read]),
+        }
+    }
     Ok(response)
+}
+
+/// Set by the window when the user cancels; the transport stops at its next wait.
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const CANCELLED: &str = "Cancelled";
+const SILENCE_MS: u128 = 120_000;
+
+fn wait_read(stream: &mut dyn Read, chunk: &mut [u8]) -> Result<usize> {
+    let quiet = std::time::Instant::now();
+    loop {
+        if CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(CANCELLED.into());
+        }
+        match stream.read(chunk) {
+            Ok(read) => return Ok(read),
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted) => {
+                if quiet.elapsed().as_millis() >= SILENCE_MS {
+                    return Err("the peer sent nothing for two minutes".into());
+                }
+            }
+            Err(_) => return Err("peer closed before finishing".into()),
+        }
+    }
+}
+
+fn core_call(request: Json) -> Result<Json> {
+    let answer = parse(&envelope(&request.string()))?;
+    if let Ok(error) = answer.get("error") {
+        return Err(error.text().unwrap_or("the core rejected the request").to_string());
+    }
+    Ok(answer.get("value")?.clone())
+}
+
+/// An incremental reply. The core owns the framing and the event format, as it
+/// does on Android: the host hands it the bytes as they arrive and reports the
+/// text decoded so far.
+fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str, u128)) -> Result<Vec<u8>> {
+    let protocol = if text(effect, "stream_protocol").is_empty() { "local".to_string() } else { text(effect, "stream_protocol") };
+    let mut opening = obj(vec![("op", s("stream_open")), ("protocol", s(&protocol))]);
+    if get(effect, "mcp_control") != &Null {
+        put(&mut opening, "mcp_control", get(effect, "mcp_control").clone());
+    }
+    let id = core_call(opening)?;
+    let limit = match number(effect, "limit") {
+        value if value > 0 => (value as usize).min(2 * 1024 * 1024),
+        _ => 1024 * 1024,
+    };
+    let started = std::time::Instant::now();
+    let outcome = (|| -> Result<Vec<u8>> {
+        let mut said = String::new();
+        let mut published = 0usize;
+        let mut previous = std::time::Instant::now();
+        let mut total = 0usize;
+        let mut chunk = [0u8; 8192];
+        let mut ended = false;
+        loop {
+            let read = wait_read(stream, &mut chunk)?;
+            if read == 0 {
+                ended = true;
+                break;
+            }
+            total += read;
+            if total > limit {
+                return Err("Stream exceeds the current response memory budget".into());
+            }
+            let part = core_call(obj(vec![("op", s("stream_feed")), ("id", id.clone()), ("data", s(&network::b64(&chunk[..read])))]))?;
+            said.push_str(&text(&part, "delta"));
+            if get(&part, "error") != &Null {
+                return Err(text(&part, "error"));
+            }
+            if matches!(get(&part, "controls"), Arr(items) if !items.is_empty()) {
+                return Err("Server control requests inside a stream are not available on this host yet".into());
+            }
+            if said.len() != published && previous.elapsed().as_millis() >= 120 {
+                heard(&said, started.elapsed().as_millis());
+                published = said.len();
+                previous = std::time::Instant::now();
+            }
+            if boolean(&part, "complete") {
+                break;
+            }
+        }
+        let finished = core_call(obj(vec![("op", s("stream_finish")), ("id", id.clone()), ("eof", Bool(ended))]))?;
+        network::unbase64(&text(&finished, "data"))
+    })();
+    if outcome.is_err() {
+        let _ = core_call(obj(vec![("op", s("stream_close")), ("id", id)]));
+    }
+    outcome
 }
 
 /// Microphone bytes for the core's own utterance segmenter. The host starts the
@@ -260,6 +384,7 @@ impl Recorder {
             let file = std::fs::File::open(&path).map_err(|error| format!("Microphone source: {error}"))?;
             return Ok(Recorder { stream: Box::new(file), child: None, header_checked: false, pending: Vec::new() });
         }
+        #[cfg(not(windows))]
         for (program, arguments) in [
             ("pw-record", vec!["--rate", "16000", "--channels", "1", "--format", "s16", "-"]),
             ("arecord", vec!["-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw"]),
@@ -275,7 +400,7 @@ impl Recorder {
                 return Ok(Recorder { stream: Box::new(stream), child: Some(child), header_checked: false, pending: Vec::new() });
             }
         }
-        Err("no microphone recorder is available on the Linux host".into())
+        Err("no microphone recorder is available on this host".into())
     }
 
     /// A recorder writing to a pipe may frame its output as WAVE; the core is fed
@@ -416,6 +541,12 @@ fn core_event(state: &Json, root: &str, action: &str, inputs: &Json) -> Result<J
 
 /// Drive one user action to rest, executing each effect the core returns.
 fn advance(state: &mut Json, root: &str, action: &str, inputs: Json) -> Result<Json> {
+    advance_shown(state, root, action, inputs, &mut |_| {})
+}
+
+/// The same, showing every surface the core renders on the way: the turn as it
+/// is sent, and the reply as it arrives.
+fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown: &mut dyn FnMut(&Json)) -> Result<Json> {
     let mut action = action.to_string();
     let mut inputs = inputs;
     for _ in 0..EFFECT_HOPS {
@@ -425,10 +556,29 @@ fn advance(state: &mut Json, root: &str, action: &str, inputs: Json) -> Result<J
         if effect == Null {
             return Ok(reply.get("ui")?.clone());
         }
+        shown(reply.get("ui")?);
         match text(&effect, "kind").as_str() {
             "network" => {
-                let (next, callback) = match exchange(&effect) {
+                let ticket = text(&effect, "model_ticket");
+                let started = std::time::Instant::now();
+                let outcome = exchange(&effect, &mut |said, elapsed| {
+                    if ticket.is_empty() {
+                        return;
+                    }
+                    let progress = obj(vec![("stream_text", s(said)), ("elapsed_ms", Num(elapsed.to_string())), ("model_ticket", s(&ticket))]);
+                    if let Ok(reply) = core_event(state, root, "model_progress", &progress) {
+                        if let (Ok(next), Ok(ui)) = (reply.get("state"), reply.get("ui")) {
+                            *state = next.clone();
+                            shown(ui);
+                        }
+                    }
+                });
+                let (next, callback) = match outcome {
                     Ok(response) => ("network_result", callback_inputs(&effect, state, &response, None)),
+                    Err(error) if error == CANCELLED => {
+                        CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
+                        ("cancel", obj(vec![("elapsed_ms", Num(started.elapsed().as_millis().to_string()))]))
+                    }
                     Err(error) => ("failure", callback_inputs(&effect, state, &[], Some(error))),
                 };
                 action = next.into();
@@ -491,13 +641,108 @@ fn advance(state: &mut Json, root: &str, action: &str, inputs: Json) -> Result<J
                     }
                 }
             }
+            "cancel" => {
+                // The request was dropped the moment the person cancelled; all
+                // that is left is to stop the core's own tool runner.
+                let _ = core_call(obj(vec![("op", s("cancel_tool"))]));
+                return Ok(reply.get("ui")?.clone());
+            }
+            "document" if picker() => {
+                let (next, callback) = attachment(get(&effect, "document_ticket"));
+                action = next.into();
+                inputs = callback;
+            }
+            "conversation_document" if picker() => match choose_file("Import conversation backup", Files::Backup).and_then(|chosen| chosen.map(|path| read_text(&path, 1024 * 1024)).transpose()) {
+                Ok(Some(content)) => {
+                    action = "conversation_review".into();
+                    inputs = obj(vec![("content", s(&content))]);
+                }
+                Ok(None) => return Ok(reply.get("ui")?.clone()),
+                Err(error) => {
+                    action = "failure".into();
+                    inputs = obj(vec![("error", s(&error))]);
+                }
+            },
+            "document_export" => {
+                // The snapshot is sealed to disk first, so choosing where it
+                // goes can be cancelled or retried without losing it.
+                let ticket = get(&effect, "ticket").clone();
+                let content = text(&effect, "content");
+                match export_stage(&effect, content.as_bytes()) {
+                    Ok(()) => {
+                        action = "export_staged".into();
+                        inputs = obj(vec![("ticket", ticket), ("bytes", Num(content.len().to_string()))]);
+                    }
+                    Err(error) => {
+                        action = "export_stage_failed".into();
+                        inputs = obj(vec![("ticket", ticket), ("error", s(&error))]);
+                    }
+                }
+            }
+            "export_picker" => {
+                let ticket = get(&effect, "ticket").clone();
+                let written = (|| -> Result<()> {
+                    let (name, bytes) = export_load(&text(&effect, "ticket"))?;
+                    let path = save_file("Save export", &name)?.ok_or_else(|| "Destination selection cancelled".to_string())?;
+                    let reply = core_event(state, root, "export_started", &obj(vec![("ticket", ticket.clone())]))?;
+                    *state = reply.get("state")?.clone();
+                    shown(reply.get("ui")?);
+                    let pending = get(state, "export_pending");
+                    if text(pending, "phase") != "writing" || get(pending, "ticket") != &ticket {
+                        return Err("The export changed before it was written; no bytes were written".into());
+                    }
+                    std::fs::write(&path, &bytes).map_err(|error| format!("The file could not be written: {error}"))?;
+                    if std::fs::read(&path).map_err(|error| format!("The file could not be read back: {error}"))? != bytes {
+                        return Err("Document readback differs from requested bytes".into());
+                    }
+                    export_clear(&text(&effect, "ticket"))
+                })();
+                match written {
+                    Ok(()) => {
+                        action = "export_done".into();
+                        inputs = obj(vec![("ticket", ticket)]);
+                    }
+                    Err(error) => {
+                        action = "export_failed".into();
+                        inputs = obj(vec![("ticket", ticket), ("error", s(&error))]);
+                    }
+                }
+            }
+            "export_discard" => {
+                let ticket = get(&effect, "ticket").clone();
+                match export_clear(&text(&effect, "ticket")) {
+                    Ok(()) => {
+                        action = "export_discarded".into();
+                        inputs = obj(vec![("ticket", ticket)]);
+                    }
+                    Err(error) => {
+                        action = "export_failed".into();
+                        inputs = obj(vec![("ticket", ticket), ("error", s(&error))]);
+                    }
+                }
+            }
+            // A desktop export is written in one step, so nothing is in flight
+            // to stop by the time a cancellation is asked for.
+            "export_cancel" => return Ok(reply.get("ui")?.clone()),
+            "wallpaper_picker" if picker() => match choose_file("Choose a wallpaper image", Files::Picture) {
+                Ok(Some(path)) => {
+                    action = "wallpaper_result".into();
+                    inputs = obj(vec![("uri", s(&format!("file:///{}", path.replace('\\', "/"))))]);
+                }
+                // Nothing chosen: the settings dialog simply stays as it was.
+                Ok(None) => return Ok(reply.get("ui")?.clone()),
+                Err(error) => {
+                    action = "failure".into();
+                    inputs = obj(vec![("error", s(&error))]);
+                }
+            },
             other => {
                 // The core scopes a refused platform service to that operation, so
                 // a service with no Linux binding yet cannot strand the app.
                 action = "failure".into();
                 inputs = obj(vec![
                     ("purpose", get(&effect, "purpose").clone()),
-                    ("error", s(&format!("{other} is not available on the Linux host yet"))),
+                    ("error", s(&format!("{other} is not available on this host yet"))),
                 ]);
             }
         }
@@ -505,11 +750,180 @@ fn advance(state: &mut Json, root: &str, action: &str, inputs: Json) -> Result<J
     Err("The core kept requesting platform work without settling".into())
 }
 
+/// Whether this run has a window that can ask the person to choose a file.
+fn picker() -> bool {
+    #[cfg(windows)]
+    return window::showing();
+    #[cfg(not(windows))]
+    return false;
+}
+
+/// What a file dialog offers. The window has its own copy of this list.
+#[cfg(windows)]
+use window::Files;
+#[cfg(not(windows))]
+#[allow(dead_code)]
+enum Files {
+    Attachment,
+    Picture,
+    Backup,
+}
+
+/// Asks for one file. `Ok(None)` means the person closed the dialog.
+fn choose_file(title: &str, files: Files) -> Result<Option<String>> {
+    #[cfg(windows)]
+    return window::choose(title, files);
+    #[cfg(not(windows))]
+    {
+        let _ = (title, files);
+        Err("Choosing a file is not available on this host yet".into())
+    }
+}
+
+/// Asks where to save a file. `Ok(None)` means the person closed the dialog.
+fn save_file(title: &str, name: &str) -> Result<Option<String>> {
+    #[cfg(windows)]
+    return window::save(title, name);
+    #[cfg(not(windows))]
+    {
+        let _ = (title, name);
+        Err("Choosing a destination is not available on this host yet".into())
+    }
+}
+
+/// A chosen text file, refused when it is too large or not UTF-8 text.
+fn read_text(path: &str, limit: u64) -> Result<String> {
+    let size = std::fs::metadata(path).map_err(|error| format!("The file could not be opened: {error}"))?.len();
+    if size > limit {
+        return Err(format!("The selected file exceeds {} MiB", limit / (1024 * 1024)));
+    }
+    let bytes = std::fs::read(path).map_err(|error| format!("The file could not be read: {error}"))?;
+    match String::from_utf8(bytes) {
+        Ok(content) if !content.contains('\0') => Ok(content),
+        _ => Err("The selected file is not UTF-8 text".into()),
+    }
+}
+
+/// Where a prepared export waits, sealed with the state key, until the person
+/// chooses its destination: the file and the key that seals it.
+static EXPORT_STORE: std::sync::OnceLock<(PathBuf, [u8; 32])> = std::sync::OnceLock::new();
+
+fn export_store() -> Result<&'static (PathBuf, [u8; 32])> {
+    EXPORT_STORE.get().ok_or_else(|| "The export store is not open".to_string())
+}
+
+fn export_stage(effect: &Json, bytes: &[u8]) -> Result<()> {
+    let (path, key) = export_store()?;
+    let record = obj(vec![
+        ("ticket", get(effect, "ticket").clone()),
+        ("name", get(effect, "name").clone()),
+        ("mime", get(effect, "mime").clone()),
+        ("data", s(&network::b64(bytes))),
+    ]);
+    let sealed = state_crypto::seal(record.string().as_bytes(), key)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| format!("Export snapshot: {error}"))?;
+    }
+    std::fs::write(path, sealed).map_err(|error| format!("Export snapshot: {error}"))
+}
+
+/// The staged export for a ticket: its suggested file name and its bytes.
+fn export_load(ticket: &str) -> Result<(String, Vec<u8>)> {
+    let (path, key) = export_store()?;
+    let sealed = std::fs::read(path).map_err(|_| "Saved snapshot is unavailable or changed".to_string())?;
+    let plain = String::from_utf8(state_crypto::open(&sealed, key)?).map_err(|_| "Saved snapshot is not UTF-8".to_string())?;
+    let record = parse(&plain)?;
+    if ticket.is_empty() || text(&record, "ticket") != ticket {
+        return Err("Saved snapshot is unavailable or changed".into());
+    }
+    Ok((text(&record, "name"), network::unbase64(&text(&record, "data"))?))
+}
+
+/// Removes the staged export. Another ticket's snapshot is left alone.
+fn export_clear(ticket: &str) -> Result<()> {
+    let (path, _) = export_store()?;
+    match export_load(ticket) {
+        Ok(_) => std::fs::remove_file(path).map_err(|error| format!("Export snapshot: {error}")),
+        Err(_) if !path.exists() => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+/// The file the person attaches, as the action and inputs the core expects:
+/// a PNG or JPEG becomes an image attachment, anything else must be UTF-8 text
+/// and is added to the draft. Limits match the phone: 2 MiB read, 1 MiB text.
+fn attachment(ticket: &Json) -> (&'static str, Json) {
+    let failed = |error: String| ("document_failure", obj(vec![("document_ticket", ticket.clone()), ("error", s(&error))]));
+    let path = match choose_file("Attach image or file", Files::Attachment) {
+        Ok(Some(path)) => path,
+        Ok(None) => return ("document_cancel", obj(vec![("document_ticket", ticket.clone())])),
+        Err(error) => return failed(error),
+    };
+    let size = match std::fs::metadata(&path) {
+        Ok(found) if found.is_file() => found.len(),
+        Ok(_) => return failed("Select a file, not a folder".into()),
+        Err(error) => return failed(format!("The file could not be opened: {error}")),
+    };
+    if size > 2 * 1024 * 1024 {
+        return failed("The selected file exceeds 2 MiB".into());
+    }
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => return failed(format!("The file could not be read: {error}")),
+    };
+    let mut name: String = Path::new(&path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default().chars().filter(|letter| !letter.is_control()).take(128).collect();
+    if name.is_empty() {
+        name = "Selected file".into();
+    }
+    let png = bytes.starts_with(&[137, 80, 78, 71]);
+    let jpeg = bytes.starts_with(&[255, 216]);
+    if png || jpeg {
+        return (
+            "image_result",
+            obj(vec![
+                ("document_ticket", ticket.clone()),
+                ("name", s(&name)),
+                ("mime", s(if png { "image/png" } else { "image/jpeg" })),
+                ("bytes", Num(bytes.len().to_string())),
+                ("data", s(&network::b64(&bytes))),
+            ]),
+        );
+    }
+    let lower = name.to_lowercase();
+    if [".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".avif", ".ico"].iter().any(|ending| lower.ends_with(ending)) {
+        return failed("Select a PNG or JPEG image".into());
+    }
+    if bytes.len() > 1024 * 1024 {
+        return failed("Text document exceeds 1 MiB".into());
+    }
+    match String::from_utf8(bytes) {
+        Ok(content) if !content.contains('\0') => ("document_result", obj(vec![("document_ticket", ticket.clone()), ("content", s(&content))])),
+        _ => failed("Select a PNG/JPEG image or UTF-8 text document".into()),
+    }
+}
+
 fn main() {
     if let Err(error) = run(&arguments()) {
+        #[cfg(windows)]
+        report(&error);
+        #[cfg(not(windows))]
         eprintln!("{error}");
         std::process::exit(1);
     }
+}
+
+#[cfg(windows)]
+fn report(error: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    let directory = data_directory();
+    let _ = std::fs::create_dir_all(&directory);
+    let _ = std::fs::write(directory.join("startup-error.txt"), error);
+    let text: Vec<u16> = std::ffi::OsStr::new(error).encode_wide().chain(std::iter::once(0)).collect();
+    let title: Vec<u16> = std::ffi::OsStr::new("RLLM").encode_wide().chain(std::iter::once(0)).collect();
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(hwnd: isize, text: *const u16, title: *const u16, kind: u32) -> i32;
+    }
+    unsafe { MessageBoxW(0, text.as_ptr(), title.as_ptr(), 0x10); }
 }
 
 fn run(args: &[String]) -> Result<()> {
@@ -521,12 +935,24 @@ fn run(args: &[String]) -> Result<()> {
         path: option(args, "--state").map(PathBuf::from).unwrap_or_else(|| directory.join("state.bin")),
         key: read_key(&option(args, "--key").map(PathBuf::from).unwrap_or_else(|| directory.join("key")))?,
     };
+    let _ = EXPORT_STORE.set((vault.path.with_file_name("export.bin"), vault.key));
     if args.iter().any(|value| value == "--check") {
-        return self_test(&vault, &root);
+        // The self-test writes a vault of its own. It never opens the person's
+        // saved state, so checking the program cannot replace their history.
+        let scratch = std::env::temp_dir().join(format!("rllm-check-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).map_err(|error| format!("Self-test folder: {error}"))?;
+        let trial = Vault { path: scratch.join("state.bin"), key: vault.key };
+        let outcome = self_test(&trial, &root);
+        let _ = std::fs::remove_dir_all(&scratch);
+        return outcome;
     }
     let (mut state, ui) = startup(&vault, &root)?;
+    #[cfg(windows)]
+    if !args.iter().any(|value| value == "--stdio") {
+        return window::open(state, ui, vault, root);
+    }
     println!("{}", ui.string());
-    // The native surface drives the runtime one action at a time; the sealed
+    // The text surface drives the runtime one action at a time; the sealed
     // vault is rewritten after every settled action so a crash cannot lose a turn.
     for line in std::io::stdin().lines() {
         let line = match line {
@@ -817,3 +1243,8 @@ fn self_test(vault: &Vault, root: &str) -> Result<()> {
     println!("desktop self-test: {checks} checks passed");
     Ok(())
 }
+
+#[cfg(windows)]
+mod window;
+#[cfg(windows)]
+mod secure;

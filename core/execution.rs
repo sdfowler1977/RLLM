@@ -1,13 +1,14 @@
 use super::*;
 use std::{
     io::{Read, Write},
-    os::unix::{io::AsRawFd, process::CommandExt},
     path::Path,
     process::{Command, Stdio},
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, Instant},
 };
+#[cfg(unix)]
+use std::os::unix::{io::AsRawFd, process::CommandExt};
 static CANCEL: AtomicBool = AtomicBool::new(false);
 // A new worker may reset the legacy flag; it cannot revive an older owner.
 static CANCEL_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -45,11 +46,14 @@ pub fn token_cancelled(token:u64) -> bool {
     if scoped_token(token){return scopes().lock().ok().and_then(|held|held.get(&token).and_then(Weak::upgrade)).map(|flag|flag.load(Ordering::SeqCst)).unwrap_or(true);}
     token==u64::MAX || CANCEL_GENERATION.load(Ordering::SeqCst)!=token || cancelled()
 }
+#[cfg(unix)]
 unsafe extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
     fn fcntl(fd: i32, cmd: i32, ...) -> i32;
 }
+#[cfg(unix)]
 struct Group(i32);
+#[cfg(unix)]
 impl Drop for Group {
     fn drop(&mut self) {
         unsafe {
@@ -84,6 +88,7 @@ fn drain(input: &mut impl Read, out: &mut Vec<u8>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 pub fn run(v: &Json) -> Result<Json> {
     CANCEL.store(false, Ordering::SeqCst);
     let source = field(v, "source")?;
@@ -158,6 +163,7 @@ pub(super) struct BoundedOutput {
 
 /// Run one child in its own process group and stop it when the time limit or cancellation hits.
 /// The caller keeps any bytes it needs; this function does not remove files.
+#[cfg(unix)]
 pub(super) fn bounded_process(
     program: &str,
     args: &[String],
@@ -218,6 +224,173 @@ pub(super) fn bounded_process(
     })
 }
 
+#[cfg(windows)]
+fn capture_pipe(mut input: impl Read, slot: Arc<Mutex<(Vec<u8>, bool)>>) {
+    let mut buffer = [0u8; 4096];
+    loop {
+        match input.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if let Ok(mut held) = slot.lock() {
+                    let room = 65536usize.saturating_sub(held.0.len());
+                    if n > room {
+                        held.1 = true;
+                    }
+                    let retain = n.min(room);
+                    held.0.extend_from_slice(&buffer[..retain]);
+                }
+            }
+        }
+    }
+}
+
+/// One Windows child in a job so a timeout stops that child. The job is
+/// assigned immediately after the process starts.
+#[cfg(windows)]
+pub(super) fn spawn_bounded(program: &str, mut command: Command, timeout: Duration, cancelled: &dyn Fn() -> bool) -> Result<BoundedOutput> {
+    use std::os::windows::io::AsRawHandle;
+    #[repr(C)]
+    struct BasicLimit {
+        per_process: i64,
+        per_job: i64,
+        limit_flags: u32,
+        min_ws: usize,
+        max_ws: usize,
+        active_process: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+    unsafe extern "system" {
+        fn CreateJobObjectW(attrs: *const u8, name: *const u16) -> isize;
+        fn SetInformationJobObject(job: isize, class: i32, info: *const u8, len: u32) -> i32;
+        fn AssignProcessToJobObject(job: isize, process: isize) -> i32;
+        fn TerminateJobObject(job: isize, code: u32) -> i32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if job == 0 {
+        return Err(format!("Cannot start {program}: process job unavailable"));
+    }
+    let info = BasicLimit {
+        per_process: 0,
+        per_job: 0,
+        limit_flags: 0x2000,
+        min_ws: 0,
+        max_ws: 0,
+        active_process: 0,
+        affinity: 0,
+        priority_class: 0,
+        scheduling_class: 0,
+    };
+    if unsafe { SetInformationJobObject(job, 2, &info as *const BasicLimit as *const u8, std::mem::size_of::<BasicLimit>() as u32) } == 0 {
+        unsafe { CloseHandle(job); }
+        return Err(format!("Cannot start {program}: process job unavailable"));
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            unsafe { CloseHandle(job); }
+            return Err(format!("Cannot start {program}: {error}"));
+        }
+    };
+    if unsafe { AssignProcessToJobObject(job, child.as_raw_handle() as isize) } == 0 {
+        let _ = child.kill();
+        let _ = child.wait();
+        unsafe { CloseHandle(job); }
+        return Err(format!("Cannot start {program}: process job unavailable"));
+    }
+    let stdout = child.stdout.take().ok_or("Child output is unavailable")?;
+    let stderr = child.stderr.take().ok_or("Child error output is unavailable")?;
+    let out = Arc::new(Mutex::new((Vec::new(), false)));
+    let err = Arc::new(Mutex::new((Vec::new(), false)));
+    let out_slot = Arc::clone(&out);
+    let err_slot = Arc::clone(&err);
+    let out_thread = std::thread::spawn(move || capture_pipe(stdout, out_slot));
+    let err_thread = std::thread::spawn(move || capture_pipe(stderr, err_slot));
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if cancelled() || start.elapsed() > timeout {
+            unsafe { TerminateJobObject(job, 1); }
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = out_thread.join();
+            let _ = err_thread.join();
+            unsafe { CloseHandle(job); }
+            return Err("Child process exceeded its time limit or was cancelled".into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let _ = out_thread.join();
+    let _ = err_thread.join();
+    unsafe { CloseHandle(job); }
+    let (stdout, _) = out.lock().map(|held| held.clone()).unwrap_or_default();
+    let (stderr, _) = err.lock().map(|held| held.clone()).unwrap_or_default();
+    Ok(BoundedOutput {
+        code: status.code(),
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    })
+}
+
+#[cfg(windows)]
+pub fn run(v: &Json) -> Result<Json> {
+    let source = field(v, "source")?;
+    if source.len() > 128 * 1024 {
+        return Err("Shell program exceeds 128 KiB".into());
+    }
+    let check = v.get("check")? == &Bool(true);
+    if check {
+        return Err("The Windows command processor has no separate syntax-check mode".into());
+    }
+    let system = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+    let command_path = Path::new(&system).join("System32").join("cmd.exe");
+    let directory = std::env::temp_dir().join("rllm-shell");
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let script = directory.join(format!("script-{}-{}.cmd", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_nanos()).unwrap_or(0)));
+    std::fs::write(&script, source.as_bytes()).map_err(|error| error.to_string())?;
+    let mut command = Command::new(&command_path);
+    command
+        .arg("/d")
+        .arg("/s")
+        .arg("/c")
+        .arg(&script)
+        .env_clear()
+        .env("SystemRoot", &system)
+        .env("PATH", Path::new(&system).join("System32"))
+        .current_dir(&directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = spawn_bounded("cmd.exe", command, Duration::from_secs(30), &cancelled)?;
+    let _ = std::fs::remove_file(&script);
+    Ok(s(&format!(
+        "Execution: exit {}\n{}\n{}",
+        output.code.map(|code| code.to_string()).unwrap_or_else(|| "signal".into()),
+        output.stdout,
+        output.stderr
+    )))
+}
+
+#[cfg(windows)]
+pub(super) fn bounded_process(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<BoundedOutput> {
+    if timeout.is_zero() || timeout > Duration::from_secs(900) {
+        return Err("Child process limit must be from 1 millisecond through 900 seconds".into());
+    }
+    let mut command = Command::new(program);
+    command.args(args).current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    spawn_bounded(program, command, timeout, cancelled)
+}
+
 /// Replace this process with the successor image. Returns only when exec fails.
 pub(super) fn exec_replace(program: &Path, args: &[String], cwd: &Path, env: &[(&str, &str)]) -> Result<()> {
     let mut command = Command::new(program);
@@ -225,8 +398,17 @@ pub(super) fn exec_replace(program: &Path, args: &[String], cwd: &Path, env: &[(
     for (key, value) in env {
         command.env(key, value);
     }
-    let error = command.exec();
-    Err(format!("Successor exec failed: {error}"))
+    #[cfg(unix)]
+    {
+        let error = command.exec();
+        return Err(format!("Successor exec failed: {error}"));
+    }
+    #[cfg(windows)]
+    {
+        let mut child = command.spawn().map_err(|error| format!("Successor exec failed: {error}"))?;
+        let status = child.wait().map_err(|error| format!("Successor exec failed: {error}"))?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
 }
 
 #[cfg(test)]

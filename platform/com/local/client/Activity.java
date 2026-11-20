@@ -57,8 +57,12 @@ public final class Activity extends android.app.Activity {
     private volatile boolean turnActive;
     private boolean turnNotificationAsked;
     private boolean protectionNoted;
-    // A committed reply that is waiting for the platform to allow notifications.
-    private String pendingReplyTitle="",pendingReplyBody="",pendingReplyChat="";
+    // The request identity and the holder token of the turn this view runs.
+    private String turnTicket="",turnHolder="";
+    // The window the core decided for the running turn: the end-to-end bound of
+    // the request it carries. The transport of that request and the promotion
+    // that protects it end at the same instant.
+    private volatile long turnWindow;
     // A conversation a published reply belongs to, waiting to be opened.
     private String requestedConversation="";
     // Set while an internal navigation must not raise a user-visible error.
@@ -143,7 +147,7 @@ public final class Activity extends android.app.Activity {
         exportStore=new ExportStore(getFilesDir());
         transferStore=new TransferStore(getFilesDir());
         pendingExportTicket=bundle==null?null:bundle.getString("export_ticket");
-        try {state=load();File selectedWorkspace=new File(root());if(!selectedWorkspace.isDirectory()&&!selectedWorkspace.mkdirs())throw new IOException("Workspace directory could not be opened");storageAccess();documentJobs.execute(()->{JSONObject recovered=new JSONObject();try{JSONObject record=exportStore.load(key());recovered.put("export_record",record==null?new JSONObject():ExportStore.metadata(record)).put("export_empty",record==null);}catch(Exception problem){try{recovered.put("export_error",safe(problem));}catch(JSONException ignored){}}try{transferRecovery(recovered);}catch(Exception problem){try{recovered.put("project_error",safe(problem));}catch(JSONException ignored){}}runOnUiThread(()->{if(!closed){dispatch("resume",recovered);authorizationReturn(getIntent());requestConversation(getIntent());openRequestedConversation();}});});}
+        try {state=load();File selectedWorkspace=new File(root());if(!selectedWorkspace.isDirectory()&&!selectedWorkspace.mkdirs())throw new IOException("Workspace directory could not be opened");storageAccess();documentJobs.execute(()->{JSONObject recovered=new JSONObject();try{JSONObject record=exportStore.load(key());recovered.put("export_record",record==null?new JSONObject():ExportStore.metadata(record)).put("export_empty",record==null);}catch(Exception problem){try{recovered.put("export_error",safe(problem));}catch(JSONException ignored){}}try{transferRecovery(recovered);}catch(Exception problem){try{recovered.put("project_error",safe(problem));}catch(JSONException ignored){}}runOnUiThread(()->{if(!closed){dispatch("resume",recovered);rebindTurn();deliverPendingAnnouncement();authorizationReturn(getIntent());requestConversation(getIntent());openRequestedConversation();}});});}
         catch(Throwable e){fatal("Saved state could not be opened. It has not been overwritten.\n"+safe(e));}
     }
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);authorizationReturn(intent);requestConversation(intent);}
@@ -183,7 +187,7 @@ public final class Activity extends android.app.Activity {
             try{startActivityForResult(intent,48);}catch(android.content.ActivityNotFoundException unavailable){startActivityForResult(new Intent("android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION"),48);}
         }else requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE","android.permission.WRITE_EXTERNAL_STORAGE"},48);
     }
-    @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){super.onRequestPermissionsResult(code,permissions,grants);media.permission(code,grants);if(code==48)dispatch("phone_access_status");if(code==56)publishPendingReply();}
+    @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){super.onRequestPermissionsResult(code,permissions,grants);media.permission(code,grants);if(code==48)dispatch("phone_access_status");if(code==56)deliverPendingAnnouncement();}
     private Object phoneReadOrDocument(JSONObject command,int token)throws Exception {
         if(!phoneStorageAccess)throw new IOException("Phone storage access is off in Setup");
         if(!command.optString("phone_scope").equals("shared"))return phoneTool(command,token);
@@ -263,7 +267,7 @@ public final class Activity extends android.app.Activity {
             // A model turn that could not start, or whose own result the core refused, is over.
             // The process promotion is released here, or the app would keep reporting work
             // that no longer runs.
-            if(turnActive&&((!effectStarted&&plannedEffect!=null&&plannedEffect.optString("kind").equals("network")&&plannedEffect.optString("purpose").equals("model"))||((action.equals("network_result")||action.equals("failure"))&&extra.optString("purpose").equals("model")))){turnActive=false;TurnService.finish();}
+            if(turnActive&&((!effectStarted&&plannedEffect!=null&&plannedEffect.optString("kind").equals("network")&&plannedEffect.optString("purpose").equals("model"))||((action.equals("network_result")||action.equals("failure"))&&extra.optString("purpose").equals("model")))){turnActive=false;finishTurn();}
             if(ratePaused){String voiceOwner=state==null?"":state.optString("voice_consent");media.pause();VoiceSession.release(this);if(!action.equals("voice_session_stop")&&!voiceOwner.isEmpty())voiceSessionStopped(voiceOwner);Toast.makeText(this,"Operation not completed: "+safe(e),Toast.LENGTH_LONG).show();}else if(!quiet)new AlertDialog.Builder(this).setTitle("Operation not completed").setMessage(safe(e)).setPositiveButton("Close",null).show();}
     }
     private boolean abortMcpOpening(JSONObject effect,boolean committed){
@@ -574,7 +578,7 @@ public final class Activity extends android.app.Activity {
         if(kind.equals("gateway_start")){if(android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},45);startForegroundService(new Intent(this,Gateway.class).putExtra("config",e.getJSONObject("config").toString()));return;}
         if(kind.equals("gateway_stop")){stopService(new Intent(this,Gateway.class));return;}
         if(kind.equals("mcp_pause")){mcpPauseOwner=e.getString("owner");for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}return;}
-        if(kind.equals("cancel")){if(e.optBoolean("voice_only"))media.stopVoice();else media.cancel();pageDeadline.clear();mcpPauseOwner="";JSONObject pending=state.optJSONObject("export_pending");if(pending!=null)cancelledExports.add(pending.optString("ticket"));stopExecution();generation++;cancelDocuments();for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}Core.call(new JSONObject().put("op","cancel_tool"));return;}
+        if(kind.equals("cancel")){if(e.optBoolean("voice_only"))media.stopVoice();else media.cancel();pageDeadline.clear();mcpPauseOwner="";JSONObject pending=state.optJSONObject("export_pending");if(pending!=null)cancelledExports.add(pending.optString("ticket"));stopExecution();generation++;TurnService.abort();cancelDocuments();for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}Core.call(new JSONObject().put("op","cancel_tool"));return;}
         if(kind.equals("wallpaper_picker")){Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);startActivityForResult(intent,47);return;}
         if(kind.equals("app_usage_settings")){
             try{startActivity(new Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS));}
@@ -600,28 +604,32 @@ public final class Activity extends android.app.Activity {
         if(kind.equals("archive_clear")){pendingImport=null;return;}
         if(kind.equals("document")){documentTicket=e.getString("document_ticket");documentGeneration=generation;try{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,41);}catch(android.content.ActivityNotFoundException|SecurityException problem){String failedTicket=documentTicket;documentTicket="";dispatch("document_failure",new JSONObject().put("document_ticket",failedTicket).put("error",safe(problem)));}return;}
         if(kind.equals("network")&&e.optString("purpose").equals("project_file"))pendingImport=null;
-        final int token=++generation;final long started=android.os.SystemClock.elapsedRealtime();
-        if(kind.equals("network")&&e.optString("purpose").equals("model")){turnActive=true;startRateClock(token,e.optString("model_ticket"),started);protectionNoted=false;try{if(TurnService.begin(this,e.optString("model_ticket"),started,turnLease(e),"Replying")==TurnService.REFUSED)turnProtectionLost();}catch(Exception unavailable){turnProtectionLost();}askReplyNotifications();}
-        try{workers.execute(()->{final boolean[] sending={false};final boolean[] streaming={false};final long[] metrics={0,-1,-1,-1};long snapshotHandle=0;boolean chunkedSnapshot=false;try{JSONObject work=e;String operation=kind;
+        final boolean model=kind.equals("network")&&e.optString("purpose").equals("model");
+        final int token=model?TurnService.nextToken():++generation;
+        final long started=android.os.SystemClock.elapsedRealtime();
+        if(model){turnActive=true;turnTicket=e.optString("model_ticket");startRateClock(token,turnTicket,started);protectionNoted=false;try{startModelTurn(e,token,started);}catch(Exception unavailable){turnProtectionLost("");}askReplyNotifications();}
+        final java.util.concurrent.ExecutorService lane=model?TurnService.workers():workers;
+        final java.util.concurrent.ScheduledExecutorService laneDeadlines=model?TurnService.deadlines():deadlines;
+        try{lane.execute(()->{final boolean[] sending={false};final boolean[] streaming={false};final long[] metrics={0,-1,-1,-1};long snapshotHandle=0;boolean chunkedSnapshot=false;try{JSONObject work=e;String operation=kind;
             if(kind.equals("project_payload")){JSONObject stored=documentJobs.submit(()->transferStore.load(key())).get();if(stored==null||stored.has("cleared_ticket"))throw new IOException("Pending snapshot is missing or cleared");
                 chunkedSnapshot=stored.optInt("version")==2;
                 if(chunkedSnapshot)work=(JSONObject)Core.call(new JSONObject().put("op","project_chunks").put("action","open").put("record",e.getJSONObject("record")).put("stored",stored.getJSONObject("record")));
                 else work=(JSONObject)Core.call(new JSONObject().put("op","project_payload").put("record",e.getJSONObject("record")).put("stored",stored.getJSONObject("record")).put("archive",stored.getString("payload")));
                 snapshotHandle=work.getLong("snapshot_handle");operation=work.getString("kind");}
-            if(token!=generation||closed)throw new IOException("Cancelled before transfer");final JSONObject command=work;activeStorageProvider=storageProvider(command);if(!sourceAllowed(activeStorageProvider))throw new IOException("Source access is off in Setup");JSONObject result=new JSONObject();String callback;
+            if(!alive(token))throw new IOException("Cancelled before transfer");final JSONObject command=work;activeStorageProvider=storageProvider(command);if(!sourceAllowed(activeStorageProvider))throw new IOException("Source access is off in Setup");JSONObject result=new JSONObject();String callback;
             if(operation.equals("network")&&chunkedSnapshot){result=transferNetwork(command,token);snapshotHandle=0;callback="network_result";
-            }else if(operation.equals("network")){String host=command.getString("host");int port=command.getInt("port");long transportDeadline=command.optLong("transport_deadline_ms",started+Math.max(5000,Math.min(600000,command.optLong("timeout_ms",120000))));networkActive(token,transportDeadline);
+            }else if(operation.equals("network")){String host=command.getString("host");int port=command.getInt("port");long transportDeadline=transportDeadline(command,started,model);networkActive(token,transportDeadline);
                 long searchDelay=command.optLong("search_delay_ms",0);
                 if(searchDelay>0){Thread.sleep(Math.min(4000,searchDelay));networkActive(token,transportDeadline);}
-                Socket raw=new Socket();activeConnections.add(raw);ScheduledFuture<?> timeout=null;
-                try{timeout=deadlines.schedule(()->{try{raw.close();}catch(IOException ignored){}},networkActive(token,transportDeadline),TimeUnit.MILLISECONDS);InetSocketAddress address=resolution.address(host,port,()->networkActive(token,transportDeadline));
+                Socket raw=new Socket();if(model)TurnService.track(token,raw);else activeConnections.add(raw);ScheduledFuture<?> timeout=null;
+                try{timeout=laneDeadlines.schedule(()->{try{raw.close();}catch(IOException ignored){}},networkActive(token,transportDeadline),TimeUnit.MILLISECONDS);InetSocketAddress address=(model?TurnService.resolver():resolution).address(host,port,()->networkActive(token,transportDeadline));
                     if(command.optBoolean("public_web_only")){
                         Core.call(new JSONObject().put("op","public_web_address").put("address",Base64.encodeToString(address.getAddress().getAddress(),Base64.NO_WRAP)));
                     }
                     raw.connect(address,Math.min(15000,networkActive(token,transportDeadline)));raw.setSoTimeout(networkActive(token,transportDeadline));Socket connection=raw;
                     if(command.optBoolean("tls")){SSLSocket tls=(SSLSocket)((SSLSocketFactory)SSLSocketFactory.getDefault()).createSocket(raw,command.optString("tls_host",host),port,true);SSLParameters params=tls.getSSLParameters();params.setEndpointIdentificationAlgorithm("HTTPS");if(command.has("tls_host"))params.setServerNames(Collections.singletonList(new SNIHostName(command.getString("tls_host"))));tls.setSSLParameters(params);tls.setSoTimeout(networkActive(token,transportDeadline));tls.startHandshake();networkActive(token,transportDeadline);connection=tls;}
-                    try(Socket managed=connection){networkActive(token,transportDeadline);sending[0]=true;byte[] requestBytes=command.has("wire_base64")?Base64.decode(command.getString("wire_base64"),Base64.NO_WRAP):command.getString("wire").getBytes(StandardCharsets.UTF_8);managed.getOutputStream().write(requestBytes);metrics[3]=requestBytes.length;if(!command.optString("media_upload").isEmpty())metrics[3]+=Wire.upload(managed.getOutputStream(),command,()->networkActive(token,transportDeadline));managed.getOutputStream().flush();InputStream measured=measuredInput(managed.getInputStream(),started,metrics);streaming[0]=command.optBoolean("stream");if(!command.optString("media_download").isEmpty()){result.put("media_receipt",Wire.download(measured,command.getString("purpose"),command.getString("media_download"),()->networkActive(token,transportDeadline)));}else{byte[] bytes=command.optBoolean("stream")?readStream(measured,token,command.optInt("limit",1024*1024),command.optString("stream_protocol","local"),started,metrics,command.optString("model_ticket"),command.optJSONObject("mcp_control"),result):Wire.read(measured,Math.min(6*1024*1024,command.optInt("limit",1024*1024)),"activity:"+token,command.optString("wire").startsWith("HEAD "),()->networkActive(token,transportDeadline));if(command.optString("purpose").equals("project_file")){JSONObject extracted=(JSONObject)Core.call(new JSONObject().put("op","network_binary").put("data",Base64.encodeToString(bytes,Base64.NO_WRAP)));byte[] archive=Base64.decode(extracted.getString("archive"),Base64.NO_WRAP);JSONObject preview=(JSONObject)Core.call(new JSONObject().put("op","archive_preview").put("archive",extracted.getString("archive")));runOnUiThread(()->{if(token!=generation||closed)return;pendingImport=archive;try{dispatch("archive_review",new JSONObject().put("names",preview.getJSONArray("names")).put("bytes",preview.getInt("bytes")));}catch(JSONException error){pendingImport=null;fatal(safe(error));}});return;}networkActive(token,transportDeadline);result.put("data",Base64.encodeToString(bytes,Base64.NO_WRAP));}result.put("purpose",command.getString("purpose"));result.put("model_ticket",command.optString("model_ticket"));result.put("web_ticket",command.optString("web_ticket"));result.put("child_ticket",command.optString("child_ticket"));result.put("drive_ticket",command.optString("drive_ticket"));addMeasurements(result,started,metrics);}
-                }finally{if(timeout!=null)timeout.cancel(false);try{raw.close();}catch(IOException ignored){}activeConnections.remove(raw);if(!streaming[0]&&command.optJSONObject("mcp_control")!=null&&(token!=generation||command.getJSONObject("mcp_control").optBoolean("resumable")))try{JSONObject context=command.getJSONObject("mcp_control");JSONArray openingCleanup=(JSONArray)Core.call(new JSONObject().put("op",context.has("resume_token")||context.has("admission_token")?"stream_open_cleanup":"mcp_cleanup_plan").put("context",context));if(!closed)queueMcpCleanup(openingCleanup,Math.min(started+120000,android.os.SystemClock.elapsedRealtime()+2000));}catch(Exception ignored){}}callback="network_result";
+                    try(Socket managed=connection){networkActive(token,transportDeadline);sending[0]=true;byte[] requestBytes=command.has("wire_base64")?Base64.decode(command.getString("wire_base64"),Base64.NO_WRAP):command.getString("wire").getBytes(StandardCharsets.UTF_8);managed.getOutputStream().write(requestBytes);metrics[3]=requestBytes.length;if(!command.optString("media_upload").isEmpty())metrics[3]+=Wire.upload(managed.getOutputStream(),command,()->networkActive(token,transportDeadline));managed.getOutputStream().flush();InputStream measured=measuredInput(managed.getInputStream(),started,metrics);streaming[0]=command.optBoolean("stream");if(!command.optString("media_download").isEmpty()){result.put("media_receipt",Wire.download(measured,command.getString("purpose"),command.getString("media_download"),()->networkActive(token,transportDeadline)));}else{byte[] bytes=command.optBoolean("stream")?readStream(measured,token,command.optInt("limit",1024*1024),command.optString("stream_protocol","local"),started,transportDeadline,metrics,command.optString("model_ticket"),command.optJSONObject("mcp_control"),result):Wire.read(measured,Math.min(6*1024*1024,command.optInt("limit",1024*1024)),"activity:"+token,command.optString("wire").startsWith("HEAD "),()->networkActive(token,transportDeadline));if(command.optString("purpose").equals("project_file")){JSONObject extracted=(JSONObject)Core.call(new JSONObject().put("op","network_binary").put("data",Base64.encodeToString(bytes,Base64.NO_WRAP)));byte[] archive=Base64.decode(extracted.getString("archive"),Base64.NO_WRAP);JSONObject preview=(JSONObject)Core.call(new JSONObject().put("op","archive_preview").put("archive",extracted.getString("archive")));runOnUiThread(()->{if(token!=generation||closed)return;pendingImport=archive;try{dispatch("archive_review",new JSONObject().put("names",preview.getJSONArray("names")).put("bytes",preview.getInt("bytes")));}catch(JSONException error){pendingImport=null;fatal(safe(error));}});return;}networkActive(token,transportDeadline);result.put("data",Base64.encodeToString(bytes,Base64.NO_WRAP));}result.put("purpose",command.getString("purpose"));result.put("model_ticket",command.optString("model_ticket"));result.put("web_ticket",command.optString("web_ticket"));result.put("child_ticket",command.optString("child_ticket"));result.put("drive_ticket",command.optString("drive_ticket"));addMeasurements(result,started,metrics);}
+                }finally{if(timeout!=null)timeout.cancel(false);try{raw.close();}catch(IOException ignored){}if(model)TurnService.untrack(token,raw);else activeConnections.remove(raw);if(!streaming[0]&&command.optJSONObject("mcp_control")!=null&&(token!=generation||command.getJSONObject("mcp_control").optBoolean("resumable")))try{JSONObject context=command.getJSONObject("mcp_control");JSONArray openingCleanup=(JSONArray)Core.call(new JSONObject().put("op",context.has("resume_token")||context.has("admission_token")?"stream_open_cleanup":"mcp_cleanup_plan").put("context",context));if(!closed)queueMcpCleanup(openingCleanup,Math.min(started+120000,android.os.SystemClock.elapsedRealtime()+2000));}catch(Exception ignored){}}callback="network_result";
             }else if(operation.equals("archive")){JSONObject request=new JSONObject().put("op","project_archive").put("root",root());JSONObject packageData=(JSONObject)Core.call(request);byte[] archive=Base64.decode(packageData.getString("archive"),Base64.NO_WRAP);
                 if(token!=generation||closed)return;stageExport(command,archive,packageData);return;
             }else if(operation.equals("artifact_file")){stageArtifact(command,token);return;
@@ -633,13 +641,27 @@ public final class Activity extends android.app.Activity {
             }else if(operation.equals("tool")){JSONObject request=new JSONObject(command.toString()).put("op","tool").put("root",root());Object output;if(command.optString("tool").startsWith("phone_")){Core.call(new JSONObject(request.toString()).put("op","local_tool_start"));output=phoneReadOrDocument(command,token);}else output=Core.call(request);if(output instanceof JSONObject && ((JSONObject)output).has("source")){JSONObject program=localResult(command,(JSONObject)output);runOnUiThread(()->{if(token==generation&&!closed)startExecution(program,token);});return;}localResult(command,result).put("output",output.toString());result.put("editor",command.optBoolean("editor"));result.put("editor_dialog",command.optString("editor_dialog"));callback="tool_result";}
             else throw new IOException("Unknown platform operation");
             if(snapshotHandle!=0){JSONObject checked=new JSONObject().put("op","project_readback").put("handle",snapshotHandle);if(result.has("found"))checked.put("found",result.get("found"));if(result.has("data"))checked.put("data",result.get("data"));result=(JSONObject)Core.call(checked);snapshotHandle=0;}
-            final JSONObject delivered=result;runOnUiThread(()->{if(token==generation&&!closed){if(command.has("transport_deadline_ms"))try{networkActive(token,command.getLong("transport_deadline_ms"));}catch(Exception expired){try{dispatch("failure",new JSONObject().put("purpose",command.optString("purpose")).put("web_ticket",command.optString("web_ticket")).put("child_ticket",command.optString("child_ticket")).put("drive_ticket",command.optString("drive_ticket")).put("error",safe(expired)).put("sent",sending[0]));}catch(JSONException ignored){}return;}dispatch(callback,delivered);}else if(callback.equals("network_result"))mcpDiscardedSuccess(command,token);});
-        }catch(Throwable error){runOnUiThread(()->{if(token==generation&&!closed){if(kind.equals("archive_import"))pendingImport=null;if(kind.equals("archive")){exportEvent("export_stage_failed",e.optString("ticket"),safe(error));return;}if(kind.equals("artifact_file")||kind.equals("archive_drive")){exportEvent("artifact_failed",e.optString("ticket"),safe(error));return;}try{dispatch("failure",addMeasurements(new JSONObject(),started,metrics).put("error",safe(error)).put("purpose",e.optString("purpose")).put("model_ticket",e.optString("model_ticket")).put("web_ticket",e.optString("web_ticket")).put("child_ticket",e.optString("child_ticket")).put("drive_ticket",e.optString("drive_ticket")).put("tool_ticket",e.optString("tool_ticket")).put("ticket",e.optString("ticket")).put("phase",e.optString("phase")).put("sent",sending[0]));}catch(JSONException ex){fatal(safe(ex));}}});}finally{if(snapshotHandle!=0)try{Core.call(new JSONObject().put("op",chunkedSnapshot?"project_chunks":"project_close").put("action","close").put("handle",snapshotHandle));}catch(Exception ignored){}}});}catch(java.util.concurrent.RejectedExecutionException unavailable){
+            final JSONObject delivered=result;runOnUiThread(()->{if(model){TurnService.deliver(token,callback,delivered);return;}if(token==generation&&!closed){if(command.has("transport_deadline_ms"))try{networkActive(token,command.getLong("transport_deadline_ms"));}catch(Exception expired){try{dispatch("failure",new JSONObject().put("purpose",command.optString("purpose")).put("web_ticket",command.optString("web_ticket")).put("child_ticket",command.optString("child_ticket")).put("drive_ticket",command.optString("drive_ticket")).put("error",safe(expired)).put("sent",sending[0]));}catch(JSONException ignored){}return;}dispatch(callback,delivered);}else if(callback.equals("network_result"))mcpDiscardedSuccess(command,token);});
+        }catch(Throwable error){runOnUiThread(()->{if(model){try{JSONObject failed=addMeasurements(new JSONObject(),started,metrics).put("error",safe(error)).put("purpose",e.optString("purpose")).put("model_ticket",e.optString("model_ticket")).put("web_ticket",e.optString("web_ticket")).put("child_ticket",e.optString("child_ticket")).put("drive_ticket",e.optString("drive_ticket")).put("tool_ticket",e.optString("tool_ticket")).put("ticket",e.optString("ticket")).put("phase",e.optString("phase")).put("sent",sending[0]);TurnService.deliver(token,"failure",failed);}catch(JSONException ignored){}return;}if(token==generation&&!closed){if(kind.equals("archive_import"))pendingImport=null;if(kind.equals("archive")){exportEvent("export_stage_failed",e.optString("ticket"),safe(error));return;}if(kind.equals("artifact_file")||kind.equals("archive_drive")){exportEvent("artifact_failed",e.optString("ticket"),safe(error));return;}try{dispatch("failure",addMeasurements(new JSONObject(),started,metrics).put("error",safe(error)).put("purpose",e.optString("purpose")).put("model_ticket",e.optString("model_ticket")).put("web_ticket",e.optString("web_ticket")).put("child_ticket",e.optString("child_ticket")).put("drive_ticket",e.optString("drive_ticket")).put("tool_ticket",e.optString("tool_ticket")).put("ticket",e.optString("ticket")).put("phase",e.optString("phase")).put("sent",sending[0]));}catch(JSONException ex){fatal(safe(ex));}}});}finally{if(snapshotHandle!=0)try{Core.call(new JSONObject().put("op",chunkedSnapshot?"project_chunks":"project_close").put("action","close").put("handle",snapshotHandle));}catch(Exception ignored){}}});}catch(java.util.concurrent.RejectedExecutionException unavailable){
             if(!kind.equals("tool"))throw unavailable;
             if(token==generation&&!closed)dispatch("failure",localResult(e,new JSONObject()).put("error","Local operation worker is unavailable; no operation was started"));
         }
     }
-    private int networkActive(int token,long until)throws IOException {if(closed||token!=generation)throw new IOException("Cancelled");return Deadline.remaining(until,android.os.SystemClock.elapsedRealtime());}
+    private int networkActive(int token,long until)throws IOException {if(!alive(token))throw new IOException("Cancelled");return Deadline.remaining(until,android.os.SystemClock.elapsedRealtime());}
+    /**
+     * The end-to-end bound of one transport. A model turn is bound by the window
+     * its own core decided, so the request and the promotion that protects it
+     * end at the same instant, and the stream of that request cannot outlive it
+     * either. Every other transport keeps the bound its command states.
+     */
+    private long transportDeadline(JSONObject command,long started,boolean model){
+        if(model&&turnWindow>0){
+            long bound=started+turnWindow;
+            if(command.has("transport_deadline_ms")){long stated=command.optLong("transport_deadline_ms",0L);if(stated>0&&stated<bound)bound=stated;}
+            return bound;
+        }
+        return command.optLong("transport_deadline_ms",started+Math.max(5000,Math.min(600000,command.optLong("timeout_ms",120000))));
+    }
     private void mcpDiscardedSuccess(JSONObject command,int token){
         if(closed||token==generation||!command.optBoolean("stream")||!command.optString("stream_protocol").equals("mcp"))return;
         JSONObject context=command.optJSONObject("mcp_control");if(context==null)return;
@@ -708,7 +730,7 @@ public final class Activity extends android.app.Activity {
     private void startRateClock(int token,String ticket,long started){
         if(rateTick!=null)rateHandler.removeCallbacks(rateTick);rateTicket=ticket;rateStarted=started;
         rateTick=new Runnable(){public void run(){
-            if(closed||state==null||token!=generation||!ticket.equals(stateText(state,"model_expected"))){rateTick=null;return;}
+            if(closed||state==null||!alive(token)||!ticket.equals(stateText(state,"model_expected"))){rateTick=null;return;}
             // The clock keeps running while the app is backgrounded. Only the core update is
             // skipped there: the elapsed time is measured from the turn's own start instant
             // either way, so the first tick after a resume reports the true elapsed time and
@@ -728,10 +750,28 @@ public final class Activity extends android.app.Activity {
         if(!(page.equals("chat")||page.equals("diagnostics")))return;
         try{dispatch("rate_tick",new JSONObject().put("model_ticket",rateTicket).put("elapsed_ms",android.os.SystemClock.elapsedRealtime()-rateStarted));}catch(JSONException e){fatal(safe(e));}
     }
-    /** Core turn-clock lease for this request. A miss throws; the caller does not substitute a number. */
-    private long turnLease(JSONObject effect)throws Exception{return TurnService.leaseOf(effect.optLong("timeout_ms",120000L));}
-    /** The promotion was refused, or the core lease could not be read. The turn keeps running. */
-    void turnProtectionLost(){if(closed||protectionNoted)return;protectionNoted=true;rateHandler.post(()->{if(closed||state==null)return;try{dispatch("turn_protection");}catch(Throwable ignored){}});}
+    /** Whether a transport token still belongs to a turn that runs. */
+    private boolean alive(int token){return (!closed&&token==generation)||TurnService.alive(token);}
+    /** The result of a turn, handed over by the owner that carried it. */
+    void turnResult(String callback,JSONObject payload){if(closed||state==null)return;try{dispatch(callback,payload);}catch(Throwable ignored){}}
+    /** Whether this view is gone. */
+    boolean isClosed(){return closed;}
+    /**
+     * The promotion was refused, or the lease ran out. The turn keeps running,
+     * and the notice is the one the core owns for both paths.
+     */
+    void turnProtectionLost(){turnProtectionLost("");}
+    void turnProtectionLost(String notice){if(closed||protectionNoted)return;protectionNoted=true;rateHandler.post(()->{if(closed||state==null)return;try{dispatch("turn_protection");}catch(Throwable ignored){if(notice!=null&&!notice.isEmpty())Toast.makeText(this,notice,Toast.LENGTH_LONG).show();}});}
+    /**
+     * A protection loss that happened while no view was there to hear it is held
+     * in the process scope, so the user learns about it when the view returns
+     * instead of the loss passing in silence.
+     */
+    private void announcePendingProtectionLoss(){
+        if(closed)return;
+        String notice=TurnService.takePendingLoss();
+        if(notice!=null)turnProtectionLost(notice);
+    }
     /** Ask once for the notification permission that carries a reply to a backgrounded app. */
     private void askReplyNotifications(){
         if(turnNotificationAsked)return;
@@ -750,7 +790,9 @@ public final class Activity extends android.app.Activity {
     private void turnSettled(JSONObject next,String action,JSONObject extra,JSONObject planned){
         try{
             if(!turnActive||next==null)return;
-            boolean stopped=action.equals("cancel")||action.equals("resume");
+            // A resume re-binds to the live turn; it does not settle it.
+            if(action.equals("resume"))return;
+            boolean stopped=action.equals("cancel");
             if(!stopped){
                 if(!stateText(next,"model_expected").isEmpty())return;
                 if(planned!=null)return;
@@ -758,10 +800,10 @@ public final class Activity extends android.app.Activity {
                 JSONArray stack=next.optJSONArray("delegation_stack");if(stack!=null&&stack.length()>0)return;
             }
             turnActive=false;
-            if(stopped){TurnService.finish();return;}
+            if(stopped){finishTurn();return;}
             boolean failed=action.equals("failure");
             String chat=stateText(next,"request_chat");if(chat.isEmpty())chat=stateText(next,"active");
-            publishReply(failed?"RLLM turn failed":"RLLM reply",failed?stateText(extra,"error"):replyText(next,chat),chat);
+            publishReply(failed,failed?stateText(extra,"error"):replyText(next,chat),chat);
         }catch(Throwable ignored){/* The committed reply never depends on this publication step. */}
     }
     /**
@@ -769,20 +811,93 @@ public final class Activity extends android.app.Activity {
      * looking at the app. The reply is held until the platform allows notifications, so a
      * reply that lands while the permission prompt is still open is not silently lost.
      */
-    private void publishReply(String title,String body,String conversation){
-        TurnService.finish();
+    private void publishReply(boolean failed,String body,String conversation){
+        String value=turnTicket;
+        finishTurn();
         if(body==null||body.trim().isEmpty())return;
-        if(!ratePaused)return;
-        pendingReplyTitle=title;pendingReplyBody=body.trim();pendingReplyChat=conversation;
-        publishPendingReply();
+        try{
+            JSONObject result=TurnService.publish(state,body,conversation,value,failed,ratePaused,TurnService.notificationsAllowed(this));
+            turnState(result);
+            if(result.optString("decision").equals("publish"))postReply(result);
+        }catch(Throwable ignored){}
     }
-    /** Deliver the held reply as soon as the platform allows notifications. */
-    private void publishPendingReply(){
-        if(pendingReplyBody.isEmpty())return;
-        if(!TurnService.notificationsAllowed(this))return;
-        String title=pendingReplyTitle;String body=pendingReplyBody;String chat=pendingReplyChat;
-        pendingReplyTitle="";pendingReplyBody="";pendingReplyChat="";
-        TurnService.post(this,title,body,chat);
+    /** Show a committed reply. The core composed its text, its title and its channel. */
+    private void postReply(JSONObject result){
+        String chat=result.optString("chat");
+        TurnService.post(this,result.optString("channel"),result.optString("channel_name"),result.optString("title"),result.optString("text"),chat);
+        if(!chat.isEmpty()){requestedConversation=chat;openRequestedConversation();}
+    }
+    /**
+     * Deliver the announcement that is held for a later grant, or leave it held.
+     * The held reply lives in the persisted state, so it survives a recreation,
+     * a process kill and a grant that arrives later.
+     */
+    private void deliverPendingAnnouncement(){
+        if(closed||state==null)return;
+        try{
+            JSONObject result=TurnService.drain(state,TurnService.notificationsAllowed(this));
+            turnState(result);
+            if(result.optString("decision").equals("publish"))postReply(result);
+        }catch(Throwable ignored){}
+    }
+    /** The state the core returned with a turn decision. It is committed like any other state. */
+    private void turnState(JSONObject result){
+        if(result==null)return;
+        JSONObject next=result.optJSONObject("state");
+        if(next==null)return;
+        try{save(next);state=next;TurnService.remember(next);}catch(Throwable ignored){}
+    }
+    /** The turn ended. The durable identity is retired only for the holder that owns it. */
+    private void finishTurn(){
+        String value=turnTicket,holderToken=turnHolder;
+        try{turnState(TurnService.finish(state,value,holderToken));}catch(Throwable ignored){}
+        finally{TurnService.release(value,holderToken);turnTicket="";turnHolder="";}
+    }
+    /**
+     * Admit the model turn. The core owns the admission decision, the durable
+     * identity, the window, the lease and the label; the owner only realizes
+     * the decision. The window the core answers with is the end-to-end bound of
+     * the request, so the transport of that request and the promotion that
+     * protects it end at the same instant.
+     */
+    private void startModelTurn(JSONObject effect,int token,long started)throws Exception{
+        String value=effect.optString("model_ticket");
+        long requested=effect.optLong("timeout_ms",120000L);
+        long elapsed=android.os.SystemClock.elapsedRealtime()-started;
+        JSONObject admitted=TurnService.begin(state,value,requested,started,elapsed);
+        turnState(admitted);
+        turnWindow=admitted.optLong("window_ms",requested);
+        if(admitted.optString("decision").equals("refused")){turnProtectionLost("");return;}
+        turnHolder=admitted.optString("holder");
+        JSONObject renewed=TurnService.renew(state,turnTicket,turnHolder,turnWindow,elapsed);
+        turnState(renewed);
+        if(!renewed.optBoolean("extended")){turnProtectionLost("");return;}
+        boolean promoted=TurnService.promote(this,turnTicket,turnHolder,token,started,turnWindow,renewed.optLong("lease_ms"),renewed.optLong("cadence_ms"),renewed.optString("label"));
+        if(!promoted)turnProtectionLost("");
+    }
+    /**
+     * A view that returns re-binds to the live turn by its durable identity
+     * instead of starting a second turn. Nothing is replayed: the result that
+     * is already in flight is adopted, and an uncertain turn says so. The core
+     * decides what a returning view finds, so a turn this process no longer
+     * owns is reported as uncertain instead of passing unnoticed.
+     */
+    private void rebindTurn(){
+        try{
+            JSONObject result=TurnService.rebind(state);
+            turnState(result);
+            String decision=result.optString("decision");
+            if(decision.equals("rebound")){
+                turnActive=true;turnTicket=result.optString("ticket");turnHolder=result.optString("holder");protectionNoted=false;
+                startRateClock(TurnService.liveToken(),turnTicket,TurnService.liveStarted());
+                JSONObject buffered=TurnService.take(turnTicket);
+                if(buffered!=null)dispatch(buffered.optString("callback","network_result"),buffered.getJSONObject("payload"));
+            }else if(decision.equals("uncertain")){
+                JSONObject next=result.optJSONObject("state");
+                String notice=next==null?"":next.optString("notice");
+                if(!notice.isEmpty())Toast.makeText(this,notice,Toast.LENGTH_LONG).show();
+            }
+        }catch(Throwable ignored){}
     }
     /** The last assistant answer in the given conversation, exactly as it was committed. */
     private String replyText(JSONObject next,String conversation){
@@ -828,9 +943,9 @@ public final class Activity extends android.app.Activity {
     private void streamProgress(int token,String text,String ticket,long started){
         if(ticket.isEmpty())return;
         long elapsed=android.os.SystemClock.elapsedRealtime()-started;
-        runOnUiThread(()->{if(token==generation&&!closed)try{dispatch("model_progress",new JSONObject().put("stream_text",text).put("elapsed_ms",elapsed).put("model_ticket",ticket));}catch(JSONException error){fatal(safe(error));}});
+        runOnUiThread(()->{if(!closed&&alive(token))try{dispatch("model_progress",new JSONObject().put("stream_text",text).put("elapsed_ms",elapsed).put("model_ticket",ticket));}catch(JSONException error){fatal(safe(error));}});
     }
-    private byte[] readStream(InputStream input,int token,int limit,String protocol,long started,long[] metrics,String ticket,JSONObject control,JSONObject result)throws Exception{
+    private byte[] readStream(InputStream input,int token,int limit,String protocol,long started,long deadline,long[] metrics,String ticket,JSONObject control,JSONObject result)throws Exception{
         JSONObject opening=new JSONObject().put("op","stream_open").put("protocol",protocol);if(control!=null)opening.put("mcp_control",control);
         long id;try{id=((Number)Core.call(opening)).longValue();}catch(Exception problem){
             if(control!=null)try{JSONArray cleanup=(JSONArray)Core.call(new JSONObject().put("op",control.has("resume_token")||control.has("admission_token")?"stream_open_cleanup":"mcp_cleanup_plan").put("context",control));if(!closed)queueMcpCleanup(cleanup,Math.min(started+120000,android.os.SystemClock.elapsedRealtime()+2000));}catch(Exception ignored){}
@@ -841,7 +956,7 @@ public final class Activity extends android.app.Activity {
             byte[] buffer=new byte[8192];int count=-2;
             while(true){
                 originalRead=true;count=input.read(buffer);originalRead=false;if(count==-1)break;
-                if(token!=generation||closed)throw new IOException("Cancelled");
+                networkActive(token,deadline);
                 total+=count;if(total>Math.min(2*1024*1024,limit))throw new IOException("Stream exceeds the current response memory budget");
                 JSONObject part=(JSONObject)Core.call(new JSONObject().put("op","stream_feed").put("id",id).put("data",Base64.encodeToString(Arrays.copyOf(buffer,count),Base64.NO_WRAP)));
                 text.append(part.optString("delta"));long now=android.os.SystemClock.elapsedRealtime();if(metrics[2]<0&&text.length()>0)metrics[2]=now-started;
@@ -849,15 +964,15 @@ public final class Activity extends android.app.Activity {
                 if(part.has("error")){JSONArray cleanup=part.optJSONArray("cleanup");if(cleanup!=null&&!closed){queueMcpCleanup(cleanup,Math.min(started+120000,android.os.SystemClock.elapsedRealtime()+2000));cleanupHandled=true;}throw new IOException(part.getString("error"));}
                 boolean complete=part.optBoolean("complete");JSONArray controls=part.optJSONArray("controls");
                 if(controls!=null)for(int i=0;i<controls.length();i++){
-                    JSONObject response=controls.getJSONObject(i);JSONObject accepted=mcpControl(response,id,token,started);
-                    if(token!=generation||closed)throw new IOException("Cancelled during MCP control response");
+                    JSONObject response=controls.getJSONObject(i);JSONObject accepted=mcpControl(response,id,token,started,deadline);
+                    if(!alive(token))throw new IOException("Cancelled during MCP control response");
                     JSONObject ack=(JSONObject)Core.call(new JSONObject().put("op","stream_control_ack").put("id",id).put("ticket",response.get("ticket")).put("owner",response.getString("owner")).put("data",accepted.getString("data")).put("eof",accepted.getBoolean("eof")));
                     complete=ack.optBoolean("complete");
                 }
                 if(text.length()!=published&&now-previous>=250){streamProgress(token,text.toString(),ticket,started);published=text.length();previous=now;}
                 if(complete)break;
             }
-            if(count==-1&&control!=null&&control.optBoolean("resumable")&&mcpPauseOwner.equals(control.optString("owner"))&&token==generation&&!closed){
+            if(count==-1&&control!=null&&control.optBoolean("resumable")&&mcpPauseOwner.equals(control.optString("owner"))&&alive(token)){
                 try{JSONObject paused=(JSONObject)Core.call(new JSONObject().put("op","stream_suspend").put("id",id).put("owner",control.getString("owner")));finished=true;return Base64.decode(paused.getString("data"),Base64.NO_WRAP);}finally{mcpPauseOwner="";}
             }
             JSONObject complete=(JSONObject)Core.call(new JSONObject().put("op","stream_finish").put("id",id).put("eof",count==-1));finished=true;
@@ -865,7 +980,7 @@ public final class Activity extends android.app.Activity {
             if(complete.optBoolean("mcp_catalog_changed"))result.put("mcp_catalog_changed",true);
             return response;
         }catch(Exception problem){
-            if(originalRead&&control!=null&&control.optBoolean("resumable")&&mcpPauseOwner.equals(control.optString("owner"))&&token==generation&&!closed){
+            if(originalRead&&control!=null&&control.optBoolean("resumable")&&mcpPauseOwner.equals(control.optString("owner"))&&alive(token)){
                 try{JSONObject paused=(JSONObject)Core.call(new JSONObject().put("op","stream_suspend").put("id",id).put("owner",control.getString("owner")));finished=true;return Base64.decode(paused.getString("data"),Base64.NO_WRAP);}catch(Exception unavailable){throw new IOException("Stream could not retain a resume cursor: "+safe(unavailable),problem);}finally{mcpPauseOwner="";}
             }
             throw problem;
@@ -881,27 +996,29 @@ public final class Activity extends android.app.Activity {
         runOnUiThread(()->{if(token==generation&&!closed)try{dispatch("mcp_client_server_progress",new JSONObject().put("purpose",owner).put("counts",counts));}catch(JSONException error){fatal(safe(error));}});
     }
     // Platform transport only: Rust owns the destination, message and one-use acknowledgment.
-    private JSONObject mcpControl(JSONObject command,long stream,int token,long started)throws Exception{
-        long remaining=120000-(android.os.SystemClock.elapsedRealtime()-started);
-        if(token!=generation||closed||remaining<=0)throw new IOException("MCP request cancelled or timed out");
+    // The nested control request is part of the same request, so it is bound by
+    // the same deadline the stream is bound by: the one window the core decided.
+    private JSONObject mcpControl(JSONObject command,long stream,int token,long started,long deadline)throws Exception{
+        long remaining=deadline-(android.os.SystemClock.elapsedRealtime()-started);
+        if(!alive(token)||remaining<=0)throw new IOException("MCP request cancelled or timed out");
         String host=command.getString("host");int port=command.getInt("port");Socket raw=new Socket();activeConnections.add(raw);
         ScheduledFuture<?> timeout=deadlines.schedule(()->{try{raw.close();}catch(IOException ignored){}},remaining,TimeUnit.MILLISECONDS);
         try{
-            if(token!=generation||closed)throw new IOException("Cancelled before MCP control connection");
-            InetSocketAddress address=resolution.address(host,port,()->networkActive(token,started+120000));raw.connect(address,Math.min(15000,networkActive(token,started+120000)));raw.setSoTimeout(networkActive(token,started+120000));Socket connection=raw;
+            if(!alive(token))throw new IOException("Cancelled before MCP control connection");
+            InetSocketAddress address=resolution.address(host,port,()->networkActive(token,deadline));raw.connect(address,Math.min(15000,networkActive(token,deadline)));raw.setSoTimeout(networkActive(token,deadline));Socket connection=raw;
             if(command.optBoolean("tls")){SSLSocket tls=(SSLSocket)((SSLSocketFactory)SSLSocketFactory.getDefault()).createSocket(raw,host,port,true);SSLParameters params=tls.getSSLParameters();params.setEndpointIdentificationAlgorithm("HTTPS");tls.setSSLParameters(params);tls.setSoTimeout((int)remaining);tls.startHandshake();connection=tls;}
             try(Socket managed=connection){
-                if(token!=generation||closed||android.os.SystemClock.elapsedRealtime()-started>=120000)throw new IOException("Cancelled before MCP control write");
+                if(!alive(token)||android.os.SystemClock.elapsedRealtime()>=deadline)throw new IOException("Cancelled before MCP control write");
                 managed.getOutputStream().write(command.getString("wire").getBytes(StandardCharsets.UTF_8));managed.getOutputStream().flush();
                 ByteArrayOutputStream accepted=new ByteArrayOutputStream();byte[] buffer=new byte[1024];int count;InputStream input=managed.getInputStream();
                 while((count=input.read(buffer))!=-1){
-                    if(token!=generation||closed||android.os.SystemClock.elapsedRealtime()-started>=120000)throw new IOException("MCP control response cancelled or timed out");
+                    if(!alive(token)||android.os.SystemClock.elapsedRealtime()>=deadline)throw new IOException("MCP control response cancelled or timed out");
                     if(accepted.size()+count>16384)throw new IOException("MCP control acknowledgment exceeds 16 KiB");accepted.write(buffer,0,count);
                     JSONObject framing=(JSONObject)Core.call(new JSONObject().put("op","stream_control_probe").put("id",stream).put("ticket",command.get("ticket")).put("owner",command.getString("owner")).put("data",Base64.encodeToString(accepted.toByteArray(),Base64.NO_WRAP)));
                     if(framing.optBoolean("ready"))break;
                 }
                 byte[] result=accepted.toByteArray();
-                if(token!=generation||closed||android.os.SystemClock.elapsedRealtime()-started>=120000)throw new IOException("Cancelled during MCP control response");return new JSONObject().put("data",Base64.encodeToString(result,Base64.NO_WRAP)).put("eof",count==-1);
+                if(!alive(token)||android.os.SystemClock.elapsedRealtime()>=deadline)throw new IOException("Cancelled during MCP control response");return new JSONObject().put("data",Base64.encodeToString(result,Base64.NO_WRAP)).put("eof",count==-1);
             }
         }finally{timeout.cancel(false);try{raw.close();}catch(IOException ignored){}activeConnections.remove(raw);}
     }
@@ -1207,7 +1324,7 @@ public final class Activity extends android.app.Activity {
     void voiceSessionStopped(String session){if(closed||state==null||!state.optString("voice_consent").equals(session))return;media.stopVoice();try{dispatch("voice_session_stop",new JSONObject().put("voice_session",session));}catch(Exception failure){Toast.makeText(this,"Voice stopped",Toast.LENGTH_LONG).show();}}
     @Override public void onBackPressed(){if(canNavigateBack)dispatch("back");else super.onBackPressed();}
     @Override protected void onPause(){ratePaused=true;boolean background=state!=null&&VoiceSession.owns(this,state.optString("voice_consent"));if(state!=null&&state.optBoolean("voice_open")&&!background&&!media.permissionPending())dispatch("voice_suspend");media.pause(background);preserveInputs();uiStale=true;super.onPause();}
-    @Override protected void onResume(){ratePaused=false;media.resume();super.onResume();pendingReplyTitle="";pendingReplyBody="";pendingReplyChat="";if(state!=null&&!closed){dispatch("phone_access_status");refreshRateClock();openRequestedConversation();}}
+    @Override protected void onResume(){ratePaused=false;media.resume();super.onResume();if(state!=null&&!closed){deliverPendingAnnouncement();announcePendingProtectionLoss();dispatch("phone_access_status");refreshRateClock();openRequestedConversation();}}
     @Override public void onConfigurationChanged(android.content.res.Configuration configuration){super.onConfigurationChanged(configuration);viewportWidth=0;viewportHeight=0;queueViewport();}
-    @Override protected void onDestroy(){VoiceSession.release(this);TurnService.finish();media.close();closed=true;pageDeadline.clear();resolution.close();try{JSONObject expected=state==null?null:state.optJSONObject("web_expected");if(expected!=null&&!expected.optString("capture_token").isEmpty())Core.call(new JSONObject().put("op","capture_document_cancel").put("ticket",expected.getString("capture_token")));}catch(Exception ignored){}try{if(state!=null){Core.call(new JSONObject().put("op","stream_owner_cancel").put("owner",state.optString("mcp_client_expected")));}}catch(Exception ignored){}try{if(state!=null&&state.has("mcp_client_resume_token")&&!state.isNull("mcp_client_resume_token"))Core.call(new JSONObject().put("op","stream_resume_close").put("token",state.get("mcp_client_resume_token")));}catch(Exception ignored){}cleanupWorkers.shutdownNow();for(Socket socket:cleanupConnections)try{socket.close();}catch(IOException ignored){}rateHandler.removeCallbacksAndMessages(null);stopExecution();generation++;cancelDocuments();for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}try{Core.call(new JSONObject().put("op","cancel_tool"));}catch(Throwable ignored){}deadlines.shutdownNow();workers.shutdownNow();super.onDestroy();}
+    @Override protected void onDestroy(){VoiceSession.release(this);TurnService.detach(this);media.close();closed=true;pageDeadline.clear();resolution.close();try{JSONObject expected=state==null?null:state.optJSONObject("web_expected");if(expected!=null&&!expected.optString("capture_token").isEmpty())Core.call(new JSONObject().put("op","capture_document_cancel").put("ticket",expected.getString("capture_token")));}catch(Exception ignored){}try{if(state!=null){Core.call(new JSONObject().put("op","stream_owner_cancel").put("owner",state.optString("mcp_client_expected")));}}catch(Exception ignored){}try{if(state!=null&&state.has("mcp_client_resume_token")&&!state.isNull("mcp_client_resume_token"))Core.call(new JSONObject().put("op","stream_resume_close").put("token",state.get("mcp_client_resume_token")));}catch(Exception ignored){}cleanupWorkers.shutdownNow();for(Socket socket:cleanupConnections)try{socket.close();}catch(IOException ignored){}rateHandler.removeCallbacksAndMessages(null);stopExecution();generation++;cancelDocuments();for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}try{Core.call(new JSONObject().put("op","cancel_tool"));}catch(Throwable ignored){}deadlines.shutdownNow();workers.shutdownNow();super.onDestroy();}
 }

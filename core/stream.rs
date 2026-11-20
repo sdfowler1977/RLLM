@@ -373,7 +373,10 @@ impl Transfer {
                 // final usage, or repeat the same terminal marker. These carry
                 // no new choice data. Never discard new text/structured fields,
                 // change the completion reason, or extend past [DONE].
-                let empty=matches!(delta,Obj(fields) if fields.iter().all(|(key,value)| value==&Null || (key=="content" && value==&Str(String::new()))));
+                // A repeat names the same completion reason; only then may it
+                // restate the assistant role, as MiniMax's repeated marker does.
+                let repeat=choice.get("finish_reason").ok().and_then(|reason|reason.text().ok())==Some(completed.as_str());
+                let empty=matches!(delta,Obj(fields) if fields.iter().all(|(key,value)| value==&Null || (key=="content" && value==&Str(String::new())) || (repeat && key=="role" && value==&Str("assistant".into()))));
                 if !empty{return Err("Choice data followed its completion".into());}
                 if let Ok(reason)=choice.get("finish_reason") {if reason!=&Null && reason.text()?!=completed{return Err("Choice completion reason changed after completion".into());}}
                 continue;
@@ -1072,6 +1075,18 @@ mod checks {
                     assert_eq!(output.get("usage").unwrap().get("completion_tokens"),Ok(&Num("9".into())));
                 }}
             }
+        }
+    }
+    #[test] fn sse_repeated_terminal_marker_may_restate_the_assistant_role(){
+        let trailer=r#"data: {"choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"stop"}]}"#.to_string()+"\n\n";
+        let body=event_body().replace("data: [DONE]",&(trailer.clone()+&trailer+"data: [DONE]"));
+        for chunked in [false,true] {let bytes=wire(&body,chunked);for size in [1,7,bytes.len()] {
+            let mut t=chat_transfer();for part in bytes.chunks(size){t.feed(part).unwrap();}
+            assert_eq!(t.text,"café 中文");t.finish().unwrap();
+        }}
+        for choice in [r#"{"index":0,"delta":{"content":"new","role":"assistant"},"finish_reason":"stop"}"#,r#"{"index":0,"delta":{"role":"user"},"finish_reason":"stop"}"#,r#"{"index":0,"delta":{"role":"assistant"},"finish_reason":"length"}"#] {
+            let body=event_body().replace("data: [DONE]",&(format!("data: {{\"choices\":[{choice}]}}\n\n")+"data: [DONE]"));
+            let mut t=chat_transfer();assert!(t.feed(&wire(&body,false)).is_err());assert_eq!(t.text,"café 中文");
         }
     }
     #[test] fn sse_terminal_trailers_cannot_change_choice_data(){

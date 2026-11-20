@@ -1,9 +1,9 @@
 {
   "state": "in_progress; signed candidate",
   "version": 1794270237,
-  "distributed_baseline": 1794569619,
+  "distributed_baseline": 1795208207,
   "distributed_baselines": {
-    "com.local.client.lab": 1794569619
+    "com.local.client.lab": 1795208207
   },
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
@@ -16,14 +16,22 @@
     "sha256": "86b7d74156a11dc6ee6d70866bb480e30b75bac57c3400878c86b9f205921c3d"
   },
   "release_candidate": {
-    "path": "APK/RLLM__Lab-46e392e-main-tree__2026-11-14__01-46-09Z.apk",
+    "path": "release/RLLM-Lab.apk",
     "package": "com.local.client.lab",
-    "version_code": 1794270239,
-    "bytes": 7837714,
-    "sha256": "c7bfec698e68315bfaf5f618e0453a366b811ab3f39f0966f28b73d76a39e9d2",
+    "version_code": 1795208207,
+    "bytes": 7940042,
+    "sha256": "fe9cf8e7670f901fae00ca3f4b82c049c5884397bd2373a45b96073764f16224",
     "above_distributed_baseline": false
   },
   "superseded_releases": [
+    {
+      "path": "APK/RLLM__Lab-46e392e-main-tree__2026-11-14__01-46-09Z.apk",
+      "package": "com.local.client.lab",
+      "version_code": 1794270239,
+      "bytes": 7837714,
+      "sha256": "c7bfec698e68315bfaf5f618e0453a366b811ab3f39f0966f28b73d76a39e9d2",
+      "superseded_by_version_code": 1795208207
+    },
     {
       "path": "APK/RLLM__Lab-46e392e__2026-11-14__01-30-59Z.apk",
       "package": "com.local.client.lab",

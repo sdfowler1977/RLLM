@@ -2,8 +2,10 @@
 //! This module neither grants access nor runs observed code. Policy comes from
 //! its trusted caller; Ask and Deny omit the affected observation.
 use std::{ffi::{CString, OsString}, fs::{self, File, Metadata, OpenOptions},
-    io::Read, os::{fd::{AsRawFd, FromRawFd}, unix::{ffi::{OsStrExt, OsStringExt}, fs::{MetadataExt, OpenOptionsExt}}},
-    path::{Component, Path, PathBuf}, time::{Duration, Instant}};
+    io::Read, path::{Component, Path, PathBuf}, time::{Duration, Instant}};
+use crate::host_fs::{MetadataExt, OpenOptionsExt};
+#[cfg(unix)]
+use std::os::{fd::{AsRawFd, FromRawFd}, unix::ffi::{OsStrExt, OsStringExt}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Access { ListDirectory, ReadHeader }
@@ -98,7 +100,21 @@ const O_PATH:i32=0o10000000;
 const O_NOFOLLOW:i32=0o400000;
 const O_CLOEXEC:i32=0o2000000;
 const O_DIRECTORY:i32=0o200000;
+fn os_bytes(value:&std::ffi::OsStr)->&[u8] {
+    #[cfg(unix)]
+    { OsStrExt::as_bytes(value) }
+    #[cfg(windows)]
+    { value.as_encoded_bytes() }
+}
+fn os_owned(bytes:&[u8])->OsString {
+    #[cfg(unix)]
+    { OsStringExt::from_vec(bytes.to_vec()) }
+    #[cfg(windows)]
+    { unsafe { std::ffi::OsStr::from_encoded_bytes_unchecked(bytes).to_os_string() } }
+}
+#[cfg(unix)]
 unsafe extern "C" { fn openat(fd:i32,path:*const std::ffi::c_char,flags:i32,...)->i32; }
+#[cfg(unix)]
 fn open_child(dir:&File,name:&[u8])->Result<File,String> {
     if name.is_empty() || name==b"." || name==b".." || name.contains(&b'/') || name.contains(&0) {
         return Err("Invalid directory entry name".into());
@@ -109,22 +125,40 @@ fn open_child(dir:&File,name:&[u8])->Result<File,String> {
     if fd<0 { Err(std::io::Error::last_os_error().to_string()) } else { Ok(unsafe{File::from_raw_fd(fd)}) }
 }
 
+#[cfg(windows)]
+fn open_child(dir:&File,name:&[u8])->Result<File,String> {
+    if name.is_empty() || name==b"." || name==b".." || name.contains(&b'/') || name.contains(&b'\\') || name.contains(&0) {
+        return Err("Invalid directory entry name".into());
+    }
+    let parent=crate::host_fs::handle_path(dir).map_err(|e|e.to_string())?;
+    let child=parent.join(os_owned(name));
+    let mut options=OpenOptions::new();
+    options.read(true).custom_flags(O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+    options.open(&child).map_err(|e|e.to_string())
+}
 // Linux/Android 64-bit dirent ABI used by both supported Android targets.
+#[cfg(unix)]
 #[repr(C)] struct Dirent { ino:u64, offset:i64, length:u16, kind:u8, name:[u8;NAME_FIELD_BYTES] }
+#[cfg(unix)]
 const NAME_FIELD_BYTES: usize = 256;
+#[cfg(unix)]
 unsafe extern "C" {
     fn fdopendir(fd:i32)->*mut std::ffi::c_void;
     fn readdir(dir:*mut std::ffi::c_void)->*mut u8;
     fn closedir(dir:*mut std::ffi::c_void)->i32;
 }
-#[cfg(target_os="android")] unsafe extern "C" {fn __errno()->*mut i32;}
-#[cfg(not(target_os="android"))] unsafe extern "C" {fn __errno_location()->*mut i32;}
+#[cfg(all(unix, target_os="android"))] unsafe extern "C" {fn __errno()->*mut i32;}
+#[cfg(all(unix, not(target_os="android")))] unsafe extern "C" {fn __errno_location()->*mut i32;}
+#[cfg(unix)]
 fn errno()->*mut i32 {
     #[cfg(target_os="android")] {unsafe{__errno()}}
     #[cfg(not(target_os="android"))] {unsafe{__errno_location()}}
 }
+#[cfg(unix)]
 struct DirectoryEntries(*mut std::ffi::c_void);
+#[cfg(unix)]
 impl Drop for DirectoryEntries {fn drop(&mut self){unsafe{closedir(self.0);}}}
+#[cfg(unix)]
 impl DirectoryEntries {
     fn new(held:&File)->Result<Self,String>{
         let fd=unsafe{openat(held.as_raw_fd(),c".".as_ptr(),O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC)};
@@ -147,6 +181,7 @@ impl DirectoryEntries {
         }
     }
 }
+#[cfg(unix)]
 fn open_regular(parent:&File,name:&[u8])->Result<File,String>{
     let name=CString::new(name).map_err(|_|"Invalid file name")?;
     // Nonblocking/no-controlling-terminal flags keep substituted special nodes
@@ -154,13 +189,34 @@ fn open_regular(parent:&File,name:&[u8])->Result<File,String>{
     let fd=unsafe{openat(parent.as_raw_fd(),name.as_ptr(),O_NOFOLLOW|O_CLOEXEC|0o4000|0o400)};
     if fd<0{Err(std::io::Error::last_os_error().to_string())}else{Ok(unsafe{File::from_raw_fd(fd)})}
 }
+#[cfg(windows)]
+struct DirectoryEntries { names: std::vec::IntoIter<Vec<u8>> }
+#[cfg(windows)]
+impl DirectoryEntries {
+    fn new(held:&File)->Result<Self,String>{
+        let meta=held.metadata().map_err(|e|e.to_string())?;
+        if !meta.is_dir() || meta.file_type().is_symlink() { return Err("Held directory listing unavailable".into()); }
+        let path=crate::host_fs::handle_path(held).map_err(|e|e.to_string())?;
+        let mut names=Vec::new();
+        for entry in fs::read_dir(&path).map_err(|e|e.to_string())? {
+            let entry=entry.map_err(|e|e.to_string())?;
+            let bytes=entry.file_name().as_encoded_bytes().to_vec();
+            if bytes==b"." || bytes==b".." { continue; }
+            names.push(bytes);
+        }
+        Ok(Self { names: names.into_iter() })
+    }
+    fn next(&mut self)->Result<Option<Vec<u8>>,String> { Ok(self.names.next()) }
+}
+#[cfg(windows)]
+fn open_regular(parent:&File,name:&[u8])->Result<File,String>{ open_child(parent,name) }
 fn kind(m:&Metadata)->Kind {
     if m.is_dir(){Kind::Directory}else if m.is_file(){Kind::File}else if m.file_type().is_symlink(){Kind::Symlink}else{Kind::Other}
 }
 fn normalize(p:&Path)->Result<PathBuf,String> {
-    if p.as_os_str().as_bytes().len()>4096 {return Err("Selected directory path exceeds 4096 bytes".into());}
+    if os_bytes(p.as_os_str()).len()>4096 {return Err("Selected directory path exceeds 4096 bytes".into());}
     let mut out=PathBuf::new();for c in p.components(){match c {
-        Component::Normal(n)=>{if n.as_bytes().contains(&0){return Err("Selected path contains NUL".into());}out.push(n)},
+        Component::Normal(n)=>{if os_bytes(n).contains(&0){return Err("Selected path contains NUL".into());}out.push(n)},
         Component::CurDir=>{},_=>return Err("Select a relative directory within this workspace".into()),
     }}Ok(out)
 }
@@ -169,7 +225,7 @@ fn open_relative(root:&File,path:&Path)->Result<File,String> {
     for c in path.components() {
         let Component::Normal(n)=c else{return Err("Non-normal observation path".into());};
         if !current.metadata().map_err(|e|e.to_string())?.is_dir(){return Err("An observation parent is not a directory".into());}
-        current=open_child(&current,n.as_bytes())?;
+        current=open_child(&current,os_bytes(n))?;
         if current.metadata().map_err(|e|e.to_string())?.file_type().is_symlink(){return Err("Observation does not follow symbolic links".into());}
     }Ok(current)
 }
@@ -198,7 +254,7 @@ impl<P,C> Walker<'_,P,C> where P:FnMut(&Path,Access)->Decision,C:Fn()->bool {
         match(self.policy)(path,access){Decision::Allow=>true,Decision::Ask=>{self.omit(i,"Current caller policy requires review; no access granted");false},Decision::Deny=>{self.omit(i,"Current caller policy denies this access");false}}
     }
     fn add(&mut self,path:&Path,k:Kind)->Option<usize> {
-        let raw=path.as_os_str().as_bytes();let cost=raw.len()+512;
+        let raw=os_bytes(path.as_os_str());let cost=raw.len()+512;
         if self.report.occurrences.len()>=self.limits.entries || self.retained_cost.saturating_add(self.pending_cost).saturating_add(cost)>self.limits.report_bytes {
             self.partial("Occurrence or report-memory bound reached; remaining names were not retained");self.exhausted=true;return None;
         }
@@ -248,8 +304,8 @@ impl<P,C> Walker<'_,P,C> where P:FnMut(&Path,Access)->Decision,C:Fn()->bool {
         names.sort();names.dedup();
         if truncated{self.omit(index,"Only a bounded subset of directory entries was enumerated");}
         for name in names {
-            if !self.check()?{self.omit(index,"Directory children were not all observed within the work bound");break;}let next=path.join(OsString::from_vec(name.clone()));
-            if next.as_os_str().as_bytes().len()>4096{self.omit(index,"An entry path exceeded 4096 bytes and was omitted");continue;}
+            if !self.check()?{self.omit(index,"Directory children were not all observed within the work bound");break;}let next=path.join(os_owned(&name));
+            if os_bytes(next.as_os_str()).len()>4096{self.omit(index,"An entry path exceeded 4096 bytes and was omitted");continue;}
             let Some(i)=self.add(&next,Kind::Unknown)else{break;};
             let f=match open_child(dir,&name){Ok(v)=>v,Err(_)=>{self.omit(i,"Entry could not be opened by its held parent");continue;}};
             let meta=match f.metadata(){Ok(v)=>v,Err(_)=>{self.omit(i,"Entry identity unavailable");continue;}};let k=kind(&meta);let identity=Identity::of(&meta);
@@ -288,7 +344,7 @@ where P:FnMut(&Path,Access)->Decision,C:Fn()->bool {
     let dir=open_relative(&root_file,&selected)?;let m=dir.metadata().map_err(|e|e.to_string())?;
     if !m.is_dir(){return Err("Selected observation target is not a directory".into());}
     let selected_identity=Identity::of(&m);
-    let report=Report{selected:selected.as_os_str().as_bytes().to_vec(),workspace_identity:root_identity.clone(),occurrences:Vec::new(),contains:Vec::new(),coverage:Coverage::Complete,notes:Vec::new(),sampled_bytes:0,bytes_read:0};
+    let report=Report{selected:os_bytes(selected.as_os_str()).to_vec(),workspace_identity:root_identity.clone(),occurrences:Vec::new(),contains:Vec::new(),coverage:Coverage::Complete,notes:Vec::new(),sampled_bytes:0,bytes_read:0};
     let mut walker=Walker{limits,policy,cancelled,started:Instant::now(),report,retained_cost:0,pending_cost:0,exhausted:false};
     let index=walker.add(&selected,Kind::Directory).ok_or("No room for selected directory identity")?;
     walker.report.occurrences[index].identity=Some(selected_identity.clone());walker.walk(&dir,&selected,index,0)?;
@@ -304,7 +360,7 @@ where P:FnMut(&Path,Access)->Decision,C:Fn()->bool {
         if !walker.check()?{for pending in i..walker.report.occurrences.len(){walker.omit(pending,"Final identity validation did not complete within the work bound");}break;}
         let o=&walker.report.occurrences[i];let Some(before)=o.identity.clone()else{continue;};
         if o.kind==Kind::Symlink{continue;}
-        let path=PathBuf::from(OsString::from_vec(o.path.clone()));
+        let path=PathBuf::from(os_owned(&o.path));
         let current=open_relative(&root_file,&path).and_then(|f|f.metadata().map_err(|e|e.to_string())).map(|m|Identity::of(&m)).ok();
         if current.as_ref()!=Some(&before){walker.changed(i,"Retained entry changed before report publication");}
     }
@@ -313,7 +369,7 @@ where P:FnMut(&Path,Access)->Decision,C:Fn()->bool {
     // Refuse this report rather than publish data whose authority was revoked.
     for occurrence in &walker.report.occurrences {
         if cancelled(){return Err("Directory observation cancelled; no completed report published".into());}
-        let path=PathBuf::from(OsString::from_vec(occurrence.path.clone()));
+        let path=PathBuf::from(os_owned(&occurrence.path));
         if occurrence.listing_observed && (walker.policy)(&path,Access::ListDirectory)!=Decision::Allow {
             return Err("Directory listing policy changed before publication; no report returned".into());
         }
@@ -325,8 +381,9 @@ where P:FnMut(&Path,Access)->Decision,C:Fn()->bool {
     walker.report.occurrences.sort_by(|a,b|a.path.cmp(&b.path));
     for (i,o) in walker.report.occurrences.iter().enumerate(){
         if o.path==walker.report.selected{continue;}
-        let p=Path::new(std::ffi::OsStr::from_bytes(&o.path));
-        let parent=p.parent().unwrap_or(Path::new("")).as_os_str().as_bytes();
+        let owned=os_owned(&o.path);
+        let p=Path::new(&owned);
+        let parent=os_bytes(p.parent().unwrap_or(Path::new("")).as_os_str());
         if let Ok(id)=walker.report.occurrences.binary_search_by(|entry|entry.path.as_slice().cmp(parent)){
             walker.report.contains.push(Contains{parent:id,child:i});
         }

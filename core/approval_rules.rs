@@ -9,7 +9,7 @@ fn sessions()->&'static Mutex<Vec<Json>>{SESSION.get_or_init(||Mutex::new(vec![]
 fn root(st:&Json)->String{text(st,"approval_root")}
 pub(super) fn namespace(st:&mut Json,directory:&str){
  let canonical=Path::new(directory).canonicalize().ok().filter(|p|p.is_dir()).and_then(|p|p.to_str().map(str::to_owned)).unwrap_or_default();
- let identity=fs::metadata(&canonical).ok().map(|m|{use std::os::unix::fs::MetadataExt;format!("{}:{}",m.dev(),m.ino())}).unwrap_or_default();put(st,"approval_root_identity",s(&identity));
+ let identity=fs::metadata(&canonical).ok().map(|m|{use crate::host_fs::MetadataExt;format!("{}:{}",m.dev(),m.ino())}).unwrap_or_default();put(st,"approval_root_identity",s(&identity));
  put(st,"approval_root",s(&canonical));
 }
 pub(super) fn binding(st:&Json)->Json{

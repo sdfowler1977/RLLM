@@ -215,11 +215,27 @@ fn transform(rounds: &[[u8; 16]], nonce: &[u8], input: &[u8]) -> Vec<u8> {
 }
 
 pub(crate) fn random_bytes(count: usize) -> Result<Vec<u8>> {
-    use std::io::Read;
-    let mut file = std::fs::File::open("/dev/urandom")
-        .map_err(|_| "no local randomness is available for state sealing".to_string())?;
     let mut bytes = vec![0u8; count];
-    file.read_exact(&mut bytes).map_err(|_| "local randomness was incomplete".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        let mut file = std::fs::File::open("/dev/urandom")
+            .map_err(|_| "no local randomness is available for state sealing".to_string())?;
+        file.read_exact(&mut bytes).map_err(|_| "local randomness was incomplete".to_string())?;
+    }
+    #[cfg(windows)]
+    {
+        if count > u32::MAX as usize {
+            return Err("local randomness request is too large".into());
+        }
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn SystemFunction036(buffer: *mut u8, len: u32) -> u8;
+        }
+        if unsafe { SystemFunction036(bytes.as_mut_ptr(), count as u32) } == 0 {
+            return Err("no local randomness is available for state sealing".into());
+        }
+    }
     Ok(bytes)
 }
 

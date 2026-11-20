@@ -3,7 +3,7 @@
 use super::*;
 use std::collections::BTreeSet;
 use std::io::{Read,Seek,SeekFrom};
-use std::os::unix::fs::{OpenOptionsExt,MetadataExt};
+use crate::host_fs::{OpenOptionsExt,MetadataExt};
 use std::sync::{Arc,Mutex,OnceLock,atomic::{AtomicBool,AtomicUsize,Ordering}};
 use std::time::{Duration,Instant};
 const VERTICES:usize=300_000;

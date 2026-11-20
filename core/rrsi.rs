@@ -10,7 +10,7 @@
 use super::*;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use crate::host_fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 const NOFOLLOW: i32 = 131072;

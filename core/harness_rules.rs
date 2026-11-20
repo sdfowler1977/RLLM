@@ -91,7 +91,7 @@ pub(super) fn request(st:&Json,messages:&mut Vec<Json>){
  if let Some(first)=messages.first_mut(){put(first,"content",s(&format!("{prompt}\nLOWER-LEVEL REQUEST INSTRUCTIONS:\n{}",text(first,"content"))));}
 }
 fn read_source(path:&Path)->Result<String>{
- use std::os::unix::fs::{OpenOptionsExt,MetadataExt};let before=fs::symlink_metadata(path).map_err(|_|"unreadable project instructions")?;if !before.is_file()||before.file_type().is_symlink(){return Err("project instruction source is not a regular non-symlink file".into());}
+ use crate::host_fs::{OpenOptionsExt,MetadataExt};let before=fs::symlink_metadata(path).map_err(|_|"unreadable project instructions")?;if !before.is_file()||before.file_type().is_symlink(){return Err("project instruction source is not a regular non-symlink file".into());}
  let mut f=fs::OpenOptions::new().read(true).custom_flags(0x20000).open(path).map_err(|_|"cannot open project instruction source")?;let m=f.metadata().map_err(|_|"cannot identify project instructions")?;if m.dev()!=before.dev()||m.ino()!=before.ino(){return Err("project instruction identity changed".into());}let mut b=Vec::new();(&mut f).take(65537).read_to_end(&mut b).map_err(|_|"cannot read project instructions")?;let after=f.metadata().map_err(|_|"cannot reidentify project instructions")?;if after.dev()!=m.dev()||after.ino()!=m.ino()||after.len()!=m.len()||after.mtime()!=m.mtime()||after.mtime_nsec()!=m.mtime_nsec(){return Err("project instruction source changed while being read".into());}if b.len()>65536{return Err("project instructions exceed 64 KiB; select a smaller project instruction source".into());}String::from_utf8(b).map_err(|_|"project instructions must be UTF-8".into())
 }
 pub(super) fn refresh(st:&mut Json){

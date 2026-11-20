@@ -4,8 +4,10 @@
 use super::*;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use crate::host_fs::OpenOptionsExt;
+#[cfg(unix)]
 use std::os::unix::io::{AsRawFd, FromRawFd};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -174,6 +176,7 @@ fn strings(value: &Json, key: &str) -> Result<Vec<String>> {
         _ => Err(format!("{key} must be an array")),
     }
 }
+#[cfg(unix)]
 fn errno() -> i32 {
     unsafe extern "C" {
         #[cfg(target_os = "linux")]
@@ -194,6 +197,7 @@ fn errno() -> i32 {
         0
     }
 }
+#[cfg(unix)]
 fn open_at(parent: &File, name: &str, flags: i32) -> std::result::Result<File, i32> {
     let c_name = std::ffi::CString::new(name).map_err(|_| 22)?;
     // SAFETY: parent is an open directory fd. O_NOFOLLOW is always included by callers.
@@ -205,6 +209,7 @@ fn open_at(parent: &File, name: &str, flags: i32) -> std::result::Result<File, i
         Ok(unsafe { File::from_raw_fd(fd) })
     }
 }
+#[cfg(unix)]
 unsafe extern "C" {
     fn openat(fd: i32, path: *const std::ffi::c_char, flags: i32, ...) -> i32;
     fn fdopendir(fd: i32) -> *mut std::ffi::c_void;
@@ -212,12 +217,15 @@ unsafe extern "C" {
     fn closedir(dir: *mut std::ffi::c_void) -> i32;
     fn close(fd: i32) -> i32;
 }
+#[cfg(unix)]
 struct Listed(*mut std::ffi::c_void);
+#[cfg(unix)]
 impl Drop for Listed {
     fn drop(&mut self) {
         unsafe { closedir(self.0) };
     }
 }
+#[cfg(unix)]
 fn list_dir(dir: &File) -> Result<Vec<String>> {
     let dot = std::ffi::CString::new(".").map_err(|_| "invalid directory name")?;
     // SAFETY: "." is relative to the already-opened directory. fdopendir owns this fd.
@@ -267,6 +275,7 @@ fn list_dir(dir: &File) -> Result<Vec<String>> {
     }
     Ok(names)
 }
+#[cfg(unix)]
 fn errno_clear() {
     unsafe extern "C" {
         #[cfg(target_os = "linux")]
@@ -283,12 +292,14 @@ fn errno_clear() {
         *__errno() = 0;
     }
 }
+#[cfg(unix)]
 enum Opened {
     Dir(File),
     File(File),
     Symlink,
     Other,
 }
+#[cfg(unix)]
 fn open_entry(parent: &File, name: &str) -> Result<Opened> {
     match open_at(parent, name, DIRECTORY | NOFOLLOW | CLOEXEC) {
         Ok(file) => Ok(Opened::Dir(file)),
@@ -326,6 +337,7 @@ struct Walk {
     bytes: u64,
     symlinks: usize,
 }
+#[cfg(unix)]
 fn walk(dir: &File, rel: &str, depth: usize, skip: &[String], state: &mut Walk) -> Result<()> {
     if depth > MAX_DEPTH {
         return Err("source walk depth bound exceeded".into());
@@ -359,6 +371,7 @@ fn walk(dir: &File, rel: &str, depth: usize, skip: &[String], state: &mut Walk) 
     }
     Ok(())
 }
+#[cfg(unix)]
 fn tree(root: &Path, skip: &[String]) -> Result<(String, usize, usize)> {
     let dir = OpenOptions::new()
         .read(true)
@@ -376,6 +389,77 @@ fn tree(root: &Path, skip: &[String]) -> Result<(String, usize, usize)> {
         manifest.push('\n');
     }
     Ok((sha256(manifest.as_bytes()), state.files.len(), state.symlinks))
+}
+#[cfg(windows)]
+fn tree(root: &Path, skip: &[String]) -> Result<(String, usize, usize)> {
+    let meta = fs::symlink_metadata(root).map_err(|error| error.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err("source root must be a real directory".into());
+    }
+    let mut state = Walk { files: Vec::new(), entries: 0, bytes: 0, symlinks: 0 };
+    walk_path(root, "", 0, skip, &mut state)?;
+    state.files.sort();
+    let mut manifest = String::new();
+    for (path, digest) in &state.files {
+        manifest.push_str(path);
+        manifest.push('\n');
+        manifest.push_str(digest);
+        manifest.push('\n');
+    }
+    Ok((sha256(manifest.as_bytes()), state.files.len(), state.symlinks))
+}
+#[cfg(windows)]
+fn walk_path(dir: &Path, rel: &str, depth: usize, skip: &[String], state: &mut Walk) -> Result<()> {
+    if depth > MAX_DEPTH {
+        return Err("source walk depth bound exceeded".into());
+    }
+    let mut names = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.contains(['/', '\\', '\0']) {
+            return Err("source filename is not a single path segment".into());
+        }
+        names.push(name);
+        if names.len() > MAX_PER_DIR {
+            return Err("directory entry bound exceeded".into());
+        }
+    }
+    names.sort();
+    if names.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("directory changed during enumeration".into());
+    }
+    for name in names {
+        state.entries += 1;
+        if state.entries > MAX_ENTRIES {
+            return Err("source walk entry bound exceeded".into());
+        }
+        if SKIP_DIRS.contains(&name.as_str()) {
+            continue;
+        }
+        let child_rel = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+        let path = dir.join(&name);
+        let meta = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if meta.file_type().is_symlink() {
+            state.symlinks += 1;
+            continue;
+        }
+        if meta.is_dir() {
+            walk_path(&path, &child_rel, depth + 1, skip, state)?;
+        } else if meta.is_file() {
+            if skip.iter().any(|item| item == &child_rel) {
+                continue;
+            }
+            let len = meta.len();
+            state.bytes = state.bytes.checked_add(len).ok_or("source walk overflow")?;
+            if state.bytes > MAX_TOTAL {
+                return Err("source walk byte bound exceeded".into());
+            }
+            let bytes = read_regular(&path, MAX_FILE)?;
+            state.files.push((child_rel, sha256(&bytes)));
+        }
+    }
+    Ok(())
 }
 fn read_regular(path: &Path, max: u64) -> Result<Vec<u8>> {
     let meta = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
@@ -537,11 +621,14 @@ pub(crate) fn plan(value: &Json) -> Result<Json> {
     ]))
 }
 
+#[cfg(unix)]
 unsafe extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
     fn fcntl(fd: i32, cmd: i32, ...) -> i32;
 }
+#[cfg(unix)]
 struct ChildGroup(i32);
+#[cfg(unix)]
 impl Drop for ChildGroup {
     fn drop(&mut self) {
         unsafe {
@@ -549,6 +636,7 @@ impl Drop for ChildGroup {
         }
     }
 }
+#[cfg(unix)]
 fn set_nonblock(fd: i32) -> bool {
     let flags = unsafe { fcntl(fd, 3) };
     flags >= 0 && unsafe { fcntl(fd, 4, flags | NONBLOCK) } >= 0
@@ -608,6 +696,7 @@ fn bound_refusal(code: Option<i32>, out: &Captured, err: &Captured) -> String {
 /// One bounded child runner for every self-build leg. The sanctioned plan steps, a
 /// probe and the reviewed builder/gate all run through this runner, which owns the
 /// child process group and stops it on timeout or cancellation.
+#[cfg(unix)]
 fn bounded_child(
     root: &Path,
     program: &str,
@@ -670,6 +759,33 @@ fn bounded_child(
         return Err(bound_refusal(code, &out, &err));
     }
     Ok(super::execution::BoundedOutput { code, stdout: out.text(), stderr: err.text() })
+}
+#[cfg(windows)]
+fn bounded_child(
+    root: &Path,
+    program: &str,
+    args: &[String],
+    wall: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<super::execution::BoundedOutput> {
+    if wall.is_zero() || wall > Duration::from_secs(900) {
+        return Err("Child process limit must be from 1 millisecond through 900 seconds".into());
+    }
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    scrub_carried(&mut command);
+    if program == "git" {
+        command.env_remove("GIT_DIR");
+        command.env_remove("GIT_WORK_TREE");
+        command.env_remove("GIT_INDEX_FILE");
+        command.env_remove("GIT_NAMESPACE");
+    }
+    super::execution::spawn_bounded(program, command, wall, cancelled)
 }
 /// The journal verb has no caller-held cancellation handle, so its own legs stay
 /// wall-bound exactly as they were under the runner this seam replaced.
@@ -1124,8 +1240,25 @@ pub(crate) fn handoff(value: &Json) -> Result<Json> {
     }
     let mut command = Command::new(&binary);
     command.args(&argv[1..]);
-    let error = CommandExt::exec(&mut command);
+    let error = replace_image(&mut command);
     Err(format!("successor exec failed: {error}"))
+}
+fn replace_image(command: &mut Command) -> std::io::Error {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        return CommandExt::exec(command);
+    }
+    #[cfg(windows)]
+    {
+        match command.spawn() {
+            Ok(mut child) => match child.wait() {
+                Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+                Err(error) => error,
+            },
+            Err(error) => error,
+        }
+    }
 }
 
 fn hex_width(value: &str, width: usize) -> bool {
@@ -1416,7 +1549,7 @@ struct CommitPermit {
 static COMMIT_PERMITS: OnceLock<Mutex<BTreeMap<String, CommitPermit>>> = OnceLock::new();
 
 fn commit_binding(value: &Json) -> Result<String> {
-    use std::os::unix::fs::MetadataExt;
+    use crate::host_fs::MetadataExt;
     let root = root_of(value)?.canonicalize().map_err(|error| error.to_string())?;
     let meta = fs::metadata(&root).map_err(|error| error.to_string())?;
     let mut bound = value.clone();
@@ -1442,8 +1575,7 @@ pub(crate) fn orchestrator_commit_permit(state: &Json, value: &Json) -> Result<J
     if root != approved { return Err("Commit review workspace differs from the selected workspace".into()); }
     let binding = commit_binding(value)?;
     let head = read_head_commit(&require_git_dir(&root)?)?;
-    let mut entropy = [0u8; 32];
-    File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut entropy))
+    let entropy = super::state_crypto::random_bytes(32)
         .map_err(|error| format!("Commit permit entropy unavailable: {error}"))?;
     let token = sha256(&entropy);
     let mut permits = COMMIT_PERMITS.get_or_init(|| Mutex::new(BTreeMap::new())).lock()
@@ -1572,7 +1704,7 @@ pub(crate) fn resume(value: &Json) -> Result<Json> {
     }
     let mut command = Command::new(&binary);
     command.args(strings(value, "args")?);
-    let error = CommandExt::exec(&mut command);
+    let error = replace_image(&mut command);
     Err(format!("successor exec failed: {error}"))
 }
 
@@ -2181,7 +2313,14 @@ pub(crate) fn durable_successor_rows(journal: &Path) -> Result<Vec<Json>> {
 }
 fn remember_exit(tracked: &mut Tracked, status: std::process::ExitStatus) {
     tracked.exit = status.code();
-    tracked.signal = std::os::unix::process::ExitStatusExt::signal(&status);
+    #[cfg(unix)]
+    {
+        tracked.signal = std::os::unix::process::ExitStatusExt::signal(&status);
+    }
+    #[cfg(windows)]
+    {
+        tracked.signal = None;
+    }
     tracked.exit_observed = true;
 }
 // A spawn that carried a journal path appends its exit beside that journal.
@@ -3913,7 +4052,7 @@ mv "$tmp" "$1.done"
         }
     }
     fn subject_stamp(path: &Path) -> (u64, u64, String) {
-        use std::os::unix::fs::MetadataExt;
+        use crate::host_fs::MetadataExt;
         let meta = fs::symlink_metadata(path).unwrap();
         let bytes = fs::read(path).unwrap();
         (meta.ino(), meta.len(), sha256(&bytes))

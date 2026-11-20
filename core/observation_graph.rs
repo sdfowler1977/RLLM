@@ -64,7 +64,7 @@ pub(super) fn validate_record(graphs:&Json,record:&Json)->Result<()>{
  for (i,g)in items.iter().enumerate(){
   validate(g)?;if text(g,"kind")=="web"{web_evidence::validate_record(g,record)?;continue;}if binary_evidence::is_binary(g){binary_evidence::validate_record(g,record)?;}if text(g,"kind")=="complete_file"&&text(get(record,"args"),"content")!="complete_digest"{return Err(fail());}let identity=get(g,"workspace_identity");let namespace=format!("{}:{}",get(identity,"dev").string(),get(identity,"ino").string());if namespace!=text(record,"workspace_identity"){return Err(fail());}
   let source=text(get(record,"args"),if i==0{"path"}else{"other"});let mut normalized=std::path::PathBuf::new();for component in std::path::Path::new(&source).components(){match component{std::path::Component::Normal(part)=>normalized.push(part),std::path::Component::CurDir=>{},_=>return Err(fail())}}
-  use std::os::unix::ffi::OsStrExt;if decode_path(get(g,"selected_hex")).as_deref()!=Some(normalized.as_os_str().as_bytes()){return Err(fail());}
+  if decode_path(get(g,"selected_hex")).as_deref()!=Some(normalized.as_os_str().as_encoded_bytes()){return Err(fail());}
  }Ok(())
 }
 pub(super) fn envelope(display:String,snapshots:Result<Vec<Json>>,budget:usize)->String{

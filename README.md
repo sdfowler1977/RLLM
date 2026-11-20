@@ -1,6 +1,52 @@
 # RLLM
 
-Current signed candidate 1794270237 includes the MCP connections, conversation menu, web search, transport and authorization changes described in the release notes. Owner validation, unavailable historical comparisons and pending device/independent acceptance are recorded separately.
+**Your models. Your devices. One app.**
+
+RLLM is a native client for large language models that runs on Android phones and Windows on ARM PCs from a single Rust core. Point it at a model you run yourself or at a hosted API, and you get a fast, focused place to chat, delegate work to agents and keep your history — without a browser shell, a web runtime or an RLLM account in the middle.
+
+![RLLM on Windows streaming a reply from MiniMax-M3.1-Flash at about 46 tokens per second](docs/images/windows/chat-minimax.jpg)
+
+## Why RLLM
+
+- **Bring any model.** Save as many connections as you need and switch between them from the chat bar. The connections shown below include MedGemma served from this laptop's Snapdragon NPU, a Qwen model and MiniMax's hosted API, side by side.
+- **Replies stream as they are written.** Text arrives token by token with a live tokens-per-second readout, so you always know how your model is performing.
+- **Truly native on both platforms.** On Windows, RLLM is a real Win32 window drawn by the Rust core: no WebView, no Electron, no console window. On Android it is a native Android app built on the same core.
+- **Private by design.** Conversations and connection keys are sealed with AES-256-GCM on the device. There is no RLLM account and no RLLM-run server; requests go to the model endpoints and services you configure.
+- **Your history, under your control.** Move conversations to trash and restore them, export a conversation to a backup file and import it again, retry the last request, or regenerate a reply in a new branch.
+- **You decide what the agent may do.** Choose a permission mode from Ask to YOLO, and manage harness rules, agent profiles, default models, skills and tool access from Agent settings.
+- **Signed builds.** The Windows executable is Authenticode-signed by RLLM and timestamped. The Android APK is signed with the RLLM application key (APK Signature Scheme v2 and v3).
+
+## Screenshots
+
+All screenshots are unedited captures of RLLM running on a Surface Laptop 7 (Windows 11 on ARM, Snapdragon X Elite).
+
+| | |
+|---|---|
+| ![Conversation actions](docs/images/windows/conversation-actions.jpg) | ![Connection chooser](docs/images/windows/connections.jpg) |
+| **Conversation actions** — new conversations, answer and permission modes, attachments, export, retry and branching in one place. | **Connections** — a local NPU model, a Qwen model and a hosted API, one click apart. |
+| ![History](docs/images/windows/history.jpg) | ![App settings](docs/images/windows/app-settings.jpg) |
+| **History** — trash, backup import and export for every conversation. | **App settings** — connections, permissions, storage, appearance, network services and diagnostics. |
+
+![Workspace](docs/images/windows/workspace.jpg)
+
+**Workspace** — projects, storage, tools and servers, investigation, programs and setup.
+
+## Download
+
+| Platform | File | Details |
+|---|---|---|
+| Android 8.0 or later (ARM64, x86-64) | [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk) | Package `com.local.client.lab`. Signing certificate SHA-256 `ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5`. |
+| Windows 11 on ARM64 | [`release/RLLM-Desktop-arm64.exe`](release/RLLM-Desktop-arm64.exe) | A single executable with no installer and no runtime to add. Signed by `RLLM`; the public certificate is [`release/RLLM.cer`](release/RLLM.cer). |
+
+The Windows signing certificate is issued by RLLM itself rather than by a public certificate authority, so on a new PC Windows shows the publisher as unknown until you trust it. To trust it, import `RLLM.cer` into **Trusted Root Certification Authorities** and **Trusted Publishers** (double-click the file and choose **Install Certificate**). Only do this if you trust the source of the download. An x64 Windows build is planned.
+
+**Platform note.** Voice and microphone sessions, phone access, document-tree storage and cloud storage accounts are currently available on Android only.
+
+Build instructions for both platforms are in [docs/BUILD.md](docs/BUILD.md).
+
+## Feature details
+
+Current signed candidate 1795208207 adds the Windows on ARM desktop app, HTTPS on Windows and compatibility with MiniMax's streaming replies, on top of the MCP connections, conversation menu, web search, transport and authorization changes described in the release notes. Owner validation, unavailable historical comparisons and pending device/independent acceptance are recorded separately.
 
 RLLM connects your Android device to configured language models and integrates investigation into ordinary command following.
 

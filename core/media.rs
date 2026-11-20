@@ -1,6 +1,6 @@
 //! Owned input/output files; binary payloads do not enter conversation state.
 use super::*;
-use std::os::unix::fs::{MetadataExt,OpenOptionsExt};
+use crate::host_fs::{MetadataExt,OpenOptionsExt};
 use std::sync::{Mutex,OnceLock};
 use std::time::{Instant,Duration};
 const INPUT_LIMIT:usize=2*1024*1024;
@@ -37,7 +37,6 @@ pub(super) fn stream_target(st:&Json,kind:&str,route:&str,limit:usize)->Result<(
  let name=if route=="capture"{format!("capture-{}.bin",now())}else{format!("{}.bin",now())};let(file,limit)=allocate(st,&name,limit)?;Ok((file,obj(vec![("path",s(&format!("service-files/{name}"))),("name",s("result.bin")),("kind",s(kind)),("route",s(route)),("root",get(st,"approval_root_identity").clone()),("root_path",get(st,"approval_root").clone())]),limit))
 }
 fn allocate(st:&Json,name:&str,limit:usize)->Result<(StreamFile,usize)>{
- use std::os::fd::{AsRawFd,FromRawFd};
  let dir=directory(st)?;let pinned=fs::OpenOptions::new().read(true).custom_flags(131072|65536).open(&dir).map_err(|e|e.to_string())?;
  pinned.try_lock().map_err(|e|format!("Media allocation is occupied or unavailable: {e}"))?;
  let current=fs::symlink_metadata(&dir).map_err(|e|e.to_string())?;let original=pinned.metadata().map_err(|e|e.to_string())?;if current.dev()!=original.dev()||current.ino()!=original.ino(){return Err("Media directory changed during allocation".into());}
@@ -45,7 +44,7 @@ fn allocate(st:&Json,name:&str,limit:usize)->Result<(StreamFile,usize)>{
  for item in fs::read_dir(&dir).map_err(|e|e.to_string())?.take(513){let item=item.map_err(|e|e.to_string())?;count+=1;let meta=fs::symlink_metadata(item.path()).map_err(|e|e.to_string())?;let mut length=meta.len();if item.file_name().to_string_lossy().starts_with("capture-")&&meta.is_file()&&!meta.file_type().is_symlink(){let active=fs::OpenOptions::new().read(true).custom_flags(131072).open(item.path()).map_err(|e|e.to_string())?;match active.try_lock(){Err(std::fs::TryLockError::WouldBlock)=>length=length.max(INPUT_LIMIT as u64),Err(error)=>return Err(error.to_string()),Ok(())=>{}}}total=total.saturating_add(length);}
  let limit=limit.min((256*1024*1024u64).saturating_sub(total)as usize);if count>=512||limit==0{return Err("Local media storage limit reached (512 files / 256 MiB)".into());}
  let current=fs::symlink_metadata(&dir).map_err(|e|e.to_string())?;if current.dev()!=original.dev()||current.ino()!=original.ino(){return Err("Media directory changed during admission".into());}
- unsafe extern "C"{fn openat(fd:i32,name:*const std::ffi::c_char,flags:i32,...)->i32;}let name=std::ffi::CString::new(name).map_err(|_|"Invalid media filename")?;let fd=unsafe{openat(pinned.as_raw_fd(),name.as_ptr(),0x80000|0x20000|0x80|0x40|1,0o600u32)};if fd<0{return Err(std::io::Error::last_os_error().to_string());}let file=unsafe{fs::File::from_raw_fd(fd)};file.set_len(limit as u64).map_err(|e|e.to_string())?;Ok((StreamFile{file,written:0,limit:limit as u64},limit))
+ let file=crate::host_fs::open_at(&pinned,name.as_bytes(),0x80000|0x20000|0x80|0x40|1).map_err(|e|e.to_string())?;file.set_len(limit as u64).map_err(|e|e.to_string())?;Ok((StreamFile{file,written:0,limit:limit as u64},limit))
 }
 pub(super) fn stream_complete(mut record:Json,bytes:usize,sha:&str)->Result<Json>{
  if bytes==0{return Err("Returned artifact is empty".into());}put(&mut record,"bytes",Num(bytes.to_string()));put(&mut record,"sha256",s(sha));let st=obj(vec![("approval_root",get(&record,"root_path").clone()),("approval_root_identity",get(&record,"root").clone())]);let path=verify(&st,&record,256*1024*1024)?;let mut file=fs::File::open(path).map_err(|e|e.to_string())?;let mut head=[0u8;512];let n=file.read(&mut head).map_err(|e|e.to_string())?;let(mime,kind)=if head.get(4..8)==Some(b"ftyp"){mp4_identity(&mut file,bytes as u64,&head[8..12])}else{identity(&head[..n])};let expected=text(&record,"kind");if !expected.is_empty()&&expected!="data"&&expected!=kind{return Err("Artifact container differs from configured kind".into());}if mime=="audio/wav"&&(n<44||u32::from_le_bytes(head[4..8].try_into().unwrap())as usize+8!=bytes){return Err("Invalid WAVE container length".into());}if mime=="model/gltf-binary"&&(n<12||head[4..8]!=2u32.to_le_bytes()||u32::from_le_bytes(head[8..12].try_into().unwrap())as usize!=bytes){return Err("Invalid scene container length".into());}put(&mut record,"mime",s(mime));put(&mut record,"kind",s(kind));put(&mut record,"name",s(output_name(mime)));put(&mut record,"validation",s("Complete HTTP framing, disk digest and container identity checked; decoder acceptance occurs at preview."));if let Obj(fields)=&mut record{fields.remove("root_path");}Ok(record)

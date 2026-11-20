@@ -13,6 +13,12 @@ build-env.sh
 .DS_Store
 tooling/
 .qwen/tmp/
+.qwen/Mailbox/
+.qwen/agents/
+.qwen/fleet/
+bloat/
+APK/
+package.json
 .playwright-mcp/
 __pycache__/
 toolchain/
