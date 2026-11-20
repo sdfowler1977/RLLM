@@ -218,12 +218,14 @@ fi
 ndk_bin="$CLIENT_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 for item in 'aarch64-linux-android arm64-v8a' 'x86_64-linux-android x86_64'; do
  read -r target abi <<< "$item"
- "$CLIENT_RUST/bin/rustc" --edition=2021 --crate-name client --crate-type staticlib --remap-path-prefix "$project_dir=RLLM" --target "$target" -C opt-level=2 -C codegen-units=1 -C panic=abort "$project_dir/core/lib.rs" -o "$out/lib-$abi.a"
- "$ndk_bin/${target}26-clang" -shared -fPIC -O2 "$project_dir/platform/jni/bridge.c" "$out/lib-$abi.a" -Wl,--exclude-libs,ALL -Wl,-z,max-page-size=16384 -Wl,-z,relro,-z,now -ldl -lm -llog -o "$out/stage/lib/$abi/libclient.so"
+ "$CLIENT_RUST/bin/rustc" --edition=2021 --crate-name client --crate-type staticlib --remap-path-prefix "$project_dir=RLLM" --target "$target" -C opt-level=z -C codegen-units=1 -C panic=abort "$project_dir/core/lib.rs" -o "$out/lib-$abi.a"
+ "$ndk_bin/${target}26-clang" -shared -fPIC -Oz "$project_dir/platform/jni/bridge.c" "$out/lib-$abi.a" -Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,-z,max-page-size=16384 -Wl,-z,relro,-z,now -ldl -lm -llog -o "$out/stage/lib/$abi/libclient.so"
  "$ndk_bin/llvm-strip" --strip-unneeded "$out/stage/lib/$abi/libclient.so"
 done
 "$CLIENT_TOOLS/aapt2" compile --dir "$project_dir/res" -o "$out/resources.zip"
-"$CLIENT_TOOLS/aapt2" link -o "$out/resources.apk" -I "$CLIENT_ANDROID/android.jar" --manifest "$manifest" "${resource_package[@]}" -A "$project_dir/notices" --java "$out/gen" "$out/resources.zip"
+mkdir -p "$out/pack-notices"
+cp "$project_dir/notices/strata-monitor-MIT.txt" "$project_dir/notices/rust-stdlib.txt" "$out/pack-notices/"
+"$CLIENT_TOOLS/aapt2" link -o "$out/resources.apk" -I "$CLIENT_ANDROID/android.jar" --manifest "$manifest" "${resource_package[@]}" -A "$out/pack-notices" --java "$out/gen" "$out/resources.zip"
 find "$project_dir/platform" "$out/gen" -name '*.java' -print > "$out/sources.txt"
 "$CLIENT_JDK/bin/javac" --release 8 -cp "$CLIENT_ANDROID/android.jar" -d "$out/classes" @"$out/sources.txt"
 "$CLIENT_JDK/bin/jar" cf "$out/classes.jar" -C "$out/classes" .

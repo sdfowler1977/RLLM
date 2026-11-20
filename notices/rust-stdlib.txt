@@ -1,0 +1,6 @@
+The Rust standard library linked into this application is dual-licensed
+under the Apache License, Version 2.0 or the MIT license, at your option.
+Copyrights in that library are retained by their contributors.
+
+The long file list that accompanies those terms is notices/runtime.html in
+the RLLM source. It is not part of the Android package.

@@ -112,9 +112,9 @@ if /i not "%CLIENT_UNSIGNED%"=="1" (
 set "ndk_bin=%CLIENT_NDK%\toolchains\llvm\prebuilt\windows-x86_64\bin"
 for %%i in ("aarch64-linux-android arm64-v8a" "x86_64-linux-android x86_64") do (
   for /f "tokens=1,2" %%a in (%%i) do (
-    rustc --edition=2021 --crate-name client --crate-type staticlib --remap-path-prefix "%project_dir%=RLLM" --target %%a -C opt-level=2 -C codegen-units=1 -C panic=abort "%project_dir%\core\lib.rs" -o "%out%\lib-%%b.a"
+    rustc --edition=2021 --crate-name client --crate-type staticlib --remap-path-prefix "%project_dir%=RLLM" --target %%a -C opt-level=z -C codegen-units=1 -C panic=abort "%project_dir%\core\lib.rs" -o "%out%\lib-%%b.a"
     if errorlevel 1 goto :failed
-    call "%ndk_bin%\%%a26-clang.cmd" -shared -fPIC -O2 "%project_dir%\platform\jni\bridge.c" "%out%\lib-%%b.a" -Wl,--exclude-libs,ALL -Wl,-z,max-page-size=16384 -Wl,-z,relro,-z,now -ldl -lm -llog -o "%out%\stage\lib\%%b\libclient.so"
+    call "%ndk_bin%\%%a26-clang.cmd" -shared -fPIC -Oz "%project_dir%\platform\jni\bridge.c" "%out%\lib-%%b.a" -Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,-z,max-page-size=16384 -Wl,-z,relro,-z,now -ldl -lm -llog -o "%out%\stage\lib\%%b\libclient.so"
     if errorlevel 1 goto :failed
     "%ndk_bin%\llvm-strip.exe" --strip-unneeded "%out%\stage\lib\%%b\libclient.so"
     if errorlevel 1 goto :failed
@@ -123,7 +123,10 @@ for %%i in ("aarch64-linux-android arm64-v8a" "x86_64-linux-android x86_64") do 
 
 "%CLIENT_TOOLS%\aapt2.exe" compile --dir "%project_dir%\res" -o "%out%\resources.zip"
 if errorlevel 1 goto :failed
-"%CLIENT_TOOLS%\aapt2.exe" link -o "%out%\resources.apk" -I "%CLIENT_ANDROID%\android.jar" --manifest "%manifest%" %resource_package% -A "%project_dir%\notices" --java "%out%\gen" "%out%\resources.zip"
+mkdir "%out%\pack-notices"
+copy /y "%project_dir%\notices\strata-monitor-MIT.txt" "%out%\pack-notices\" >nul
+copy /y "%project_dir%\notices\rust-stdlib.txt" "%out%\pack-notices\" >nul
+"%CLIENT_TOOLS%\aapt2.exe" link -o "%out%\resources.apk" -I "%CLIENT_ANDROID%\android.jar" --manifest "%manifest%" %resource_package% -A "%out%\pack-notices" --java "%out%\gen" "%out%\resources.zip"
 if errorlevel 1 goto :failed
 rem javac argument files treat a backslash as an escape, so the list uses forward slashes.
 (for /f "delims=" %%f in ('dir /s /b /a-d "%project_dir%\platform\*.java" "%out%\gen\*.java"') do (

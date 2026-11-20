@@ -5,7 +5,7 @@ use super::raster::Picture;
 use std::ffi::c_void;
 
 static DARK: &[u8] = include_bytes!("../res/drawable-nodpi/wallpaper_dark.webp");
-static LIGHT: &[u8] = include_bytes!("../res/drawable-nodpi/wallpaper_light.jpg");
+static LIGHT: &[u8] = include_bytes!("../platform/windows/wallpaper_light.jpg");
 
 #[repr(C)]
 struct Guid {

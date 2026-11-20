@@ -1,6 +1,6 @@
 # RLLM for Windows — installers and x64 build
 
-RLLM now runs on x64 Windows PCs as well as Windows on ARM. `RLLM-Setup.exe` is one installer for both: it reads the machine's native processor and installs the ARM64 or x64 build, so ARM PCs get the native build rather than an emulated one. `RLLM-Windows-x64.zip` carries the smaller x64-only installer with a read-me and the public certificate, for sending to x64 PCs. Setup installs for the current user only and needs no administrator rights. It adds Start menu and desktop shortcuts with the RLLM icon and an entry in Installed apps. If RLLM is open, it asks you to close it before replacing it. Removing RLLM deletes the program and shortcuts and keeps conversations and settings in `%LOCALAPPDATA%\rllm`. The executables now carry the RLLM icon and version information. Same core and the same Android package as 1795208207.
+RLLM now runs on x64 Windows PCs as well as Windows on ARM. `RLLM-Setup.exe` is one installer for both: it reads the machine's native processor and installs the ARM64 or x64 build, so ARM PCs get the native build rather than an emulated one. `RLLM-Windows-x64.zip` carries the smaller x64-only installer with a read-me and the public certificate, for sending to x64 PCs. Setup installs for the current user only and needs no administrator rights. It adds Start menu and desktop shortcuts with the RLLM icon and an entry in Installed apps. If RLLM is open, it asks you to close it before replacing it. Removing RLLM deletes the program and shortcuts and keeps conversations and settings in `%LOCALAPPDATA%\rllm`. The executables now carry the RLLM icon and version information. Those Windows files are unchanged. The Android package on this release is now 1795217278.
 
 All files are Authenticode-signed by RLLM with an RFC 3161 timestamp.
 
@@ -13,6 +13,14 @@ All files are Authenticode-signed by RLLM with an RFC 3161 timestamp.
 | RLLM-Desktop-x64.exe | 12131544 | d254915b79003a840346ad90fa0a8e84f18072c8d6dbbfea98234df46bccba46 |
 
 Install, reinstall over a running copy, uninstall with data kept, and both installers were exercised on a Windows 11 ARM64 PC; the x64 build ran there under Windows x64 emulation. Installation on a physical x64 PC and independent acceptance remain unverified.
+
+# RLLM 1795217278 — smaller Android package
+
+Android only. The Windows installers listed above are the same files.
+
+Package com.local.client.lab, Android 8.0+, ARM64 and x86-64, version 0.1-lab.1795217278. Same signing certificate (SHA-256 ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5), v2 and v3 signatures, and 16 KiB alignment. APK 4708301 bytes, SHA256 fef5d51f3796f7d176547d95955fade26ad0c11059b8ca5c92d520dcde89afac. The previous Android file remains on this release as RLLM-Lab-1795208207.apk.
+
+Installed device acceptance of this APK remains unverified.
 
 # RLLM 1795208207 — signed candidate
 
