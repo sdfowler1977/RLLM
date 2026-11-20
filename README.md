@@ -35,10 +35,10 @@ All screenshots are unedited captures of RLLM running on a Surface Laptop 7 (Win
 
 | Platform | File | Details |
 |---|---|---|
-| Android 8.0 or later (ARM64, x86-64) | [`release/RLLM-Lab.apk`](release/RLLM-Lab.apk) | Package `com.local.client.lab`. Signing certificate SHA-256 `ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5`. |
+| Android 8.0 or later (ARM64, x86-64) | [`RLLM-Lab-1795208207.apk`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Windows-Installers__2026-11-20__21-35-25Z/RLLM-Lab-1795208207.apk) | Package `com.local.client.lab`. Signing certificate SHA-256 `ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5`. |
 | Windows 10 or 11, ARM64 or x64 | [`RLLM-Setup.exe`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Windows-Installers__2026-11-20__21-35-25Z/RLLM-Setup.exe) | One installer for both kinds of PC: it detects the processor and installs the native ARM64 or x64 build. |
 | Windows 10 or 11, x64 | [`RLLM-Windows-x64.zip`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Windows-Installers__2026-11-20__21-35-25Z/RLLM-Windows-x64.zip) | A smaller package to send to x64 PCs: `RLLM-Setup-x64.exe`, a short read-me and the public certificate. |
-| Windows, no installer | [`release/RLLM-Desktop-arm64.exe`](release/RLLM-Desktop-arm64.exe) · [`RLLM-Desktop-x64.exe`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Windows-Installers__2026-11-20__21-35-25Z/RLLM-Desktop-x64.exe) | A single executable to run from any folder, with no runtime to add. |
+| Windows, no installer | [`RLLM-Desktop-arm64.exe`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Windows-Installers__2026-11-20__21-35-25Z/RLLM-Desktop-arm64.exe) · [`RLLM-Desktop-x64.exe`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Windows-Installers__2026-11-20__21-35-25Z/RLLM-Desktop-x64.exe) | A single executable to run from any folder, with no runtime to add. |
 
 The installers set RLLM up for the current user only, so no administrator rights are needed. They add Start menu and desktop shortcuts and an entry under **Settings > Apps > Installed apps**, from which RLLM can be removed; removal keeps your conversations and settings. All Windows files are signed by `RLLM`; the public certificate is [`release/RLLM.cer`](release/RLLM.cer).
 
