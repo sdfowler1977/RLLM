@@ -927,6 +927,10 @@ fn report(error: &str) {
 }
 
 fn run(args: &[String]) -> Result<()> {
+    #[cfg(windows)]
+    if let Some(path) = option(args, "--write-icon") {
+        return std::fs::write(&path, window::icon_file()?).map_err(|error| format!("{path}: {error}"));
+    }
     let root = option(args, "--root").unwrap_or_else(|| {
         std::env::current_dir().map(|value| value.display().to_string()).unwrap_or_else(|_| ".".into())
     });

@@ -1,3 +1,19 @@
+# RLLM for Windows — installers and x64 build
+
+RLLM now runs on x64 Windows PCs as well as Windows on ARM. `RLLM-Setup.exe` is one installer for both: it reads the machine's native processor and installs the ARM64 or x64 build, so ARM PCs get the native build rather than an emulated one. `RLLM-Windows-x64.zip` carries the smaller x64-only installer with a read-me and the public certificate, for sending to x64 PCs. Setup installs for the current user only and needs no administrator rights. It adds Start menu and desktop shortcuts with the RLLM icon and an entry in Installed apps. If RLLM is open, it asks you to close it before replacing it. Removing RLLM deletes the program and shortcuts and keeps conversations and settings in `%LOCALAPPDATA%\rllm`. The executables now carry the RLLM icon and version information. Same core and the same Android package as 1795208207.
+
+All files are Authenticode-signed by RLLM with an RFC 3161 timestamp.
+
+| File | Bytes | SHA256 |
+|---|---|---|
+| RLLM-Setup.exe (ARM64 and x64) | 23107288 | 5681205705af96d734fff1e97a65198cd7b83cd2150130d920de55771ceda1fb |
+| RLLM-Windows-x64.zip | 5501165 | 1fea94c198bbbbc263f8e90613db1695e1c69c371d50fa923d477ebe55115143 |
+| RLLM-Setup-x64.exe | 12848344 | 3a99f30496c98c3292895777e74c7586c628582cc1b7653d2e68c8e63865a497 |
+| RLLM-Desktop-arm64.exe | 10259160 | 6eb72a29e3f0fe526eb00adefa050c65a22a26ffe9b144e230f7d34306fc4902 |
+| RLLM-Desktop-x64.exe | 12131544 | d254915b79003a840346ad90fa0a8e84f18072c8d6dbbfea98234df46bccba46 |
+
+Install, reinstall over a running copy, uninstall with data kept, and both installers were exercised on a Windows 11 ARM64 PC; the x64 build ran there under Windows x64 emulation. Installation on a physical x64 PC and independent acceptance remain unverified.
+
 # RLLM 1795208207 — signed candidate
 
 RLLM now runs as a native Windows on ARM desktop app built from the same Rust core as the Android app. The window, navigation, conversation actions, history, settings and workspace are drawn by the core itself, with no browser shell and no console window. Model connections over HTTPS work on Windows through the system TLS stack with system certificate validation. Streaming replies from MiniMax now complete normally: MiniMax repeats its final completion marker with the assistant role, and the shared stream reader accepts that exact repeat while still refusing new text, a different role or a changed completion reason after a reply has finished. This fix is in the shared core, so it applies to the Android app as well. The desktop self-test now runs against a scratch vault and never touches saved history. The Android package can now also be built on a Windows host with `package.cmd`, which follows the `package.sh` steps and signing checks.

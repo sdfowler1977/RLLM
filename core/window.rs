@@ -1513,21 +1513,71 @@ fn key(message: &Msg) -> bool {
 }
 
 /// The launcher drawable as a window icon.
-fn emblem(size: i32) -> isize {
-    let Some(glyph) = glyphs().get("icon") else { return 0 };
+/// The launcher glyph as 0xAARRGGBB pixels with straight alpha, recovered by
+/// drawing it over black and over white.
+fn emblem_pixels(size: i32) -> Option<Vec<u32>> {
+    let glyph = glyphs().get("icon")?;
     let count = (size * size) as usize;
     let mut dark = vec![0u32; count];
     let mut light = vec![0x00FF_FFFFu32; count];
     Canvas::new(&mut dark, size, size).glyph(glyph, 0.0, 0.0, size as f32, None);
     Canvas::new(&mut light, size, size).glyph(glyph, 0.0, 0.0, size as f32, None);
-    let pixels: Vec<u32> = dark
-        .iter()
-        .zip(&light)
-        .map(|(dark, light)| {
-            let alpha = 255 - (((light >> 16) & 255) as i32 - ((dark >> 16) & 255) as i32).clamp(0, 255) as u32;
-            (alpha << 24) | (dark & 0x00FF_FFFF)
-        })
-        .collect();
+    Some(
+        dark.iter()
+            .zip(&light)
+            .map(|(dark, light)| {
+                let alpha = 255 - (((light >> 16) & 255) as i32 - ((dark >> 16) & 255) as i32).clamp(0, 255) as u32;
+                let straight = |shift: u32| if alpha == 0 { 0 } else { (((dark >> shift) & 255) * 255 / alpha).min(255) << shift };
+                (alpha << 24) | straight(16) | straight(8) | straight(0)
+            })
+            .collect(),
+    )
+}
+
+/// The launcher glyph as a Windows .ico holding 32-bit images from 16 to 256 pixels.
+pub fn icon_file() -> Result<Vec<u8>> {
+    let sizes = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256];
+    let mut images = Vec::new();
+    for size in sizes {
+        let pixels = emblem_pixels(size).ok_or("The launcher glyph is missing")?;
+        let mask_row = (((size + 31) / 32) * 4) as usize;
+        let mut image = Vec::new();
+        for value in [40u32, size as u32, (size * 2) as u32] {
+            image.extend_from_slice(&value.to_le_bytes());
+        }
+        image.extend_from_slice(&1u16.to_le_bytes());
+        image.extend_from_slice(&32u16.to_le_bytes());
+        image.extend_from_slice(&[0u8; 24]);
+        for row in (0..size as usize).rev() {
+            for pixel in &pixels[row * size as usize..(row + 1) * size as usize] {
+                image.extend_from_slice(&pixel.to_le_bytes());
+            }
+        }
+        image.resize(image.len() + mask_row * size as usize, 0);
+        images.push((size, image));
+    }
+    let mut file = Vec::new();
+    for value in [0u16, 1, images.len() as u16] {
+        file.extend_from_slice(&value.to_le_bytes());
+    }
+    let mut offset = 6 + 16 * images.len();
+    for (size, image) in &images {
+        let edge = if *size >= 256 { 0 } else { *size as u8 };
+        file.extend_from_slice(&[edge, edge, 0, 0]);
+        file.extend_from_slice(&1u16.to_le_bytes());
+        file.extend_from_slice(&32u16.to_le_bytes());
+        file.extend_from_slice(&(image.len() as u32).to_le_bytes());
+        file.extend_from_slice(&(offset as u32).to_le_bytes());
+        offset += image.len();
+    }
+    for (_, image) in &images {
+        file.extend_from_slice(image);
+    }
+    Ok(file)
+}
+
+fn emblem(size: i32) -> isize {
+    let Some(pixels) = emblem_pixels(size) else { return 0 };
     let mask = vec![0u8; (((size + 15) / 16) * 2 * size) as usize];
     unsafe {
         let color = CreateBitmap(size, size, 1, 32, pixels.as_ptr() as *const u8);

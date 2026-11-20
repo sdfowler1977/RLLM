@@ -1,0 +1,37 @@
+#include <winver.h>
+
+1 ICON "rllm.ico"
+
+#ifdef RLLM_SETUP
+1 24 "setup.manifest"
+#define RLLM_DESCRIPTION "RLLM Setup"
+#define RLLM_FILE "RLLM-Setup.exe"
+#else
+#define RLLM_DESCRIPTION "RLLM"
+#define RLLM_FILE "RLLM-Desktop.exe"
+#endif
+
+1 VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "RLLM"
+      VALUE "FileDescription", RLLM_DESCRIPTION
+      VALUE "FileVersion", "0.1"
+      VALUE "InternalName", RLLM_FILE
+      VALUE "OriginalFilename", RLLM_FILE
+      VALUE "ProductName", "RLLM"
+      VALUE "ProductVersion", "0.1"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
