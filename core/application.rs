@@ -170,7 +170,10 @@ fn profile(st: &Json) -> Result<Json> {
 }
 // Explicit chat choices take precedence over an agent's default model.
 fn select_primary(st: &mut Json, index: usize) -> Result<()> {
-    if index >= array(st, "profiles").len() { return Err("Connection not found".into()); }
+    let Some(profile) = array(st, "profiles").get(index).cloned() else { return Err("Connection not found".into()) };
+    if !super::provider::allows(&profile, "primary") {
+        return Err(format!("{} is set to sub-agent only, so it cannot be the chat model", interaction::connection_label(&profile)));
+    }
     put(st, "selected", Num(index.to_string()));
     let mut current = chat(st);
     if current != Null {
@@ -183,6 +186,7 @@ fn model_picker(st: &Json) -> Json {
     let selected = harness::route(st, "primary").ok();
     let mut buttons = vec![button("Add a new LLM", "profile_new")];
     for (i, p) in array(st, "profiles").iter().enumerate() {
+        if !super::provider::allows(p, "primary") { continue; }
         buttons.push(button(&format!("{}{} · {}", if selected == Some(i) {"Current: "} else {""}, interaction::connection_label(p), text(p,"model")), &format!("chat_model:{i}")));
     }
     buttons.push(button("Conversation actions","chat_actions"));
@@ -2325,15 +2329,16 @@ fn event_inner(v: &Json) -> Result<Json> {
                     list.push(p);
                     list.len() - 1
                 };
+                let primary_allowed = super::provider::allows(&list[selected], "primary");
                 put(&mut st, "profiles", Arr(list));
-                select_primary(&mut st, selected)?;
-                put(&mut st,"capability_mode",s("assisted"));
                 put(&mut st, "dialog", Null);
-                put(
-                    &mut st,
-                    "notice",
-                    s("Connection saved and selected for this chat. Your conversation is preserved."),
-                );
+                if primary_allowed {
+                    select_primary(&mut st, selected)?;
+                    put(&mut st,"capability_mode",s("assisted"));
+                    put(&mut st, "notice", s("Connection saved and selected for this chat. Your conversation is preserved."));
+                } else {
+                    put(&mut st, "notice", s("Sub-agent connection saved. It is used only when another model delegates to it, never as the chat model."));
+                }
             }
             "formats" => put(&mut st, "dialog", s("formats")),
             "drive_edit" => put(&mut st, "dialog", s("drive")),

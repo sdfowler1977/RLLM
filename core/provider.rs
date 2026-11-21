@@ -34,6 +34,23 @@ impl Reply{pub fn details(&self)->Json{obj(vec![("version",Num("1".into())),("te
 fn text<'a>(p: &'a Json, k: &str) -> &'a str {
     p.get(k).and_then(Json::text).unwrap_or("")
 }
+pub const AGENT_ROLES: [&str; 3] = ["both", "primary", "subagent"];
+pub const MAX_STREAMS: usize = 64;
+/// Connections saved before these fields existed act as both, with one stream.
+pub fn agent_role(p: &Json) -> &str {
+    match text(p, "agent_role") { r @ ("primary" | "subagent") => r, _ => "both" }
+}
+pub fn allows(p: &Json, role: &str) -> bool {
+    let allowed = agent_role(p);
+    allowed == "both" || allowed == role
+}
+pub fn streams(p: &Json) -> usize {
+    match p.get("streams") { Ok(Num(v) | Str(v)) => v.parse::<usize>().ok(), _ => None }
+        .filter(|n| (1..=MAX_STREAMS).contains(n)).unwrap_or(1)
+}
+pub fn role_label(p: &Json) -> &'static str {
+    match agent_role(p) { "primary" => "Primary agent only", "subagent" => "Sub-agent only", _ => "Primary agent or sub-agent" }
+}
 // Scheme inference is confined to model setup; explicit schemes always win.
 fn local_address(input: &str) -> bool {
     let authority = input.split(['/', '?']).next().unwrap_or("");
@@ -103,6 +120,21 @@ pub fn normalized(p: &Json) -> Result<Json> {
         fields.insert("endpoint".into(), s(&endpoint));
         fields.insert("model".into(), s(model));
         fields.insert("name".into(),s(text(p,"name").trim()));
+        let role = text(p, "agent_role").trim();
+        let role = if role.is_empty() { "both" } else { role };
+        if !AGENT_ROLES.contains(&role) {
+            return Err("Choose whether this model is a primary agent, a sub-agent, or both".into());
+        }
+        fields.insert("agent_role".into(), s(role));
+        let streams = match p.get("streams") {
+            Ok(Null) | Err(_) => 1,
+            Ok(Num(v) | Str(v)) => v.trim().parse::<usize>().map_err(|_| "Enter a whole number of streams from 1 to 64")?,
+            Ok(_) => return Err("Enter a whole number of streams from 1 to 64".into()),
+        };
+        if !(1..=MAX_STREAMS).contains(&streams) {
+            return Err("Maximum streams must be from 1 to 64".into());
+        }
+        fields.insert("streams".into(), Num(streams.to_string()));
     }
     hosted_search::validate(&out)?;
     if out.get("oauth_enabled")==Ok(&Bool(true)){application::oauth::validate_profile(&out)?;}else{authorization(&out)?;}

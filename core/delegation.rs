@@ -30,7 +30,8 @@ pub(super) fn slots_available(st:&Json)->bool{array(st,"delegation_stack").len()
 fn prospective(st:&Json,p:&Json,agent:Json)->Result<(Json,usize)>{
  let mut stack=array(st,"delegation_stack");if !slots_available(st){return Err("Delegation reached its depth or operation limit".into());}
  let model=text(&agent,"model");let fallback=if model.is_empty()||model=="primary"{harness::route(st,"subagent")?}else{model.parse::<usize>().map_err(|_|"Invalid subagent model")?};
- if fallback>=array(st,"profiles").len(){return Err("Subagent connection not found".into());}
+ let Some(child)=array(st,"profiles").get(fallback).cloned() else{return Err("Subagent connection not found".into());};
+ if !super::provider::allows(&child,"subagent"){return Err(format!("{} is set to primary agent only and cannot take delegated work",interaction::connection_label(&child)));}
  stack.push(obj(vec![("run",get(st,"task_run").clone()),("connection",get(st,"request_index").clone()),("inquiry_id",get(p,"delegate_question").clone()),("harness_role",s(&harness_rules::execution_role(st)))]));
  let mut next=st.clone();put(&mut next,"delegation_stack",Arr(stack));put(&mut next,"task_run",obj(vec![("mode",s("delegate")),("phase",s("delegate")),("task",s(&text(get(p,"args"),"task"))),("agent",agent),("chat",get(st,"active").clone()),("connection",Num(fallback.to_string()))]));
  let connection=harness_rules::model_route(&next,fallback)?;Ok((next,connection))
