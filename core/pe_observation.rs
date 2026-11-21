@@ -124,6 +124,9 @@ fn observe(r:Reader<'_>,out:&mut Report,b:&mut Budget<'_>,flow:&mut super::contr
  let inventory=complete_table&&r.total.is_some()&&r.extent(0,headers).is_ok()&&image.sections.iter().all(|s|s.raw_valid&&s.rva+s.virtual_size<=1u64<<32);
  if kind==0xaa64&&wide{
  *flow=super::control_flow::analyze(r.bytes,&regions,inventory,"RVA ",b.cancelled).map_err(|e|if(b.cancelled)(){Issue::Cancelled}else{Issue::Operation(e)})?;
+ }else if matches!(kind, 0x14c | 0x8664) {
+  let spans:Vec<super::x86_words::Span>=regions.iter().map(|region| super::x86_words::Span{offset:region.offset,address:region.address,size:region.file_size,executable:region.executable}).collect();
+  flow.coordinate="RVA ".into();flow.regions=regions;flow.mappings_complete=inventory;flow.text=super::x86_words::summarize_regions(r.bytes,&spans,kind==0x8664);
  }else{flow.coordinate="RVA ".into();flow.regions=regions;flow.mappings_complete=inventory;flow.text=format!("Control-flow instruction interpretation unavailable for PE machine0x{kind:04x}/class; mixed Arm64EC/Arm64X is not interpreted as uniform AArch64. Existing structural observations remain available.\n");}
  if directories<=5{flow.relocations_complete=Some(true);row!(out,"Observed directory count places the base-relocation entry outside the declared directory list.");}
  else{let result=optional.u32(directory_start+5*8).and_then(|rva|optional.u32(directory_start+5*8+4).map(|size|(rva,size))).and_then(|(rva,size)|relocations(&image,rva as u64,size as u64,out,b,&mut flow.pe_relocations));match result{Ok(complete)=>flow.relocations_complete=Some(complete),Err(Issue::Cancelled)=>return Err(Issue::Cancelled),Err(error)=>{flow.relocations_complete=Some(false);row!(out,"Base-relocation inventory incomplete: {error}; previously observed declarations retained, remaining records unknown.");}}}

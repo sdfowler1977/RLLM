@@ -436,7 +436,7 @@ pub(super) fn byte_limit(text:&str,max:usize)->String{let mut n=text.len().min(m
 #[cfg(test)]
 mod dotnet_inspect_checks {
     use super::*;
-    const PE_TAIL: &str = "Control-flow instruction interpretation unavailable for PE machine0x8664/class; mixed Arm64EC/Arm64X is not interpreted as uniform AArch64. Existing structural observations remain available.\n";
+    const PE_TAIL: &str = "x86 instruction summary ended.\n";
     const FOOTER: &str = "Signatures and symbolic instruction IR describe the captured bytes. File sizes and sampled byte counts identify the observation coverage.";
 
     fn put16(buf: &mut [u8], at: usize, value: u16) {

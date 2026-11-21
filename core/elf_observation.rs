@@ -165,6 +165,10 @@ fn contents(reader:&Reader<'_>,wide:bool,out:&mut String,flow:&mut super::contro
  if architecture==183&&wide{
   *flow=match code::inspect(reader,&header,kind,sh_valid,&flow_regions,cancelled){Ok(context)=>super::control_flow::observe(reader.bytes,&flow_regions,loads_complete&&reader.total.is_some(),"declared VA ",cancelled,&context.data).map(|mut value|{value.text.push('\n');value.text.push_str(&context.report);value.classifications=context.classifications;value.classifications_complete=Some(context.classifications_complete);value.relocations=context.relocations;value.relocations_complete=Some(context.relocations_complete);value}),Err(e)=>Err(e)}.unwrap_or_else(|e|super::control_flow::Observation{text:format!("Control-flow observation unavailable: {e}."),coordinate:"declared VA ".into(),..Default::default()});
  }
+ else if matches!(architecture, 3 | 62) && matches!(reader.endian, Endian::Little) {
+  let spans:Vec<super::x86_words::Span>=flow_regions.iter().map(|region| super::x86_words::Span{offset:region.offset,address:region.address,size:region.file_size,executable:region.executable}).collect();
+  flow.coordinate="declared VA ".into();flow.regions=flow_regions.clone();flow.mappings_complete=loads_complete&&reader.total.is_some();flow.text=super::x86_words::summarize_regions(reader.bytes,&spans,architecture==62);
+ }
  else{flow.text=format!("Control-flow instruction interpretation unavailable for ELF class/machine {architecture}; existing structural observations remain available.\n");}
  let mut dynamic_names=0;for d in dynamics{dynamic_names+=dynamic(reader,&header,d,&loads,loads_complete,out);}
  let _=writeln!(out,"Observed {ph_observed} program headers and {sh_observed} section headers; classified {symbol_candidates} named symbol candidates and {dynamic_names} dynamic-name declarations. Symbol section-index extensions and executable semantics are not resolved.");

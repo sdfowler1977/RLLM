@@ -971,7 +971,15 @@ fn attachment(ticket: &Json) -> (&'static str, Json) {
 }
 
 fn main() {
-    if let Err(error) = run(&arguments()) {
+    let args = arguments();
+    if args.iter().any(|value| value == "--mcp") {
+        if let Err(error) = application::serve_mcp() {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if let Err(error) = run(&args) {
         #[cfg(windows)]
         report(&error);
         #[cfg(not(windows))]

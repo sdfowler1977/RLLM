@@ -15,7 +15,7 @@ fn connection(st:&Json)->String{
  match index(st){Some(i)=>match array(st,"profiles").into_iter().nth(i){Some(p)=>interaction::connection_label(&p),None=>"this connection".into()},None=>"this connection".into()}
 }
 fn web_class(t:&str)->bool{matches!(t,"web_search"|"web_read")}
-fn file_class(t:&str)->bool{matches!(t,"list"|"read"|"write"|"search"|"inspect"|"compare"|"reconstruct"|"capture")}
+fn file_class(t:&str)->bool{matches!(t,"list"|"read"|"write"|"search"|"inspect"|"compare"|"reconstruct"|"capture"|"listing"|"regions"|"packets")}
 fn access(l:&Json,class:&str)->&'static str{match text(l,class).as_str(){"ask"=>"ask","off"=>"off",_=>"inherit"}}
 fn effective(st:&Json)->(String,Json){let l=limits(st);let m=text(&l,"mode");(if MODES.contains(&m.as_str()){m}else{mode(st)},l)}
 pub(super) fn requires_review(st:&Json,p:&Json)->bool{

@@ -9,12 +9,15 @@ pub(super) fn locked(st:&Json)->bool {boolean(st,"busy")||get(st,"pending")!=&Nu
 pub(super) fn agent_index(st:&Json)->usize {let c=chat(st);if get(&c,"agent_profile")!=&Null{number(&c,"agent_profile")}else{number(st,"agent_selected")}}
 pub(super) fn select_agent(st:&mut Json,index:usize)->Result<()> {
     if locked(st){return Err("Finish or cancel the current task or tool review first".into());}
-    if index>=array(st,"agents").len(){return Err("Agent profile not found".into());}
+    let chosen=array(st,"agents").get(index).cloned().ok_or("Agent profile not found")?;
+    let bound=harness::agent_connection(&chosen).ok_or("Assign this agent profile to one LLM before selecting it")?;
+    if let Some(profile)=array(st,"profiles").get(bound){if !super::provider::allows(profile,"primary"){return Err("This profile's LLM is sub-agent only, so it cannot be the main chat agent".into());}}
     // Freeze older conversations at their previous global default once.
     let previous=number(st,"agent_selected");let mut chats=array(st,"chats");
     for c in &mut chats {if get(c,"agent_profile")==&Null{put(c,"agent_profile",Num(previous.to_string()));}}
     put(st,"chats",Arr(chats));let mut trash=array(st,"trash");for c in &mut trash{if get(c,"agent_profile")==&Null{put(c,"agent_profile",Num(previous.to_string()));}}put(st,"trash",Arr(trash));put(st,"agent_selected",Num(index.to_string()));
     let mut c=chat(st);if c!=Null{put(&mut c,"agent_profile",Num(index.to_string()));replace_chat(st,c);}
+    select_primary(st,bound)?;
     put(st,"dialog",Null);put(st,"notice",s(""));Ok(())
 }
 fn target(st:&Json,trash:bool)->Result<Json>{
@@ -104,7 +107,7 @@ pub(super) fn appearance(st:&Json)->Json {if get(st,"appearance_preview")!=&Null
 pub(super) fn theme(st:&Json)->String {if get(st,"appearance_preview")!=&Null{text(st,"preview_theme")}else{text(st,"theme")}}
 pub(super) fn palette(st:&Json)->Json{let mut p=super::super::layout::palette(theme(st)=="dark");let c=appearance(st);for k in ["accent","ink","surface"]{let v=text(&c,k);if v.len()==7&&v.starts_with('#')&&v.as_bytes()[1..].iter().all(|b|b.is_ascii_hexdigit()){put(&mut p,k,s(&v));if k=="ink"{put(&mut p,"muted",s(&v));}if k=="surface"{for key in ["card","glass"]{put(&mut p,key,s(&format!("#E6{}",&v[1..])));}}}}p}
 pub(super) fn modal_for(st:&Json)->Json {match text(st,"dialog").as_str(){
-    "chat_agents"=>{let mut b=vec![button("Create agent profile","agent_new")];for(i,a)in array(st,"agents").iter().enumerate(){b.push(button(&format!("{}{}",if i==agent_index(st){"Selected · "}else{""},text(a,"name")),&format!("chat_agent:{i}")));}menu("Main agent",b)},
+    "chat_agents"=>{let current=harness::chat_connection(st);let mut b=vec![button("Create agent profile","agent_new")];for(i,a)in array(st,"agents").iter().enumerate(){if harness::agent_connection(a)!=current{continue;}if let Some(bound)=current{if let Some(profile)=array(st,"profiles").get(bound){if !super::provider::allows(profile,"primary"){continue;}}}let mark=if i==agent_index(st){"Selected · "}else{""};b.push(button(&format!("{mark}{}",text(a,"name")),&format!("chat_agent:{i}")));}menu("Main agent",b)},
     "trash"=>{let mut b=vec![];if !array(st,"trash").is_empty(){b.push(button("Empty Trash…","trash_empty_review"));}for c in array(st,"trash"){b.push(button(&text(&c,"title"),&format!("trash_options:{}",text(&c,"id"))));}menu("Trash",b)},
     "trash_empty_review"=>{let items=array(st,"trash_review");modal("Empty Trash permanently?",vec![field_ui("items","These conversations and their messages will be permanently deleted",&items.iter().map(|c|format!("{} · {} messages",text(c,"title"),number(c,"messages"))).collect::<Vec<_>>().join("\n"),"readonly")],vec![button(&format!("Permanently delete {} conversations",items.len()),"trash_empty"),button("Keep conversations","trash")])},
     "chat_options"=>menu(&target(st,false).map(|c|text(&c,"title")).unwrap_or("Conversation".into()),vec![button("Open conversation",&format!("history:{}",text(st,"chat_target"))),button("Move to Trash",&scoped("chat_delete_review",&text(st,"chat_target")))]),

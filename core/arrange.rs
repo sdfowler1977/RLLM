@@ -1031,19 +1031,19 @@ pub fn compose(view: &View, ruler: &mut dyn Ruler) -> Scene {
         chat(&mut pen, view, &mut scene, panel, [x0 + (mw - cw) / 2, cw]);
         if view.menu {
             if let Some(draft) = scene.draft {
-                let choices = [("conversation", "New conversation", "new"), ("transfer", "Attach image or file", "phone_file"), ("actions", "More options", "chat_actions")];
+                let choices = rows(ui, "composer_menu");
                 let (each, wide) = (pen.d(46), pen.d(264));
-                let tall = each * choices.len() as i32 + pen.d(12);
+                let tall = each * choices.len().max(1) as i32 + pen.d(12);
                 let cx = x0 + (mw - cw) / 2;
                 let card = [cx + pen.d(2), draft[1] - pen.d(22) - tall, wide, tall];
                 pen.hit([0, 0, w, h], "menu:close", 0, false);
                 pen.fill(card, 12, pal.raised);
                 pen.edge(card, 12, pal.border);
-                for (index, (icon, label, action)) in choices.iter().enumerate() {
+                for (index, choice) in choices.iter().enumerate() {
                     let row = [card[0] + pen.d(6), card[1] + pen.d(6) + index as i32 * each, wide - pen.d(12), each];
-                    pen.hit(row, action, 8, true);
-                    pen.icon(row[0] + pen.d(12), row[1] + (each - pen.d(20)) / 2, pen.d(20), icon, pal.accent);
-                    pen.text([row[0] + pen.d(46), row[1], row[2] - pen.d(54), each], BODY, pal.ink, label, 0);
+                    pen.hit(row, &text(choice, "event"), 8, true);
+                    pen.icon(row[0] + pen.d(12), row[1] + (each - pen.d(20)) / 2, pen.d(20), &text(choice, "icon"), pal.accent);
+                    pen.text([row[0] + pen.d(46), row[1], row[2] - pen.d(54), each], BODY, pal.ink, &text(choice, "label"), 0);
                 }
             }
         }

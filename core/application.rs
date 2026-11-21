@@ -65,6 +65,13 @@ use super::*;
 #[path="acquire.rs"] mod acquire;
 #[path="netobserve.rs"] mod netobserve;
 #[path="device.rs"] mod device;
+#[path="x86_words.rs"] mod x86_words;
+#[path="image_marks.rs"] mod image_marks;
+#[path="packet_words.rs"] mod packet_words;
+#[path="image_mach.rs"] mod image_mach;
+#[path="subject_reports.rs"] mod subject_reports;
+#[path="stdio_service.rs"] mod stdio_service;
+pub(super) fn serve_mcp() -> Result<()> { stdio_service::serve() }
 #[path="capture_job.rs"] mod capture_job;
 #[path="web_operation.rs"] mod web_operation;
 #[path="web_document.rs"] mod web_document;
@@ -191,7 +198,8 @@ fn model_picker(st: &Json) -> Json {
     let mut buttons = vec![button("Add a new LLM", "profile_new")];
     for (i, p) in array(st, "profiles").iter().enumerate() {
         if !super::provider::allows(p, "primary") { continue; }
-        buttons.push(button(&format!("{}{} · {}", if selected == Some(i) {"Current: "} else {""}, interaction::connection_label(p), text(p,"model")), &format!("chat_model:{i}")));
+        let streams=super::provider::streams(p);
+        buttons.push(button(&format!("{}{} · {} · {} · {streams} stream{}", if selected == Some(i) {"Current: "} else {""}, interaction::connection_label(p), text(p,"model"), super::provider::role_label(p), if streams==1{""}else{"s"}), &format!("chat_model:{i}")));
     }
     buttons.push(button("Conversation actions","chat_actions"));
     menu("Connection",buttons)
@@ -505,6 +513,7 @@ fn ui(st: &Json) -> Json {
         ),
         ("rows", Arr(rows)),
         ("draft", s(&text(st, "draft"))),
+        ("composer_menu", Arr(vec![obj(vec![("icon",s("conversation")),("label",s("New conversation")),("event",s("new"))]),obj(vec![("icon",s("transfer")),("label",s("Attach image or file")),("event",s("phone_file"))]),obj(vec![("icon",s("actions")),("label",s("More options")),("event",s("chat_actions"))])])),
         ("service_artifacts",get(&current,"service_artifacts").clone()),
         ("capture_active",Bool(get(st,"media_expected")!=&Null)),
         ("voice_status",voice::status(st)),
@@ -3607,6 +3616,9 @@ fn validate_tool(v: &Json) -> Result<()> {
     if text(v,"tool")=="acquire"{return acquire::validate(get(v,"args"));}
     if text(v,"tool")=="netobserve"{return netobserve::validate(get(v,"args"));}
     if text(v,"tool")=="device"{return device::validate(get(v,"args"));}
+    if text(v,"tool")=="listing"{return subject_reports::validate_listing(get(v,"args"));}
+    if text(v,"tool")=="regions"{return subject_reports::validate_regions(get(v,"args"));}
+    if text(v,"tool")=="packets"{return subject_reports::validate_packets(get(v,"args"));}
     if text(v,"tool")=="experiments"{return experiment_records::validate(get(v,"args"));}
     if text(v,"tool")=="hypotheses"{return claim_records::validate_tool(get(v,"args"));}
     if text(v,"tool")=="observations"{return observation_records::validate(get(v,"args"));}
@@ -3785,6 +3797,9 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
         "acquire" => acquire::run(&root,args,&inspection_access)?,
         "netobserve" => netobserve::run(&root,args,&inspection_access)?,
         "device" => device::run(&root,args,&inspection_access)?,
+        "listing" => subject_reports::run_listing(&root,&p,args,&|| inspection_access.cancelled())?,
+        "regions" => subject_reports::run_regions(&root,&p,args,&|| inspection_access.cancelled())?,
+        "packets" => subject_reports::run_packets(&root,&p,args,&|| inspection_access.cancelled())?,
         "compare" => if text(args,"content")=="complete_digest"{file_evidence::compare(&root,args,&inspection_access)?}else{investigation::compare_scoped(&root,&p,&path(&root,&text(args,"other"))?,args,&inspection_access)?},
         "list" => {
             let mut entries = Vec::new();
@@ -3938,7 +3953,7 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
         }
         _ => return Err("Unknown tool".into()),
     };
-    if matches!(field(v,"tool")?,"inspect"|"compare"|"capture"|"reconstruct"|"acquire"|"netobserve"|"device") && inspection_access.cancelled(){return Err("Local investigation cancelled before publication; any new output is retained but unconfirmed".into());}
+    if matches!(field(v,"tool")?,"inspect"|"compare"|"capture"|"reconstruct"|"acquire"|"netobserve"|"device"|"listing"|"regions"|"packets") && inspection_access.cancelled(){return Err("Local investigation cancelled before publication; any new output is retained but unconfirmed".into());}
     if let Some(lease)=&inquiry_export{lease.check()?;}
     Ok(s(&result))
 }
