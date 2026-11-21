@@ -1,18 +1,28 @@
 # RLLM for Windows — installers and x64 build
 
-RLLM now runs on x64 Windows PCs as well as Windows on ARM. `RLLM-Setup.exe` is one installer for both: it reads the machine's native processor and installs the ARM64 or x64 build, so ARM PCs get the native build rather than an emulated one. `RLLM-Windows-x64.zip` carries the smaller x64-only installer with a read-me and the public certificate, for sending to x64 PCs. Setup installs for the current user only and needs no administrator rights. It adds Start menu and desktop shortcuts with the RLLM icon and an entry in Installed apps. If RLLM is open, it asks you to close it before replacing it. Removing RLLM deletes the program and shortcuts and keeps conversations and settings in `%LOCALAPPDATA%\rllm`. The executables now carry the RLLM icon and version information. Those Windows files are unchanged. The Android package on this release is now 1795217278.
+RLLM now runs on x64 Windows PCs as well as Windows on ARM. `RLLM-Setup.exe` is one installer for both: it reads the machine's native processor and installs the ARM64 or x64 build, so ARM PCs get the native build rather than an emulated one. `RLLM-Windows-x64.zip` carries the smaller x64-only installer with a read-me and the public certificate, for sending to x64 PCs. Setup installs for the current user only and needs no administrator rights. It adds Start menu and desktop shortcuts with the RLLM icon and an entry in Installed apps. If RLLM is open, it asks you to close it before replacing it. Removing RLLM deletes the program and shortcuts and keeps conversations and settings in `%LOCALAPPDATA%\rllm`. The executables now carry the RLLM icon and version information. The Android package on this release is now 1795218000.
 
 All files are Authenticode-signed by RLLM with an RFC 3161 timestamp.
 
 | File | Bytes | SHA256 |
 |---|---|---|
-| RLLM-Setup.exe (ARM64 and x64) | 23107288 | 5681205705af96d734fff1e97a65198cd7b83cd2150130d920de55771ceda1fb |
-| RLLM-Windows-x64.zip | 5501165 | 1fea94c198bbbbc263f8e90613db1695e1c69c371d50fa923d477ebe55115143 |
-| RLLM-Setup-x64.exe | 12848344 | 3a99f30496c98c3292895777e74c7586c628582cc1b7653d2e68c8e63865a497 |
-| RLLM-Desktop-arm64.exe | 10259160 | 6eb72a29e3f0fe526eb00adefa050c65a22a26ffe9b144e230f7d34306fc4902 |
-| RLLM-Desktop-x64.exe | 12131544 | d254915b79003a840346ad90fa0a8e84f18072c8d6dbbfea98234df46bccba46 |
+| RLLM-Setup.exe (ARM64 and x64) | 23338200 | b6c704b38d7475dd9ebf54f9e78fb77a3f84796c0e683a32c36e91000d39b338 |
+| RLLM-Windows-x64.zip | 5552149 | 92f984254a06d9dac53ab871f751cf0423d356dc9b71153f5b8161adc72ec525 |
+| RLLM-Setup-x64.exe | 12971224 | 539b0bb0244f4dc1c6621e905729fe0d780b64d0d921b60347e228f8a2e7d5da |
+| RLLM-Desktop-arm64.exe | 10367192 | d9f30977daaf0917ae86365c5ab08bb69f452dc8e00730b41919ff929fa66227 |
+| RLLM-Desktop-x64.exe | 12254424 | 8a9d8d392973104dc303f9e2bab3d5d455a6308d331efd66b57bdf19af9dd54b |
 
 Install, reinstall over a running copy, uninstall with data kept, and both installers were exercised on a Windows 11 ARM64 PC; the x64 build ran there under Windows x64 emulation. Installation on a physical x64 PC and independent acceptance remain unverified.
+
+# RLLM 1795218000 — Android + menu
+
+Android only. The Windows installers listed above are the same files.
+
+The + button opens the same choices as Windows: New conversation, Attach image or file, and More options. On a screen too short to show the model name, the menu also offers Change chat model. This build also carries Loop and Goal per project, the medical check, connection role and stream limits, and parallel text sub-agents.
+
+Package com.local.client.lab, Android 8.0+, ARM64 and x86-64, version 0.1-lab.1795218000. Same signing certificate (SHA-256 ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5), v2 and v3 signatures, and 16 KiB alignment. APK 4745165 bytes, SHA256 9043fd1b59eb8acc2fda8195d7b54e1659174e6e095a165bd7d84a0197df154b. The previous Android file remains on this release as RLLM-Lab-1795217278.apk.
+
+Installed device acceptance of this APK remains unverified.
 
 # RLLM 1795217278 — smaller Android package
 
