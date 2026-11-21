@@ -62,6 +62,7 @@ use super::*;
 #[path="raster_surface.rs"] mod raster_surface;
 #[path="page_capture.rs"] mod page_capture;
 #[path="capture_file.rs"] mod capture_file;
+#[path="acquire.rs"] mod acquire;
 #[path="capture_job.rs"] mod capture_job;
 #[path="web_operation.rs"] mod web_operation;
 #[path="web_document.rs"] mod web_document;
@@ -3601,6 +3602,7 @@ fn validate_tool(v: &Json) -> Result<()> {
     if text(v,"tool")=="service"{return services::validate_args(get(v,"args"));}
     if text(v,"tool")=="reconstruct"{return reconstruction::validate(get(v,"args"));}
     if text(v,"tool")=="self_build"{return self_build::validate(get(v,"args"));}
+    if text(v,"tool")=="acquire"{return acquire::validate(get(v,"args"));}
     if text(v,"tool")=="experiments"{return experiment_records::validate(get(v,"args"));}
     if text(v,"tool")=="hypotheses"{return claim_records::validate_tool(get(v,"args"));}
     if text(v,"tool")=="observations"{return observation_records::validate(get(v,"args"));}
@@ -3776,6 +3778,7 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
         "read" => read_file(&p)?,
         "inspect" => if text(args,"content")=="complete_digest"{file_evidence::inspect(&root,args,&inspection_access)?}else{investigation::inspect_scoped(&root,&p,&text(args,"path"),&inspection_access)?},
         "capture" => capture_file::capture(&root,&p,args,&inspection_access)?,
+        "acquire" => acquire::run(&root,args,&inspection_access)?,
         "compare" => if text(args,"content")=="complete_digest"{file_evidence::compare(&root,args,&inspection_access)?}else{investigation::compare_scoped(&root,&p,&path(&root,&text(args,"other"))?,args,&inspection_access)?},
         "list" => {
             let mut entries = Vec::new();
@@ -3929,7 +3932,7 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
         }
         _ => return Err("Unknown tool".into()),
     };
-    if matches!(field(v,"tool")?,"inspect"|"compare"|"capture"|"reconstruct") && inspection_access.cancelled(){return Err("Local investigation cancelled before publication; any new output is retained but unconfirmed".into());}
+    if matches!(field(v,"tool")?,"inspect"|"compare"|"capture"|"reconstruct"|"acquire") && inspection_access.cancelled(){return Err("Local investigation cancelled before publication; any new output is retained but unconfirmed".into());}
     if let Some(lease)=&inquiry_export{lease.check()?;}
     Ok(s(&result))
 }
