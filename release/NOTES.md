@@ -1,3 +1,13 @@
+# RLLM 1795240001 — Android conversation menu
+
+Android only. The Windows installers listed below are unchanged.
+
+The + button opens three choices: New conversation, Attach image or file, and More options. More options opens the conversation menu. A saved agent profile belongs to one LLM and is not offered on another. A stream limit is the number of streams that connection can run at once.
+
+Package com.local.client.lab, Android 8.0+, ARM64 and x86-64, version 0.1-lab.1795240001. Same signing certificate (SHA-256 ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5), v2 and v3 signatures, and 16 KiB alignment. APK 4855757 bytes, SHA256 062b479e3d18832efc4931c1230593c38499bdc20ad5961a379c62e72a26fb37.
+
+Installed device acceptance of this APK remains unverified.
+
 # RLLM for Windows — installers and x64 build
 
 RLLM now runs on x64 Windows PCs as well as Windows on ARM. `RLLM-Setup.exe` is one installer for both: it reads the machine's native processor and installs the ARM64 or x64 build, so ARM PCs get the native build rather than an emulated one. `RLLM-Windows-x64.zip` carries the smaller x64-only installer with a read-me and the public certificate, for sending to x64 PCs. Setup installs for the current user only and needs no administrator rights. It adds Start menu and desktop shortcuts with the RLLM icon and an entry in Installed apps. If RLLM is open, it asks you to close it before replacing it. Removing RLLM deletes the program and shortcuts and keeps conversations and settings in `%LOCALAPPDATA%\rllm`. The executables now carry the RLLM icon and version information. The Android package on this release is now 1795218000.
