@@ -736,6 +736,75 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
                     inputs = obj(vec![("error", s(&error))]);
                 }
             },
+            "parallel" => {
+                let requests = match effect.get("requests") {
+                    Ok(Arr(items)) => items.clone(),
+                    _ => Vec::new(),
+                };
+                if requests.is_empty() || requests.len() > 8 {
+                    action = "parallel_result".into();
+                    inputs = obj(vec![
+                        ("purpose", s("parallel")),
+                        ("consult", get(&effect, "consult").clone()),
+                        ("results", Arr(vec![obj(vec![("ok", Bool(false)), ("error", s("Parallel request was empty or too large"))])])),
+                    ]);
+                } else {
+                    let mut pending: Vec<(usize, Json)> = requests.into_iter().enumerate().collect();
+                    let mut results = vec![Null; pending.len()];
+                    let mut cancelled = false;
+                    while !pending.is_empty() && !cancelled {
+                        let mut wave = Vec::new();
+                        let mut rest = Vec::new();
+                        let mut used = std::collections::BTreeMap::<i64, i64>::new();
+                        for (index, request) in pending.drain(..) {
+                            let lane = number(&request, "lane");
+                            let limit = number(&request, "lane_limit").max(1);
+                            let count = used.entry(lane).or_insert(0);
+                            if *count < limit {
+                                *count += 1;
+                                wave.push((index, request));
+                            } else {
+                                rest.push((index, request));
+                            }
+                        }
+                        pending = rest;
+                        if wave.is_empty() {
+                            break;
+                        }
+                        let mut handles = Vec::new();
+                        for (index, request) in wave {
+                            handles.push((index, std::thread::spawn(move || exchange(&request, &mut |_, _| {}))));
+                        }
+                        for (index, handle) in handles {
+                            match handle.join() {
+                                Ok(Ok(bytes)) => {
+                                    results[index] = obj(vec![("ok", Bool(true)), ("data", s(&network::b64(&bytes)))]);
+                                }
+                                Ok(Err(error)) => {
+                                    results[index] = obj(vec![("ok", Bool(false)), ("error", s(&error))]);
+                                }
+                                Err(_) => {
+                                    results[index] = obj(vec![("ok", Bool(false)), ("error", s("The request did not finish"))]);
+                                }
+                            }
+                        }
+                        if CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+                            cancelled = true;
+                        }
+                    }
+                    if cancelled {
+                        action = "cancel".into();
+                        inputs = obj(vec![("elapsed_ms", Num("0".into()))]);
+                    } else {
+                        action = "parallel_result".into();
+                        inputs = obj(vec![
+                            ("purpose", s("parallel")),
+                            ("consult", get(&effect, "consult").clone()),
+                            ("results", Arr(results)),
+                        ]);
+                    }
+                }
+            }
             other => {
                 // The core scopes a refused platform service to that operation, so
                 // a service with no Linux binding yet cannot strand the app.

@@ -799,6 +799,10 @@ pub(super) fn parent_request_images(st:&Json)->Result<Vec<Json>>{
 pub(super) fn request_messages(st:&Json,mut messages:Vec<Json>)->Result<Vec<Json>>{
  let agent=if get(st,"task_run")==&Null{active_agent(st)}else{get(get(st,"task_run"),"agent").clone()};
  let run=get(st,"task_run");let mode=text(run,"mode");
+ if matches!(text(run,"phase").as_str(),"consult"|"verify_answer"){
+  let system=if text(run,"phase")=="verify_answer"{"You check another model's answer for the treating physician. The first line is AGREE or DISAGREE. Then plain sentences naming what you would change. No JSON, no tools, and no disclaimer that you are an AI."}else{"Answer the task in plain text. No JSON and no tools."};
+  return Ok(vec![obj(vec![("role",s("system")),("content",s(system))]),obj(vec![("role",s("user")),("content",s(&text(run,"task")))])]);
+ }
  if improvement::evaluating(st){
   let evaluation=get(run,"evaluation");let task=field(evaluation,"task")?;
   let mut instructions=if text(run,"phase")=="evaluation_base"{text(&agent,"instructions")}else{text(run,"composition")};
@@ -846,6 +850,7 @@ pub(super) fn request_messages(st:&Json,mut messages:Vec<Json>)->Result<Vec<Json
 pub(super) fn model_reply(st:&mut Json,reply:&str)->Result<Option<Json>>{
  let mut run=get(st,"task_run").clone();if run==Null{return Ok(None);}put(st,"stream_text",Null);if text(&run,"chat")!=text(st,"active"){return Err("Task conversation changed; result was not applied".into());}
  let phase=text(&run,"phase");
+ if phase=="verify_answer"{append(st,"assistant",&format!("Medical check:\n{reply}"))?;reset_task(st);put(st,"consult_plain",Bool(false));put(st,"notice",s("Medical check saved under the answer. It does not replace that answer."));return Ok(Some(Null));}
  if tool_format::proposal_phase(st){if let Ok(mut p)=parse(reply.trim()){if text(&p,"tool")=="delegate"{delegation::unreviewed(&mut p);}if get(&p,"tool")!=&Null{if let Err(error)=allowed_tool(st,&p).and_then(|_|validate_tool(&p)){if text(&p,"tool")=="delegate"{return Ok(Some(delegation::blocked(st,&error,Some(reply))?));}if array(st,"delegation_stack").is_empty(){return Ok(Some(proposal_failure(st,&p,&error,reply)?));}return Err(error);}if web_operation::is_web(&p){web_operation::own_model(st,&mut p);}claim_records::own(st,&mut p)?;experiment_records::own(st,&mut p)?;if !has_operation_room(st){return Err(format!("Task reached the orchestrator operation limit {}; original agent preserved",operation_limit(st)));}let mut trail=array(&run,"tool_trail");let mut message=obj(vec![("role",s("assistant")),("content",s(reply))]);hosted_decorate(st,&mut message);trail.push(message);put(&mut run,"tool_trail",Arr(trail));put(st,"task_run",run);put(st,"pending",p);put(st,"agent_pending",Bool(true));put(st,"dialog",s("approval"));return Ok(Some(Null));}}inquiry::answer(st,reply);}
  if boolean(st,"web_answer_only")&&matches!(phase.as_str(),"baseline"|"probe"|"verify"|"delegate"){inquiry::answer(st,reply);}
  if phase=="delegate"{if let Some(effect)=delegation::complete(st,reply)?{return Ok(Some(effect));}append(st,"assistant",&standalone_result(reply))?;reset_task(st);put(st,"notice",s("Agent task result saved"));return Ok(Some(Null));}

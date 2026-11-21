@@ -25,6 +25,7 @@ use super::*;
 #[path="history_view.rs"] mod history_view;
 #[path="generation_controls.rs"] pub(super) mod generation;
 #[path="delegation.rs"] mod delegation;
+#[path="routines.rs"] pub(super) mod routines;
 #[path="investigation.rs"] mod investigation;
 #[path="observation_records.rs"] mod observation_records;
 #[path="observation_store.rs"] mod observation_store;
@@ -865,7 +866,7 @@ fn model_request_at(st: &mut Json, index: usize, refreshed: bool) -> Result<Json
         put(&mut run,if evaluating{"evaluation_context"}else{"response_context"},improvement::evaluation_context(st));
         put(st,"task_run",run);
     }
-    if !evaluating&&!evidence_only{tool_format::messages(st,&mut messages);}
+    if !evaluating&&!evidence_only&&!boolean(st,"consult_plain"){tool_format::messages(st,&mut messages);}
     harness_rules::request(st,&mut messages);
     super::hosted_search::project(&mut messages,get(&p,"hosted_identity"),hosted && mode==Some(super::hosted_search::Mode::Messages))?;
     if hosted {if let Some(system)=messages.first_mut(){let content=format!("{}\n{}",text(system,"content"),super::hosted_search::PROMPT);put(system,"content",s(&content));}}
@@ -905,7 +906,7 @@ fn model_request_at(st: &mut Json, index: usize, refreshed: bool) -> Result<Json
         hosted_budget(&p,&body,crate::generation::content_bytes(&messages)?)?;
     }
     let body_snapshot=body.clone();
-    let streaming=!hosted && !evidence_only && !improvement::evaluating(st) && ["local","chat","messages","content"].contains(&protocol.as_str()) && get(&p,"stream")!=&Bool(false) && text(&p,"stream")!="false";
+    let streaming=!boolean(st,"consult_plain") && !hosted && !evidence_only && !improvement::evaluating(st) && ["local","chat","messages","content"].contains(&protocol.as_str()) && get(&p,"stream")!=&Bool(false) && text(&p,"stream")!="false";
     if streaming && protocol!="content" {put(&mut body,"stream",Bool(true));}
     let body=body.string();
     let authentication = super::provider::authorization(&p)?;
@@ -1901,6 +1902,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     | "cloud_result" | "cloud_text_result" | "cloud_release_result" | "cloud_disconnect" | "cloud_failure" | "cloud_cancel" | "workspace_access_save" | "workspace_projects" | "workspace_storage" | "workspace_setup" | "workspace_permissions" | "workspace_locations" | "phone_locations" | "network_locations" | "document_providers" | "google_drive" | "workspace_programs" | "workspace_research" | "workspace_snapshots" | "workspace_files" | "cloud_setup"
                     | "phone_access" | "phone_access_status" | "apps_view" | "apps_result" | "apps_disable"
                     | "server_monitor" | "chat_models" | "agent_settings" | "storage_settings" | "instruction_settings" | "connections" | "services" | "observability"
+                    | "parallel_result"
             ) && !(app_observation::controls(action) && get(&st,"apps_expected")!=&Null)
             && !action.starts_with("workspace_source_access:")
             && !action.starts_with("branch:")
@@ -2108,9 +2110,20 @@ fn event_inner(v: &Json) -> Result<Json> {
             selected if selected.starts_with("answer_mode:")=>{
                 answer_mode::save(&mut st,selected.trim_start_matches("answer_mode:"))?;
             }
-            "send" => {
+            "parallel_result" => { effect = delegation::finish_parallel(&mut st, inputs)?; }
+            "send" | "loop_due" => {
+                if action == "loop_due" {
+                    if !routines::due(&st) { return Ok(()); }
+                    let saying = routines::prompt(&st);
+                    put(&mut st, "draft", s(&saying));
+                    put(&mut st, "loop_last", Num(routines::unix_secs().to_string()));
+                }
                 if !boolean(inputs,"voice_transcript"){put(&mut st,"voice_turn",Bool(false));}
                 let draft = text(&st, "draft");
+                if action == "send" && routines::consume_slash(&mut st, &draft)? {
+                    put(&mut st, "draft", s(""));
+                    return Ok(());
+                }
                 if draft.trim().is_empty() && array(&chat(&st),"draft_attachments").is_empty() {
                     return Err("Enter a message or attach an image".into());
                 }
@@ -2802,7 +2815,10 @@ fn event_inner(v: &Json) -> Result<Json> {
                                 put(&mut st, "dialog", s("approval"));
                             }
                         }
-                        if get(&st,"pending")==&Null && get(&st,"task_run")==&Null {put(&mut st,"agent_running",Bool(false));put(&mut st,"agent_pending",Bool(false));}
+                        if get(&st,"pending")==&Null && get(&st,"task_run")==&Null {
+                            put(&mut st,"agent_running",Bool(false));put(&mut st,"agent_pending",Bool(false));
+                            if let Some(next)=routines::start_verify(&mut st,&reply)?{effect=next;return Ok(());}
+                        }
                         if get(&st,"pending")==&Null&&boolean(get(&st, "drive"), "autosave") {
                             effect = snapshot(&mut st)?
                         }
@@ -3218,7 +3234,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 let active_tool=text(&pending,"tool");
                 inquiry::prepare(&mut st,&pending);
                 inquiry::approve_export(&mut st,&mut pending,boolean(&approval_dispatch_base,"agent_pending"))?;
-                if active_tool=="delegate"{effect=match delegation::start(&mut st,&pending){Ok(effect)=>effect,Err(error)=>{if !delegation::review_owner_current(&st,&pending){delegation::review_changed(&mut st,&error);return Err(error);}delegation::blocked(&mut st,&error,None)?}};return Ok(());}
+                if active_tool=="delegate"{let started=if delegation::batch(&pending){delegation::start_parallel(&mut st,&pending)}else{delegation::start(&mut st,&pending)};effect=match started{Ok(effect)=>effect,Err(error)=>{if !delegation::review_owner_current(&st,&pending){delegation::review_changed(&mut st,&error);return Err(error);}delegation::blocked(&mut st,&error,None)?}};return Ok(());}
                 if active_tool=="hypotheses"{
                     let agent=boolean(&st,"agent_pending");claim_records::approve_author(&st,get(&pending,"args"),agent)?;let mut next=st.clone();let output=claim_records::execute(&mut next,get(&pending,"args"),agent);synchronous_tool_failed=output.is_err();synchronous_tool_completed=!synchronous_tool_failed;if synchronous_tool_failed{put(&mut st,"approval_rules",previous_rules.clone());}effect=synchronous_result(&mut st,next,"hypotheses",output,steps)?;return Ok(());
                 }
@@ -3451,8 +3467,9 @@ fn event_inner(v: &Json) -> Result<Json> {
         if !policy_refusal && ["network_result","tool_result","failure"].contains(&action) && (child_callback||array(&st,"delegation_stack").is_empty()) {harness::reset_task(&mut st);}
         put(&mut st, "notice", s(&e));
         if action == "phone_revision_result" {let record=get(&st,"phone_revision").clone();put(&mut st,"phone_revision",super::document::interrupt(&record));put(&mut st,"active_tool",Null);}
-        if action == "network_result" || action == "tool_result" || action=="phone_revision_result" {
-            put(&mut st, "busy", Bool(false))
+        if action == "network_result" || action == "tool_result" || action=="phone_revision_result" || action=="parallel_result" {
+            put(&mut st, "busy", Bool(false));
+            if action=="parallel_result" { put(&mut st, "consult_batch", Null); put(&mut st, "consult_plain", Bool(false)); }
         }
     }
     if !child_callback&&background_callback&&!array(&st,"delegation_stack").is_empty(){put(&mut st,"busy",Bool(operation_was_busy));}

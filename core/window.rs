@@ -1280,6 +1280,12 @@ unsafe extern "system" fn wndproc(hwnd: isize, msg: u32, wparam: usize, lparam: 
                     invalidate(app.frame);
                 }
             });
+            if wparam == 3 {
+                let fire = with_app(|app| !app.busy && super::application::routines::due(&app.state)).unwrap_or(false);
+                if fire {
+                    launch("loop_due".into());
+                }
+            }
             return 0;
         }
         WM_MOUSEMOVE => {
@@ -1688,6 +1694,7 @@ pub fn open(state: Json, ui: Json, vault: Vault, root: String) -> Result<()> {
     unsafe {
         ShowWindow(frame, 5);
         SetFocus(draft);
+        SetTimer(frame, 3, 15000, 0);
     }
     let mut message = Msg { hwnd: 0, message: 0, wparam: 0, lparam: 0, time: 0, point_x: 0, point_y: 0 };
     loop {
