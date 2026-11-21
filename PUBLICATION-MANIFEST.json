@@ -1,9 +1,9 @@
 {
   "state": "in_progress; signed candidate",
   "version": 1794270237,
-  "distributed_baseline": 1795218000,
+  "distributed_baseline": 1795220000,
   "distributed_baselines": {
-    "com.local.client.lab": 1795218000
+    "com.local.client.lab": 1795220000
   },
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
