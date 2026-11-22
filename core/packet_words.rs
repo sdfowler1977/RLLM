@@ -40,15 +40,33 @@ impl<'a> Cursor<'a> {
     }
 }
 
+const TEXT_CAP: usize = 64;
+
+fn shown(text: &str) -> String {
+    let mut out = String::new();
+    let mut more = false;
+    for (index, ch) in text.chars().enumerate() {
+        if index == TEXT_CAP {
+            more = true;
+            break;
+        }
+        out.push(ch);
+    }
+    if more {
+        out.push_str("...");
+    }
+    out
+}
+
 fn payload_note(data: &[u8]) -> String {
     let mut notes = Vec::new();
     if data.len() >= 4 && matches!(&data[..4], b"GET " | b"POST" | b"HEAD" | b"PUT ") {
         let line_end = data.iter().position(|b| *b == b'\r' || *b == b'\n').unwrap_or(data.len().min(80));
-        notes.push(format!("http {}", String::from_utf8_lossy(&data[..line_end])));
+        notes.push(format!("http {}", shown(&String::from_utf8_lossy(&data[..line_end]))));
     }
     if data.first() == Some(&22) && data.len() > 5 && data[5] == 1 {
         if let Some(name) = server_name(data) {
-            notes.push(format!("handshake server name {name}"));
+            notes.push(format!("handshake server name {}", shown(&name)));
         } else {
             notes.push("handshake client hello".into());
         }
@@ -193,7 +211,7 @@ fn dns_question(payload: &[u8]) -> Option<String> {
         name.push_str(&String::from_utf8_lossy(label));
         at += len;
     }
-    if name.is_empty() { None } else { Some(format!("dns question {name}")) }
+    if name.is_empty() { None } else { Some(format!("dns question {}", shown(&name))) }
 }
 
 fn classic(bytes: &[u8], little: bool, nano: bool, cancelled: &mut dyn FnMut() -> bool) -> Result<Vec<Record>, String> {
@@ -460,5 +478,66 @@ mod checks {
         let mut payload = vec![0u8; 12];
         payload.extend_from_slice(b"\x07example\x03com\x00");
         assert_eq!(dns_question(&payload).as_deref(), Some("dns question example.com"));
+    }
+
+    #[test]
+    fn long_dns_question_is_marked() {
+        let mut payload = vec![0u8; 12];
+        payload.push(63);
+        payload.extend(std::iter::repeat(b'A').take(63));
+        payload.push(1);
+        payload.push(b'b');
+        payload.push(0);
+        let head = format!("{}.", "A".repeat(63));
+        let expected = format!("dns question {head}...");
+        assert_eq!(dns_question(&payload).as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn long_handshake_name_is_marked() {
+        let host = "a".repeat(65);
+        let shown = "a".repeat(64);
+        assert_eq!(payload_note(&client_hello(host.as_bytes())), format!("handshake server name {shown}..."));
+    }
+
+    #[test]
+    fn long_http_line_is_marked() {
+        let mut line = b"GET /".to_vec();
+        line.extend(std::iter::repeat(b'a').take(60));
+        line.extend_from_slice(b"\r\n");
+        let shown = "a".repeat(59);
+        assert_eq!(payload_note(&line), format!("http GET /{shown}..."));
+    }
+
+    fn client_hello(host: &[u8]) -> Vec<u8> {
+        let list_len = 3 + host.len();
+        let body_len = 2 + list_len;
+        let ext_len = 4 + body_len;
+        let cipher_len = 2usize;
+        let hello_len = 2 + 32 + 1 + 2 + cipher_len + 1 + 1 + 2 + ext_len;
+        let record_len = 4 + hello_len;
+        let mut out = Vec::new();
+        out.push(22);
+        out.extend_from_slice(&[3, 3]);
+        out.extend_from_slice(&(record_len as u16).to_be_bytes());
+        out.push(1);
+        out.push((hello_len >> 16) as u8);
+        out.push((hello_len >> 8) as u8);
+        out.push(hello_len as u8);
+        out.extend_from_slice(&[3, 3]);
+        out.extend_from_slice(&[0u8; 32]);
+        out.push(0);
+        out.extend_from_slice(&(cipher_len as u16).to_be_bytes());
+        out.extend_from_slice(&[0x00, 0x2f]);
+        out.push(1);
+        out.push(0);
+        out.extend_from_slice(&(ext_len as u16).to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&(body_len as u16).to_be_bytes());
+        out.extend_from_slice(&(list_len as u16).to_be_bytes());
+        out.push(0);
+        out.extend_from_slice(&(host.len() as u16).to_be_bytes());
+        out.extend_from_slice(host);
+        out
     }
 }

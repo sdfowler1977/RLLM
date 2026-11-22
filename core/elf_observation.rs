@@ -175,7 +175,7 @@ fn contents(reader:&Reader<'_>,wide:bool,out:&mut String,flow:&mut super::contro
  let observed_memory=loads.iter().fold(0u64,|n,l|n.saturating_add(l.memory_size));let _=writeln!(out,"Observed LOAD memory-size fields sum to {observed_memory} bytes before overlap reconciliation; this is not memory usage, allocation, or a unique-address total.");
 }
 
-pub(super) fn analyze_with_cancel(data:&[u8],complete:bool,total:u64,cancelled:&impl Fn()->bool)->Result<String,String>{if cancelled(){return Err("Inspection cancelled during ELF observations".into());}let value=analyze_using(data,complete,total,cancelled);if cancelled(){return Err("Inspection cancelled during ELF observations".into());}Ok(value)}
+pub(crate) fn analyze_with_cancel(data:&[u8],complete:bool,total:u64,cancelled:&impl Fn()->bool)->Result<String,String>{if cancelled(){return Err("Inspection cancelled during ELF observations".into());}let value=analyze_using(data,complete,total,cancelled);if cancelled(){return Err("Inspection cancelled during ELF observations".into());}Ok(value)}
 pub(super) fn observe_with_cancel(data:&[u8],complete:bool,total:u64,cancelled:&impl Fn()->bool)->Result<super::control_flow::Observation,String>{if cancelled(){return Err("Inspection cancelled during ELF observations".into());}let value=observe_using(data,complete,total,cancelled);if cancelled(){return Err("Inspection cancelled during ELF observations".into());}Ok(value)}
 fn analyze_using(data:&[u8],complete:bool,total:u64,cancelled:&impl Fn()->bool)->String{analyze(data,complete,total,cancelled).text}
 fn observe_using(data:&[u8],complete:bool,total:u64,cancelled:&impl Fn()->bool)->super::control_flow::Observation{analyze(data,complete,total,cancelled)}

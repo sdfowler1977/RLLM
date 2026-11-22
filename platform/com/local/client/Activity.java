@@ -191,7 +191,7 @@ public final class Activity extends android.app.Activity {
     }
     @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){super.onRequestPermissionsResult(code,permissions,grants);media.permission(code,grants);if(code==48)dispatch("phone_access_status");if(code==56)deliverPendingAnnouncement();}
     private Object phoneReadOrDocument(JSONObject command,int token)throws Exception {
-        if(!phoneStorageAccess)throw new IOException("Phone storage access is off in Setup");
+        if(!phoneStorageAccess)throw new IOException("Device storage access is off in Setup");
         if(!command.optString("phone_scope").equals("shared"))return phoneTool(command,token);
         String tool=command.getString("tool");
         if(!tool.equals("phone_read")&&!tool.equals("phone_list"))throw new IOException("Shared-storage operation is unsupported");
@@ -1131,7 +1131,7 @@ public final class Activity extends android.app.Activity {
         if(request==42||request==44){finishSavedExport(result,data);return;}
         if(result!=RESULT_OK||data==null||data.getData()==null){if(request==41){try{dispatch("document_cancel",new JSONObject().put("document_ticket",documentTicket));}catch(JSONException ignored){}documentTicket="";}if(request==45){pendingImport=null;dispatch("archive_reject");}return;}
         Uri uri=data.getData();
-        if(!"content".equals(uri.getScheme())||uri.getAuthority()==null){if(request==41){String failedTicket=documentTicket;documentTicket="";try{dispatch("document_failure",new JSONObject().put("document_ticket",failedTicket).put("error","Choose a document through Android storage; this URI is unsupported"));}catch(JSONException ignored){}}else Toast.makeText(this,"Choose a document through Android storage; this URI is unsupported",Toast.LENGTH_LONG).show();return;}
+        if(!"content".equals(uri.getScheme())||uri.getAuthority()==null){if(request==41){String failedTicket=documentTicket;documentTicket="";try{dispatch("document_failure",new JSONObject().put("document_ticket",failedTicket).put("error","Choose a document on the device storage; this URI is unsupported"));}catch(JSONException ignored){}}else Toast.makeText(this,"Choose a document on the device storage; this URI is unsupported",Toast.LENGTH_LONG).show();return;}
         if(request==47){try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);dispatch("wallpaper_result",new JSONObject().put("uri",uri.toString()));}catch(Exception e){Toast.makeText(this,safe(e),Toast.LENGTH_LONG).show();}return;}
         if(request==43){try{getContentResolver().takePersistableUriPermission(uri,data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION));dispatch("folder_result",new JSONObject().put("uri",uri.toString()));}catch(Exception e){Toast.makeText(this,safe(e),Toast.LENGTH_LONG).show();}return;}
         if(request!=41&&request!=45&&request!=46)return;
@@ -1189,10 +1189,10 @@ public final class Activity extends android.app.Activity {
     }
     private void cancelExportDocuments(){for(android.os.CancellationSignal signal:exportSignals)signal.cancel();for(android.os.ParcelFileDescriptor file:exportFiles)try{file.close();}catch(IOException ignored){}}
     private void cancelDocuments(){cancelExportDocuments();for(android.os.CancellationSignal signal:documentSignals)signal.cancel();for(android.os.ParcelFileDescriptor file:documentFiles)try{file.close();}catch(IOException ignored){}}
-    private void documentActive(int token,android.os.CancellationSignal signal)throws IOException{signal.throwIfCanceled();if(!sourceAllowed(activeStorageProvider))throw new IOException("Source access is off in Setup");if(closed||token!=generation||Thread.currentThread().isInterrupted())throw new IOException("Phone operation cancelled");}
+    private void documentActive(int token,android.os.CancellationSignal signal)throws IOException{signal.throwIfCanceled();if(!sourceAllowed(activeStorageProvider))throw new IOException("Source access is off in Setup");if(closed||token!=generation||Thread.currentThread().isInterrupted())throw new IOException("Device operation cancelled");}
     private byte[] phoneBytes(Uri file,int token,android.os.CancellationSignal signal)throws Exception {
         documentActive(token,signal);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(file,"r",signal);
-        if(descriptor==null)throw new IOException("Phone document unavailable");documentFiles.add(descriptor);
+        if(descriptor==null)throw new IOException("Device document unavailable");documentFiles.add(descriptor);
         try(InputStream input=new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)){byte[] bytes=read(input,1024*1024);documentActive(token,signal);return bytes;}finally{documentFiles.remove(descriptor);}
     }
     private String[] phoneIdentity(Uri tree,String path,int token,android.os.CancellationSignal signal)throws Exception {
@@ -1200,15 +1200,15 @@ public final class Activity extends android.app.Activity {
         for(String segment:path.split("/",-1)){
             documentActive(token,signal);String next=null;parent=id;
             try(Cursor cursor=getContentResolver().query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,parent),new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){
-                if(cursor==null)throw new IOException("Phone folder unavailable");int count=0;
-                while(cursor.moveToNext()){if(++count>5000)throw new IOException("Phone folder lookup limit exceeded");if(segment.equals(cursor.getString(1))){if(next!=null)throw new IOException("Ambiguous phone filename");next=cursor.getString(0);}}
+                if(cursor==null)throw new IOException("Device folder unavailable");int count=0;
+                while(cursor.moveToNext()){if(++count>5000)throw new IOException("Device folder lookup limit exceeded");if(segment.equals(cursor.getString(1))){if(next!=null)throw new IOException("Ambiguous device filename");next=cursor.getString(0);}}
             }
-            if(next==null)throw new IOException("Phone document not found: "+segment);id=next;
+            if(next==null)throw new IOException("Device document not found: "+segment);id=next;
         }
         Uri file=DocumentsContract.buildDocumentUriUsingTree(tree,id);
         try(Cursor cursor=getContentResolver().query(file,new String[]{DocumentsContract.Document.COLUMN_MIME_TYPE,DocumentsContract.Document.COLUMN_FLAGS},null,null,null,signal)){
-            if(cursor==null||!cursor.moveToFirst())throw new IOException("Phone document metadata unavailable");
-            if(DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(0))||(cursor.getInt(1)&DocumentsContract.Document.FLAG_SUPPORTS_WRITE)==0)throw new IOException("Phone provider does not permit updating this file");
+            if(cursor==null||!cursor.moveToFirst())throw new IOException("Device document metadata unavailable");
+            if(DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(0))||(cursor.getInt(1)&DocumentsContract.Document.FLAG_SUPPORTS_WRITE)==0)throw new IOException("Device provider does not permit updating this file");
         }
         return new String[]{id,parent};
     }
@@ -1217,7 +1217,7 @@ public final class Activity extends android.app.Activity {
         try{
             documentActive(token,signal);Uri tree=Uri.parse(e.getString("tree"));boolean granted=false;
             for(android.content.UriPermission grant:getContentResolver().getPersistedUriPermissions())if(grant.getUri().equals(tree)&&grant.isReadPermission()&&grant.isWritePermission())granted=true;
-            if(!granted)throw new IOException("Grant read and write permission to this phone folder through Android");
+            if(!granted)throw new IOException("Grant read and write permission to this device folder");
             String phase=e.getString("phase");JSONObject result=new JSONObject();
             if(phase.equals("read")){
                 String[] identity=phoneIdentity(tree,e.getString("path"),token,signal);
@@ -1226,37 +1226,37 @@ public final class Activity extends android.app.Activity {
             }else if(phase.equals("backup")){
                 String parent=e.getString("parent_id"),name=e.getString("revision_name");Set<String> ids=new HashSet<>();
                 try(Cursor cursor=getContentResolver().query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,parent),new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){
-                    if(cursor==null)throw new IOException("Phone folder unavailable");int count=0;
-                    while(cursor.moveToNext()){if(++count>5000)throw new IOException("Phone folder lookup limit exceeded");ids.add(cursor.getString(0));if(name.equals(cursor.getString(1)))throw new IOException("Revision name already exists; no existing document was replaced");}
+                    if(cursor==null)throw new IOException("Device folder unavailable");int count=0;
+                    while(cursor.moveToNext()){if(++count>5000)throw new IOException("Device folder lookup limit exceeded");ids.add(cursor.getString(0));if(name.equals(cursor.getString(1)))throw new IOException("Revision name already exists; no existing document was replaced");}
                 }
                 documentActive(token,signal);Uri created=DocumentsContract.createDocument(getContentResolver(),DocumentsContract.buildDocumentUriUsingTree(tree,parent),"text/plain",name);
                 if(created==null||!tree.getAuthority().equals(created.getAuthority())||ids.contains(DocumentsContract.getDocumentId(created))||e.getString("document_id").equals(DocumentsContract.getDocumentId(created)))throw new IOException("Provider did not create a separate revision; no bytes were written");
                 try(Cursor cursor=getContentResolver().query(created,new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){if(cursor==null||!cursor.moveToFirst())throw new IOException("Revision metadata unavailable");name=cursor.getString(0);}
                 documentActive(token,signal);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(created,"w",signal);
-                if(descriptor==null)throw new IOException("Could not open the new phone revision");documentFiles.add(descriptor);
+                if(descriptor==null)throw new IOException("Could not open the new device revision");documentFiles.add(descriptor);
                 try(OutputStream out=new android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor)){documentActive(token,signal);out.write(e.getString("previous").getBytes(StandardCharsets.UTF_8));out.flush();descriptor.getFileDescriptor().sync();}finally{documentFiles.remove(descriptor);}
                 result.put("document_id",DocumentsContract.getDocumentId(created)).put("name",name).put("data",Base64.encodeToString(phoneBytes(created,token,signal),Base64.NO_WRAP));
             }else if(phase.equals("write")){
                 String[] identity=phoneIdentity(tree,e.getString("path"),token,signal);Uri target=DocumentsContract.buildDocumentUriUsingTree(tree,identity[0]);
                 documentActive(token,signal);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(target,"rw",signal);
-                if(descriptor==null)throw new IOException("Provider cannot open this phone file for a checked update");documentFiles.add(descriptor);
+                if(descriptor==null)throw new IOException("Provider cannot open this device file for a checked update");documentFiles.add(descriptor);
                 try{
                     // A duplicated descriptor gives the lock its own close ownership. The
                     // same original descriptor is read, checked, truncated and written.
                     try(android.os.ParcelFileDescriptor lockDescriptor=android.os.ParcelFileDescriptor.dup(descriptor.getFileDescriptor());FileOutputStream lockStream=new android.os.ParcelFileDescriptor.AutoCloseOutputStream(lockDescriptor);java.nio.channels.FileLock lock=lockStream.getChannel().tryLock()){
-                        if(lock==null)throw new IOException("Phone file is locked by another writer; target unchanged");
+                        if(lock==null)throw new IOException("Device file is locked by another writer; target unchanged");
                         FileDescriptor fd=descriptor.getFileDescriptor();android.system.Os.lseek(fd,0,android.system.OsConstants.SEEK_SET);
                         ByteArrayOutputStream before=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int count;
-                        while((count=android.system.Os.read(fd,buffer,0,buffer.length))>0){documentActive(token,signal);if(before.size()+count>1024*1024)throw new IOException("Phone original exceeds 1 MiB");before.write(buffer,0,count);}
+                        while((count=android.system.Os.read(fd,buffer,0,buffer.length))>0){documentActive(token,signal);if(before.size()+count>1024*1024)throw new IOException("Device original exceeds 1 MiB");before.write(buffer,0,count);}
                         Core.call(new JSONObject().put("op","phone_revision_check").put("record",e).put("document_id",identity[0]).put("data",Base64.encodeToString(before.toByteArray(),Base64.NO_WRAP)));
                         documentActive(token,signal);android.system.Os.lseek(fd,0,android.system.OsConstants.SEEK_SET);android.system.Os.ftruncate(fd,0);
                         byte[] replacement=e.getString("content").getBytes(StandardCharsets.UTF_8);int offset=0;
-                        while(offset<replacement.length){documentActive(token,signal);count=android.system.Os.write(fd,replacement,offset,replacement.length-offset);if(count<=0)throw new IOException("Phone update stopped before all bytes were written");offset+=count;}
+                        while(offset<replacement.length){documentActive(token,signal);count=android.system.Os.write(fd,replacement,offset,replacement.length-offset);if(count<=0)throw new IOException("Device update stopped before all bytes were written");offset+=count;}
                         android.system.Os.fsync(fd);documentActive(token,signal);
                     }
                 }catch(Exception error){try{descriptor.closeWithError(safe(error));}catch(IOException ignored){}throw error;}finally{documentFiles.remove(descriptor);descriptor.close();}
                 result.put("data",Base64.encodeToString(phoneBytes(target,token,signal),Base64.NO_WRAP));
-            }else throw new IOException("Unexpected phone revision phase");
+            }else throw new IOException("Unexpected device revision phase");
             documentActive(token,signal);return result;
         }finally{documentSignals.remove(signal);}
     }
@@ -1270,16 +1270,16 @@ public final class Activity extends android.app.Activity {
         try{
             if(chunked)stream=documentJobs.submit(()->openTransfer(e)).get();
             documentActive(token,signal);Uri tree=Uri.parse(e.getString("tree"));String name=e.getString("name"),phase=e.getString("phase");
-            if(!"content".equals(tree.getScheme())||tree.getAuthority()==null)throw new IOException("Unsupported phone folder");
+            if(!"content".equals(tree.getScheme())||tree.getAuthority()==null)throw new IOException("Unsupported device folder");
             if(name.isEmpty()||name.equals(".")||name.equals("..")||name.contains("/")||name.contains("\\")||name.indexOf('%')>=0||name.indexOf(':')>=0||name.indexOf('\0')>=0||name.getBytes(StandardCharsets.UTF_8).length>255)throw new IOException("Invalid project filename");
             String mime=e.optString("mime","application/zip");if(!mime.equals("application/zip")&&!mime.equals("application/octet-stream"))throw new IOException("Unsupported snapshot content type");
-            boolean write=phase.equals("write");if(!write&&!phase.equals("probe")&&!phase.equals("verify"))throw new IOException("Invalid phone transfer phase");
+            boolean write=phase.equals("write");if(!write&&!phase.equals("probe")&&!phase.equals("verify"))throw new IOException("Invalid device transfer phase");
             boolean granted=false;for(android.content.UriPermission grant:getContentResolver().getPersistedUriPermissions())if(grant.getUri().equals(tree)&&grant.isReadPermission()&&(!write||grant.isWritePermission()))granted=true;
-            if(!granted)throw new IOException("The original phone folder grant is unavailable; pending snapshot retained");
+            if(!granted)throw new IOException("The original device folder grant is unavailable; pending snapshot retained");
             String rootId=DocumentsContract.getTreeDocumentId(tree),match=null;Set<String> ids=new HashSet<>();
             try(Cursor c=getContentResolver().query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,rootId),new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){
-                if(c==null)throw new IOException("Phone folder unavailable");int count=0;
-                while(c.moveToNext()){documentActive(token,signal);if(++count>5000)throw new IOException("Phone folder exceeds lookup bound");String id=c.getString(0);if(id==null||!ids.add(id))throw new IOException("Ambiguous phone document identity");if(name.equals(c.getString(1))){if(match!=null)throw new IOException("Ambiguous project filename");match=id;}}
+                if(c==null)throw new IOException("Device folder unavailable");int count=0;
+                while(c.moveToNext()){documentActive(token,signal);if(++count>5000)throw new IOException("Device folder exceeds lookup bound");String id=c.getString(0);if(id==null||!ids.add(id))throw new IOException("Ambiguous device document identity");if(name.equals(c.getString(1))){if(match!=null)throw new IOException("Ambiguous project filename");match=id;}}
             }
             documentActive(token,signal);Uri file;
             if(write){
@@ -1301,36 +1301,36 @@ public final class Activity extends android.app.Activity {
                 actual=read(in,5*1024*1024);documentActive(token,signal);
             }finally{opened.compareAndSet(descriptor,null);documentFiles.remove(descriptor);}
             return new JSONObject().put("found",true).put("data",Base64.encodeToString(actual,Base64.NO_WRAP));
-        }catch(Exception error){if(expired.get())error=new IOException("Phone project transfer timed out; pending snapshot retained",error);if(createdName!=null)throw new IOException("New project document "+createdName+" may remain incomplete or unverified; existing files were not replaced. "+safe(error),error);throw error;}
+        }catch(Exception error){if(expired.get())error=new IOException("Device project transfer timed out; pending snapshot retained",error);if(createdName!=null)throw new IOException("New project document "+createdName+" may remain incomplete or unverified; existing files were not replaced. "+safe(error),error);throw error;}
         finally{if(stream!=null)try{stream.close();}catch(IOException ignored){}timeout.cancel(false);documentSignals.remove(signal);android.os.ParcelFileDescriptor file=opened.getAndSet(null);if(file!=null){documentFiles.remove(file);try{file.close();}catch(IOException ignored){}}}
     }
     private String phoneTool(JSONObject e,int token) throws Exception {
-        if(!phoneStorageAccess)throw new IOException("Phone storage access is off in Setup");
+        if(!phoneStorageAccess)throw new IOException("Device storage access is off in Setup");
         android.os.CancellationSignal signal=new android.os.CancellationSignal();documentSignals.add(signal);String createdName=null;
         try{
             documentActive(token,signal);Uri tree=Uri.parse(e.getString("tree"));String id=DocumentsContract.getTreeDocumentId(tree);String path=e.getJSONObject("args").getString("path");
-            if(path.startsWith("/")||path.contains("\\")||path.indexOf('\0')>=0)throw new IOException("Invalid phone path");
+            if(path.startsWith("/")||path.contains("\\")||path.indexOf('\0')>=0)throw new IOException("Invalid device path");
             boolean creating=e.getString("tool").equals("phone_create");String[] segments=path.split("/",-1);String fileName=creating?segments[segments.length-1]:null;
             if(creating&&(fileName.isEmpty()||fileName.equals(".")||fileName.equals("..")||fileName.getBytes(StandardCharsets.UTF_8).length>255||fileName.indexOf('%')>=0||fileName.indexOf(':')>=0))throw new IOException("Choose a plain new filename of at most 255 UTF-8 bytes");
-            if(creating){boolean writable=false;for(android.content.UriPermission grant:getContentResolver().getPersistedUriPermissions())if(grant.getUri().equals(tree)&&grant.isWritePermission())writable=true;if(!writable)throw new IOException("Grant write permission to this phone folder through Android");}
+            if(creating){boolean writable=false;for(android.content.UriPermission grant:getContentResolver().getPersistedUriPermissions())if(grant.getUri().equals(tree)&&grant.isWritePermission())writable=true;if(!writable)throw new IOException("Grant write permission to this device folder");}
             for(int index=0;index<segments.length-(creating?1:0);index++){String segment=segments[index];if(segment.isEmpty()||segment.equals("."))continue;if(segment.equals(".."))throw new IOException("Path leaves permitted folder");String next=null;Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,id);
                 documentActive(token,signal);try(Cursor c=getContentResolver().query(children,new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){if(c==null)throw new IOException("Folder unavailable");int count=0;while(c.moveToNext()){if(++count>5000)throw new IOException("Folder traversal limit exceeded");if(segment.equals(c.getString(1))){if(next!=null)throw new IOException("Ambiguous document name");next=c.getString(0);}}}
                 if(next==null)throw new IOException("Document not found: "+segment);id=next;
             }
             documentActive(token,signal);
-            if(creating){String content=e.getJSONObject("args").getString("content");byte[] bytes=content.getBytes(StandardCharsets.UTF_8);if(bytes.length>1024*1024||content.indexOf('\0')>=0)throw new IOException("Phone text file must be UTF-8 and at most 1 MiB");
+            if(creating){String content=e.getJSONObject("args").getString("content");byte[] bytes=content.getBytes(StandardCharsets.UTF_8);if(bytes.length>1024*1024||content.indexOf('\0')>=0)throw new IOException("Device text file must be UTF-8 and at most 1 MiB");
                 Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,id);Set<String> existingIds=new HashSet<>();
                 try(Cursor c=getContentResolver().query(children,new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){if(c==null)throw new IOException("Folder unavailable");int count=0;while(c.moveToNext()){if(++count>5000)throw new IOException("Folder exceeds lookup limit");existingIds.add(c.getString(0));if(fileName.equals(c.getString(1)))throw new IOException("File already exists; it was not replaced");}}
                 documentActive(token,signal);Uri created=DocumentsContract.createDocument(getContentResolver(),DocumentsContract.buildDocumentUriUsingTree(tree,id),"text/plain",fileName);if(created==null)throw new IOException("Folder provider refused to create the file");
                 if(!tree.getAuthority().equals(created.getAuthority())||existingIds.contains(DocumentsContract.getDocumentId(created)))throw new IOException("Provider did not return a new document; no bytes were written");
                 createdName=fileName;documentActive(token,signal);try(Cursor c=getContentResolver().query(created,new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){if(c==null||!c.moveToFirst())throw new IOException("New document metadata unavailable");createdName=c.getString(0);}
-                documentActive(token,signal);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(created,"w",signal);if(descriptor==null)throw new IOException("Could not open the new phone file");documentFiles.add(descriptor);try(OutputStream out=new android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor)){documentActive(token,signal);out.write(bytes);out.flush();}finally{documentFiles.remove(descriptor);}
-                documentActive(token,signal);descriptor=getContentResolver().openFileDescriptor(created,"r",signal);if(descriptor==null)throw new IOException("Could not verify the new phone file");documentFiles.add(descriptor);byte[] actual;try(InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)){documentActive(token,signal);actual=read(in,1024*1024);}finally{documentFiles.remove(descriptor);}documentActive(token,signal);
-                if(!Arrays.equals(bytes,actual))throw new IOException("Phone file readback differs from the requested contents");return "Created and verified phone file "+createdName+" ("+bytes.length+" bytes).";
+                documentActive(token,signal);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(created,"w",signal);if(descriptor==null)throw new IOException("Could not open the new device file");documentFiles.add(descriptor);try(OutputStream out=new android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor)){documentActive(token,signal);out.write(bytes);out.flush();}finally{documentFiles.remove(descriptor);}
+                documentActive(token,signal);descriptor=getContentResolver().openFileDescriptor(created,"r",signal);if(descriptor==null)throw new IOException("Could not verify the new device file");documentFiles.add(descriptor);byte[] actual;try(InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)){documentActive(token,signal);actual=read(in,1024*1024);}finally{documentFiles.remove(descriptor);}documentActive(token,signal);
+                if(!Arrays.equals(bytes,actual))throw new IOException("Device file readback differs from the requested contents");return "Created and verified device file "+createdName+" ("+bytes.length+" bytes).";
             }
             if(e.getString("tool").equals("phone_list")){JSONArray rows=new JSONArray();Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,id);try(Cursor c=getContentResolver().query(children,new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE},null,null,null,signal)){if(c==null)throw new IOException("Folder unavailable");while(c.moveToNext()){if(rows.length()>=500)throw new IOException("Folder exceeds 500 entries");rows.put(new JSONObject().put("name",c.getString(0)).put("directory",DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(1))));}}documentActive(token,signal);return rows.toString(2);}
             Uri file=DocumentsContract.buildDocumentUriUsingTree(tree,id);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(file,"r",signal);if(descriptor==null)throw new IOException("Document unavailable");documentFiles.add(descriptor);try(InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)){documentActive(token,signal);byte[] bytes=read(in,1024*1024);documentActive(token,signal);return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();}finally{documentFiles.remove(descriptor);}
-        }catch(Exception error){if(createdName!=null)throw new IOException("New phone document "+createdName+" may remain incomplete or unverified. Existing documents were not replaced. "+safe(error),error);throw error;}finally{documentSignals.remove(signal);}
+        }catch(Exception error){if(createdName!=null)throw new IOException("New device document "+createdName+" may remain incomplete or unverified. Existing documents were not replaced. "+safe(error),error);throw error;}finally{documentSignals.remove(signal);}
     }
     private void preserveInputs(){if(closed||state==null)return;try{JSONObject result=(JSONObject)Core.call(new JSONObject().put("op","event").put("action","capture").put("state",state).put("inputs",inputs()).put("root",root()));JSONObject next=result.getJSONObject("state");save(next);state=next;media.state(next);JSONObject status=result.getJSONObject("ui").optJSONObject("voice_status");VoiceSession.reconcile(this,next,status==null?"Voice conversation active":status.optString("label"));}catch(Throwable problem){Toast.makeText(this,"Input could not be saved: "+safe(problem),Toast.LENGTH_LONG).show();}}
     boolean voiceForeground(){return !closed&&!ratePaused;}

@@ -1,9 +1,9 @@
 {
   "state": "in_progress; signed candidate",
   "version": 1794270237,
-  "distributed_baseline": 1795309931,
+  "distributed_baseline": 1795309932,
   "distributed_baselines": {
-    "com.local.client.lab": 1795309931
+    "com.local.client.lab": 1795309932
   },
   "package": "com.local.client.lab",
   "launcher_name": "RLLM",
@@ -230,9 +230,9 @@
     "res/values/styles.xml": "66b7ac21724d0110d50b1ee59eb54b9b18cd8062f96c1822809e8a4cf1f6d17d",
     "res/xml/network.xml": "30607c8f0160843366cf48bbb318eafbf5a8793a35847732c77ebb564125e115",
     "notices/.gitkeep": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+    "notices/monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
     "notices/runtime.html": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27",
     "notices/rust-stdlib.txt": "a3001e5126f70d2b876e4cababda19267d01a9b24551220acd3ec13fb8e74d7a",
-    "notices/strata-monitor-MIT.txt": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c",
     "AndroidManifest.xml": "7b56d65603b73dd667a467f891b4b6b77ae99bc04e4b7c8388e9d6ff467ec269",
     "package.sh": "b396ac9ef0e00210df1adfa34fbd95e6e167e5cbe021270a1a368de285c3d089",
     "package.cmd": "1232496e47a7d534625e0b10d808eb9a7a113524321dec108b3d74b83dab8550",
@@ -860,13 +860,13 @@
       "bytes": 1,
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
     },
+    "notices/monitor-MIT.txt": {
+      "bytes": 1069,
+      "sha256": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c"
+    },
     "notices/runtime.html": {
       "bytes": 1499465,
       "sha256": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27"
-    },
-    "notices/strata-monitor-MIT.txt": {
-      "bytes": 1069,
-      "sha256": "9c9d1575841b61fcac2449a9a7153b165614285c5814ad1a7726bf359d01ab2c"
     },
     "package.sh": {
       "bytes": 7784,

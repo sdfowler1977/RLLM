@@ -1,6 +1,6 @@
 # Understand the measurements
 
-Tap the chat footer's `≈tok/s` number, or open **App settings → Diagnostics → Phone observations**.
+Tap the chat footer's `≈tok/s` number, or open **App settings → Diagnostics → Device observations**.
 
 ## Live app estimate
 

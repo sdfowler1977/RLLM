@@ -57,7 +57,7 @@ pub(super) fn network_event(st:&mut Json,action:&str,inputs:&Json)->Result<Json>
    if history.len()>32{history.drain(..history.len()-32);}
    put(&mut next,"server_monitor_sample",sample);put(&mut next,"server_monitor_history",Arr(history));put(&mut next,"server_monitor_error",Null);
    if next.string().len()>6*1024*1024-4096{put(st,"server_monitor_error",s("Not enough saved-state capacity; previous server sample retained"));}
-   else{*st=next;put(st,"notice",s("Server-reported metrics received; these are not independent phone hardware measurements"));}
+   else{*st=next;put(st,"notice",s("Server-reported metrics received; these are not independent device hardware measurements"));}
   },
   Err(error)=>{put(st,"server_monitor_error",s(&error));put(st,"notice",s(&error));}
  }
@@ -72,7 +72,7 @@ fn quantile(rows:&[Json],key:&str,p:usize)->String{let mut values=rows.iter().fi
 fn row(key:&str,title:&str,value:String)->Json{field_ui(key,title,&value,"readonly")}
 pub(super) fn modal(st:&Json)->Json{
  if text(st,"dialog")=="server_monitor_settings"{
-  let e=get(st,"edit");return super::modal("Server monitor connection",vec![field_ui("url","Exact metrics JSON URL",&text(e,"url"),"uri"),field_ui("key","Separate bearer key (optional)",&text(e,"key"),"secret"),field_ui("scope","Source","Enter the direct server /metrics URL or your monitor's /strata/metrics URL. Refresh is manual. Model, search and tool keys are never reused. Server readings are reported values, not phone measurements.","readonly")],vec![button("Save monitor connection","server_monitor_save")]);
+  let e=get(st,"edit");return super::modal("Server monitor connection",vec![field_ui("url","Exact metrics JSON URL",&text(e,"url"),"uri"),field_ui("key","Separate bearer key (optional)",&text(e,"key"),"secret"),field_ui("scope","Source","Enter the direct server /metrics URL or your monitor's /monitor/metrics URL. Refresh is manual. Model, search and tool keys are never reused. Server readings are reported values, not device measurements.","readonly")],vec![button("Save monitor connection","server_monitor_save")]);
  }
  let sample=get(st,"server_monitor_sample");let live=get(sample,"live");let hw=get(sample,"hardware");let config=get(st,"server_monitor");
  let mut fields=vec![row("source","Source and freshness",format!("Configured: {}\nRecorded source: {}\nSample age: {}\n{}\nManual snapshot; values may have changed. All values below are reported by the server.",endpoint_summary(&text(config,"url")),endpoint_summary(&text(sample,"url")),age(sample),if !text(st,"server_monitor_error").is_empty(){text(st,"server_monitor_error")}else if sample==&Null{"No sample received".into()}else if text(config,"url")!=text(sample,"url"){"STALE: source changed".into()}else if stale(sample){"STALE: more than 60 seconds old or clock unavailable; refresh for current values".into()}else{"Last received sample; refresh for current values".into()}))];

@@ -2464,7 +2464,17 @@ fn run_with(
         require_journal_parent(root, args)?;
     }
     let (edited, written) = apply_reviewed_edit(root, args)?;
-    let saved = format!("Saved {written} bytes to {edited}.");
+    let reload_note = match crate::rebuild_reload::rebuild_reload(
+        root,
+        "core/desktop.rs",
+        &root.join("RLLM.exe"),
+        "source-edit",
+        false,
+    ) {
+        Ok(text) => text,
+        Err(error) => format!("Rebuild plan was not recorded: {error}"),
+    };
+    let saved = format!("Saved {written} bytes to {edited}.\n{reload_note}");
     let mut source_digest = String::new();
     let mut rollback_digest = String::new();
     if !journal_rel.is_empty() {

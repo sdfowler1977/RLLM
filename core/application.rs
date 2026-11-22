@@ -26,7 +26,7 @@ use super::*;
 #[path="generation_controls.rs"] pub(super) mod generation;
 #[path="delegation.rs"] mod delegation;
 #[path="routines.rs"] pub(super) mod routines;
-#[path="investigation.rs"] mod investigation;
+#[path="investigation.rs"] pub(crate) mod investigation;
 #[path="observation_records.rs"] mod observation_records;
 #[path="observation_store.rs"] mod observation_store;
 #[path="observation_graph.rs"] mod observation_graph;
@@ -43,7 +43,7 @@ use super::*;
 #[path="binary_observation.rs"] mod binary_observation;
 #[path="rust_source_observation.rs"] mod rust_source_observation;
 #[path="control_flow.rs"] mod control_flow;
-#[path="elf_observation.rs"] mod elf_observation;
+#[path="elf_observation.rs"] pub(crate) mod elf_observation;
 #[path="instruction.rs"] mod instruction;
 #[path="binary_evidence.rs"] mod binary_evidence;
 #[path="binary_flow.rs"] mod binary_flow;
@@ -131,7 +131,7 @@ fn reply_telemetry(protocol: &str, body: &str, reply: &str, elapsed_ms: usize) -
                 .unwrap_or(0)
                 .to_string()),
         ),
-        ("basis", s("phone clock · complete request")),
+        ("basis", s("device clock · complete request")),
     ];
     if tokens > 0 && tokens <= 10_000_000 {
         fields.push(("tokens", Num(tokens.to_string())));
@@ -423,7 +423,7 @@ fn telemetry_summary(value:&Json)->String {
     if value==&Null {return "No completed reply measurements".into();}
     let chars=number(value,"character_rate_tenths");let rate=number(value,"rate_tenths");
     let tokens=if get(value,"rate_tenths")==&Null {"Token count unavailable".into()}else{format!("{}.{:01} tokens/s (server token count)",rate/10,rate%10)};
-    format!("{tokens}\n{}.{:01} characters/s\n{} ms, measured on the phone over the complete request",chars/10,chars%10,number(value,"duration_ms"))
+    format!("{tokens}\n{}.{:01} characters/s\n{} ms, measured on the device over the complete request",chars/10,chars%10,number(value,"duration_ms"))
 }
 fn ui(st: &Json) -> Json {
     let page = text(st, "page");
@@ -479,7 +479,7 @@ fn ui(st: &Json) -> Json {
                 text(&p, "model"),
                 if busy { "Working" } else { "Ready" },
                 if boolean(get(st, "drive"), "autosave") {
-                    if boolean(get(st,"drive"),"phone_default") {"Phone-folder autosave on"} else {"WebDAV autosave on"}
+                    if boolean(get(st,"drive"),"phone_default") {"Device-folder autosave on"} else {"WebDAV autosave on"}
                 } else {
                     "Autosave off"
                 },
@@ -538,13 +538,13 @@ fn ui(st: &Json) -> Json {
  "navigation"=>menu("RLLM",vec![button("Chat","chat"),button("History","history"),button("Workspace","workspace"),button("App settings","config"),button("Agent settings","agent_settings")]),
  "app_settings"=>app_settings_menu(),
  "apps"=>app_observation::modal_for(st),
- "phone_access"=>modal("Phone folders and scope",vec![field_ui("access","Allow phone storage access",if workspace::allowed(st,"phone"){"true"}else{"false"},"check"),field_ui("scope","Browsing scope",if text(st,"phone_access_mode")=="limited"{"Selected phone folder"}else if text(st,"phone_access_mode")=="off"{"Off"}else{"Primary shared storage"},"readonly"),field_ui("folder","Selected folder",&text(st,"phone_uri"),"readonly"),field_ui("grant","Android broad file permission",if boolean(st,"phone_access_granted"){"Granted"}else{"Choose Android file permission to grant access"},"readonly")],vec![button("Apply access","workspace_source_access:phone"),button("Android file permission","phone_access_full"),button("Selected-folder browsing","phone_access_limited"),button("Choose or change phone folder","phone_folder")]),
+ "phone_access"=>modal("Device folders and scope",vec![field_ui("access","Allow device storage access",if workspace::allowed(st,"phone"){"true"}else{"false"},"check"),field_ui("scope","Browsing scope",if text(st,"phone_access_mode")=="limited"{"Selected device folder"}else if text(st,"phone_access_mode")=="off"{"Off"}else{"Primary shared storage"},"readonly"),field_ui("folder","Selected folder",&text(st,"phone_uri"),"readonly"),field_ui("grant","Broad file permission",if boolean(st,"phone_access_granted"){"Granted"}else{"Choose broad file permission to grant access"},"readonly")],vec![button("Apply access","workspace_source_access:phone"),button("Broad file permission","phone_access_full"),button("Selected-folder browsing","phone_access_limited"),button("Choose or change device folder","phone_folder")]),
  "agent_settings"=>agent_settings_menu(),
  "storage_settings"=>workspace::modal_for(&{let mut current=st.clone();put(&mut current,"dialog",s("workspace_setup"));current}).unwrap_or(Null),
  "instruction_settings"=>menu("Instructions and preferences",vec![button("Global instructions","instructions"),button("Investigation preferences","investigation_preferences"),button("Saved refinement","refinement_review")]),
  "connections"=>menu("LLM connections",vec![button("Choose or add an LLM","chat_models"),button("Edit current connection","profile_edit"),button("Connection authorization","oauth_settings"),button("Optional model-list check","connection_test"),button("Connection details","configuration"),button("Export configuration","configuration_export")]),
- "services"=>menu("Network services",vec![button("Voice and microphone","voice_settings"),button("Service connections","service_connections"),button("MCP connections","mcp_client_connections"),button("Web access","web_settings"),button("Phone API gateway","gateway_edit")]),
- "observability"=>menu("Diagnostics",vec![button("Phone observations","diagnostics"),button("App inspection","apps_view"),button("Server monitor","server_monitor"),button("Features","capabilities")]),
+ "services"=>menu("Network services",vec![button("Voice and microphone","voice_settings"),button("Service connections","service_connections"),button("MCP connections","mcp_client_connections"),button("Web access","web_settings"),button("Device API gateway","gateway_edit")]),
+ "observability"=>menu("Diagnostics",vec![button("Device observations","diagnostics"),button("App inspection","apps_view"),button("Server monitor","server_monitor"),button("Features","capabilities")]),
  "configuration"=>modal("Configuration",vec![field_ui("server","Model server address",&endpoint_summary(&text(&p,"endpoint")),"readonly"),field_ui("detail","Current configuration",&text(&out,"detail"),"readonly"),field_ui("notice","Operation status",&text(st,"notice"),"readonly"),field_ui("fields","Profile fields",if p==Null {"0"}else{"9"},"readonly"),field_ui("budget","Configured memory budget",&format!("{} bytes; measured resource inputs: {}",number(get(st,"policy"),"budget_bytes"),boolean(get(st,"policy"),"measured")),"readonly"),field_ui("rate","Last reply measurements",&telemetry_summary(get(st,"telemetry")),"readonly")],{let mut buttons=vec![button("Apply profile settings","profile_edit"),button("Export configuration","configuration_export")];if get(st,"export_pending")!=&Null{buttons.push(button("Review saved export","export_review"));}buttons}),
  "status"=>modal("Operation status",{
     let mut fields=vec![field_ui("notice","Current result",&text(st,"notice"),"readonly")];
@@ -564,11 +564,11 @@ fn ui(st: &Json) -> Json {
  "drive"=>{let d=get(st,"drive");let header=text(d,"auth_header");let prefix=if get(d,"auth_prefix")==&Null{"Bearer".to_string()}else{text(d,"auth_prefix")};modal("Network drive connection",vec![field_ui("url","WebDAV folder URL, port and share path",&text(d,"url"),"uri"),field_ui("tls_name","Certificate DNS hostname",&text(d,"tls_name"),"text"),field_ui("user","Username",&text(d,"user"),"text"),field_ui("password","Password",&text(d,"password"),"secret"),field_ui("key","Access key/token (optional; overrides username/password)",&text(d,"key"),"secret"),field_ui("auth_header","Key/token header name",if header.is_empty(){"Authorization"}else{&header},"text"),field_ui("auth_prefix","Header value prefix (empty sends the raw key)",&prefix,"text"),field_ui("auth_status","Current saved method",&if boolean(d,"oauth_enabled"){network::storage_authorization(d).map(|_|"Storage authorization active; manual credentials retained".to_string()).unwrap_or_else(|e|e)}else if !text(d,"key").is_empty(){"Key/token header active; username/password retained".into()}else if !text(d,"user").is_empty(){"Username/password credentials active".into()}else{"No network credentials configured".into()},"readonly"),field_ui("plain","Allow HTTP on this LAN or VPN",if boolean(d,"plain"){"true"}else{"false"},"check"),field_ui("access","Allow network storage access",if workspace::allowed(st,"network"){"true"}else{"false"},"check")],vec![button("Save network connection","drive_save"),button("Connection authorization","storage_oauth_settings")])},
  "remote_save_review"=>{let r=get(st,"remote_save");modal("Pending remote save",vec![field_ui("target","Destination",&endpoint_summary(&text(r,"target")),"readonly"),field_ui("phase","Verification state",&text(r,"phase"),"readonly"),field_ui("warning","Status","Not reported as saved until an exact GET readback matches the encrypted pending snapshot.","readonly")],vec![button("Verify existing destination","remote_save_verify"),button("Retry save (verify before creating)","remote_save_retry"),button("Discard pending snapshot","remote_save_discard")])},
  "resources"=>{let r=get(st,"resources");let percent=text(r,"percent");modal("Resources and mode",vec![field_ui("performance","Performance mode",if boolean(r,"performance"){"true"}else{"false"},"check"),field_ui("percent","Performance memory limit: 50–95% of measured heap",if percent.is_empty(){"75"}else{&percent},"text"),field_ui("local","Pause remote model requests (keep file tools available)",if text(st,"capability_mode")=="local"{"true"}else{"false"},"check"),field_ui("fallback","Use next compatible profile if connection fails before sending",if boolean(r,"fallback"){"true"}else{"false"},"check"),field_ui("measurement","Current policy",&get(st,"policy").string(),"readonly")],vec![button("Apply and stop gateway","resources_save")])},
- "gateway"=>{let g=get(st,"gateway");modal("Phone API gateway",vec![field_ui("listen","Listen address: 127.0.0.1 or 0.0.0.0",&text(g,"listen"),"text"),field_ui("port","TCP port",&text(g,"port"),"text"),field_ui("token","Client bearer token",&text(g,"token"),"secret"),field_ui("lan","Allow unencrypted traffic from LAN clients",if boolean(g,"lan"){"true"}else{"false"},"check"),field_ui("a2a","Enable read-only A2A for this workspace (127.0.0.1 only)",if boolean(g,"a2a"){"true"}else{"false"},"check"),field_ui("workspace","A2A scope: the currently selected workspace; inspect and compare only",&text(st,"approval_root"),"readonly"),field_ui("status","Current service status",&text(st,"gateway_status"),"readonly")],vec![button("Start gateway","gateway_start"),button("Stop gateway","gateway_stop")])},
+ "gateway"=>{let g=get(st,"gateway");modal("Device API gateway",vec![field_ui("listen","Listen address: 127.0.0.1 or 0.0.0.0",&text(g,"listen"),"text"),field_ui("port","TCP port",&text(g,"port"),"text"),field_ui("token","Client bearer token",&text(g,"token"),"secret"),field_ui("lan","Allow unencrypted traffic from LAN clients",if boolean(g,"lan"){"true"}else{"false"},"check"),field_ui("a2a","Enable read-only A2A for this workspace (127.0.0.1 only)",if boolean(g,"a2a"){"true"}else{"false"},"check"),field_ui("workspace","A2A scope: the currently selected workspace; inspect and compare only",&text(st,"approval_root"),"readonly"),field_ui("status","Current service status",&text(st,"gateway_status"),"readonly")],vec![button("Start gateway","gateway_start"),button("Stop gateway","gateway_stop")])},
  "instructions"=>modal("Agent instructions",vec![field_ui("instructions","Instructions included with each request",&text(st,"instructions"),"multiline")],vec![button("Save instructions","instructions_save")]),
- "phone_update_editor"=>modal("Phone text update",vec![field_ui("path","Existing path relative to selected phone folder",&text(edit,"path"),"text"),field_ui("content","Replacement UTF-8 text",&text(edit,"content"),"multiline")],vec![button("Load existing phone text","phone_update_load"),button("Review phone revision and update","phone_update_review")]),
- "phone_revision_status"=>modal("Last phone revision",vec![field_ui("path","Original phone path",&text(get(st,"phone_revision"),"path"),"readonly"),field_ui("backup","Verified revision path",&text(get(st,"phone_revision"),"backup"),"readonly"),field_ui("phase","Operation state",&text(get(st,"phone_revision"),"phase"),"readonly")],vec![]),
- "phone_editor"=>modal("New phone-folder file",vec![field_ui("path","New path relative to selected phone folder",&text(edit,"path"),"text"),field_ui("content","UTF-8 file contents",&text(edit,"content"),"multiline")],vec![button("Review phone file creation","phone_create_review")]),
+ "phone_update_editor"=>modal("Device text update",vec![field_ui("path","Existing path relative to selected device folder",&text(edit,"path"),"text"),field_ui("content","Replacement UTF-8 text",&text(edit,"content"),"multiline")],vec![button("Load existing device text","phone_update_load"),button("Review device revision and update","phone_update_review")]),
+ "phone_revision_status"=>modal("Last device revision",vec![field_ui("path","Original device path",&text(get(st,"phone_revision"),"path"),"readonly"),field_ui("backup","Verified revision path",&text(get(st,"phone_revision"),"backup"),"readonly"),field_ui("phase","Operation state",&text(get(st,"phone_revision"),"phase"),"readonly")],vec![]),
+ "phone_editor"=>modal("New device-folder file",vec![field_ui("path","New path relative to selected device folder",&text(edit,"path"),"text"),field_ui("content","UTF-8 file contents",&text(edit,"content"),"multiline")],vec![button("Review device file creation","phone_create_review")]),
  "drive_editor"=>modal("New network file",vec![field_ui("path","New path relative to configured network folder",&text(edit,"path"),"text"),field_ui("content","UTF-8 file contents",&text(edit,"content"),"multiline")],vec![button("Review network file creation","drive_create_review")]),
  "drive_update_editor"=>modal("Update network file",vec![field_ui("path","Existing path relative to configured network folder",&text(edit,"path"),"text"),field_ui("content","New UTF-8 file contents",&text(edit,"content"),"multiline")],vec![button("Load existing text","drive_update_load"),button("Review revision and update","drive_update_review")]),
  "drive_folder"=>modal("New network folder",vec![field_ui("path","New folder path relative to configured network folder",&text(edit,"path"),"text")],vec![button("Review network folder creation","drive_folder_review")]),
@@ -612,7 +612,7 @@ fn ui(st: &Json) -> Json {
  "conversation_review"=>modal("Review conversation import",vec![field_ui("summary","Separate history entry",&format!("{} · {} messages\nExisting conversations will be preserved.",text(get(st,"conversation_candidate"),"title"),array(get(st,"conversation_candidate"),"messages").len()),"readonly")],vec![button("Import conversation","conversation_accept"),button("Cancel","conversation_reject")]),
  "generation"=>generation::modal_for(st),
  "appearance"|"chat_agents"|"chat_options"|"chat_delete_review"|"trash"|"trash_options"|"chat_purge_review"|"trash_empty_review"=>interaction::modal_for(st),
- "capabilities"=>modal("Capabilities",vec![field_ui("native_investigation","Investigation","Question and design journals connect plans, evidence, hypotheses, original design notes, finite checks and item assessments. Workspace inspection and comparison support selected files and directories, complete-file digests, source/data/media/binary observations, retained evidence graphs, reviewed experiments and reconstruction. Ordinary, recursive, delegated, manual and headless workflows share the Rust engine.","readonly"),field_ui("status","Current capabilities","Server profiles; four text API formats with incremental replies and partial-reply retention; child-agent result returns; MCP discovery, calls, session controls and March/June/November 2025 negotiation; encrypted local history and conversation branching; workspace file tools; reviewed agent operations; phone PNG/JPEG attachments and text-document import; WebDAV browsing, reading, snapshots, reviewed file creation, revision-aware text updates, folder creation and network-to-project copy; shell syntax checking and execution in an isolated Android service; authenticated local JSON API gateway; standalone JSON-lines controller, read-only MCP and ACP v1 workspace sessions over standard streams, and opt-in local A2A workspace tasks (1.0/0.3).","readonly")],vec![]),_=>harness::modal_for(st)}};
+ "capabilities"=>modal("Capabilities",vec![field_ui("native_investigation","Investigation","Question and design journals connect plans, evidence, hypotheses, original design notes, finite checks and item assessments. Workspace inspection and comparison support selected files and directories, complete-file digests, source/data/media/binary observations, retained evidence graphs, reviewed experiments and reconstruction. Ordinary, recursive, delegated, manual and headless workflows share the Rust engine.","readonly"),field_ui("status","Current capabilities","Server profiles; four text API formats with incremental replies and partial-reply retention; child-agent result returns; MCP discovery, calls, session controls and March/June/November 2025 negotiation; encrypted local history and conversation branching; workspace file tools; reviewed agent operations; device PNG/JPEG attachments and text-document import; WebDAV browsing, reading, snapshots, reviewed file creation, revision-aware text updates, folder creation and network-to-project copy; shell syntax checking and execution in an isolated Android service; authenticated local JSON API gateway; standalone JSON-lines controller, read-only MCP and ACP v1 workspace sessions over standard streams, and opt-in local A2A workspace tasks (1.0/0.3).","readonly")],vec![]),_=>harness::modal_for(st)}};
     if dialog=="profile" && !text(st,"profile_error").is_empty() {let mut fields=array(&pop,"fields");fields.insert(0,field_ui("profile_error","Profile could not be saved",&text(st,"profile_error"),"readonly"));put(&mut pop,"fields",Arr(fields));}
     if pop != Null && text(st,"form_dialog")==dialog {
         let mut definitions=array(&pop,"fields");
@@ -769,7 +769,7 @@ fn hosted_preflight(st:&Json)->Result<()>{
  let record=response.saturating_mul(2).saturating_add(hosted_owner(st).string().len()).saturating_add(4096);
  let copies=if get(st,"task_run")==&Null{2}else{3};
  let reserve=record.saturating_mul(copies).saturating_add(response.saturating_mul(2));
- if st.string().len().saturating_add(reserve)>5*1024*1024{return Err("Hosted search needs space for raw-response history, task evidence and continuation in the existing phone vault. Export or reduce history before retrying.".into());}Ok(())
+ if st.string().len().saturating_add(reserve)>5*1024*1024{return Err("Hosted search needs space for raw-response history, task evidence and continuation in the existing device vault. Export or reduce history before retrying.".into());}Ok(())
 }
 fn hosted_record(st:&mut Json,r:&super::hosted_search::Reply)->Result<()> {
  let snapshot=get(st,"hosted_request").clone();let record=obj(vec![("identity",get(&snapshot,"identity").clone()),("content",r.content.clone()),("visible",s(&r.visible)),("raw",r.raw.clone()),("owner",get(&snapshot,"owner").clone())]);
@@ -1065,7 +1065,7 @@ fn snapshot(st: &mut Json) -> Result<Json> {
     if boolean(get(st, "drive"), "phone_default") {
         let tree = text(st, "phone_uri");
         if tree.is_empty() {
-            return Err("Grant a phone folder before selecting it as default storage".into());
+            return Err("Grant a device folder before selecting it as default storage".into());
         }
         let path = format!("RLLM__Conversation__{}__{}.json", text(&c, "id"), stamp());
         let mut effect = obj(vec![
@@ -1079,7 +1079,7 @@ fn snapshot(st: &mut Json) -> Result<Json> {
         put(&mut effect, "purpose", s("phone_snapshot"));
         put(st, "active_tool", s("phone_snapshot"));
         put(st, "busy", Bool(true));
-        put(st, "notice", s("Saving and verifying the conversation in the selected phone folder…"));
+        put(st, "notice", s("Saving and verifying the conversation in the selected device folder…"));
         return Ok(effect);
     }
     let target = format!(
@@ -2026,7 +2026,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     .iter()
                     .any(|prefix| previous_notice.starts_with(prefix))
                 {
-                    let resume_notice=if text(&st,"active_tool")=="phone_create" {"The previous phone creation was interrupted and has not been replayed. A new document may remain incomplete or unverified; inspect the selected folder before retrying."} else {"Ready. The previous operation was interrupted; it has not been replayed."};
+                    let resume_notice=if text(&st,"active_tool")=="phone_create" {"The previous device creation was interrupted and has not been replayed. A new document may remain incomplete or unverified; inspect the selected folder before retrying."} else {"Ready. The previous operation was interrupted; it has not been replayed."};
                     put(&mut st,"notice",s(resume_notice));
                 }
                 if text(&st,"active_tool")=="phone_update" {let record=get(&st,"phone_revision").clone();put(&mut st,"notice",s(&super::document::interruption(&record)));put(&mut st,"phone_revision",super::document::interrupt(&record));}
@@ -2238,7 +2238,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     } else if phone_update {
                         &phone_notice
                     } else if phone_create {
-                        "Phone creation cancellation requested. A new document may remain incomplete or unverified; inspect the selected folder before retrying."
+                        "Device creation cancellation requested. A new document may remain incomplete or unverified; inspect the selected folder before retrying."
                     } else {
                         "Operation cancelled; saved history is preserved"
                     }),
@@ -2295,7 +2295,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     let transport=if ["ssl","tls","handshake","wrong version","record header"].iter().any(|x|lower.contains(x)) {
                         "TLS connection failed. Edit the connection URL: use http:// for HTTP or https:// for HTTPS. For HTTPS, check the server certificate and device trust settings."
                     } else if !boolean(inputs,"sent") && number(inputs,"received_bytes")==0 {
-                        "Check the server IP/port, Wi-Fi or VPN route, LAN listener and firewall. localhost means this phone."
+                        "Check the server IP/port, Wi-Fi or VPN route, LAN listener and firewall. localhost means this device."
                     } else {""};
                     return Err(if transport.is_empty(){format!("Server request failed: {error}")}else{format!("Server request failed: {error}. {transport}")});
                 }
@@ -2367,10 +2367,10 @@ fn event_inner(v: &Json) -> Result<Json> {
             "drive_save" => {
                 let address=text(inputs,"url").trim().to_string();
                 if (if get(inputs,"phone_default")==&Null{boolean(get(&st,"drive"),"phone_default")}else{boolean(inputs,"phone_default")}) && text(&st,"phone_uri").is_empty() {
-                    return Err("Grant a phone folder before selecting it as default storage".into());
+                    return Err("Grant a device folder before selecting it as default storage".into());
                 }
                 if address.len()>2048 || (address.is_empty() && !(if get(inputs,"phone_default")==&Null{boolean(get(&st,"drive"),"phone_default")}else{boolean(inputs,"phone_default")})) {
-                    return Err("Enter the WebDAV host, port and share path, or explicitly select a granted phone folder".into());
+                    return Err("Enter the WebDAV host, port and share path, or explicitly select a granted device folder".into());
                 }
                 let address=if address.is_empty(){String::new()}else if address.contains("://") {address}else{format!("{}://{}",if boolean(inputs,"plain") {"http"}else{"https"},address)};
                 if !address.is_empty(){let mut probe=network::wire(&address,boolean(inputs,"plain"),"GET","",vec![])?;network::tls_identity(&mut probe,&text(inputs,"tls_name"))?;}
@@ -2382,7 +2382,7 @@ fn event_inner(v: &Json) -> Result<Json> {
             "remote_save_review" => put(&mut st,"dialog",s("remote_save_review")),
             "remote_save_discard" => {
                 put(&mut st,"remote_save",Null);put(&mut st,"dialog",Null);
-                put(&mut st,"notice",s("Pending remote snapshot discarded; conversation history remains saved on this phone"));
+                put(&mut st,"notice",s("Pending remote snapshot discarded; conversation history remains saved on this device"));
             }
             "remote_save_retry" | "remote_save_verify" => {
                 let pending=get(&st,"remote_save").clone();
@@ -2432,7 +2432,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 let listen = text(inputs, "listen");
                 if listen != "127.0.0.1" && listen != "0.0.0.0" {
                     return Err(
-                        "Listen on 127.0.0.1 for phone-only access or 0.0.0.0 for LAN access"
+                        "Listen on 127.0.0.1 for device-only access or 0.0.0.0 for LAN access"
                             .into(),
                     );
                 }
@@ -2726,7 +2726,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                                 || harness_rules::is_report(&reply)
                                 || markup_misuse;
                             if forbidden{
-                                if markup_misuse{tool_penalty(&mut st,"tool_misuse","tool_misuse_count","tool_misuse_score_tenths",TOOL_MISUSE_TENTHS,"The reply carried tool-call markup or a tool-shaped payload that this answer mode cannot execute. Nothing was executed on the phone.");}
+                                if markup_misuse{tool_penalty(&mut st,"tool_misuse","tool_misuse_count","tool_misuse_score_tenths",TOOL_MISUSE_TENTHS,"The reply carried tool-call markup or a tool-shaped payload that this answer mode cannot execute. Nothing was executed on the device.");}
                                 harness::finish_attempt(&mut st,inputs,"stopped");
                                 put(&mut st,"stream_text",Null);put(&mut st,"agent_running",Bool(false));put(&mut st,"agent_pending",Bool(false));
                                 let message=if mode==answer_mode::Mode::Lookup{"I couldn’t verify an answer within this quick lookup."}else{"The model did not return a direct answer."};
@@ -2750,7 +2750,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                         }
                         if tool_format::proposal_phase(&st)&&tool_format::embedded(&reply){
                             format_error_received=true;
-                            tool_penalty(&mut st,"tool_misuse","tool_misuse_count","tool_misuse_score_tenths",TOOL_MISUSE_TENTHS,"A tool request was written inside the answer text instead of a bare JSON proposal. Nothing was executed on the phone.");
+                            tool_penalty(&mut st,"tool_misuse","tool_misuse_count","tool_misuse_score_tenths",TOOL_MISUSE_TENTHS,"A tool request was written inside the answer text instead of a bare JSON proposal. Nothing was executed on the device.");
                             tool_format::record(&mut st,&reply,inputs)?;
                             if tool_format::recover_web(&mut st){format_error_received=false;}
                             else if let Some(next)=tool_format::correct_web(&mut st){effect=next;format_error_received=false;}
@@ -2763,12 +2763,12 @@ fn event_inner(v: &Json) -> Result<Json> {
                             put(&mut current,"messages",Arr(messages));replace_chat(&mut st,current);
                             // Tool-call markup is a scored misuse, not a stop: the turn continues
                             // and the reason rides into the next proposal.
-                            tool_penalty(&mut st,"tool_misuse","tool_misuse_count","tool_misuse_score_tenths",TOOL_MISUSE_TENTHS,"The reply carried tool-call markup that no operation could execute. Nothing was executed on the phone.");
-                            if child_callback{return Err("The model returned unsupported tool-call markup instead of an answer. Nothing was executed on the phone. Tap the message to inspect the raw response, or regenerate a reply in a new branch. Tool proposals must be bare JSON. Ask for ordinary text when no tool is needed.".into());}
+                            tool_penalty(&mut st,"tool_misuse","tool_misuse_count","tool_misuse_score_tenths",TOOL_MISUSE_TENTHS,"The reply carried tool-call markup that no operation could execute. Nothing was executed on the device.");
+                            if child_callback{return Err("The model returned unsupported tool-call markup instead of an answer. Nothing was executed on the device. Tap the message to inspect the raw response, or regenerate a reply in a new branch. Tool proposals must be bare JSON. Ask for ordinary text when no tool is needed.".into());}
                             harness::finish_attempt(&mut st,inputs,"error");
                             put(&mut st,"hosted_request",Null);put(&mut st,"busy",Bool(false));
                             if array(&st,"delegation_stack").is_empty(){harness::reset_task(&mut st);}
-                            put(&mut st,"notice",s("The model returned unsupported tool-call markup. Nothing was executed on the phone. The tool-guidance penalty is recorded (-10 tenths) and the reason rides into the next proposal. Tool proposals must be bare JSON. Ask for ordinary text when no tool is needed."));
+                            put(&mut st,"notice",s("The model returned unsupported tool-call markup. Nothing was executed on the device. The tool-guidance penalty is recorded (-10 tenths) and the reason rides into the next proposal. Tool proposals must be bare JSON. Ask for ordinary text when no tool is needed."));
                             return Ok(());
                         }
                         // A later reply retains the exact operation already in review.
@@ -2788,7 +2788,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                         // A claimed tool result with no tool call in this turn is a scored
                         // misuse: the reason rides into the next proposal.
                         if !turn_tool_call&&!parse(reply.trim()).is_ok_and(|proposed|get(&proposed,"tool")!=&Null)&&invented_tool_result(&st,&reply){
-                            tool_penalty(&mut st,"tool_misuse","tool_misuse_count","tool_misuse_score_tenths",TOOL_MISUSE_TENTHS,"The reply claimed a tool result that no operation in this turn produced. Nothing was executed on the phone.");
+                            tool_penalty(&mut st,"tool_misuse","tool_misuse_count","tool_misuse_score_tenths",TOOL_MISUSE_TENTHS,"The reply claimed a tool result that no operation in this turn produced. Nothing was executed on the device.");
                         }
                         harness::finish_attempt(&mut st,inputs,"success");
                         if get(&st,"task_run")==&Null{inquiry::answer(&mut st,&reply);}
@@ -2810,7 +2810,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                         put(
                             &mut st,
                             "notice",
-                            s(&format!("Reply from {reply_model} saved in encrypted phone history")),
+                            s(&format!("Reply from {reply_model} saved in encrypted device history")),
                         );
                         if let Ok(mut proposed) = parse(reply.trim()) {
                             if text(&proposed,"tool")=="delegate"{delegation::unreviewed(&mut proposed);}
@@ -2945,12 +2945,14 @@ fn event_inner(v: &Json) -> Result<Json> {
             "phone_access" => put(&mut st,"dialog",s("phone_access")),
             "phone_access_status" => {},
             "phone_access_full" => {put(&mut st,"phone_access_mode",s("shared"));put(&mut st,"phone_access_requested",Bool(true));put(&mut st,"dialog",s("phone_access"));effect=obj(vec![("kind",s("phone_access_request"))]);},
-            "phone_access_off" => {put(&mut st,"phone_access_mode",s("off"));put(&mut st,"phone_access_requested",Bool(true));put(&mut st,"dialog",s("phone_access"));put(&mut st,"notice",s("Phone file tools disabled. Explicit document imports and configured default saves are separate actions; change Storage settings to disable autosave."));},
-            "phone_access_limited" => {put(&mut st,"phone_access_mode",s("limited"));put(&mut st,"phone_access_requested",Bool(true));put(&mut st,"dialog",s("phone_access"));put(&mut st,"notice",s("Phone browsing is limited to the selected Android folder, even if Android still grants broad access. You can also revoke All files access in Android settings."));},
+            "phone_access_off" => {put(&mut st,"phone_access_mode",s("off"));put(&mut st,"phone_access_requested",Bool(true));put(&mut st,"dialog",s("phone_access"));put(&mut st,"notice",s("Device file tools disabled. Explicit document imports and configured default saves are separate actions; change Storage settings to disable autosave."));},
+            "phone_access_limited" => {put(&mut st,"phone_access_mode",s("limited"));put(&mut st,"phone_access_requested",Bool(true));put(&mut st,"dialog",s("phone_access"));put(&mut st,"notice",s("Device browsing is limited to the selected device folder, even if the device still grants broad access. Broad file access can be revoked in device settings."));},
             "phone_folder" => effect = obj(vec![("kind", s("document_tree"))]),
+            "device_elevation" => effect = obj(vec![("kind", s("device_elevation"))]),
+            "device_elevation_result" => {put(&mut st,"dialog",s("phone_locations"));put(&mut st,"notice",s(&text(inputs,"notice")));},
             "folder_result" => {
                 put(&mut st, "phone_uri", s(&text(inputs, "uri")));
-                put(&mut st,"notice",s("Phone folder permission saved for selected-folder tools and saves. Workspace → Setup → Phone folders and scope controls the browsing scope."));
+                put(&mut st,"notice",s("Device folder permission saved for selected-folder tools and saves. Workspace → Setup → Device folders and scope controls the browsing scope."));
             }
             "phone_files" => {
                 effect = obj(vec![("kind",s("tool")),("tool",s("phone_list")),("args",obj(vec![("path",s(""))]))]);
@@ -2977,7 +2979,7 @@ fn event_inner(v: &Json) -> Result<Json> {
             },
             "document_result" => {
                 let body=text(inputs,"content");if body.len()>1024*1024{return Err("Document exceeds 1 MiB".into());}
-                let draft=text(&st,"draft");let combined=format!("{}{}Selected phone file (untrusted content):\n\n{}",draft,if draft.is_empty(){""}else{"\n\n"},body);
+                let draft=text(&st,"draft");let combined=format!("{}{}Selected device file (untrusted content):\n\n{}",draft,if draft.is_empty(){""}else{"\n\n"},body);
                 if combined.len()>1024*1024{return Err("Draft and selected document exceed 1 MiB; existing draft preserved".into());}
                 let mut candidate=st.clone();put(&mut candidate,"draft",s(&combined));put(&mut candidate,"page",s("chat"));
                 if super::mcp_schema::state_bytes(&candidate)>6*1024*1024-8192{return Err("History has insufficient space for this document; existing draft retained".into());}st=candidate;
@@ -3103,8 +3105,8 @@ fn event_inner(v: &Json) -> Result<Json> {
             }
             "phone_revision_status" => put(&mut st,"dialog",s("phone_revision_status")),
             "phone_update_load" => {
-                if text(&st,"phone_access_mode")=="off" {return Err("Phone file tools are disabled in Workspace → Setup → Phone folders and scope".into());}
-                let tree=text(&st,"phone_uri");if tree.is_empty(){return Err("Grant a phone folder first".into());}
+                if text(&st,"phone_access_mode")=="off" {return Err("Device file tools are disabled in Workspace → Setup → Device folders and scope".into());}
+                let tree=text(&st,"phone_uri");if tree.is_empty(){return Err("Grant a device folder first".into());}
                 effect=obj(vec![("kind",s("tool")),("tool",s("phone_read")),("args",get(&st,"edit").clone()),("tree",s(&tree)),("editor",Bool(true)),("editor_dialog",s("phone_update_editor"))]);
                 validate_tool(&effect)?;put(&mut st,"busy",Bool(true));put(&mut st,"agent_running",Bool(false));
             }
@@ -3112,11 +3114,11 @@ fn event_inner(v: &Json) -> Result<Json> {
                 let prior=get(&st,"phone_revision").clone();
                 if text(&prior,"ticket")!=text(inputs,"ticket") || text(&prior,"phase")!=text(inputs,"phase") || text(&st,"active_tool")!="phone_update" {return Ok(());}
                 let next=super::document::advance(&prior,&text(inputs,"phase"),inputs)?;
-                if st.string().len().saturating_sub(prior.string().len()).saturating_add(next.string().len())>6*1024*1024-4096 {return Err("Encrypted history has insufficient space for a safe phone revision".into());}
+                if st.string().len().saturating_sub(prior.string().len()).saturating_add(next.string().len())>6*1024*1024-4096 {return Err("Encrypted history has insufficient space for a safe device revision".into());}
                 put(&mut st,"phone_revision",next.clone());
                 if text(&next,"phase")=="complete" {
                     put(&mut st,"busy",Bool(false));put(&mut st,"active_tool",Null);
-                    effect=completed_tool(&mut st,&format!("Phone text updated and exact bytes verified. Prior contents saved at {}.",text(&next,"backup")))?;
+                    effect=completed_tool(&mut st,&format!("Device text updated and exact bytes verified. Prior contents saved at {}.",text(&next,"backup")))?;
                 } else {effect=super::document::effect(&next)?;put(&mut effect,"purpose",s("phone_revision"));}
             }
             "drive_update_load" => {
@@ -3253,12 +3255,12 @@ fn event_inner(v: &Json) -> Result<Json> {
                 effect = pending;
                 put(&mut effect, "kind", s("tool"));
                 if text(&effect, "tool").starts_with("phone_") {
-                    if text(&st,"phone_access_mode")=="off" {return Err("Phone file tools are disabled in Workspace → Setup → Phone folders and scope".into());}
+                    if text(&st,"phone_access_mode")=="off" {return Err("Device file tools are disabled in Workspace → Setup → Device folders and scope".into());}
                     if ["phone_read","phone_list"].contains(&active_tool.as_str()) {
                         let mut current=obj(vec![]);phone_read_scope(&st,&mut current)?;
-                        if get(&current,"phone_scope")!=get(&effect,"phone_scope") || get(&current,"tree")!=get(&effect,"tree"){return Err("Phone browsing scope changed; review this operation again".into());}
+                        if get(&current,"phone_scope")!=get(&effect,"phone_scope") || get(&current,"tree")!=get(&effect,"tree"){return Err("Device browsing scope changed; review this operation again".into());}
                     }else{
-                        let tree=text(&st,"phone_uri");if tree.is_empty(){return Err("Grant a phone folder first".into());}put(&mut effect,"tree",s(&tree));
+                        let tree=text(&st,"phone_uri");if tree.is_empty(){return Err("Grant a device folder first".into());}put(&mut effect,"tree",s(&tree));
                     }
                 }
                 if text(&effect, "tool").starts_with("drive_") {
@@ -3301,7 +3303,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                         let mut edit=get(&st,"edit").clone();put(&mut edit,"expected",s(&output));put(&mut st,"edit",edit);put(&mut st,"dialog",s("phone_update_editor"));
                     } else {put(&mut st, "dialog", s("editor"));}
                 } else if active_tool=="phone_snapshot" {
-                    put(&mut st,"notice",s(&format!("Conversation snapshot saved to the selected phone folder and verified: {output}")));
+                    put(&mut st,"notice",s(&format!("Conversation snapshot saved to the selected device folder and verified: {output}")));
                 } else {
                     let mut output=output;
                     if experiment_descriptor!=Null{observation_records::retain(&mut st,&observation_descriptor,&output,&graphs,&graph_note);let summary=experiment_records::finish(&mut st,&experiment_descriptor,&text(&observation_descriptor,"id"));output.push_str("\n\n");output.push_str(&summary);}
@@ -3675,7 +3677,7 @@ fn validate_tool(v: &Json) -> Result<()> {
             || name.contains('%')
             || name.contains(':')
         {
-            return Err("Choose a plain new phone filename of at most 255 bytes".into());
+            return Err("Choose a plain new device filename of at most 255 bytes".into());
         }
     }
     Ok(())
@@ -3960,12 +3962,12 @@ pub fn cancel() {
 }
 fn phone_read_scope(st:&Json,effect:&mut Json)->Result<()> {
     workspace::check_tool(st,"phone_read")?;
-    if text(st,"phone_access_mode")=="off"{return Err("Phone file tools are disabled in Workspace → Setup → Phone folders and scope".into());}
+    if text(st,"phone_access_mode")=="off"{return Err("Device file tools are disabled in Workspace → Setup → Device folders and scope".into());}
     if text(st,"phone_access_mode")=="limited" {
-        let tree=text(st,"phone_uri");if tree.is_empty(){return Err("Choose a permitted phone folder in Workspace → Setup → Phone folders and scope".into());}
+        let tree=text(st,"phone_uri");if tree.is_empty(){return Err("Choose a permitted device folder in Workspace → Setup → Device folders and scope".into());}
         put(effect,"tree",s(&tree));put(effect,"phone_scope",s("limited"));
     }else{
-        if !boolean(st,"phone_access_granted"){return Err("Enable Android All files access in Workspace → Setup → Phone folders and scope, or select limited folder browsing".into());}
+        if !boolean(st,"phone_access_granted"){return Err("Enable broad file access in Workspace → Setup → Device folders and scope, or select limited folder browsing".into());}
         put(effect,"phone_scope",s("shared"));
     }
     Ok(())
@@ -3979,7 +3981,7 @@ fn proposal(st: &mut Json, root: &str) -> Result<()> {
     if kind=="experiments"{experiment_records::prepare(st,&mut pending,boolean(st,"agent_pending"))?;put(st,"pending",pending);return Ok(());}
     if let Obj(fields)=&mut pending{fields.remove("experiment");}put(st,"pending",pending.clone());
     if web_operation::is_web(&pending) && get(&pending,"web_owner")==&Null {web_operation::own(st,&mut pending);put(st,"pending",pending.clone());}
-    if kind.starts_with("phone_") && text(st,"phone_access_mode")=="off" {return Err("Phone file tools are disabled in Workspace → Setup → Phone folders and scope".into());}
+    if kind.starts_with("phone_") && text(st,"phone_access_mode")=="off" {return Err("Device file tools are disabled in Workspace → Setup → Device folders and scope".into());}
     if kind=="delegate"{delegation::prepare(st,&mut pending)?;put(st,"pending",pending);return Ok(());}
     if ["web_read","web_search","mcp"].contains(&kind.as_str()) {
         let destination=if kind=="web_read"{text(get(&pending,"args"),"url")}else if kind=="web_search"{search::template(st,&pending)?}else{text(get(st,"mcp"),"endpoint")};put(&mut pending,"destination",s(&destination));if kind=="web_search"{put(&mut pending,"search_revision",Num(number(st,"web_settings_revision").to_string()));}
@@ -3999,18 +4001,18 @@ fn proposal(st: &mut Json, root: &str) -> Result<()> {
     }
     if ["phone_read","phone_list"].contains(&kind.as_str()) {
         if get(&pending,"phone_scope")==&Null {phone_read_scope(st,&mut pending)?;}
-        put(&mut pending,"warning",s(if text(st,"phone_access_mode")=="limited"{"Reads only inside the selected Android folder. Reviewed agent results are sent to the assigned model."}else{"Reads inside Android shared storage using broad access. Other apps' private data is not unlocked. Reviewed agent results are sent to the assigned model."}));put(st,"pending",pending);return Ok(());
+        put(&mut pending,"warning",s(if text(st,"phone_access_mode")=="limited"{"Reads only inside the selected device folder. Reviewed agent results are sent to the assigned model."}else{"Reads inside shared device storage using broad access. Other apps' private data is not unlocked. Reviewed agent results are sent to the assigned model."}));put(st,"pending",pending);return Ok(());
     }
     if kind == "phone_update" {
-        if text(st,"phone_uri").is_empty() {return Err("Grant a phone folder first".into());}
-        put(&mut pending,"warning",s("Updates an existing UTF-8 phone file only after a separate revision is saved and verified. The original is re-read before writing. Android providers do not promise cross-app atomicity; concurrent edits or an interrupted write can leave an unconfirmed target. The verified revision remains available for recovery. No interrupted write is automatically replayed."));
+        if text(st,"phone_uri").is_empty() {return Err("Grant a device folder first".into());}
+        put(&mut pending,"warning",s("Updates an existing UTF-8 device file only after a separate revision is saved and verified. The original is re-read before writing. Document providers do not promise cross-app atomicity; concurrent edits or an interrupted write can leave an unconfirmed target. The verified revision remains available for recovery. No interrupted write is automatically replayed."));
         put(st,"pending",pending);return Ok(());
     }
     if kind == "phone_create" {
         if text(st, "phone_uri").is_empty() {
-            return Err("Grant a phone folder first".into());
+            return Err("Grant a device folder first".into());
         }
-        put(&mut pending, "warning", s("Creates a new file in the selected Android folder. Existing names are refused; the document provider controls final naming. Success requires exact readback. Partial or unverified new files can remain if the provider fails or the operation is interrupted."));
+        put(&mut pending, "warning", s("Creates a new file in the selected device folder. Existing names are refused; the document provider controls final naming. Success requires exact readback. Partial or unverified new files can remain if the provider fails or the operation is interrupted."));
         put(st, "pending", pending);
         return Ok(());
     }
@@ -4659,7 +4661,7 @@ mod checks {
         );
         assert_eq!(number(&chat, "rate_tenths"), 250);
         assert_eq!(number(&chat, "character_rate_tenths"), 25);
-        assert_eq!(text(&chat, "basis"), "phone clock · complete request");
+        assert_eq!(text(&chat, "basis"), "device clock · complete request");
         let local = reply_telemetry(
             "local",
             r#"{"eval_count":80,"eval_duration":2000000000}"#,
@@ -5366,7 +5368,7 @@ mod checks {
         // The header may select a different model later; the reply keeps its request identity.
         assert_eq!(text(&st,"request_model"),"qwen3.8-flash-next-iq3_s");
         let mut profiles=array(&st,"profiles");put(&mut profiles[0],"model",s("another-model"));put(&mut st,"profiles",Arr(profiles));
-        append(&mut st,"assistant","Hello from Strata").unwrap();
+        append(&mut st,"assistant","Hello from the assistant.").unwrap();
         put(&mut st,"busy",Bool(false));
         let view=step(st,"diagnostics",Null);
         let rows=array(get(&view,"ui"),"messages");
@@ -5464,13 +5466,13 @@ mod checks {
         assert!(!text(get(&mismatch,"state"),"notice").contains("saved to WebDAV"));
 
         let refused=step(configured(),"drive_save",obj(vec![("phone_default",Bool(true)),("url",s(""))]));
-        assert!(text(get(&refused,"state"),"notice").contains("Grant a phone folder"));
+        assert!(text(get(&refused,"state"),"notice").contains("Grant a device folder"));
         let mut granted=configured();put(&mut granted,"phone_uri",s("content://provider/tree/root"));
         let selected=step(granted,"drive_save",obj(vec![("phone_default",Bool(true)),("url",s(""))]));
         let saved=step(get(&selected,"state").clone(),"save_drive",Null);
         assert_eq!(text(get(&saved,"effect"),"tool"),"phone_create");
         assert_eq!(text(get(&saved,"effect"),"tree"),"content://provider/tree/root");
-        let done=step(get(&saved,"state").clone(),"tool_result",obj(vec![("output",s("Created and verified phone file snapshot.json (99 bytes)."))]));
+        let done=step(get(&saved,"state").clone(),"tool_result",obj(vec![("output",s("Created and verified device file snapshot.json (99 bytes)."))]));
         assert!(text(get(&done,"state"),"notice").contains("verified"));
     }
     #[test]

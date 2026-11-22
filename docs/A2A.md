@@ -1,8 +1,8 @@
 # Local Agent2Agent access
 
-RLLM exposes authenticated, read-only workspace observations through the existing native gateway and the headless executable. This is an opt-in local development HTTP interface, with A2A JSON-RPC wire versions1.0 and0.3. The shared Rust inspection/comparison engine runs without a model. It does not turn a protocol client into a phone-wide file controller.
+RLLM exposes authenticated, read-only workspace observations through the existing native gateway and the headless executable. This is an opt-in local development HTTP interface, with A2A JSON-RPC wire versions1.0 and0.3. The shared Rust inspection/comparison engine runs without a model. It does not turn a protocol client into a device-wide file controller.
 
-On Android, open App settings → Network services → Phone API gateway, keep the listen address127.0.0.1, choose a bearer token of at least32 printable characters, enable the A2A workspace switch and start the gateway. The form shows the selected workspace. Its filesystem identity is captured when the gateway starts. Stop and restart to select a different workspace. The foreground notification reports actual service status and provides Stop. Existing model gateway routes keep their configured behavior; A2A workspace access cannot be enabled on the LAN address.
+On the device, open App settings → Network services → Device API gateway, keep the listen address127.0.0.1, choose a bearer token of at least32 printable characters, enable the A2A workspace switch and start the gateway. The form shows the selected workspace. Its filesystem identity is captured when the gateway starts. Stop and restart to select a different workspace. The foreground notification reports actual service status and provides Stop. Existing model gateway routes keep their configured behavior; A2A workspace access cannot be enabled on the LAN address.
 
 On Linux, build with headless.sh and run:
 

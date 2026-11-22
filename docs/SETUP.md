@@ -4,9 +4,9 @@
 
 Open **Workspace → Projects → New workspace**, enter a name and choose **Create workspace**. Each workspace has its own app-owned project directory. **Switch workspace** returns to a saved location; **Original workspace** retains the files from earlier releases. **Project files** opens browsing, text editing, reading and search. **Project snapshots** contains import, export and saves.
 
-**Workspace → Storage** is for browsing: **Phone locations**, **Network locations** and **Google Drive**. **Workspace → Setup** is for phone folders/scope, network connection settings, Google Drive accounts, MCP connections, access permissions and default saves.
+**Workspace → Storage** is for browsing: **Device locations**, **Network locations** and **Google Drive**. **Workspace → Setup** is for device folders/scope, network connection settings, Google Drive accounts, MCP connections, access permissions and default saves.
 
-Configure a source once, then use its access toggle to allow or suspend app operations while retaining its setup. **Access permissions** groups phone, network, Google Drive and MCP switches. Phone setup also chooses Android's broad storage grant or a selected-folder browsing scope. **Default saves** independently chooses the phone/network destination and reply autosave.
+Configure a source once, then use its access toggle to allow or suspend app operations while retaining its setup. **Access permissions** groups device, network, Google Drive and MCP switches. Device setup also chooses the broad storage grant or a selected-folder browsing scope. **Default saves** independently chooses the device or network destination and reply autosave.
 
 For Google Drive, open **Setup → Google Drive account → Sign in / add Google account**. Android manages the account sign-in. Then open **Storage → Google Drive → Browse Google Drive files**, choose Google Drive in Android's Locations and select a file. Use **Open selected file** for its Android viewer, **Read selected text** for a local UTF-8 preview, or **Copy text to workspace** to open the existing reviewed editor. **Remove Google Drive file grants** releases the app's saved document grants for that provider. These actions use the device's installed document provider and account controls.
 
@@ -56,7 +56,7 @@ Use history controls to branch, restore or move conversations to Trash. Open Tra
 3. Choose **Save and discover tools**. The app negotiates with that server and opens **Available server tools** with the returned names.
 4. Select a tool, inspect its description/schema, enter its JSON arguments and choose **Review call → Run this call**. The returned result appears in the app. Server stream controls are grouped separately under **Server streams**.
 
-For a build server such as Dazzle, choose its advertised workspace/project creation or opening tool first, then its build tool with the parameters and paths from that server's schema/results. App workspaces hold local phone project files; server workspace parameters refer to the build server's locations.
+For a build server such as Dazzle, choose its advertised workspace/project creation or opening tool first, then its build tool with the parameters and paths from that server's schema/results. App workspaces hold local device project files; server workspace parameters refer to the build server's locations.
 
 To let the primary model use those tools, enable **Allow the selected agent to use MCP tools** in the connection form, or open **Tools and servers → Agent tool access** and enable `mcp` for the selected agent. Ask the model to discover and use the configured server. The existing reviewed command flow carries the actual tool names, arguments and results. **Setup → Access permissions → MCP server access** controls the connection independently of retained setup and per-agent tool choices.
 

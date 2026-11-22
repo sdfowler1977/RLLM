@@ -32,9 +32,9 @@ final class DocumentAccess {
     }
 
     static void check(Uri uri,boolean phone,boolean providers,boolean selected)throws IOException {
-        if(!valid(uri))throw new IOException("Select a valid document from Android file locations");
+        if(!valid(uri))throw new IOException("Select a valid document from the device file locations");
         if((selected||provider(uri))&&!providers)throw new IOException("Document provider access is off in Setup");
-        if(!provider(uri)&&!phone)throw new IOException("Phone storage access is off in Setup");
+        if(!provider(uri)&&!phone)throw new IOException("Device storage access is off in Setup");
     }
 
     static JSONArray release(ContentResolver resolver,JSONArray owned,String phoneUri)throws Exception {

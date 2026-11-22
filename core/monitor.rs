@@ -134,10 +134,10 @@ pub(super) fn dashboard(st:&Json)->Json{
         gauge("ERROR RATE",error_rate,100.0,"%","error","Selected requests · cancellations excluded"),
     ];
     let mut cards=vec![
-        plot(rows,"APP-ESTIMATED TOKEN THROUGHPUT",&[("estimated","Visible characters ÷ 4 / phone time","success")],"estimated tok/s"),
+        plot(rows,"APP-ESTIMATED TOKEN THROUGHPUT",&[("estimated","Visible characters ÷ 4 / device time","success")],"estimated tok/s"),
         plot(rows,"RESPONSE LATENCY",&[("elapsed_ms","Total","accent"),("first_text_ms","First text","violet")],"ms"),
-        plot(rows,"OBSERVED TEXT THROUGHPUT",&[("characters","Counted characters / phone time","success")],"chars/s"),
-        plot(rows,"REPORTED TOKEN THROUGHPUT",&[("tokens","Server token count / phone time","violet")],"tokens/s"),
+        plot(rows,"OBSERVED TEXT THROUGHPUT",&[("characters","Counted characters / device time","success")],"chars/s"),
+        plot(rows,"REPORTED TOKEN THROUGHPUT",&[("tokens","Server token count / device time","violet")],"tokens/s"),
         heat(rows),
     ];
     cards.push(obj(vec![("kind",s("text")),("title",s("MEASUREMENTS")),
@@ -151,7 +151,7 @@ fn model_label(row:&Json)->String{let name=text(row,"model");if name.is_empty(){
 fn statistic(row:&Json,key:&str,unit:&str)->String{label(numeric(row,key),unit)}
 fn models(st:&Json)->Json{
     let groups=request_metrics::groups(&obj(vec![("requests",Arr(selected(st)))]));
-    let mut fields=vec![field_ui("basis","Phone observations",&format!("Last {} selected runs. p50/p95 use successful timed replies. Text throughput uses total characters / total request time. Error rate uses success and error outcomes.",window(st)),"readonly")];
+    let mut fields=vec![field_ui("basis","Device observations",&format!("Last {} selected runs. p50/p95 use successful timed replies. Text throughput uses total characters / total request time. Error rate uses success and error outcomes.",window(st)),"readonly")];
     let mut buttons=vec![button("Show all models","monitor:all")];
     for (i,g) in groups.iter().enumerate(){
         fields.push(field_ui(&format!("model_{i}"),&format!("{} · {}",model_label(g),text(g,"endpoint")),
@@ -200,9 +200,9 @@ pub(super) fn detail(st:&Json)->Json{
         field_ui("model","Model",if text(r,"model").is_empty(){"Not recorded for this historical request"}else{get(r,"model").text().unwrap_or("")},"readonly"),
         field_ui("endpoint","Endpoint",&text(r,"endpoint"),"readonly"),
         field_ui("outcome","Outcome",&text(r,"outcome"),"readonly"),
-        field_ui("timing","Phone measurements",&format!("Elapsed: {}\nFirst byte: {}\nFirst text: {}\nText rate: {}",label(numeric(r,"elapsed_ms"),"ms"),label(numeric(r,"first_byte_ms"),"ms"),label(numeric(r,"first_text_ms"),"ms"),label(series(r,"characters"),"chars/s")),"readonly"),
+        field_ui("timing","Device measurements",&format!("Elapsed: {}\nFirst byte: {}\nFirst text: {}\nText rate: {}",label(numeric(r,"elapsed_ms"),"ms"),label(numeric(r,"first_byte_ms"),"ms"),label(numeric(r,"first_text_ms"),"ms"),label(series(r,"characters"),"chars/s")),"readonly"),
         field_ui("estimate","App-calculated estimated tokens/s",&format!("{}\n{}",throughput::label(get(r,"local_rate")),throughput::METHOD),"readonly"),
-        field_ui("token","Provider token count / phone clock",&label(series(r,"tokens"),"tokens/s"),"readonly"),
+        field_ui("token","Provider token count / device clock",&label(series(r,"tokens"),"tokens/s"),"readonly"),
     ],vec![])
 }
 

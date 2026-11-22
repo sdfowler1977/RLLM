@@ -124,7 +124,7 @@ for %%i in ("aarch64-linux-android arm64-v8a" "x86_64-linux-android x86_64") do 
 "%CLIENT_TOOLS%\aapt2.exe" compile --dir "%project_dir%\res" -o "%out%\resources.zip"
 if errorlevel 1 goto :failed
 mkdir "%out%\pack-notices"
-copy /y "%project_dir%\notices\strata-monitor-MIT.txt" "%out%\pack-notices\" >nul
+copy /y "%project_dir%\notices\monitor-MIT.txt" "%out%\pack-notices\" >nul
 copy /y "%project_dir%\notices\rust-stdlib.txt" "%out%\pack-notices\" >nul
 "%CLIENT_TOOLS%\aapt2.exe" link -o "%out%\resources.apk" -I "%CLIENT_ANDROID%\android.jar" --manifest "%manifest%" %resource_package% -A "%out%\pack-notices" --java "%out%\gen" "%out%\resources.zip"
 if errorlevel 1 goto :failed

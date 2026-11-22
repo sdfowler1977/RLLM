@@ -9,11 +9,28 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+fn permission_mode(meta: &fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    {
+        meta.permissions().mode()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        0o100644
+    }
+}
+
+#[path = "native_tool.rs"]
+mod native_count;
 
 const USAGE: &str = "\
 usage: package --destination DESTINATION [--candidate] [--dry-run]
@@ -939,7 +956,7 @@ fn created_file_mode() -> u32 {
     *MODE.get_or_init(|| {
         let path = env::temp_dir().join(format!("rllm-package-mode-{}", std::process::id()));
         let _ = fs::remove_file(&path);
-        let mode = fs::File::create(&path).and_then(|_| fs::metadata(&path)).map(|meta| meta.permissions().mode()).unwrap_or(0o100644);
+        let mode = fs::File::create(&path).and_then(|_| fs::metadata(&path)).map(|meta| permission_mode(&meta)).unwrap_or(0o100644);
         let _ = fs::remove_file(&path);
         mode
     })
@@ -948,7 +965,7 @@ fn created_file_mode() -> u32 {
 fn member_stamp(root: &Path, relative: &str, rewritten_at: Option<SystemTime>) -> Result<MemberStamp, String> {
     let path = root.join(relative);
     let existing = fs::metadata(&path).ok();
-    let mode = existing.as_ref().map(|meta| meta.permissions().mode()).unwrap_or_else(created_file_mode);
+    let mode = existing.as_ref().map(|meta| permission_mode(meta)).unwrap_or_else(created_file_mode);
     let when = if let Some(now) = rewritten_at {
         now
     } else if let Some(meta) = existing {
@@ -2558,6 +2575,43 @@ fn sequence_len(value: &Json) -> Option<usize> {
 }
 
 fn executed_count(value: &Json) -> Result<u64, String> {
+    let mut fields = Vec::new();
+    for key in ["passed", "checks", "count"] {
+        if let Some(item) = get(value, key) {
+            fields.push((key, json_count_field(item)));
+        }
+    }
+    let native = native_count::executed_count(&fields);
+    let local = executed_count_local(value);
+    match (native, local) {
+        (Ok(native), Ok(local)) if i64::try_from(local).ok() == Some(native) => Ok(local),
+        (_, Err(error)) => Err(error),
+        _ => Err(refuse("executed count differs from the native count")),
+    }
+}
+
+fn json_count_field(value: &Json) -> native_count::FieldValue {
+    match value {
+        Json::Null => native_count::FieldValue::Null,
+        Json::Bool(flag) => native_count::FieldValue::Bool(*flag),
+        Json::Number(token) => {
+            if let Ok(number) = token.parse::<i64>() {
+                native_count::FieldValue::Int(number)
+            } else if let Ok(number) = token.parse::<f64>() {
+                native_count::FieldValue::Float(number)
+            } else {
+                native_count::FieldValue::Text(token.clone())
+            }
+        }
+        Json::Str(text) => native_count::FieldValue::Text(text.clone()),
+        Json::Arr(items) => native_count::FieldValue::List(items.iter().map(json_count_field).collect()),
+        Json::Obj(pairs) => native_count::FieldValue::Object(
+            pairs.iter().map(|(key, item)| (key.clone(), json_count_field(item))).collect(),
+        ),
+    }
+}
+
+fn executed_count_local(value: &Json) -> Result<u64, String> {
     let count = if let Some(passed) = get(value, "passed") {
         if let Some(length) = match passed {
             Json::Arr(_) => sequence_len(passed),

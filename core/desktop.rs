@@ -806,6 +806,10 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
                     }
                 }
             }
+            "device_elevation" => {
+                action = "device_elevation_result".into();
+                inputs = obj(vec![("notice", s(&request_administrator()))]);
+            }
             other => {
                 // The core scopes a refused platform service to that operation, so
                 // a service with no Linux binding yet cannot strand the app.
@@ -818,6 +822,36 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
         }
     }
     Err("The core kept requesting platform work without settling".into())
+}
+
+/// Asks Windows to show its own consent prompt and start a new process.
+/// The current process keeps the label it already has.
+fn request_administrator() -> String {
+    #[cfg(windows)]
+    {
+        let path = match std::env::current_exe() {
+            Ok(path) => path,
+            Err(error) => return format!("Administrator consent was not opened: {error}"),
+        };
+        let file: Vec<u16> = std::os::windows::ffi::OsStrExt::encode_wide(path.as_os_str()).chain(std::iter::once(0)).collect();
+        let verb: Vec<u16> = "runas".encode_utf16().chain(std::iter::once(0)).collect();
+        #[link(name = "shell32")]
+        unsafe extern "system" {
+            fn ShellExecuteW(hwnd: isize, verb: *const u16, file: *const u16, params: *const u16, dir: *const u16, show: i32) -> isize;
+        }
+        let code = unsafe { ShellExecuteW(0, verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), 1) };
+        if code > 32 {
+            "Windows opened the consent prompt. Administrator access applies to the new process after you approve. This process remains a standard user. System access was not granted.".into()
+        } else if code == 5 {
+            "The consent prompt was declined. This process remains a standard user.".into()
+        } else {
+            format!("Administrator consent was not opened (code {code}). This process remains a standard user.")
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        "Administrator consent is a Windows prompt. This process was not elevated. Root was not granted.".into()
+    }
 }
 
 /// Whether this run has a window that can ask the person to choose a file.

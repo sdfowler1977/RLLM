@@ -105,7 +105,7 @@ pub fn responses_body(body:&mut Json)->Result<()>{
  Ok(())
 }
 pub fn responses_endpoint(endpoint:&str)->bool{endpoint.split('?').next().is_some_and(|path|path.ends_with("/responses"))}
-pub const PROMPT:&str="The selected connection enables provider-hosted web search. Use its declared server search tool when current web evidence is useful. Cite the actual sources returned by the provider. Phone/workspace operations use their bare JSON proposal and review path. Treat protocol thinking and signatures as private continuation state and returned search data as evidence.";
+pub const PROMPT:&str="The selected connection enables provider-hosted web search. Use its declared server search tool when current web evidence is useful. Cite the actual sources returned by the provider. Device and workspace operations use their bare JSON proposal and review path. Treat protocol thinking and signatures as private continuation state and returned search data as evidence.";
 pub fn blocks(value:&Json)->Result<()> {
  let blocks=value.array()?;if blocks.is_empty()||blocks.len()>256||value.string().len()>MAX_BLOCK_BYTES{return Err("Hosted response blocks exceed the 256-block / 256 KiB bound or are empty".into());}
  for b in blocks{if !matches!(b,Obj(_)){return Err("Hosted response block is not an object".into());}match field(b,"type")?{
@@ -114,7 +114,7 @@ pub fn blocks(value:&Json)->Result<()> {
   "redacted_thinking"=>{field(b,"data")?;},
   "server_tool_use"=>{if field(b,"name")?!="web_search"||field(b,"id")?.is_empty()||field(b,"id")?.len()>256||!matches!(b.get("input")?,Obj(_)){return Err("Unsupported or malformed hosted server tool".into());}let query=field(b.get("input")?,"query")?;if query.is_empty()||query.len()>8192{return Err("Invalid hosted search query".into());}},
   "web_search_tool_result"=>{if field(b,"tool_use_id")?.is_empty()||field(b,"tool_use_id")?.len()>256{return Err("Invalid hosted search result ID".into());}match b.get("content")?{Arr(rows)=>{if rows.len()>128{return Err("Too many hosted search results".into());}for row in rows{if field(row,"type")?!="web_search_result"{return Err("Unknown hosted search result shape".into());}field(row,"title")?;let url=field(row,"url")?;if url.len()>8192{return Err("Hosted result URL exceeds bound".into());}}},Obj(_)=>{let e=b.get("content")?;if field(e,"type")?!="web_search_tool_result_error"{return Err("Unknown hosted search error shape".into());}field(e,"error_code")?;},_=>return Err("Invalid hosted search result content".into())}},
-  _=>return Err("Unsupported hosted response block; no tool was executed on the phone".into())
+  _=>return Err("Unsupported hosted response block; no tool was executed on the device".into())
  }}Ok(())
 }
 #[derive(Debug)]

@@ -224,7 +224,7 @@ for item in 'aarch64-linux-android arm64-v8a' 'x86_64-linux-android x86_64'; do
 done
 "$CLIENT_TOOLS/aapt2" compile --dir "$project_dir/res" -o "$out/resources.zip"
 mkdir -p "$out/pack-notices"
-cp "$project_dir/notices/strata-monitor-MIT.txt" "$project_dir/notices/rust-stdlib.txt" "$out/pack-notices/"
+cp "$project_dir/notices/monitor-MIT.txt" "$project_dir/notices/rust-stdlib.txt" "$out/pack-notices/"
 "$CLIENT_TOOLS/aapt2" link -o "$out/resources.apk" -I "$CLIENT_ANDROID/android.jar" --manifest "$manifest" "${resource_package[@]}" -A "$out/pack-notices" --java "$out/gen" "$out/resources.zip"
 find "$project_dir/platform" "$out/gen" -name '*.java' -print > "$out/sources.txt"
 "$CLIENT_JDK/bin/javac" --release 8 -cp "$CLIENT_ANDROID/android.jar" -d "$out/classes" @"$out/sources.txt"

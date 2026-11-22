@@ -1,7 +1,7 @@
 //! Bounded, non-executing file and web evidence tools.
 use super::*;
 #[path="model_artifact.rs"] mod model_artifact;
-#[path="dex.rs"] mod dex;
+#[path="dex.rs"] pub(crate) mod dex;
 pub(super) const NATIVE_CAPABILITIES:&str="Workspace investigation uses the shared inspection, comparison and retained-evidence paths. inspect/compare content:complete_digest streams complete selected regular files in64KiB chunks and records exact length/SHA256. File/folder observations retain source identity, captured byte ranges, typed nodes and encoded relationships. observations pages saved records and nodes. reconstruct uses current source identity to create selected file, representation or structural outputs through review and readback.\nSupported observations include JSON and CSV/TSV structure, Unicode text, decoded PNG pixels/alpha, RIFF/WAVE, WebAssembly section envelopes, Rust declarations, JavaScript/Electron module graphs, package.json entries, ASAR listings, route and IPC string sites, and source-map references, DEX identifiers/classes/members, GGUF and safetensors metadata/tensor layouts, ELF headers/mappings/symbols/dependencies/relocations, PE headers/sections/imports/base-relocation declarations, HTML/CSS structure and cascade, static page text and rendered PNG capture.\nAArch64 observations retain encoded branches, candidate blocks, register/SP/NZCV facts, integer/address/memory expressions and separately labelled predecessor interpretations. Coordinates identify declared source VAs or PE RVAs. PE base-relocation rows include source entry locations, raw types, page/offset RVAs, paired HIGHADJ words, known field widths and captured target mappings. Coverage, captured prefixes and retained/omitted counts accompany each observation.\nPage capture uses the selected font, dimensions and resource settings. scripts:inline runs the supported inline-program/DOM operations transactionally through the existing reviewed page path. Use the operation reference and returned fields to choose a focused next step. Keep source observations, interpretations and implementation decisions clearly labelled.";
 #[path="directory_observation.rs"] pub(super) mod directory_observation;
 #[path="directory_comparison.rs"] mod directory_comparison;
@@ -160,17 +160,170 @@ pub(super) fn inspect(p:&Path,source:&file_evidence::Source<'_>,cancelled:&impl 
         structure.push('\n');
         structure.push_str(&super::super::har_evidence::file_section(&capture));
     }
+    if data.starts_with(&[0xCF, 0xFA, 0xED, 0xFE]) || data.starts_with(&[0xFE, 0xED, 0xFA, 0xCF]) {
+        structure.push('\n');
+        structure.push_str(&super::super::mach_image::mach_image(&data));
+        structure.push('\n');
+        structure.push_str(&super::super::mach_libraries::mach_libraries(&data));
+        if data.starts_with(&[0xCF, 0xFA, 0xED, 0xFE]) {
+            structure.push('\n');
+            structure.push_str(&super::super::mach_symbols::mach_symbols(&data));
+            structure.push('\n');
+            structure.push_str(&super::super::mach_text::mach_text(&data));
+            structure.push('\n');
+            structure.push_str(&super::super::arm_branch::arm_branch(&data));
+        }
+    }
+    if data.len() >= 4 && u32::from_le_bytes([data[0], data[1], data[2], data[3]]) == 0x0008_0003 {
+        structure.push('\n');
+        structure.push_str(&super::super::manifest_pool::manifest_pool(&data));
+    }
+    if data.starts_with(b"TRC1") {
+        structure.push('\n');
+        structure.push_str(&super::super::trace_record::trace_record(&data));
+    }
+    if data.starts_with(b"DEV1") {
+        structure.push('\n');
+        structure.push_str(&super::super::device_record::device_record(&data));
+    }
+    if data.starts_with(b"KEY1") {
+        structure.push('\n');
+        structure.push_str(&super::super::record_plain::record_plain(&data));
+    }
+    if data.starts_with(b"EVB1\n") {
+        structure.push('\n');
+        structure.push_str(&super::super::evidence_bundle::evidence_bundle_bytes(&data));
+    }
+    if data.starts_with(b"TFL3") {
+        structure.push('\n');
+        structure.push_str(&super::super::model_graph::model_graph(&data));
+    }
+    if data.starts_with(b"TGR1") {
+        structure.push('\n');
+        structure.push_str(&super::super::tensor_edges::tensor_edges(&data));
+    }
+    if data.starts_with(b"dex\n") {
+        structure.push('\n');
+        structure.push_str(&super::super::dex_strings::dex_strings(&data));
+        structure.push('\n');
+        structure.push_str(&super::super::dex_use::dex_use(&data));
+        structure.push('\n');
+        structure.push_str(&super::super::dex_source::dex_source(&data));
+    }
+    if data.starts_with(b"PK\x03\x04") {
+        structure.push('\n');
+        structure.push_str(&super::super::zip_members::zip_members(&data));
+        structure.push('\n');
+        structure.push_str(&super::super::saved_archive::saved_archive(&data));
+    }
+    if data.starts_with(b"MZ") || data.starts_with(b"\x7fELF") || data.starts_with(b"dex\n") || data.starts_with(b"PK\x03\x04") {
+        let near = &data[..data.len().min(1 << 20)];
+        structure.push('\n');
+        structure.push_str(&super::super::string_near_call::string_near_call(near));
+        structure.push('\n');
+        structure.push_str(&super::super::text_catalog::text_catalog(near, 6));
+    }
+    if data.starts_with(b"MZ") || (data.len() >= 20 && data.starts_with(b"\x7fELF") && data[5] == 1 && matches!(u16::from_le_bytes([data[18], data[19]]), 3 | 62)) {
+        structure.push('\n');
+        structure.push_str(&super::super::reach_edges::reach_edges(&data[..data.len().min(1 << 20)]));
+    }
+    if data.len() >= 20 && data.starts_with(b"\x7fELF") && data[5] == 1 && u16::from_le_bytes([data[18], data[19]]) == 183 {
+        structure.push('\n');
+        structure.push_str(&super::super::arm_branch::arm_branch(&data));
+        structure.push('\n');
+        structure.push_str(&super::super::arm_text::arm_text(&data));
+    }
+    if !data.starts_with(b"MZ") && data.windows(4).take(61).any(|w| w == b"BSJB") {
+        structure.push('\n');
+        structure.push_str(&super::super::assembly_tables::assembly_tables(&data));
+    }
     let format=if data.starts_with(b"\x7fELF"){"ELF"}else if data.starts_with(b"MZ"){"DOS/PE candidate"}else if data.starts_with(b"dex\n"){"DEX"}else if data.starts_with(b"PK\x03\x04"){"ZIP"}else if data.starts_with(b"\0asm"){"WebAssembly"}else if data.starts_with(b"\x89PNG\r\n\x1a\n"){"PNG"}else if data.starts_with(b"%PDF-"){"PDF"}else if std::str::from_utf8(&data).is_ok(){"UTF-8 text"}else{"Unknown binary"};
+    if format == "Unknown binary" {
+        let window = &data[..data.len().min(4096)];
+        let catalog = &data[..data.len().min(1 << 20)];
+        structure.push('\n');
+        structure.push_str(&super::super::lifted_block::lifted_block(window, false));
+        structure.push('\n');
+        structure.push_str(&super::super::call_sites::call_sites(window));
+        structure.push('\n');
+        structure.push_str(&super::super::block_trace::block_trace(&data[..data.len().min(256)], false));
+        structure.push('\n');
+        structure.push_str(&super::super::statement_source::statement_source(&data[..data.len().min(256)], false));
+        structure.push('\n');
+        structure.push_str(&super::super::reach_edges::reach_edges(window));
+        structure.push('\n');
+        structure.push_str(&super::super::text_catalog::text_catalog(catalog, 4));
+        structure.push('\n');
+        structure.push_str(&super::super::string_near_call::string_near_call(catalog));
+        structure.push('\n');
+        structure.push_str(&super::super::datagram_fields::datagram_fields(&data[..data.len().min(512)]));
+        structure.push('\n');
+        structure.push_str(&super::super::observer_index::observer_index("listing"));
+        structure.push('\n');
+        structure.push_str(&super::super::evidence_pack::evidence_listing(&[&data[..data.len().min(256)]]));
+    }
+    if data.starts_with(b"RIFF") {
+        if let Some(fmt) = data.windows(4).position(|mark| mark == b"fmt ") {
+            if fmt + 16 <= data.len() && u16::from_le_bytes([data[fmt + 8], data[fmt + 9]]) == 1 {
+                let rate = u32::from_le_bytes([data[fmt + 12], data[fmt + 13], data[fmt + 14], data[fmt + 15]]);
+                if let Some(tag) = data.windows(4).position(|mark| mark == b"data") {
+                    let start = tag + 8;
+                    if start <= data.len() {
+                        let end = start.saturating_add(65536).min(data.len());
+                        structure.push('\n');
+                        structure.push_str(&super::super::tone_scan::tone_scan(&data[start..end], rate, 19000));
+                        structure.push('\n');
+                        structure.push_str(&super::super::spectrum_bins::spectrum_bins(&data[start..end], rate));
+                    }
+                }
+            }
+        }
+    }
+    if p.extension().and_then(|v| v.to_str()) == Some("js") {
+        if let Ok(source) = std::str::from_utf8(&data) {
+            structure.push('\n');
+            structure.push_str(&super::super::script_text::script_text(source));
+            if source.len() > 40 && !source.contains('\n') {
+                structure.push('\n');
+                structure.push_str(&super::super::script_layout::script_layout(source));
+            }
+        }
+    }
+    if let Ok(source) = std::str::from_utf8(&data) {
+        if source.contains("\"entries\"") && source.contains("\"url\": ") {
+            let rows = super::super::session_rows::session_rows(&data);
+            if !rows.starts_with("A saved session") {
+                structure.push('\n');
+                structure.push_str(&rows);
+                structure.push('\n');
+                structure.push_str(&super::super::session_env::session_env(&data));
+            }
+        }
+    }
     let mut counts=[0usize;256];for b in &data{counts[*b as usize]+=1;}
     let entropy=counts.iter().filter(|&&n|n>0).map(|&n|{let p=n as f64/data.len() as f64;-p*p.log2()}).sum::<f64>();
-    let mut strings=vec![];let mut start=None;
-    for (i,b) in data.iter().copied().chain(std::iter::once(0)).enumerate(){
-        if b.is_ascii_graphic()||b==b' ' {if start.is_none(){start=Some(i);}}
-        else if let Some(begin)=start.take(){if i-begin>=5{strings.push(format!("0x{begin:08x}: {}",String::from_utf8_lossy(&data[begin..i.min(begin+256)])));if strings.len()==160{break;}}}
-    }
+    let strings = super::super::ascii_runs::ascii_runs(&data);
     let elf=if format=="ELF"&&data.len()>=20{let machine=if data[5]==1{u16::from_le_bytes([data[18],data[19]])}else{u16::from_be_bytes([data[18],data[19]])};format!("\nELF class byte: {}; endian byte: {}; machine: {machine}",data[4],data[5])}else{String::new()};
     if cancelled(){return Err("Inspection cancelled before publication".into());}source.check()?;
-    let display=format!("Observed static inspection\nSource: {}\nFile size: {} bytes\nSampled: {} bytes\nSignature: {format}{elf}\nSample Shannon entropy: {entropy:.4} bits/byte\nFirst bytes: {}\nASCII strings (up to 160; 256 bytes each):\n{}\n\n{structure}\nSignatures and symbolic instruction IR describe the captured bytes. File sizes and sampled byte counts identify the observation coverage.",p.display(),meta.len(),data.len(),data.iter().take(32).map(|b|format!("{b:02x}")).collect::<Vec<_>>().join(" "),strings.join("\n"));
+    let mut display=format!("Observed static inspection\nSource: {}\nFile size: {} bytes\nSampled: {} bytes\nSignature: {format}{elf}\nSample Shannon entropy: {entropy:.4} bits/byte\nFirst bytes: {}\nASCII strings (up to 160; 256 bytes each):\n{}\n\n{structure}\nSignatures and symbolic instruction IR describe the captured bytes. File sizes and sampled byte counts identify the observation coverage.",p.display(),meta.len(),data.len(),data.iter().take(32).map(|b|format!("{b:02x}")).collect::<Vec<_>>().join(" "),strings);
+    if data.starts_with(b"MZ") {
+        display.push('\n');
+        display.push_str(&super::super::call_sites::pe_code_sites(&data));
+        if data.get(0x3c..0x40).and_then(|raw| raw.try_into().ok()).map(u32::from_le_bytes).map(|at| at as usize).is_some_and(|pe| {
+            data.get(pe..pe.saturating_add(6)).is_some_and(|header| header.starts_with(b"PE\0\0") && u16::from_le_bytes([header[4], header[5]]) == 0xAA64)
+        }) {
+            display.push('\n');
+            display.push_str(&super::super::arm_branch::arm_branch(&data));
+        }
+    }
+    if let Some(text) = super::super::call_sites::elf_code_sites(&data) {
+        display.push('\n');
+        display.push_str(&text);
+    }
+    if let Some(text) = super::super::call_sites::macho_code_sites(&data) {
+        display.push('\n');
+        display.push_str(&text);
+    }
     if let Some(binary)=binary{let (root,relative,access)=scope;if access.graph&&!binary.coordinate.is_empty(){let snapshot=binary_evidence::snapshot(root,relative,access,&after,&data,complete,&binary,&display);if cancelled(){return Err("Inspection cancelled before typed evidence publication".into());}return Ok(match snapshot{Ok((display,graph))=>observation_graph::envelope(display,Ok(vec![graph]),access.budget),Err(e)=>observation_graph::envelope(display,Err(e),access.budget)});}}
     Ok(display)
 }
@@ -297,7 +450,7 @@ fn page_geometry(document:&super::html_document::Document)->String{
  let cascade=super::css_cascade::compute(document);let mut output=cascade.describe(document);
  if cascade.incomplete{return output;}
  match super::page_layout::layout(document,&cascade.styles,800.,super::page_layout::TextMetrics::default()){
-  Ok(layout)=>{output.push('\n');output.push_str(&layout.summary());output.push_str("\nObservation viewport: 800 CSS px (not the phone screen). Geometry is approximate and is not a screenshot.");
+  Ok(layout)=>{output.push('\n');output.push_str(&layout.summary());output.push_str("\nObservation viewport: 800 CSS px (not the device screen). Geometry is approximate and is not a screenshot.");
    for b in layout.boxes.iter().take(16){output.push_str(&format!("\nBox node {}: x={} y={} width={} height={}",b.node,b.bounds.x,b.bounds.y,b.bounds.width,b.bounds.height));}
    if layout.boxes.len()>16{output.push_str("\nFurther box records omitted from this observation.");}
    for command in layout.commands.iter().take(24){match command{

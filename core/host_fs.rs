@@ -163,3 +163,71 @@ pub fn open_at(parent: &File, name: &[u8], flags: i32) -> io::Result<File> {
         options.open(path)
     }
 }
+
+/// The process label the operating system already gave this program.
+/// A missing read stays a missing read. No higher label is invented.
+pub fn process_access() -> String {
+    #[cfg(windows)]
+    {
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn OpenProcessToken(process: isize, access: u32, token: *mut isize) -> i32;
+            fn GetTokenInformation(token: isize, class: i32, info: *mut u8, len: u32, returned: *mut u32) -> i32;
+            fn GetSidSubAuthority(sid: *mut u8, index: u32) -> *mut u32;
+            fn GetSidSubAuthorityCount(sid: *mut u8) -> *mut u8;
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> isize;
+            fn CloseHandle(handle: isize) -> i32;
+        }
+        unsafe {
+            let mut token = 0isize;
+            if OpenProcessToken(GetCurrentProcess(), 0x0008, &mut token) == 0 {
+                return "Device access was not read. Administrator and System were not granted.".to_string();
+            }
+            let mut raw = [0u64; 32];
+            let mut needed = 0u32;
+            let ok = GetTokenInformation(token, 25, raw.as_mut_ptr() as *mut u8, (raw.len() * 8) as u32, &mut needed);
+            CloseHandle(token);
+            if ok == 0 {
+                return "Device access was not read. Administrator and System were not granted.".to_string();
+            }
+            let sid = raw.as_ptr() as *const *mut u8;
+            let sid = sid.read();
+            if sid.is_null() {
+                return "Device access was not read. Administrator and System were not granted.".to_string();
+            }
+            let count = *GetSidSubAuthorityCount(sid) as u32;
+            if count == 0 {
+                return "Device access was not read. Administrator and System were not granted.".to_string();
+            }
+            let rid = *GetSidSubAuthority(sid, count - 1);
+            if rid >= 0x4000 {
+                "System. This is the highest Windows process label.".to_string()
+            } else if rid >= 0x3000 {
+                "Administrator. System access was not granted.".to_string()
+            } else if rid >= 0x2000 {
+                "Standard user. Administrator access starts only after you approve the Windows consent prompt. System access was not granted.".to_string()
+            } else {
+                "Restricted user. Administrator access starts only after you approve the Windows consent prompt. System access was not granted.".to_string()
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        "Application user. Broad file access is a separate device setting. Root was not granted.".to_string()
+    }
+}
+
+#[cfg(test)]
+mod checks {
+    #[test]
+    fn process_access_names_the_label_it_read() {
+        let access = super::process_access();
+        assert!(
+            access.contains("not granted") || access.contains("System."),
+            "{access}"
+        );
+    }
+}

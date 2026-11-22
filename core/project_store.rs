@@ -8,7 +8,7 @@ pub(super) fn start(st:&mut Json)->Result<Json>{start_destination(st,false)}
 pub(super) fn start_default(st:&mut Json)->Result<Json>{start_destination(st,boolean(get(st,"drive"),"phone_default"))}
 fn start_destination(st:&mut Json,phone:bool)->Result<Json>{
  if get(st,"project_transfer")!=&Null{return Err("A project snapshot is pending; verify or retry it before preparing another".into());}
- if phone {let tree=text(st,"phone_uri");if !tree.starts_with("content://") {return Err("Grant a phone folder before saving a project there".into());}} else {drive_root(st)?;}let ticket=format!("{}-{}",now(),SERIAL.fetch_add(1,std::sync::atomic::Ordering::Relaxed));put(st,"project_prepare",obj(vec![("connection",get(st,"drive").clone()),("phone",Bool(phone)),("tree",if phone {s(&text(st,"phone_uri"))} else {Null}),("ticket",s(&ticket))]));put(st,"busy",Bool(true));Ok(obj(vec![("kind",s("archive_drive")),("ticket",s(&ticket)),("prepare",get(st,"project_prepare").clone())]))
+ if phone {let tree=text(st,"phone_uri");if !tree.starts_with("content://") {return Err("Grant a device folder before saving a project there".into());}} else {drive_root(st)?;}let ticket=format!("{}-{}",now(),SERIAL.fetch_add(1,std::sync::atomic::Ordering::Relaxed));put(st,"project_prepare",obj(vec![("connection",get(st,"drive").clone()),("phone",Bool(phone)),("tree",if phone {s(&text(st,"phone_uri"))} else {Null}),("ticket",s(&ticket))]));put(st,"busy",Bool(true));Ok(obj(vec![("kind",s("archive_drive")),("ticket",s(&ticket)),("prepare",get(st,"project_prepare").clone())]))
 }
 pub(super) fn artifact_start(st:&mut Json,source:&str)->Result<Json>{
  let parts=relative_parts(source)?;let basename=parts.last().ok_or("Choose a project file")?;
@@ -116,7 +116,7 @@ pub(super) fn readback(v:&Json)->Result<Json>{
  let mut out=obj(vec![("purpose",get(p,"purpose").clone()),("stage_ticket",get(p,"stage_ticket").clone()),("phase",get(p,"phase").clone())]);
  if boolean(p,"phone") {
   if get(v,"found")==&Bool(false){put(&mut out,"found",Bool(false));}
-  else {if get(v,"found")!=&Bool(true){return Err("Missing phone lookup result".into());}
+  else {if get(v,"found")!=&Bool(true){return Err("Missing device lookup result".into());}
   let actual=payload_bytes(&Null,&text(v,"data"))?;put(&mut out,"found",Bool(true));put(&mut out,"verified",Bool(actual==saved.bytes));}
  }else{
   let encoded=text(v,"data");if encoded.len()>8*1024*1024{return Err("Readback exceeds transfer bound".into());}
@@ -163,7 +163,7 @@ pub(super) fn event(st:&mut Json,action:&str)->Result<Json>{
  if action=="project_transfer_verify"{return request(st,"verify");}
  put(st,"dialog",s("project_transfer"));Ok(Null)
 }
-pub(super) fn modal(st:&Json)->Json{if text(st,"dialog")=="project_transfer_discard_review"{return super::modal("Discard pending project snapshot?",vec![field_ui("warning","Scope","This discards only the encrypted pending transfer. Project files and any partial or complete remote file remain unchanged.","readonly")],vec![button("Discard pending snapshot","project_transfer_discard")]);}let p=get(st,"project_transfer");super::modal("Pending project snapshot",vec![field_ui("destination","Original destination",&if boolean(p,"phone") {format!("{} · {}",text(p,"tree"),text(p,"target"))} else {endpoint_summary(&text(p,"target"))},"readonly"),field_ui("phase","Transfer state",&text(p,"phase"),"readonly"),field_ui("note","Recovery","The original encrypted archive and destination are retained until exact readback succeeds. Retry checks existing bytes first. A differing existing file is never overwritten; resolve it explicitly before retrying. No phone fallback is reported as a remote save.","readonly")],vec![button("Verify existing snapshot","project_transfer_verify"),button("Retry pending snapshot","project_transfer_retry"),button("Discard pending snapshot","project_transfer_discard_review")])}
+pub(super) fn modal(st:&Json)->Json{if text(st,"dialog")=="project_transfer_discard_review"{return super::modal("Discard pending project snapshot?",vec![field_ui("warning","Scope","This discards only the encrypted pending transfer. Project files and any partial or complete remote file remain unchanged.","readonly")],vec![button("Discard pending snapshot","project_transfer_discard")]);}let p=get(st,"project_transfer");super::modal("Pending project snapshot",vec![field_ui("destination","Original destination",&if boolean(p,"phone") {format!("{} · {}",text(p,"tree"),text(p,"target"))} else {endpoint_summary(&text(p,"target"))},"readonly"),field_ui("phase","Transfer state",&text(p,"phase"),"readonly"),field_ui("note","Recovery","The original encrypted archive and destination are retained until exact readback succeeds. Retry checks existing bytes first. A differing existing file is never overwritten; resolve it explicitly before retrying. No device fallback is reported as a remote save.","readonly")],vec![button("Verify existing snapshot","project_transfer_verify"),button("Retry pending snapshot","project_transfer_retry"),button("Discard pending snapshot","project_transfer_discard_review")])}
 pub(super) fn result(st:&mut Json,action:&str,inputs:&Json)->Result<Json>{
  let p=get(st,"project_transfer").clone();if p==Null||text(&p,"purpose").is_empty()||text(&p,"purpose")!=text(inputs,"purpose"){return Ok(Null);}
  if text(&p,"phase")=="clearing"{if action=="failure"{put(st,"notice",s("Pending storage cleanup was interrupted; retry finalization from its review screen"));}return Ok(Null);}
@@ -177,12 +177,12 @@ pub(super) fn result(st:&mut Json,action:&str,inputs:&Json)->Result<Json>{
   let expected=if external{Vec::new()}else{payload_bytes(&p,&text(&p,"archive"))?};
   if text(inputs,"data").len()>8*1024*1024{return Err("Project readback exceeds transfer limit".into());}
   if boolean(&p,"phone") {
-   if action!="project_phone_result" {return Err("Unexpected response for phone project transfer".into());}
-   let phase=text(&p,"phase");if !["write","probe","verify"].contains(&phase.as_str()){return Err("No active phone transfer matches this response".into());}
+   if action!="project_phone_result" {return Err("Unexpected response for device project transfer".into());}
+   let phase=text(&p,"phase");if !["write","probe","verify"].contains(&phase.as_str()){return Err("No active device transfer matches this response".into());}
    if get(inputs,"found")==&Bool(false) {if phase=="probe" {return request(st,"write");}return Err("Project document was not found; snapshot remains pending".into());}
-   if get(inputs,"found")!=&Bool(true){return Err("Phone transfer response is missing an explicit lookup result; snapshot retained".into());}
-   let matches=if external{get(inputs,"verified")==&Bool(true)}else{network::unbase64(&text(inputs,"data"))?==expected};if !matches {return Err("Phone project readback differs; original snapshot retained without overwriting the document".into());}
-   return finish(st,p.clone(),"Project snapshot saved to the selected phone folder and exact bytes verified");
+   if get(inputs,"found")!=&Bool(true){return Err("Device transfer response is missing an explicit lookup result; snapshot retained".into());}
+   let matches=if external{get(inputs,"verified")==&Bool(true)}else{network::unbase64(&text(inputs,"data"))?==expected};if !matches {return Err("Device project readback differs; original snapshot retained without overwriting the document".into());}
+   return finish(st,p.clone(),"Project snapshot saved to the selected device folder and exact bytes verified");
   }
   let (status,matches)=if external {let status=match get(inputs,"status"){Num(n)=>n.parse::<u16>().map_err(|_|"Invalid readback HTTP status")?,_=>return Err("Missing readback HTTP status".into())};(status,get(inputs,"verified")==&Bool(true))}else{let raw=network::unbase64(&text(inputs,"data"))?;let(status,body)=network::decoded_optional_bytes(&raw)?;(status,body==expected)};
   match text(&p,"phase").as_str(){
