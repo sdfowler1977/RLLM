@@ -2,6 +2,7 @@
 //! Desktop host: the same application core, the window, the transport and the key.
 //! Product logic stays in the core. This file owns the window and the platform work.
 include!("lib.rs");
+mod harness_mcp;
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -972,13 +973,6 @@ fn attachment(ticket: &Json) -> (&'static str, Json) {
 
 fn main() {
     let args = arguments();
-    if args.iter().any(|value| value == "--mcp") {
-        if let Err(error) = application::serve_mcp() {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
-        return;
-    }
     if let Err(error) = run(&args) {
         #[cfg(windows)]
         report(&error);
@@ -1028,6 +1022,9 @@ fn run(args: &[String]) -> Result<()> {
         return outcome;
     }
     let (mut state, ui) = startup(&vault, &root)?;
+    if args.iter().any(|value| value == "--mcp") {
+        return harness_mcp::serve(&mut state, &vault, &root);
+    }
     #[cfg(windows)]
     if !args.iter().any(|value| value == "--stdio") {
         return window::open(state, ui, vault, root);

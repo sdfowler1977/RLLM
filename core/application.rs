@@ -68,10 +68,7 @@ use super::*;
 #[path="x86_words.rs"] mod x86_words;
 #[path="image_marks.rs"] mod image_marks;
 #[path="packet_words.rs"] mod packet_words;
-#[path="image_mach.rs"] mod image_mach;
 #[path="subject_reports.rs"] mod subject_reports;
-#[path="stdio_service.rs"] mod stdio_service;
-pub(super) fn serve_mcp() -> Result<()> { stdio_service::serve() }
 #[path="capture_job.rs"] mod capture_job;
 #[path="web_operation.rs"] mod web_operation;
 #[path="web_document.rs"] mod web_document;
