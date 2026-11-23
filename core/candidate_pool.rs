@@ -268,4 +268,35 @@ mod tests {
         assert!(report.contains("lesson level2 alpha\nbeta\nno child process was started\n"), "{report}");
         assert!(report.ends_with("no child process was started"), "{report}");
     }
+
+    #[test]
+    fn later_read_returns_the_first_stored_lesson() {
+        let mut library = LessonLibrary::new();
+        library.store("kept-first", "compose from observed contrasts");
+        library.store("kept-first", "a later text is not stored");
+        assert_eq!(
+            library.read("kept-first"),
+            "compose from observed contrasts"
+        );
+        let report = library.report();
+        assert!(!report.contains("a later text is not stored"), "{report}");
+        assert!(report.ends_with("no child process was started"), "{report}");
+    }
+
+    #[test]
+    fn later_candidate_is_not_composed() {
+        let mut pool = CandidatePool::new();
+        for index in 1..=16 {
+            pool.store(&format!("c{index}"), &format!("text {index}"));
+        }
+        pool.store("c17", "kept out");
+        assert_eq!(
+            pool.compose(),
+            "text 1\ntext 2\ntext 3\ntext 4\nno child process was started"
+        );
+        let report = pool.report();
+        assert!(report.contains("candidate c17 was not stored\n"), "{report}");
+        assert!(report.ends_with("no child process was started"), "{report}");
+        assert!(!report.contains("kept out"), "{report}");
+    }
 }
