@@ -2,7 +2,7 @@
 //! a desktop window, `raster` draws it, and this file owns the window itself:
 //! the pixel surface, the text boxes, the pointer and the keyboard.
 use super::{advance_shown, get, obj, s, text, Bool, Json, Null, Num, Result, Vault};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -261,6 +261,63 @@ pub enum Files {
     Picture,
     /// A saved RLLM document.
     Backup,
+}
+
+#[repr(C)]
+struct BrowseInfo {
+    owner: isize,
+    root: *mut std::ffi::c_void,
+    display: *mut u16,
+    title: *const u16,
+    flags: u32,
+    callback: usize,
+    param: isize,
+    image: i32,
+}
+
+/// Shows the system folder dialog. `Ok(None)` when it is closed without a choice.
+pub fn choose_folder(title: &str) -> Result<Option<String>> {
+    let frame = FRAME.load(Ordering::Relaxed);
+    if frame == 0 {
+        return Err("Choosing a folder needs the RLLM window".into());
+    }
+    let title = wide(title);
+    let mut display = [0u16; 260];
+    let mut info = BrowseInfo {
+        owner: frame,
+        root: std::ptr::null_mut(),
+        display: display.as_mut_ptr(),
+        title: title.as_ptr(),
+        flags: 0x0001,
+        callback: 0,
+        param: 0,
+        image: 0,
+    };
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SHBrowseForFolderW(info: *mut BrowseInfo) -> *mut std::ffi::c_void;
+        fn SHGetPathFromIDListW(pidl: *mut std::ffi::c_void, path: *mut u16) -> i32;
+    }
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoTaskMemFree(block: *mut std::ffi::c_void);
+    }
+    let pidl = unsafe { SHBrowseForFolderW(&mut info) };
+    if pidl.is_null() {
+        return Ok(None);
+    }
+    let mut path = [0u16; 260];
+    let ok = unsafe { SHGetPathFromIDListW(pidl, path.as_mut_ptr()) };
+    unsafe { CoTaskMemFree(pidl) };
+    if ok == 0 {
+        return Err("The selected folder could not be read".into());
+    }
+    let length = path.iter().position(|unit| *unit == 0).unwrap_or(path.len());
+    let chosen = String::from_utf16_lossy(&path[..length]);
+    if !super::host_fs::windows_folder_path(&chosen) {
+        return Err("Choose a folder".into());
+    }
+    Ok(Some(chosen))
 }
 
 /// Shows the system "Open" dialog over the window. `Ok(None)` when it is closed
@@ -923,6 +980,16 @@ fn mark_font(app: &mut App, size: i32) -> isize {
     font
 }
 
+/// Corner radius of a submenu pill: half the painted control height.
+fn submenu_pill_radius(height: i32) -> i32 {
+    (height.max(2) / 2).max(1)
+}
+
+fn inset_pill(area: [i32; 4], inset: i32) -> [i32; 4] {
+    let inset = inset.min(area[2] / 6).min(area[3] / 6).max(0);
+    [area[0] + inset, area[1] + inset, (area[2] - inset * 2).max(1), (area[3] - inset * 2).max(1)]
+}
+
 fn paint(app: &mut App) {
     let mut info = PaintInfo { hdc: 0, erase: 0, area: Rect { left: 0, top: 0, right: 0, bottom: 0 }, restore: 0, update: 0, reserved: [0; 32] };
     let hdc = unsafe { BeginPaint(app.frame, &mut info) };
@@ -943,11 +1010,33 @@ fn paint(app: &mut App) {
         SetBkMode(dc, 1);
         SelectClipRgn(dc, 0);
     }
+    let standard = px(10, app.dpi);
+    let modal = get(&app.ui, "modal");
+    let presentation = text(modal, "presentation");
+    let dropdown = text(modal, "title") == "Connection" || text(modal, "title") == "Main agent";
+    let button_pills = modal != &Null && presentation == "pills";
+    let list_pills = modal != &Null && presentation == "list" && !dropdown;
+    let composer = app.menu && modal == &Null;
+    let submenu_events: BTreeSet<String> = rows(modal, "buttons").into_iter().map(|button| text(&button, "event")).collect();
+    let composer_events: BTreeSet<String> = rows(&app.ui, "composer_menu").into_iter().map(|choice| text(&choice, "event")).collect();
+    let mut in_dialog = false;
     let items = std::mem::take(&mut app.scene.items);
     for item in &items {
         match item {
-            Item::Fill { area, radius, color } => canvas.round(area[0], area[1], area[2], area[3], *radius as f32, *color),
-            Item::Edge { area, radius, color } => canvas.ring(area[0], area[1], area[2], area[3], *radius as f32, line, *color),
+            Item::Fill { area, radius, color } => {
+                if area[0] == 0 && area[1] == 0 && area[2] == width && area[3] == height && *radius == 0 {
+                    in_dialog = true;
+                }
+                if list_pills && in_dialog && area[3] <= 1 {
+                    continue;
+                }
+                let radius = if button_pills && in_dialog && *radius == standard { submenu_pill_radius(area[3]) } else { *radius };
+                canvas.round(area[0], area[1], area[2], area[3], radius as f32, *color);
+            }
+            Item::Edge { area, radius, color } => {
+                let radius = if button_pills && in_dialog && *radius == standard { submenu_pill_radius(area[3]) } else { *radius };
+                canvas.ring(area[0], area[1], area[2], area[3], radius as f32, line, *color);
+            }
             Item::Icon { x, y, size, name, color } => {
                 if let Some(glyph) = glyphs().get(name.as_str()) {
                     canvas.glyph(glyph, *x as f32, *y as f32, *size as f32, if *color == 0 { None } else { Some(*color) });
@@ -963,10 +1052,29 @@ fn paint(app: &mut App) {
                 }
             }
             Item::Hot(index) => {
-                if app.hover == Some(*index) {
-                    if let Some(hit) = app.scene.hits.get(*index) {
+                if let Some(hit) = app.scene.hits.get(*index) {
+                    let area = hit.area;
+                    let action = hit.action.clone();
+                    let hit_radius = hit.radius;
+                    let list_row = list_pills && in_dialog && submenu_events.contains(&action);
+                    let composer_row = composer && composer_events.contains(&action);
+                    if list_row || composer_row {
+                        let pill = inset_pill(area, px(3, app.dpi));
+                        let radius = submenu_pill_radius(pill[3]) as f32;
+                        canvas.round(pill[0], pill[1], pill[2], pill[3], radius, pal.card);
+                        canvas.ring(pill[0], pill[1], pill[2], pill[3], radius, line, pal.border);
+                    }
+                    if app.hover == Some(*index) {
+                        let wash = if list_row || composer_row { inset_pill(area, px(3, app.dpi)) } else { area };
+                        let radius = if button_pills && in_dialog && hit_radius == standard {
+                            submenu_pill_radius(area[3])
+                        } else if list_row || composer_row {
+                            submenu_pill_radius(wash[3])
+                        } else {
+                            hit_radius
+                        };
                         let strength = if app.pressed == Some(*index) { 0x38 } else { 0x1E };
-                        canvas.round(hit.area[0], hit.area[1], hit.area[2], hit.area[3], hit.radius as f32, with_alpha(pal.ink, strength));
+                        canvas.round(wash[0], wash[1], wash[2], wash[3], radius as f32, with_alpha(pal.ink, strength));
                     }
                 }
             }
@@ -1148,6 +1256,18 @@ fn launch(action: String) {
     });
 }
 
+fn chosen_work_tree(state: &Json) -> Option<String> {
+    let approved = text(state, "approval_root");
+    if super::host_fs::windows_folder_path(&approved) && std::path::Path::new(&approved).is_dir() {
+        return Some(approved);
+    }
+    let chosen = text(state, "phone_uri");
+    if super::host_fs::windows_folder_path(&chosen) && std::path::Path::new(&chosen).is_dir() {
+        return Some(chosen);
+    }
+    None
+}
+
 fn finish() {
     let finished = match FINISHED.lock() {
         Ok(mut slot) => slot.take(),
@@ -1165,6 +1285,9 @@ fn finish() {
             Ok((state, ui, vault)) => {
                 let before = text(&app.state, "notice");
                 let said = text(&state, "notice");
+                if let Some(tree) = chosen_work_tree(&state) {
+                    app.root = tree;
+                }
                 app.state = state;
                 app.vault = vault;
                 // What the core reports about a finished action (a file saved,
@@ -1595,6 +1718,194 @@ fn emblem(size: i32) -> isize {
     }
 }
 
+fn png_frame(pixels: &[u32], width: i32, height: i32) -> Result<Vec<u8>> {
+    if width <= 0 || height <= 0 || pixels.len() != (width as usize) * (height as usize) {
+        return Err("The submenu frame has no pixels".into());
+    }
+    let mut raw = Vec::with_capacity(pixels.len() * 4 + height as usize);
+    for row in pixels.chunks(width as usize) {
+        raw.push(0);
+        for pixel in row {
+            raw.push((pixel >> 16) as u8);
+            raw.push((pixel >> 8) as u8);
+            raw.push(*pixel as u8);
+            raw.push(255);
+        }
+    }
+    let mut z = vec![0x78, 0x01];
+    let pieces: Vec<&[u8]> = raw.chunks(65535).collect();
+    for (index, piece) in pieces.iter().enumerate() {
+        z.push(if index + 1 == pieces.len() { 1 } else { 0 });
+        let len = piece.len() as u16;
+        z.extend_from_slice(&len.to_le_bytes());
+        z.extend_from_slice(&(!len).to_le_bytes());
+        z.extend_from_slice(piece);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for byte in &raw {
+        a = (a + *byte as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut header = Vec::new();
+    header.extend_from_slice(&(width as u32).to_be_bytes());
+    header.extend_from_slice(&(height as u32).to_be_bytes());
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let mut crc = |kind: &[u8; 4], data: &[u8]| {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let at = out.len();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let mut c = !0u32;
+        for byte in &out[at..] {
+            c ^= *byte as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { (c >> 1) ^ 0xEDB8_8320 } else { c >> 1 };
+            }
+        }
+        out.extend_from_slice(&(!c).to_be_bytes());
+    };
+    crc(b"IHDR", &header);
+    crc(b"IDAT", &z);
+    crc(b"IEND", &[]);
+    Ok(out)
+}
+
+fn open_menu(state: &mut Json, action: &str) -> Result<Json> {
+    open_menu_at(state, action, "menu-proof")
+}
+
+fn open_menu_at(state: &mut Json, action: &str, root: &str) -> Result<Json> {
+    let result = crate::application::event(&obj(vec![
+        ("state", state.clone()),
+        ("action", s(action)),
+        ("inputs", obj(vec![])),
+        ("root", s(root)),
+        ("defer_policy_commit", Bool(true)),
+    ]))?;
+    *state = get(&result, "state").clone();
+    Ok(get(&result, "ui").clone())
+}
+
+fn media_workspace(dir: &str) -> Result<String> {
+    let root = std::path::Path::new(dir).join("media-root");
+    let files = root.join("service-files");
+    std::fs::create_dir_all(&files).map_err(|error| error.to_string())?;
+    std::fs::write(files.join("sample.txt"), b"sample").map_err(|error| error.to_string())?;
+    Ok(root.to_string_lossy().into_owned())
+}
+
+fn save_menu(app: &mut App, dir: &str, file: &str, ui: &Json, menu: bool) -> Result<()> {
+    app.ui = ui.clone();
+    app.menu = menu;
+    app.hover = None;
+    app.pressed = None;
+    app.modal_scroll = 0;
+    app.scroll = 0;
+    tune(app);
+    place(app);
+    paint(app);
+    let (width, height) = app.size;
+    if app.bits.is_null() || width <= 0 || height <= 0 {
+        return Err("The submenu frame was not drawn".into());
+    }
+    let pixels = unsafe { std::slice::from_raw_parts(app.bits, (width * height) as usize) };
+    let path = std::path::Path::new(dir).join(format!("{file}.png"));
+    std::fs::write(&path, png_frame(pixels, width, height)?).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn capture_pill_proof(app: &mut App, dir: &str) -> Result<()> {
+    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    let mut notes = String::from("submenu\told form\tnew form\tscreenshot\tresult\n");
+    let menus = [
+        ("navigation", "Navigation", "navigation", "list rows"),
+        ("config", "App settings", "app-settings", "list rows"),
+        ("agent_settings", "Agent settings", "agent-settings", "list rows"),
+        ("instruction_settings", "Instructions and preferences", "instructions", "list rows"),
+        ("connections", "LLM connections", "llm-connections", "list rows"),
+        ("services", "Network services", "network-services", "list rows"),
+        ("observability", "Diagnostics", "diagnostics", "list rows"),
+        ("investigation_preferences", "Investigation preferences", "investigation-preferences", "list rows"),
+        ("agents", "Agent profiles", "agent-profiles", "list rows"),
+        ("skills", "Skills", "skills", "list rows"),
+        ("mcp_streams", "Server streams", "server-streams", "list rows"),
+        ("jobs_menu", "Generation jobs", "generation-jobs", "list rows"),
+        ("media_files", "Local media files", "local-media-files", "list rows"),
+        ("apps_view", "App inspection", "app-inspection", "list rows"),
+    ];
+    for (action, title, file, old) in menus {
+        let mut state = Null;
+        let opened = if action == "media_files" {
+            match media_workspace(dir) {
+                Ok(root) => open_menu_at(&mut state, action, &root),
+                Err(error) => Err(error),
+            }
+        } else {
+            open_menu(&mut state, action)
+        };
+        match opened {
+            Ok(ui) => {
+                let shown = text(get(&ui, "modal"), "title");
+                let expected = if action == "navigation" { "RLLM" } else { title };
+                if shown != expected {
+                    let _ = save_menu(app, dir, file, &ui, false);
+                    notes.push_str(&format!("{title}\t{old}\tpill buttons\t{file}.png\topened \"{shown}\"\n"));
+                } else {
+                    match save_menu(app, dir, file, &ui, false) {
+                        Ok(()) => notes.push_str(&format!("{title}\t{old}\tpill buttons\t{file}.png\tok\n")),
+                        Err(error) => notes.push_str(&format!("{title}\t{old}\tpill buttons\t{file}.png\t{error}\n")),
+                    }
+                }
+            }
+            Err(error) => notes.push_str(&format!("{title}\t{old}\tpill buttons\t\t{error}\n")),
+        }
+    }
+    let mut state = Null;
+    if let Ok(_) = open_menu(&mut state, "new") {
+        let id = text(&state, "active");
+        if !id.is_empty() {
+            match open_menu(&mut state, &format!("chat_options:{id}")) {
+                Ok(ui) => match save_menu(app, dir, "conversation-options", &ui, false) {
+                    Ok(()) => notes.push_str("Conversation options\tlist rows\tpill buttons\tconversation-options.png\tok\n"),
+                    Err(error) => notes.push_str(&format!("Conversation options\tlist rows\tpill buttons\tconversation-options.png\t{error}\n")),
+                },
+                Err(error) => notes.push_str(&format!("Conversation options\tlist rows\tpill buttons\t\t{error}\n")),
+            }
+            let _ = open_menu(&mut state, "chat_delete_review");
+            let _ = open_menu(&mut state, "chat_delete");
+            match open_menu(&mut state, "trash") {
+                Ok(ui) => match save_menu(app, dir, "trash", &ui, false) {
+                    Ok(()) => notes.push_str("Trash\tlist rows\tpill buttons\ttrash.png\tok\n"),
+                    Err(error) => notes.push_str(&format!("Trash\tlist rows\tpill buttons\ttrash.png\t{error}\n")),
+                },
+                Err(error) => notes.push_str(&format!("Trash\tlist rows\tpill buttons\t\t{error}\n")),
+            }
+            match open_menu(&mut state, &format!("trash_options:{id}")) {
+                Ok(ui) => match save_menu(app, dir, "trash-options", &ui, false) {
+                    Ok(()) => notes.push_str("Trash item options\tlist rows\tpill buttons\ttrash-options.png\tok\n"),
+                    Err(error) => notes.push_str(&format!("Trash item options\tlist rows\tpill buttons\ttrash-options.png\t{error}\n")),
+                },
+                Err(error) => notes.push_str(&format!("Trash item options\tlist rows\tpill buttons\t\t{error}\n")),
+            }
+        }
+    }
+    let mut state = Null;
+    if let Ok(ui) = open_menu(&mut state, "navigation") {
+        let mut page = ui;
+        put(&mut page, "modal", Null);
+        match save_menu(app, dir, "conversation-actions", &page, true) {
+            Ok(()) => notes.push_str("Conversation actions\ticon list rows\tpill buttons\tconversation-actions.png\tok\n"),
+            Err(error) => notes.push_str(&format!("Conversation actions\ticon list rows\tpill buttons\tconversation-actions.png\t{error}\n")),
+        }
+    }
+    notes.push_str("Connection\tlist rows\tlist rows, main-page dropdown\t\tunchanged\n");
+    notes.push_str("Main agent\tlist rows\tlist rows, main-page dropdown\t\tunchanged\n");
+    std::fs::write(std::path::Path::new(dir).join("submenu-forms.txt"), notes).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 pub fn open(state: Json, ui: Json, vault: Vault, root: String) -> Result<()> {
     unsafe { SetProcessDpiAwarenessContext(-4); }
     picture::start();
@@ -1689,6 +2000,13 @@ pub fn open(state: Json, ui: Json, vault: Vault, root: String) -> Result<()> {
     place(&mut app);
     app.draft_lines = draft_lines(&app);
     place(&mut app);
+    if let Ok(dir) = std::env::var("RLLM_PILL_PROOF") {
+        if !dir.is_empty() {
+            let saved = capture_pill_proof(&mut app, &dir);
+            unsafe { DestroyWindow(frame); }
+            return saved;
+        }
+    }
     let draft = app.draft;
     *APP.lock().map_err(|_| "Desktop session is unavailable".to_string())? = Some(app);
     unsafe {
