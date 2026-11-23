@@ -343,8 +343,11 @@ fn tab(label: &str, event: &str, icon: &str) -> Json {
     obj(vec![("label",s(label)),("event",s(event)),("icon",s(icon))])
 }
 fn menu(title: &str, buttons: Vec<Json>) -> Json {
+    // The connection picker and the main-agent picker are the main-page dropdowns.
+    let dropdown=(title=="Connection"&&buttons.iter().any(|b|text(b,"event")=="profile_new"||text(b,"event").starts_with("chat_model:")))
+        ||(title=="Main agent"&&buttons.iter().any(|b|text(b,"event")=="agent_new"||text(b,"event").starts_with("chat_agent:")));
     let mut value=modal(title,vec![],buttons);
-    put(&mut value,"presentation",s("list"));value
+    put(&mut value,"presentation",s(if dropdown{"list"}else{"pills"}));value
 }
 fn app_settings_menu() -> Json {
     menu("App settings",vec![button("Harness rules","harness_settings"),button("Permissions","permissions"),button("LLM connections","connections"),button("Files and storage","storage_settings"),button("Voice and microphone","voice_settings"),button("Appearance","appearance"),button("Resources","resources_edit"),button("Network services","services"),button("Diagnostics","observability")])
@@ -4591,7 +4594,7 @@ mod checks {
             ("model",s("controlled")),
             ("plain",Bool(true)),
             ("stream",Bool(false)),
-            ("hosted_search",s("messages_search_v1")),
+            ("hosted_search",s("messages_search")),
             ("tool_format",s("structured")),
         ])]));
         put(&mut st,"agents",Arr(vec![obj(vec![
@@ -4683,8 +4686,8 @@ mod checks {
     #[test]
     fn settings_menus_are_short_separate_and_preserve_the_thread() {
         let mut st=configured();append(&mut st,"user","Retained conversation").unwrap();put(&mut st,"draft",s("Retained draft"));let active=text(&st,"active");
-        let app=step(st,"config",Null);let pop=get(get(&app,"ui"),"modal");assert_eq!(text(pop,"presentation"),"list");assert_eq!(text(pop,"title"),"App settings");let settings_events=array(pop,"buttons").iter().map(|b|text(b,"event")).collect::<std::collections::BTreeSet<_>>();assert_eq!(settings_events,["harness_settings","permissions","connections","storage_settings","voice_settings","appearance","resources_edit","services","observability"].into_iter().map(str::to_string).collect());assert_eq!(array(pop,"buttons").len(),settings_events.len());assert!(!array(pop,"buttons").iter().any(|b|text(b,"event")=="agents"));
-        let agent=step(get(&app,"state").clone(),"agent_settings",Null);let pop=get(get(&agent,"ui"),"modal");assert_eq!(text(pop,"presentation"),"list");assert_eq!(array(pop,"buttons").len(),6);assert_eq!(text(get(&agent,"state"),"active"),active);assert_eq!(text(get(&agent,"state"),"draft"),"Retained draft");
+        let app=step(st,"config",Null);let pop=get(get(&app,"ui"),"modal");assert_eq!(text(pop,"presentation"),"pills");assert_eq!(text(pop,"title"),"App settings");let settings_events=array(pop,"buttons").iter().map(|b|text(b,"event")).collect::<std::collections::BTreeSet<_>>();assert_eq!(settings_events,["harness_settings","permissions","connections","storage_settings","voice_settings","appearance","resources_edit","services","observability"].into_iter().map(str::to_string).collect());assert_eq!(array(pop,"buttons").len(),settings_events.len());assert!(!array(pop,"buttons").iter().any(|b|text(b,"event")=="agents"));
+        let agent=step(get(&app,"state").clone(),"agent_settings",Null);let pop=get(get(&agent,"ui"),"modal");assert_eq!(text(pop,"presentation"),"pills");assert_eq!(array(pop,"buttons").len(),6);assert_eq!(text(get(&agent,"state"),"active"),active);assert_eq!(text(get(&agent,"state"),"draft"),"Retained draft");
         let settings=step(get(&agent,"state").clone(),"instruction_settings",Null);assert!(array(get(get(&settings,"ui"),"modal"),"buttons").iter().any(|b|text(b,"event")=="investigation_preferences"));let skills=step(get(&agent,"state").clone(),"skills",Null);assert!(!array(get(get(&skills,"ui"),"modal"),"buttons").iter().any(|b|text(b,"event")=="investigation_preferences"));
         let mut old=get(&agent,"state").clone();put(&mut old,"page",s("config"));put(&mut old,"dialog",Null);let restored=step(old,"resume",Null);assert_eq!(text(get(&restored,"ui"),"page"),"chat");assert_eq!(text(get(get(&restored,"ui"),"modal"),"title"),"App settings");
     }
