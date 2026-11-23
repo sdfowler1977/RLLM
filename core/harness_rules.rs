@@ -13,8 +13,9 @@ fn role(st:&Json)->String{
  let r=text(&active(st),"role");if r.is_empty()||r=="any"{if get(st,"task_run")==&Null{"orchestrator".into()}else{"any".into()}}else{r}
 }
 pub(super) fn readonly(t:&str,a:&Json)->bool{
- ["list","read","search","inspect","compare","web_search","phone_list","phone_read","drive_list","drive_read","script_check","observation","observations","import"].contains(&t)||t=="hypotheses"||t=="experiments"||(t=="web_read"&&get(a,"capture")==&Null)
+ ["list","read","search","inspect","compare","web_search","phone_list","phone_read","phone_stat","phone_search","drive_list","drive_read","script_check","observation","observations","import","device_shell_status","device_shell_list","device_shell_stat","device_shell_read"].contains(&t)||t=="hypotheses"||t=="experiments"||(t=="web_read"&&get(a,"capture")==&Null)
 }
+pub(super) fn phone_folder_tool(tool:&str)->bool{matches!(tool,"phone_stat"|"phone_search"|"phone_create"|"phone_create_file"|"phone_write"|"phone_update"|"phone_mkdir"|"phone_create_folder"|"phone_rename"|"phone_move"|"phone_copy")}
 fn target_match(prefix:&str,value:&str)->bool{
  if prefix.is_empty(){return true;}if value.is_empty(){return false;}
  if prefix.starts_with("http://")||prefix.starts_with("https://"){
@@ -37,7 +38,7 @@ pub(super) fn check(st:&Json,t:&str,a:&Json,model_origin:bool)->Result<()>{
  version(st,false)?;
  permissions::check(st,t)?;
  if model_origin&&text(&active(st),"role")=="nonwrite"&&!readonly(t,a)&&t!="model"{return Err("This subagent has a user-configured non-writing role; this operation is not read-only".into());}
- if ["inspect","compare"].contains(&t)&&text(a,"content")=="complete_digest"{for k in if t=="compare"{vec!["path","other"]}else{vec!["path"]}{check(st,"read",&obj(vec![("path",get(a,k).clone())]),model_origin)?;}} if t=="reconstruct"{let source=reconstruction::web_authority(st,a,model_origin)?;if source!=Null{check(st,&text(&source,"tool"),get(&source,"args"),model_origin)?;}else{check(st,"read",&obj(vec![("path",get(a,"path").clone())]),model_origin)?;}check(st,"write",&obj(vec![("path",get(a,"output").clone())]),model_origin)?;}let(d,r)=decision(st,t,a);if d=="deny"{return Err(format!("Harness rule {} denies {t}: {}",text(&r,"id"),text(&r,"text")));}if t=="web_read"&&get(a,"capture")!=&Null{check(st,"capture",get(a,"capture"),model_origin)?;}Ok(())
+ if ["inspect","compare"].contains(&t)&&text(a,"content")=="complete_digest"{for k in if t=="compare"{vec!["path","other"]}else{vec!["path"]}{check(st,"read",&obj(vec![("path",get(a,k).clone())]),model_origin)?;}} if t=="reconstruct"{let source=reconstruction::web_authority(st,a,model_origin)?;if source!=Null{check(st,&text(&source,"tool"),get(&source,"args"),model_origin)?;}else{check(st,"read",&obj(vec![("path",get(a,"path").clone())]),model_origin)?;}check(st,"write",&obj(vec![("path",get(a,"output").clone())]),model_origin)?;}let(d,r)=decision(st,t,a);if d=="deny"{return Err(format!("Harness rule {} denies {t}: {}",text(&r,"id"),text(&r,"text")));}if t=="web_read"&&get(a,"capture")!=&Null{check(st,"capture",get(a,"capture"),model_origin)?;}if matches!(t,"device_shell_connect"|"device_shell_pair"){harness::device_shell_host_args(st,t,a)?;}Ok(())
 }
 pub(super) fn permits_hosted_search(st:&Json,endpoint:&str)->bool{
  let args=obj(vec![("endpoint",s(endpoint)),("url",s(endpoint))]);
@@ -112,7 +113,56 @@ pub(super) fn reported(st:&mut Json,reply:&str)->Result<bool>{
  let source=match text(c,"source").as_str(){"project"=>array(st,"harness_project").iter().map(|r|text(r,"text")).collect::<Vec<_>>(),"memory"=>memory_sources(st),_=>return Err("Conflict source must be current project instructions or memory".into())};if !source.iter().any(|t|t.contains(&quote)){return Err("Conflict quote is absent from the current exact source; no rule changed".into());}
  let token=id()?;put(st,"harness_conflict",obj(vec![("id",s(&token)),("rule",rule),("quote",s(&quote)),("source",get(c,"source").clone()),("binding",conflict_binding(st))]));put(st,"dialog",s("harness_conflict"));put(st,"busy",Bool(false));put(st,"stream_text",Null);put(st,"notice",s("A lower-level instruction may conflict with your harness rule. Clarify before continuing; no operation ran."));Ok(true)
 }
+#[derive(Clone)]
+struct PhoneReview{tool:String,tree:String,mode:String,granted:bool}
+fn phone_reviews()->&'static std::sync::Mutex<Option<PhoneReview>>{static CELL:std::sync::OnceLock<std::sync::Mutex<Option<PhoneReview>>>=std::sync::OnceLock::new();CELL.get_or_init(||std::sync::Mutex::new(None))}
+fn phone_review_of(v:&Json)->(String,String,bool){(text(v,"reviewed_tree"),text(v,"reviewed_phone_mode"),boolean(v,"reviewed_phone_granted"))}
+fn remember_phone_folder(st:&mut Json){
+ let tool=text(get(st,"pending"),"tool");
+ let Ok(mut slot)=phone_reviews().lock() else{return;};
+ if phone_folder_tool(&tool){
+  let mut pending=get(st,"pending").clone();
+  if get(&pending,"reviewed_tree")==&Null{
+   put(&mut pending,"reviewed_tree",s(&text(st,"phone_uri")));
+   put(&mut pending,"reviewed_phone_mode",s(&text(st,"phone_access_mode")));
+   put(&mut pending,"reviewed_phone_granted",Bool(boolean(st,"phone_access_granted")));
+   put(st,"pending",pending.clone());
+  }
+  *slot=Some(PhoneReview{tool,tree:text(&pending,"reviewed_tree"),mode:text(&pending,"reviewed_phone_mode"),granted:boolean(&pending,"reviewed_phone_granted")});
+  return;
+ }
+ // The revision callback has no pending tool, so the process slot cannot
+ // survive this refresh. The in-flight revision keeps the review the user
+ // already gave; later backup and write effects are clones of that record.
+ if let Some(binding)=slot.as_ref(){
+  if binding.tool=="phone_update"{
+   let phase=text(get(st,"phone_revision"),"phase");
+   if matches!(phase.as_str(),"read"|"backup"|"write")&&get(get(st,"phone_revision"),"reviewed_tree")==&Null{
+    let mut revision=get(st,"phone_revision").clone();
+    put(&mut revision,"reviewed_tree",s(&binding.tree));
+    put(&mut revision,"reviewed_phone_mode",s(&binding.mode));
+    put(&mut revision,"reviewed_phone_granted",Bool(binding.granted));
+    put(st,"phone_revision",revision);
+   }
+  }
+ }
+ *slot=None;
+}
+fn phone_folder_effect(st:&Json,effect:&Json)->Result<()>{
+ let kind=text(effect,"kind");
+ let tool=if kind=="tool"{text(effect,"tool")}else if kind=="phone_revision"{"phone_update".into()}else{return Ok(());};
+ if !phone_folder_tool(&tool){return Ok(());}
+ let record=get(st,"phone_revision");
+ let record_open=kind=="phone_revision"&&get(record,"reviewed_tree")!=&Null&&matches!(text(record,"phase").as_str(),"read"|"backup"|"write");
+ let carried=get(effect,"reviewed_tree")!=&Null;
+ let (tree,mode,granted)=if carried{phone_review_of(effect)}else if record_open{phone_review_of(record)}else{let Ok(slot)=phone_reviews().lock() else{return Ok(());};let Some(binding)=slot.as_ref() else{return Ok(());};if binding.tool!=tool{return Ok(());}(binding.tree.clone(),binding.mode.clone(),binding.granted)};
+ let executed=if kind=="phone_revision"||get(effect,"tree")!=&Null{text(effect,"tree")}else{text(st,"phone_uri")};
+ let selected=if kind=="phone_revision"{text(st,"phone_uri")}else{executed.clone()};
+ if executed!=tree||selected!=tree||text(st,"phone_access_mode")!=mode||boolean(st,"phone_access_granted")!=granted{return Err("Device folder changed after review; review this operation again".into());}
+ Ok(())
+}
 pub(super) fn effect_check(st:&Json,effect:&Json,model_origin:bool)->Result<()>{
+ phone_folder_effect(st,effect)?;
  let kind=text(effect,"kind");
  if kind=="tool"{return check(st,&text(effect,"tool"),get(effect,"args"),model_origin);}
  if kind=="network"{let purpose=text(effect,"purpose");let endpoint=wire_target(effect);let mut args=obj(vec![("endpoint",s(&endpoint)),("url",s(&endpoint))]);
@@ -181,7 +231,7 @@ pub(super) fn event(st:&mut Json,a:&str,inputs:&Json)->Result<Json>{
 
 fn scalar(v:&Json,key:&str)->String{match get(v,key){Str(v)|Num(v)=>v.clone(),Bool(v)=>v.to_string(),_=>String::new()}}
 fn clear_form(st:&mut Json){put(st,"form_dialog",Null);put(st,"form_inputs",Null);}
-pub(super) fn identity_refresh(st:&mut Json){let identity=obj(vec![("root",get(st,"approval_root").clone()),("identity",get(st,"approval_root_identity").clone())]);if get(st,"harness_form_root")!=&identity{clear_form(st);put(st,"harness_form_root",identity);}refresh(st);}
+pub(super) fn identity_refresh(st:&mut Json){let identity=obj(vec![("root",get(st,"approval_root").clone()),("identity",get(st,"approval_root_identity").clone())]);if get(st,"harness_form_root")!=&identity{clear_form(st);put(st,"harness_form_root",identity);}refresh(st);remember_phone_folder(st);}
 fn project_record(st:&Json)->Json{let p=policy(st);array(&p,"projects").into_iter().find(|r|get(r,"root")==get(st,"approval_root")&&get(r,"identity")==get(st,"approval_root_identity")).unwrap_or(Null)}
 pub(super) fn project_feature(st:&Json,name:&str)->Json{let record=project_record(st);if record==Null{Null}else{get(&record,name).clone()}}
 pub(super) fn store_project_feature(st:&mut Json,name:&str,value:Json)->Result<()>{
@@ -249,7 +299,7 @@ pub(super) fn sha256(bytes:&[u8])->String{
  for block in 0..blocks{let mut data=[0u8;64];for(i,v)in data.iter_mut().enumerate(){let index=block*64+i;*v=if index<bytes.len(){bytes[index]}else if index==bytes.len(){0x80}else if index>=blocks*64-8{((bytes.len()as u64*8)>>((blocks*64-1-index)*8))as u8}else{0};}let mut w=[0u32;64];for i in 0..16{w[i]=u32::from_be_bytes(data[i*4..i*4+4].try_into().unwrap());}for i in 16..64{let s0=w[i-15].rotate_right(7)^w[i-15].rotate_right(18)^(w[i-15]>>3);let s1=w[i-2].rotate_right(17)^w[i-2].rotate_right(19)^(w[i-2]>>10);w[i]=w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1);}let[mut a,mut b,mut c,mut d,mut e,mut f,mut g,mut x]=h;for i in 0..64{let t1=x.wrapping_add(e.rotate_right(6)^e.rotate_right(11)^e.rotate_right(25)).wrapping_add((e&f)^(!e&g)).wrapping_add(K[i]).wrapping_add(w[i]);let t2=(a.rotate_right(2)^a.rotate_right(13)^a.rotate_right(22)).wrapping_add((a&b)^(a&c)^(b&c));x=g;g=f;f=e;e=d.wrapping_add(t1);d=c;c=b;b=a;a=t1.wrapping_add(t2);}for(i,v)in[a,b,c,d,e,f,g,x].iter().enumerate(){h[i]=h[i].wrapping_add(*v);}}
  h.iter().map(|v|format!("{v:08x}")).collect()
 }
-#[cfg(test)]mod hierarchy_tests{use super::*;#[test]fn digest_vectors(){assert_eq!(sha256(b""),"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");assert_eq!(sha256(b"abc"),"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");}#[test]fn target_boundaries(){assert!(target_match("/docs","/docs/a"));assert!(!target_match("/docs","/docs-other/a"));assert!(!target_match("https://one.test","https://two.test"));assert!(target_match("https://one.test/a","https://one.test/a/b?q=1"));}}
+#[cfg(any(test, rllm_module_tests))]mod hierarchy_tests{use super::*;#[cfg_attr(not(rllm_module_tests), test)]fn digest_vectors(){assert_eq!(sha256(b""),"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");assert_eq!(sha256(b"abc"),"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");}#[cfg_attr(not(rllm_module_tests), test)]fn target_boundaries(){assert!(target_match("/docs","/docs/a"));assert!(!target_match("/docs","/docs-other/a"));assert!(!target_match("https://one.test","https://two.test"));assert!(target_match("https://one.test/a","https://one.test/a/b?q=1"));}#[cfg(rllm_module_tests)]#[no_mangle]pub extern "C" fn x2_harness_rules_hierarchy_tests(){digest_vectors();target_boundaries();}}
 
 // Public worker entry uses the live user policy; no caller-supplied policy is trusted.
 pub(super) fn worker_policy(v:&Json)->Result<Json>{let global=gateway_current(&Null)?;gateway_check(&global,&text(v,"tool"),get(v,"args"))?;Ok(global)}
@@ -257,14 +307,73 @@ pub(super) fn worker_review_required(global:&Json,v:&Json)->bool{let state=obj(v
 
 pub(super) fn storage_tool(method:&str,purpose:&str)->&'static str{match method{"GET"|"HEAD"=>"drive_read","PROPFIND"=>"drive_list","MKCOL"=>"drive_folder",_=>if purpose.contains("update"){"drive_update"}else{"drive_create"}}}
 
-#[cfg(test)]mod intent_tests{
+#[cfg(any(test, rllm_module_tests))]mod intent_tests{
  use super::*;
  fn state(scope:&str)->Json{obj(vec![("harness_policy",obj(vec![("schema",Num("1".into())),("rules",Arr(vec![obj(vec![("id",s("intent")),("text",s("Current applicable denial")),("scope",s(scope)),("decision",s("deny"))])]))]))])}
- #[test]fn actual_native_storage_and_revision_intents(){
+ #[cfg_attr(not(rllm_module_tests), test)]fn actual_native_storage_and_revision_intents(){
   let st=state("write");let upload=obj(vec![("kind",s("network")),("host",s("drive.test")),("port",Num("443".into())),("tls",Bool(true)),("wire",s("PUT /folder/file.json HTTP/1.1\r\n\r\n")),("purpose",s("saved"))]);assert!(effect_check(&st,&upload,false).is_err());
   let mut get=upload.clone();put_field(&mut get,"wire",s("GET /folder/file.json HTTP/1.1\r\n\r\n"));put_field(&mut get,"purpose",s("saved_verify"));assert!(effect_check(&st,&get,false).is_ok());
   for phase in ["read","backup","write"]{let e=obj(vec![("kind",s("phone_revision")),("phase",s(phase)),("path",s("note.txt"))]);assert_eq!(effect_check(&st,&e,false).is_err(),phase!="read");}
   assert!(effect_check(&state("read"),&obj(vec![("kind",s("wallpaper_picker"))]),false).is_err());
+ }
+ fn reviewed_phone_update(folder:&str)->Json{
+  let mut st=obj(vec![("phone_access_mode",s("limited")),("phone_uri",s(folder)),("phone_access_granted",Bool(true)),("pending",obj(vec![("tool",s("phone_update")),("args",obj(vec![("path",s("notes/a.txt")),("content",s("next"))]))]))]);
+  identity_refresh(&mut st);
+  assert_eq!(text(get(&st,"pending"),"reviewed_tree"),folder);
+  put(&mut st,"pending",Null);
+  put(&mut st,"active_tool",s("phone_update"));
+  put(&mut st,"phone_revision",obj(vec![("phase",s("read")),("ticket",s("job")),("tree",s(folder)),("path",s("notes/a.txt")),("content",s("next"))]));
+  st
+ }
+ fn revision_effect(st:&Json,phase:&str)->Json{let mut effect=get(st,"phone_revision").clone();put_field(&mut effect,"kind",s("phone_revision"));put_field(&mut effect,"phase",s(phase));effect}
+ #[cfg_attr(not(rllm_module_tests), test)]
+ fn phone_update_review_follows_revision_callback(){
+  let original="content://tree/reviewed";
+  let mut idle=obj(vec![]);identity_refresh(&mut idle);
+  let mut shifted=reviewed_phone_update(original);
+  put(&mut shifted,"phone_uri",s("content://tree/other"));
+  put(&mut shifted,"phone_access_mode",s("off"));
+  put(&mut shifted,"phone_access_granted",Bool(false));
+  identity_refresh(&mut shifted);
+  let record=get(&shifted,"phone_revision");
+  assert_eq!(text(record,"reviewed_tree"),original);
+  assert_eq!(text(record,"reviewed_phone_mode"),"limited");
+  assert!(boolean(record,"reviewed_phone_granted"));
+  for phase in ["backup","write"]{
+   let bare=obj(vec![("kind",s("phone_revision")),("phase",s(phase)),("tree",s("content://tree/other")),("path",s("notes/a.txt")),("content",s("next"))]);
+   let err=effect_check(&shifted,&bare,false).unwrap_err();
+   assert!(err.contains("Device folder changed after review"),"{phase} {err}");
+   let err=effect_check(&shifted,&revision_effect(&shifted,phase),false).unwrap_err();
+   assert!(err.contains("Device folder changed after review"),"{phase} carried {err}");
+  }
+  let mut folder=reviewed_phone_update(original);
+  put(&mut folder,"phone_uri",s("content://tree/other"));
+  identity_refresh(&mut folder);
+  let err=effect_check(&folder,&revision_effect(&folder,"write"),false).unwrap_err();
+  assert!(err.contains("Device folder changed after review"),"folder {err}");
+  let mut access=reviewed_phone_update(original);
+  put(&mut access,"phone_access_mode",s("off"));
+  identity_refresh(&mut access);
+  let err=effect_check(&access,&revision_effect(&access,"backup"),false).unwrap_err();
+  assert!(err.contains("Device folder changed after review"),"access {err}");
+  let mut grant=reviewed_phone_update(original);
+  put(&mut grant,"phone_access_granted",Bool(false));
+  identity_refresh(&mut grant);
+  let err=effect_check(&grant,&revision_effect(&grant,"write"),false).unwrap_err();
+  assert!(err.contains("Device folder changed after review"),"grant {err}");
+  let mut kept=reviewed_phone_update(original);
+  identity_refresh(&mut kept);
+  for phase in ["read","backup","write"]{assert!(effect_check(&kept,&revision_effect(&kept,phase),false).is_ok(),"{phase}");}
+  let unrelated=obj(vec![("phone_access_mode",s("off")),("phone_uri",s("content://tree/other")),("phone_access_granted",Bool(false))]);
+  let bare=obj(vec![("kind",s("phone_revision")),("phase",s("write")),("tree",s("content://tree/other")),("path",s("notes/a.txt"))]);
+  assert!(effect_check(&unrelated,&bare,false).is_ok(),"a revision with no review binding still runs");
+  identity_refresh(&mut idle);
+ }
+ #[cfg(rllm_module_tests)]
+ #[no_mangle]
+ pub extern "C" fn x2_harness_rules_tests(){
+  actual_native_storage_and_revision_intents();
+  phone_update_review_follows_revision_callback();
  }
  fn put_field(v:&mut Json,key:&str,value:Json){super::put(v,key,value)}
 }
