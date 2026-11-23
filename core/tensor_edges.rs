@@ -40,9 +40,10 @@ impl<'a> Cursor<'a> {
 /// List nodes and edges in a caller-supplied graph record.
 ///
 /// A record that does not begin with `TGR1` and both counts is not identified.
-/// An edge index at or past the declared node count is not resolved. The
-/// returned text ends with `Operators were not executed.` when a record was
-/// identified.
+/// An edge index at or past the declared node count is not resolved. A source
+/// index read before the destination index is listed, then the record is
+/// reported as ending early. The returned text ends with `Operators were not
+/// executed.` when a record was identified.
 pub fn tensor_edges(bytes: &[u8]) -> String {
     let Some((mut cursor, node_count, edge_count)) = open(bytes) else {
         return "A tensor graph record was not identified.".to_string();
@@ -132,6 +133,11 @@ fn take_edges(cursor: &mut Cursor<'_>, count: u16, nodes: u16) -> Listed {
             };
         };
         let Some(to) = cursor.u16() else {
+            if lines.len() < LIST_LIMIT {
+                lines.push(partial_edge(index, from, nodes));
+            } else {
+                omitted = true;
+            }
             return Listed {
                 lines,
                 omitted,
@@ -156,6 +162,14 @@ fn edge_line(index: usize, from: u16, to: u16, nodes: u16) -> String {
         format!("edge {index} from {from} to {to}: the edge was not resolved")
     } else {
         format!("edge {index} from {from} to {to}")
+    }
+}
+
+fn partial_edge(index: usize, from: u16, nodes: u16) -> String {
+    if from >= nodes {
+        format!("edge {index} from {from}: the edge was not resolved")
+    } else {
+        format!("edge {index} from {from}")
     }
 }
 
@@ -233,6 +247,18 @@ mod checks {
         assert_eq!(
             report,
             "nodes 1\nedges 1\nnode 0 only\nedge 0 from 0 to 4: the edge was not resolved\nOperators were not executed.\n"
+        );
+    }
+
+    #[test]
+    fn a_source_index_without_a_destination_is_listed() {
+        let mut bytes = record(&["only"], &[]);
+        bytes[6] = 1;
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        let report = tensor_edges(&bytes);
+        assert_eq!(
+            report,
+            "nodes 1\nedges 1\nnode 0 only\nedge 0 from 0\nThe record ended before every declared edge was read.\nOperators were not executed.\n"
         );
     }
 
