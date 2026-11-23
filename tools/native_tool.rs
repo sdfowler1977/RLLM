@@ -270,6 +270,21 @@ fn large_integer_not_equal_to_rounded_float() {
 }
 
 #[test]
+fn i64_max_does_not_equal_two_to_the_63() {
+    // {'passed': 2**63-1, 'count': float(2**63)} -> AssertionError
+    assert_eq!(
+        executed_count(&[(
+            "passed",
+            FieldValue::Int(9223372036854775807),
+        ), (
+            "count",
+            FieldValue::Float(9223372036854775808.0),
+        )]),
+        Err(CountFault::Assertion)
+    );
+}
+
+#[test]
 fn passed_true_rejected() {
     // {'passed': True} -> AssertionError
     assert_eq!(
