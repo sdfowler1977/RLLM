@@ -1,6 +1,7 @@
 //! Host and path lines from saved session text.
 //! The scan requires the entries marker and reads literal `"url": "..."` values.
 //! It keeps 16 http and https hosts. A further host is named as omitted.
+//! The listed host count is calculated from those hosts.
 //! It is not a document parser, names are not resolved, and the session is not replayed.
 #![forbid(unsafe_code)]
 
@@ -15,7 +16,7 @@ const CLOSING: &str = "The session was not replayed.";
 ///
 /// Literal `"url": "..."` values are read when `"entries"` is present.
 /// At most 16 http and https hosts are listed. A further host is not listed.
-/// The report ends with `The session was not replayed.`
+/// The report names how many hosts were listed, then ends with `The session was not replayed.`
 /// Text without the entries marker is refused.
 pub fn session_env(bytes: &[u8]) -> String {
     let Some(text) = std::str::from_utf8(bytes).ok() else {
@@ -36,6 +37,7 @@ pub fn session_env(bytes: &[u8]) -> String {
         report.push_str(LATER);
         report.push('\n');
     }
+    report.push_str(&format!("hosts {}\n", places.len()));
     report.push_str(CLOSING);
     report.push('\n');
     report
@@ -189,7 +191,7 @@ mod checks {
         let report = session_env(br#"{"entries":[{"request":{"url": "https://example.test/a"}}]}"#);
         assert_eq!(
             report,
-            "host example.test\npath /a\nThe session was not replayed.\n"
+            "host example.test\npath /a\nhosts 1\nThe session was not replayed.\n"
         );
     }
 
@@ -205,6 +207,7 @@ mod checks {
             expected.push_str(&format!("host h{index}.test\npath /p{index}\n"));
         }
         expected.push_str("later hosts were not listed\n");
+        expected.push_str("hosts 16\n");
         expected.push_str("The session was not replayed.\n");
         assert_eq!(report, expected);
         assert!(!report.contains("h17.test"));
@@ -242,7 +245,18 @@ mod checks {
         );
         assert_eq!(
             report,
-            "host example.test\npath /a/b\nThe session was not replayed.\n"
+            "host example.test\npath /a/b\nhosts 1\nThe session was not replayed.\n"
+        );
+    }
+
+    #[test]
+    fn two_declared_hosts_are_counted() {
+        let report = session_env(
+            br#"{"entries":[{"url": "https://example.test/a"},{"url": "http://example.test:8080/a/b?x=1#y"}]}"#,
+        );
+        assert_eq!(
+            report,
+            "host example.test\npath /a\nhost example.test\npath /a/b\nhosts 2\nThe session was not replayed.\n"
         );
     }
 }
