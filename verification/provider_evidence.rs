@@ -617,7 +617,7 @@ fn controlled_profile() -> Value {
         ("model".into(), s("controlled")),
         ("plain".into(), b(true)),
         ("stream".into(), b(false)),
-        ("hosted_search".into(), s("messages_search_v1")),
+        ("hosted_search".into(), s("messages_search")),
         ("tool_format".into(), s("structured")),
     ])
 }
