@@ -1,15 +1,17 @@
-//! Eight Goertzel bins of little-endian signed 16-bit mono PCM.
+//! Nine Goertzel bins of little-endian signed 16-bit mono PCM.
+//! Calculated bins are 0 Hz and equal integer steps from rate/16 through rate/2.
+//! The next bin, at rate/32, is not yet calculated. Every other frequency stays unavailable.
 //! The samples are not played.
 
 const NOT_ENOUGH: &str = "not enough samples. The samples were not played.";
-const BIN_COUNT: u32 = 8;
+const BIN_COUNT: u32 = 9;
 
 pub fn spectrum_bins(pcm: &[u8], rate: u32) -> String {
     if pcm.len() / 2 < 16 {
         return NOT_ENOUGH.to_string();
     }
     let mut lines = Vec::with_capacity(BIN_COUNT as usize + 1);
-    for index in 1..=BIN_COUNT {
+    for index in 0..BIN_COUNT {
         let hz = bin_hz(rate, index);
         let energy = magnitude_integer(goertzel(pcm, rate, hz));
         lines.push(format!("bin {hz} energy {energy}"));
@@ -18,7 +20,8 @@ pub fn spectrum_bins(pcm: &[u8], rate: u32) -> String {
     lines.join("\n")
 }
 
-/// Frequency of bin `index` (1..=8): equal integer steps from rate/16 through rate/2.
+/// Frequency of bin `index` (0..=8): 0 Hz, then equal integer steps from rate/16 through rate/2.
+/// The next bin, at rate/32, is not yet calculated. Every other frequency stays unavailable.
 fn bin_hz(rate: u32, index: u32) -> u32 {
     ((u64::from(index) * u64::from(rate)) / 16) as u32
 }
@@ -98,13 +101,13 @@ mod tests {
         let rate = 16_000u32;
         let report = spectrum_bins(&[0u8; 32], rate);
         let bins = listed_bins(&report);
-        assert_eq!(bins.len(), 8, "{report}");
-        let expected: Vec<(u32, u64)> = (1..=8).map(|index| (index * rate / 16, 0)).collect();
+        assert_eq!(bins.len(), 9, "{report}");
+        let expected: Vec<(u32, u64)> = (0..=8).map(|index| (index * rate / 16, 0)).collect();
         assert_eq!(bins, expected, "{report}");
         assert!(!report.contains("not enough samples"), "{report}");
         let zero_rate = spectrum_bins(&[0u8; 32], 0);
         let zero_bins = listed_bins(&zero_rate);
-        assert_eq!(zero_bins, vec![(0, 0); 8], "{zero_rate}");
+        assert_eq!(zero_bins, vec![(0, 0); 9], "{zero_rate}");
     }
 
     #[test]
@@ -121,7 +124,7 @@ mod tests {
         }
         let report = spectrum_bins(&pcm, rate);
         let bins = listed_bins(&report);
-        assert_eq!(bins.len(), 8, "{report}");
+        assert_eq!(bins.len(), 9, "{report}");
         let (best_hz, best_energy) = bins
             .iter()
             .copied()
@@ -139,6 +142,26 @@ mod tests {
             1,
             "{report}"
         );
+    }
+
+    #[test]
+    fn direct_current_on_existing_tone_bytes() {
+        let rate = 16_000u32;
+        let near = 4_050u32;
+        let count = 160usize;
+        let amplitude = 8_000.0f64;
+        let mut pcm = Vec::with_capacity(count * 2);
+        for index in 0..count {
+            let angle = 2.0 * std::f64::consts::PI * (near as f64) * (index as f64) / (rate as f64);
+            let sample = (amplitude * angle.sin()).round() as i16;
+            pcm.extend_from_slice(&sample.to_le_bytes());
+        }
+        let report = spectrum_bins(&pcm, rate);
+        let bins = listed_bins(&report);
+        assert_eq!(bins.first().copied(), Some((0, 7_834)), "{report}");
+        let upper: Vec<u32> = bins.iter().skip(1).map(|(hz, _)| *hz).collect();
+        let expected: Vec<u32> = (1..=8).map(|index| index * rate / 16).collect();
+        assert_eq!(upper, expected, "{report}");
     }
 
     #[test]
