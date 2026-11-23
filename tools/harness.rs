@@ -8,6 +8,110 @@
 // output/checks/current-regression.json, one name and code per group, including
 // when a group fails. Code 0 is written only for a group that passed. The bare
 // run and `harness <group>` do not write either record.
+#[cfg(test)]
+use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::process::Command;
+
+#[cfg(test)]
+fn scene_twin_compiler() -> PathBuf {
+    std::env::var_os("RUSTC")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("CLIENT_RUST").map(|dir| PathBuf::from(dir).join("bin/rustc")))
+        .unwrap_or_else(|| PathBuf::from("rustc"))
+}
+
+// The compiler's own text. Callers fail the test with this string. A failed
+// build is never reported as "not built", which would let the test return
+// without running.
+#[cfg(test)]
+fn compile_scene_twin(source: &Path, built: &Path) -> Result<(), String> {
+    let rustc = scene_twin_compiler();
+    let mut command = Command::new(&rustc);
+    command.arg("--edition=2021");
+    // The linux twin link uses this flag. On other hosts it is rejected before
+    // the fixture is type-checked, which would hide the compiler diagnostic.
+    if cfg!(target_os = "linux") {
+        command.args(["-C", "linker-features=-lld"]);
+    }
+    match command.arg(source).arg("-o").arg(built).output() {
+        Ok(result) if result.status.success() => Ok(()),
+        Ok(result) => {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            Err(format!("could not build the scene twin: {stderr}{stdout}"))
+        }
+        Err(error) => Err(format!("could not start the compiler for the scene twin: {error}")),
+    }
+}
+
+#[cfg(test)]
+fn demand_scene_twin<T>(built: Result<T, String>) -> T {
+    match built {
+        Ok(value) => value,
+        Err(error) => panic!("{error}"),
+    }
+}
+
+#[cfg(test)]
+mod scene_twin_fixture_failure {
+    use super::{compile_scene_twin, demand_scene_twin};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    struct Scratch(std::path::PathBuf);
+    impl Scratch {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "rllm-harness-fixture-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(message) = payload.downcast_ref::<String>() {
+            return message.clone();
+        }
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            return (*message).to_string();
+        }
+        "non-text panic".to_string()
+    }
+
+    #[test]
+    fn a_failed_scene_twin_build_fails_with_the_compiler_error() {
+        let scratch = Scratch::new();
+        let source = scratch.0.join("scene.rs");
+        let built = scratch.0.join("scene-build");
+        std::fs::write(&source, "fn main() { fixture_build_error(); }\n").unwrap();
+        let error = compile_scene_twin(&source, &built)
+            .expect_err("a fixture the compiler rejects must fail the build");
+        assert!(error.starts_with("could not build the scene twin:"), "{error}");
+        assert!(
+            error.contains("fixture_build_error"),
+            "the build error did not carry the compiler diagnostic: {error}"
+        );
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = demand_scene_twin(compile_scene_twin(&source, &built));
+        }));
+        let message = panic_text(panicked.expect_err("a failed fixture build must fail the caller"));
+        assert!(message.contains("could not build the scene twin:"), "{message}");
+        assert!(message.contains("fixture_build_error"), "{message}");
+    }
+}
+
+#[cfg(unix)]
+mod unix_runner {
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::os::unix::io::AsRawFd;
@@ -1682,12 +1786,10 @@ struct PollFd {
     revents: i16,
 }
 
-// What a group runs, or the reason it does not run. A group's own source file
-// decides which leg the group owns: a native group owns
-// verification/<name>.rs and runs as the twin built from that source, and a
-// python group owns verification/<name>.py and runs as that script. The two
-// are never interchanged, so the runner never reports a result for a group
-// under a leg that group does not own.
+// What a group runs, or the reason it does not run. A native group owns
+// verification/<name>.rs and runs as the twin built from that source. A group
+// whose only source is verification/<name>.py does not run: a native twin is
+// required, and the runner does not launch Python.
 enum GroupLaunch {
     Ready(Command),
     Refused(String),
@@ -1711,11 +1813,11 @@ fn leg_source(root: &Path, name: &str) -> (String, SourceLanguage) {
 }
 
 // The command that runs a group, or the reason the group is not run. A built
-// twin at output/verification/<name> is the group. When no twin is built the
-// group's own source decides: a native group is refused, because the twin is
-// the native leg and the runner does not run a native group under another
-// language's script; a python group runs its own script; a group with no
-// source is refused by name.
+// twin at output/verification/<name> is the group. When no twin is built, a
+// native source is refused until that twin exists. A group with no native
+// source and only verification/<name>.py is refused, because a native twin is
+// required and the runner does not launch Python. A group with no source of
+// either kind is refused by name.
 fn group_command(root: &Path, name: &str, arguments: &[String]) -> GroupLaunch {
     let twin = root.join("output/verification").join(name);
     if twin.is_file() {
@@ -1728,11 +1830,10 @@ fn group_command(root: &Path, name: &str, arguments: &[String]) -> GroupLaunch {
             "{name} NOT EXECUTED (missing native twin: output/verification/{name}; build it with bash tools/build-verification.sh)"
         ));
     }
-    let script = root.join(format!("verification/{name}.py"));
-    if script.is_file() {
-        let mut command = Command::new("python3");
-        command.arg(&script).args(arguments).current_dir(root).process_group(0);
-        return GroupLaunch::Ready(command);
+    if root.join(format!("verification/{name}.py")).is_file() {
+        return GroupLaunch::Refused(format!(
+            "{name} NOT EXECUTED (a native twin is required)"
+        ));
     }
     GroupLaunch::Refused(format!(
         "{name} NOT EXECUTED (no group source: verification/{name}.rs or verification/{name}.py)"
@@ -2728,7 +2829,7 @@ fn requested_group_refusals(names: &[String]) -> Vec<String> {
     names.iter().filter_map(|name| requested_group_refusal(name)).collect()
 }
 
-fn main() {
+pub(crate) fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("sweep") {
         let code = match run_sweep(&args[1..]) {
@@ -3584,8 +3685,8 @@ mod checks {
         }
     }
 
-    // A group whose own source is a python leg still runs under python3, and
-    // the script it runs is the one that exists.
+    // A group whose only source is verification/<name>.py is refused. The
+    // runner does not launch Python, and a native twin is required.
     #[test]
     fn a_python_group_is_started_with_python3_on_its_own_script() {
         let dir = TempDir::new();
@@ -3594,12 +3695,13 @@ mod checks {
         let script = root.join("verification/scene.py");
         std::fs::write(&script, "print(1)\n").unwrap();
         match group_command(root, "scene", &[]) {
-            GroupLaunch::Ready(command) => {
-                assert_eq!(command.get_program().to_string_lossy(), "python3", "a python group runs under python3");
-                let arguments: Vec<String> = command.get_args().map(|argument| argument.to_string_lossy().to_string()).collect();
-                assert_eq!(arguments, vec![script.display().to_string()], "the python group runs its own script");
+            GroupLaunch::Refused(message) => {
+                assert!(message.contains("scene"), "the refusal names the group: {message}");
+                assert!(message.contains("a native twin is required"), "the refusal requires a native twin: {message}");
             }
-            GroupLaunch::Refused(message) => panic!("a python group was refused: {message}"),
+            GroupLaunch::Ready(command) => {
+                panic!("a python-only group was started as {}", command.get_program().to_string_lossy())
+            }
         }
     }
 
@@ -3924,15 +4026,131 @@ mod checks {
         assert_eq!(std::fs::read(&record).unwrap(), original, "failing sweep changed the record");
     }
 
+    // Ready when the linux twin was built. NotBuilt when this host does not
+    // compile that twin and the missing-twin contract held. A compiler failure
+    // is an error carrying the compiler's own text, so a caller cannot treat
+    // it as a skip.
+    enum SceneTwinBuild {
+        Ready,
+        #[cfg(not(target_os = "linux"))]
+        NotBuilt,
+    }
+
+    fn build_scene_twin(root: &Path, fixture: &str) -> Result<SceneTwinBuild, String> {
+        std::fs::create_dir_all(root.join("verification")).unwrap();
+        std::fs::create_dir_all(root.join("output/checks")).unwrap();
+        std::fs::create_dir_all(root.join("output/verification")).unwrap();
+        let source = root.join("verification/scene.rs");
+        std::fs::write(&source, fixture).unwrap();
+
+        #[cfg(target_os = "linux")]
+        {
+            let built = root.join("output/scene-build");
+            return match crate::compile_scene_twin(&source, &built) {
+                Ok(()) => {
+                    std::fs::rename(&built, root.join("output/verification/scene")).unwrap();
+                    Ok(SceneTwinBuild::Ready)
+                }
+                Err(error) => Err(error),
+            };
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let (code, stdout, elapsed) = sweep_run(root, "scene", &[], 2);
+            assert_eq!(code, -1);
+            assert_eq!(elapsed, 0);
+            assert_eq!(String::from_utf8_lossy(&stdout), "scene NOT EXECUTED (missing native twin: output/verification/scene; build it with bash tools/build-verification.sh)");
+            Ok(SceneTwinBuild::NotBuilt)
+        }
+    }
+
+    // The timeout and cleanup tests run only when the twin is ready. A failed
+    // fixture build fails the test with the compiler's text. A host that does
+    // not build the linux twin returns false after the missing-twin contract
+    // has been checked; that is not a compiler failure.
+    fn scene_twin_ready(root: &Path, fixture: &str) -> bool {
+        match crate::demand_scene_twin(build_scene_twin(root, fixture)) {
+            SceneTwinBuild::Ready => true,
+            #[cfg(not(target_os = "linux"))]
+            SceneTwinBuild::NotBuilt => false,
+        }
+    }
+
+    fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(message) = payload.downcast_ref::<String>() {
+            return message.clone();
+        }
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            return (*message).to_string();
+        }
+        "non-text panic".to_string()
+    }
+
+    // A fixture the compiler rejects used to come back as "not built", and the
+    // timeout and cleanup tests then returned normally. The compiler's text is
+    // the failure. The compiler runs on the linux host that executes the twin.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_failed_scene_twin_build_fails_with_the_compiler_error() {
+        let dir = TempDir::new();
+        let root = dir.path();
+        let fixture = "fn main() { fixture_build_error(); }\n";
+        let reported = build_scene_twin(root, fixture);
+        let error = match reported {
+            Err(error) => error,
+            Ok(SceneTwinBuild::Ready) => panic!("a fixture the compiler rejects was built"),
+        };
+        assert!(error.starts_with("could not build the scene twin:"), "{error}");
+        assert!(error.contains("fixture_build_error"), "the build error did not carry the compiler diagnostic: {error}");
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = scene_twin_ready(root, fixture);
+        }));
+        let message = panic_text(panicked.expect_err("the timeout and cleanup callers must fail when the fixture does not build"));
+        assert!(message.contains("could not build the scene twin:"), "{message}");
+        assert!(message.contains("fixture_build_error"), "{message}");
+    }
+
+    const PIPE_HOLDER_TWIN: &str = r#"
+use std::{env, fs, process, thread, time::Duration};
+
+extern "C" {
+    fn setsid() -> i32;
+}
+
+fn main() {
+    let mut args = env::args().skip(1);
+    let mode = args.next().unwrap();
+    if args.next().as_deref() == Some("grandchild") {
+        if mode == "setsid" {
+            assert!(unsafe { setsid() } > 0);
+        } else {
+            println!("held");
+        }
+        fs::write("output/checks/grandchild", process::id().to_string()).unwrap();
+        thread::sleep(Duration::from_secs(30));
+        return;
+    }
+    if mode == "setsid" {
+        println!("{{\"passed\": 1, \"checks\": [1]}}");
+    }
+    let mut child = process::Command::new(env::current_exe().unwrap())
+        .args([mode.as_str(), "grandchild"])
+        .spawn()
+        .unwrap();
+    child.wait().unwrap();
+}
+"#;
+
     #[test]
     fn sweep_timeout_kills_the_grandchild_holding_stdout() {
         let dir = TempDir::new();
         let root = dir.path();
-        std::fs::create_dir_all(root.join("verification")).unwrap();
-        std::fs::create_dir_all(root.join("output/checks")).unwrap();
-        std::fs::write(root.join("verification/scene.py"), "import os, sys, time\nchild = os.fork()\nif child == 0:\n    open('output/checks/grandchild', 'w').write(str(os.getpid()))\n    sys.stdout.write('held\\n')\n    sys.stdout.flush()\n    time.sleep(120)\n    sys.exit(0)\ntime.sleep(120)\n").unwrap();
+        if !scene_twin_ready(root, PIPE_HOLDER_TWIN) {
+            return;
+        }
         let started = Instant::now();
-        let (code, _stdout, _elapsed) = sweep_run(root, "scene", &[], 2);
+        let (code, _stdout, _elapsed) = sweep_run(root, "scene", &["group".into()], 2);
         let wall = started.elapsed().as_secs();
         let pid = std::fs::read_to_string(root.join("output/checks/grandchild")).unwrap_or_default().trim().parse::<i32>().unwrap_or(0);
         let alive = process_running(pid);
@@ -3949,15 +4167,11 @@ mod checks {
     fn sweep_timeout_abandons_a_setsid_grandchild_holding_stdout() {
         let dir = TempDir::new();
         let root = dir.path();
-        std::fs::create_dir_all(root.join("verification")).unwrap();
-        std::fs::create_dir_all(root.join("output/checks")).unwrap();
-        std::fs::write(
-            root.join("verification/scene.py"),
-            "import os, sys, time\nsys.stdout.write('{\"passed\": 1, \"checks\": [1]}\\n')\nsys.stdout.flush()\nchild = os.fork()\nif child == 0:\n    os.setsid()\n    open('output/checks/grandchild', 'w').write(str(os.getpid()))\n    time.sleep(30)\n    sys.exit(0)\ntime.sleep(120)\n",
-        )
-        .unwrap();
+        if !scene_twin_ready(root, PIPE_HOLDER_TWIN) {
+            return;
+        }
         let started = Instant::now();
-        let (code, stdout, _elapsed) = sweep_run(root, "scene", &[], 2);
+        let (code, stdout, _elapsed) = sweep_run(root, "scene", &["setsid".into()], 2);
         let wall = started.elapsed().as_secs();
         let pid = std::fs::read_to_string(root.join("output/checks/grandchild")).unwrap_or_default().trim().parse::<i32>().unwrap_or(0);
         let alive = process_running(pid);
@@ -4115,36 +4329,51 @@ mod checks {
         assert!(survivors.is_empty(), "the tree of the killed group survived: {survivors:?}");
     }
 
+    const SCRATCH_TREE_TWIN: &str = r#"
+use std::{env, fs, io::{self, Write}, process, thread, time::{Duration, SystemTime}};
+
+extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+fn main() {
+    let owner = process::id();
+    let created = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos();
+    fs::create_dir(format!("output/probe-{owner}-{created}-0")).unwrap();
+    println!("published scratch tree");
+    io::stdout().flush().unwrap();
+    if env::args().nth(1).as_deref() == Some("self-kill") {
+        unsafe { kill(owner as i32, 9); }
+        process::exit(1);
+    }
+    thread::sleep(Duration::from_secs(120));
+}
+"#;
+
     #[test]
-    fn the_survivor_of_the_script_spawn_path_is_reclaimed_after_the_deadline() {
+    fn the_tree_of_a_timed_out_native_group_is_reclaimed() {
         let dir = TempDir::new();
         let root = dir.path();
-        std::fs::create_dir_all(root.join("verification")).unwrap();
-        std::fs::create_dir_all(root.join("output/checks")).unwrap();
-        std::fs::write(
-            root.join("verification/scene.py"),
-            "import os, time\nos.makedirs('output', exist_ok=True)\ncreated = time.time_ns()\nos.makedirs('output/probe-%d-%d-0' % (os.getpid(), created), exist_ok=True)\ntime.sleep(120)\n",
-        )
-        .unwrap();
-        let (code, _stdout, _elapsed) = sweep_run(root, "scene", &[], 2);
-        assert_eq!(code, 124, "a script group that holds its stdout must end as a 124 deadline");
+        if !scene_twin_ready(root, SCRATCH_TREE_TWIN) {
+            return;
+        }
+        let (code, stdout, _elapsed) = sweep_run(root, "scene", &[], 2);
+        assert_eq!(code, 124, "a native group that holds its stdout must end as a 124 deadline");
+        assert_eq!(stdout, b"published scratch tree\n", "the group must publish its tree before the deadline");
         let survivors = survivor_trees(root);
-        assert!(survivors.is_empty(), "the tree of the killed script group survived: {survivors:?}");
+        assert!(survivors.is_empty(), "the tree of the killed native group survived: {survivors:?}");
     }
 
     #[test]
     fn the_tree_of_a_group_killed_outside_the_runner_is_reclaimed() {
         let dir = TempDir::new();
         let root = dir.path();
-        std::fs::create_dir_all(root.join("verification")).unwrap();
-        std::fs::create_dir_all(root.join("output/checks")).unwrap();
-        std::fs::write(
-            root.join("verification/scene.py"),
-            "import os, signal, time\nos.makedirs('output', exist_ok=True)\ncreated = time.time_ns()\nos.makedirs('output/probe-%d-%d-0' % (os.getpid(), created), exist_ok=True)\nos.kill(os.getpid(), signal.SIGKILL)\ntime.sleep(120)\n",
-        )
-        .unwrap();
-        let (code, _stdout, _elapsed) = sweep_run(root, "scene", &[], 30);
+        if !scene_twin_ready(root, SCRATCH_TREE_TWIN) {
+            return;
+        }
+        let (code, stdout, _elapsed) = sweep_run(root, "scene", &["self-kill".into()], 30);
         assert_eq!(code, -1, "a group killed by a signal reports the signal, not a code");
+        assert_eq!(stdout, b"published scratch tree\n", "the group must publish its tree before receiving the signal");
         let survivors = survivor_trees(root);
         assert!(survivors.is_empty(), "the tree of the group killed outside the runner survived: {survivors:?}");
     }
@@ -4443,4 +4672,10 @@ mod checks {
         assert!(!root.join("output/checks/current-regression.json.new").exists(), "temporary regression file was left behind");
         assert!(!root.join("verification/RESULTS.json").exists(), "a refused regression write still published the delivered record");
     }
+}
+}
+
+#[cfg(unix)]
+fn main() {
+    unix_runner::main();
 }
