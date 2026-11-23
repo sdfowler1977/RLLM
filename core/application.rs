@@ -538,13 +538,13 @@ fn ui(st: &Json) -> Json {
  "navigation"=>menu("RLLM",vec![button("Chat","chat"),button("History","history"),button("Workspace","workspace"),button("App settings","config"),button("Agent settings","agent_settings")]),
  "app_settings"=>app_settings_menu(),
  "apps"=>app_observation::modal_for(st),
- "phone_access"=>modal("Device folders and scope",vec![field_ui("access","Allow device storage access",if workspace::allowed(st,"phone"){"true"}else{"false"},"check"),field_ui("scope","Browsing scope",if text(st,"phone_access_mode")=="limited"{"Selected device folder"}else if text(st,"phone_access_mode")=="off"{"Off"}else{"Primary shared storage"},"readonly"),field_ui("folder","Selected folder",&text(st,"phone_uri"),"readonly"),field_ui("grant","Broad file permission",if boolean(st,"phone_access_granted"){"Granted"}else{"Choose broad file permission to grant access"},"readonly")],vec![button("Apply access","workspace_source_access:phone"),button("Broad file permission","phone_access_full"),button("Selected-folder browsing","phone_access_limited"),button("Choose or change device folder","phone_folder")]),
+ "phone_access"=>modal(if cfg!(windows){"Local folders"}else{"Device folders and scope"},vec![field_ui("access","Allow device storage access",if workspace::allowed(st,"phone"){"true"}else{"false"},"check"),field_ui("scope","Browsing scope",if cfg!(windows){if text(st,"phone_access_mode")=="off"{"Off"}else if crate::host_fs::windows_folder_path(&text(st,"phone_uri")){"Selected folder"}else{"Choose a folder"}}else if text(st,"phone_access_mode")=="limited"{"Selected device folder"}else if text(st,"phone_access_mode")=="off"{"Off"}else{"Primary shared storage"},"readonly"),field_ui("folder","Selected folder",&text(st,"phone_uri"),"readonly"),field_ui("grant",if cfg!(windows){"Folder"}else{"Broad file permission"},if cfg!(windows){if crate::host_fs::windows_folder_path(&text(st,"phone_uri")){"Selected"}else{"Choose a folder"}}else if boolean(st,"phone_access_granted"){"Granted"}else{"Choose broad file permission to grant access"},"readonly")],vec![button("Apply access","workspace_source_access:phone"),button(if cfg!(windows){"Choose a folder"}else{"Broad file permission"},if cfg!(windows){"phone_folder"}else{"phone_access_full"}),button("Selected-folder browsing","phone_access_limited"),button(if cfg!(windows){"Change folder"}else{"Choose or change device folder"},"phone_folder")]),
  "agent_settings"=>agent_settings_menu(),
  "storage_settings"=>workspace::modal_for(&{let mut current=st.clone();put(&mut current,"dialog",s("workspace_setup"));current}).unwrap_or(Null),
  "instruction_settings"=>menu("Instructions and preferences",vec![button("Global instructions","instructions"),button("Investigation preferences","investigation_preferences"),button("Saved refinement","refinement_review")]),
  "connections"=>menu("LLM connections",vec![button("Choose or add an LLM","chat_models"),button("Edit current connection","profile_edit"),button("Connection authorization","oauth_settings"),button("Optional model-list check","connection_test"),button("Connection details","configuration"),button("Export configuration","configuration_export")]),
  "services"=>menu("Network services",vec![button("Voice and microphone","voice_settings"),button("Service connections","service_connections"),button("MCP connections","mcp_client_connections"),button("Web access","web_settings"),button("Device API gateway","gateway_edit")]),
- "observability"=>menu("Diagnostics",vec![button("Device observations","diagnostics"),button("App inspection","apps_view"),button("Server monitor","server_monitor"),button("Features","capabilities")]),
+ "observability"=>menu("Diagnostics",vec![button("Device observations","diagnostics"),button("App inspection","apps_view"),button("Calculated record","server_monitor"),button("Features","capabilities")]),
  "configuration"=>modal("Configuration",vec![field_ui("server","Model server address",&endpoint_summary(&text(&p,"endpoint")),"readonly"),field_ui("detail","Current configuration",&text(&out,"detail"),"readonly"),field_ui("notice","Operation status",&text(st,"notice"),"readonly"),field_ui("fields","Profile fields",if p==Null {"0"}else{"9"},"readonly"),field_ui("budget","Configured memory budget",&format!("{} bytes; measured resource inputs: {}",number(get(st,"policy"),"budget_bytes"),boolean(get(st,"policy"),"measured")),"readonly"),field_ui("rate","Last reply measurements",&telemetry_summary(get(st,"telemetry")),"readonly")],{let mut buttons=vec![button("Apply profile settings","profile_edit"),button("Export configuration","configuration_export")];if get(st,"export_pending")!=&Null{buttons.push(button("Review saved export","export_review"));}buttons}),
  "status"=>modal("Operation status",{
     let mut fields=vec![field_ui("notice","Current result",&text(st,"notice"),"readonly")];
@@ -576,7 +576,7 @@ fn ui(st: &Json) -> Json {
  "artifact"=>modal("Project file destination",vec![field_ui("path","Relative project file path",&text(edit,"path"),"text"),field_ui("info","Snapshot","Stream an exact binary copy (up to 256 MiB) to the selected default destination. A unique filename preserves the source basename. Existing files are never replaced.","readonly")],vec![button("Save file snapshot","artifact_save")]),
  "editor"=>modal("Project file",vec![field_ui("path","Relative path",&text(edit,"path"),"text"),field_ui("content","File contents",&text(edit,"content"),"multiline")],vec![button("Read existing file","editor_read"),button("Review write","editor_save")]),
  "web_search"=>{let mut fields=vec![field_ui("query","Search query",&text(edit,"query"),"text"),field_ui("description","Search results","Run the entered search. Results list their source and may have limited coverage.","readonly")];if search::known(st){fields.insert(1,interaction::choice("source","Search source",if text(edit,"source").is_empty(){"default"}else{get(edit,"source").text().unwrap_or("default")},&[("Configured source chain","default"),("Alternative source only","alternative")]));}modal("Web search",fields,vec![button(if search::automatic(st)||search::known(st){"Search"}else{"Review search"},"web_search_review")])},
- "reader"|"drive_reader"|"phone_reader"|"search"|"script_check"|"script_run"=>modal(&dialog,vec![field_ui("path","Relative file or directory path",&text(edit,"path"),"text"),field_ui("query","Search text (search only)",&text(edit,"query"),"text")],vec![button("Continue","manual_tool")]),
+ "reader"|"drive_reader"|"phone_reader"|"search"|"script_check"|"script_run"=>modal(if dialog=="phone_reader"{"Read device text"}else{&dialog},vec![field_ui("path","Relative file or directory path",&text(edit,"path"),"text"),field_ui("query","Search text (search only)",&text(edit,"query"),"text")],vec![button("Continue","manual_tool")]),
  "archive_review"=>{let names=array(st,"archive_names");let visible=names.iter().map(|v|v.text().unwrap_or("").to_string()).collect::<Vec<_>>().join("\n");modal("Review project import",vec![field_ui("summary","New files and folders",&format!("{} entries, {} bytes\n{}\n\nExisting files will not be replaced. An interrupted import may leave newly created files and folders.",names.len(),number(st,"archive_bytes"),visible),"readonly")],vec![button("Create reviewed entries","archive_accept"),button("Cancel import","archive_reject")])},
  d if d.starts_with("harness_")=>harness_rules::modal(st),
  "approval"=>approval_rules::approval(st),
@@ -1067,6 +1067,9 @@ fn snapshot(st: &mut Json) -> Result<Json> {
         if tree.is_empty() {
             return Err("Grant a device folder before selecting it as default storage".into());
         }
+        if matches!(text(get(st,"phone_snapshot"),"phase").as_str(), "writing" | "verifying") {
+            return Err("A device conversation snapshot is still being verified. Wait for its readback, or cancel it, before starting another save.".into());
+        }
         let path = format!("RLLM__Conversation__{}__{}.json", text(&c, "id"), stamp());
         let mut effect = obj(vec![
             ("kind", s("tool")),
@@ -1075,11 +1078,24 @@ fn snapshot(st: &mut Json) -> Result<Json> {
             ("args", obj(vec![("path", s(&path)), ("content", s(&body))])),
         ]);
         validate_tool(&effect)?;
+        phone_effect_inside_folder(&effect)?;
         harness_rules::check(st,"phone_create",get(&effect,"args"),false)?;
+        let pending=obj(vec![
+            ("path", s(&path)),
+            ("tree", s(&tree)),
+            ("content", s(&body)),
+            ("phase", s("writing")),
+        ]);
+        let mut candidate=st.clone();
+        put(&mut candidate,"phone_snapshot",pending.clone());
+        if candidate.string().len()>6*1024*1024-4096 {
+            return Err("Encrypted history has insufficient room for a recoverable device snapshot; export or split large history first".into());
+        }
         put(&mut effect, "purpose", s("phone_snapshot"));
+        put(st, "phone_snapshot", pending);
         put(st, "active_tool", s("phone_snapshot"));
         put(st, "busy", Bool(true));
-        put(st, "notice", s("Saving and verifying the conversation in the selected device folder…"));
+        put(st, "notice", s("Saving the conversation in the selected device folder. It is not reported as saved until an exact readback matches."));
         return Ok(effect);
     }
     let target = format!(
@@ -1890,7 +1906,8 @@ fn event_inner(v: &Json) -> Result<Json> {
             return Ok(());
         }
         if boolean(&st, "busy")
-            && !matches!(
+            && !(
+                matches!(
                 action,
                 "network_result" | "model_progress" | "rate_tick" | "phone_revision_result" | "mcp_client_pause"
                     | "tool_result"
@@ -1908,10 +1925,11 @@ fn event_inner(v: &Json) -> Result<Json> {
                     | "export_cancel" | "export_review" | "export_resume" | "export_discard_review" | "export_discard"
                     | "export_staged" | "export_started" | "export_done" | "export_failed" | "export_discarded" | "export_stage_failed"
                     | "chat" | "history" | "workspace" | "settings" | "config" | "navigation" | "diagnostics"
-                    | "cloud_result" | "cloud_text_result" | "cloud_release_result" | "cloud_disconnect" | "cloud_failure" | "cloud_cancel" | "workspace_access_save" | "workspace_projects" | "workspace_storage" | "workspace_setup" | "workspace_permissions" | "workspace_locations" | "phone_locations" | "network_locations" | "document_providers" | "google_drive" | "workspace_programs" | "workspace_research" | "workspace_snapshots" | "workspace_files" | "cloud_setup"
+                    | "cloud_result" | "cloud_text_result" | "cloud_release_result" | "cloud_disconnect" | "cloud_failure" | "cloud_cancel" | "workspace_access_save" | "workspace_projects" | "workspace_storage" | "workspace_setup" | "workspace_permissions" | "workspace_locations" | "phone_locations" | "network_locations"                     | "document_providers" | "workspace_programs" | "workspace_research" | "workspace_snapshots" | "workspace_files" | "cloud_setup"
                     | "phone_access" | "phone_access_status" | "apps_view" | "apps_result" | "apps_disable"
                     | "server_monitor" | "chat_models" | "agent_settings" | "storage_settings" | "instruction_settings" | "connections" | "services" | "observability"
                     | "parallel_result"
+                ) && !workspace::retired_provider_route(action)
             ) && !(app_observation::controls(action) && get(&st,"apps_expected")!=&Null)
             && !action.starts_with("workspace_source_access:")
             && !action.starts_with("branch:")
@@ -1940,6 +1958,11 @@ fn event_inner(v: &Json) -> Result<Json> {
         if interaction::locked(&st) && matches!(action,"agent_save"|"agent_new"|"profile_save"|"routing_save"){return Err("Finish or cancel the current task or tool review first".into());}
         if app_observation::controls(action) && boolean(&st,"busy") && get(&st,"apps_expected")==&Null {return Err("Wait for the current operation or cancel it".into());}
         if app_observation::handles(action){effect=app_observation::event(&mut st,action,inputs)?;return Ok(());}
+        if retired_storage_action(action) {
+            put(&mut st, "dialog", s(if cfg!(target_os = "android") { "document_providers" } else { "workspace_storage" }));
+            put(&mut st, "notice", s("Saved storage route opened in the current storage section"));
+            return Ok(());
+        }
         workspace::remember(&mut st,action);
         if workspace::handles(action){effect=workspace::event(&mut st,action,inputs,&text(v,"root"))?;return Ok(());}
         if services::handles(action){effect=services::event(&mut st,action)?;return Ok(());}
@@ -2033,6 +2056,10 @@ fn event_inner(v: &Json) -> Result<Json> {
                 if ["writing","verifying"].contains(&text(get(&st,"remote_save"),"phase").as_str()) {
                     let mut pending=get(&st,"remote_save").clone();put(&mut pending,"phase",s("interrupted"));put(&mut st,"remote_save",pending);
                     put(&mut st,"notice",s("A remote save was interrupted and remains pending. The destination may contain partial or complete bytes; retry performs a fresh conditional write and exact readback."));
+                }
+                if ["writing","verifying"].contains(&text(get(&st,"phone_snapshot"),"phase").as_str()) {
+                    let mut pending=get(&st,"phone_snapshot").clone();put(&mut pending,"phase",s("interrupted"));put(&mut st,"phone_snapshot",pending);
+                    put(&mut st,"notice",s("A device snapshot was interrupted before readback. It is partial and is not reported as saved. It has not been replayed."));
                 }
                 put(&mut st,"active_tool",Null);
                 put(&mut st, "agent_running", Bool(false));
@@ -2227,8 +2254,16 @@ fn event_inner(v: &Json) -> Result<Json> {
                 let importing = boolean(&st, "active_import");
                 let phone_create = text(&st,"active_tool")=="phone_create";
                 let phone_update=text(&st,"active_tool")=="phone_update";
+                let phone_snapshot=text(&st,"active_tool")=="phone_snapshot";
                 let phone_notice=super::document::interruption(get(&st,"phone_revision"));
                 if phone_update {let interrupted=super::document::interrupt(get(&st,"phone_revision"));put(&mut st,"phone_revision",interrupted);}
+                if phone_snapshot {
+                    let mut pending=get(&st,"phone_snapshot").clone();
+                    if ["writing","verifying"].contains(&text(&pending,"phase").as_str()) {
+                        put(&mut pending,"phase",s("interrupted"));
+                        put(&mut st,"phone_snapshot",pending);
+                    }
+                }
                 put(&mut st, "busy", Bool(false));
                 put(
                     &mut st,
@@ -2239,6 +2274,8 @@ fn event_inner(v: &Json) -> Result<Json> {
                         &phone_notice
                     } else if phone_create {
                         "Device creation cancellation requested. A new document may remain incomplete or unverified; inspect the selected folder before retrying."
+                    } else if phone_snapshot {
+                        "Device snapshot cancellation requested. The file may remain incomplete. It is partial and is not reported as saved, and it has not been replayed."
                     } else {
                         "Operation cancelled; saved history is preserved"
                     }),
@@ -2258,6 +2295,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     return Err(format!("{} {notice}",text(inputs,"error")));
                 }
                 if text(inputs,"purpose")=="model" {put(&mut st,"hosted_request",Null);harness::finish_attempt(&mut st,inputs,"error");interrupted_reply(&mut st)?;}
+                let failed_snapshot=text(&st,"active_tool")=="phone_snapshot";
                 put(&mut st,"active_tool",Null);
                 put(&mut st, "active_import", Bool(false));
                 if ["drive_update_write", "drive_update_confirm"]
@@ -2300,6 +2338,15 @@ fn event_inner(v: &Json) -> Result<Json> {
                     return Err(if transport.is_empty(){format!("Server request failed: {error}")}else{format!("Server request failed: {error}. {transport}")});
                 }
                 let error=text(inputs,"error");let lower=error.to_ascii_lowercase();
+                if failed_snapshot {
+                    let mut pending=get(&st,"phone_snapshot").clone();
+                    if ["writing","verifying"].contains(&text(&pending,"phase").as_str()) {
+                        put(&mut pending,"phase",s("interrupted"));
+                        put(&mut st,"phone_snapshot",pending);
+                    }
+                    put(&mut st,"busy",Bool(false));
+                    return Err(format!("Device snapshot is partial and is not reported as saved: {error}"));
+                }
                 let purpose=text(inputs,"purpose");
                 if (purpose.starts_with("drive_")||["listing","file","saved","saved_probe","saved_verify"].contains(&purpose.as_str())) &&
                     ["subjectaltnames","subject alternative","hostname","no name matching"].iter().any(|part|lower.contains(part)) {
@@ -2816,7 +2863,9 @@ fn event_inner(v: &Json) -> Result<Json> {
                             if text(&proposed,"tool")=="delegate"{delegation::unreviewed(&mut proposed);}
                             if get(&proposed, "tool") != &Null {
                                 if !harness::has_operation_room(&st){return Err(format!("Agent turn reached the orchestrator operation limit {}. No further operation was started or presented for approval; actual returned evidence remains in the conversation.",harness::operation_limit(&st)));}
-                                if let Err(error)=harness::allowed_tool(&st,&proposed).and_then(|_|validate_tool(&proposed)){if text(&proposed,"tool")=="delegate"{effect=delegation::blocked(&mut st,&error,None)?;return Ok(());}if array(&st,"delegation_stack").is_empty(){effect=proposal_failure(&mut st,&proposed,&error,&reply)?;return Ok(());}return Err(error);}
+                                // The displayed proposal stays unchanged. Scope is checked on a copy so a refusal cannot create the identity directory.
+                                let admission = device_scope_probe(&proposed);
+                                if let Err(error)=harness::allowed_tool(&st,&admission).and_then(|_|validate_tool(&admission)){if text(&proposed,"tool")=="delegate"{effect=delegation::blocked(&mut st,&error,None)?;return Ok(());}if array(&st,"delegation_stack").is_empty(){effect=proposal_failure(&mut st,&proposed,&error,&reply)?;return Ok(());}return Err(error);}
                                 if web_operation::is_web(&proposed){web_operation::own_model(&st,&mut proposed);}
                                 claim_records::own(&st,&mut proposed)?;experiment_records::own(&st,&mut proposed)?;
                                 put(&mut st, "pending", proposed);
@@ -2951,12 +3000,19 @@ fn event_inner(v: &Json) -> Result<Json> {
             "device_elevation" => effect = obj(vec![("kind", s("device_elevation"))]),
             "device_elevation_result" => {put(&mut st,"dialog",s("phone_locations"));put(&mut st,"notice",s(&text(inputs,"notice")));},
             "folder_result" => {
-                put(&mut st, "phone_uri", s(&text(inputs, "uri")));
-                put(&mut st,"notice",s("Device folder permission saved for selected-folder tools and saves. Workspace → Setup → Device folders and scope controls the browsing scope."));
+                let uri=text(inputs,"uri");
+                put(&mut st, "phone_uri", s(&uri));
+                #[cfg(windows)]
+                if crate::host_fs::windows_folder_path(&uri) {
+                    put(&mut st,"phone_access_mode",s("limited"));
+                    approval_rules::namespace(&mut st,&uri);
+                }
+                put(&mut st,"notice",s(if cfg!(windows){"Folder saved. Local file tools use this directory."}else{"Device folder saved for selected-folder tools and saves. Workspace → Setup → Device folders and scope controls the browsing scope."}));
             }
             "phone_files" => {
                 effect = obj(vec![("kind",s("tool")),("tool",s("phone_list")),("args",obj(vec![("path",s(""))]))]);
                 phone_read_scope(&st,&mut effect)?;
+                phone_effect_inside_folder(&effect)?;
                 put(&mut st, "busy", Bool(true));
                 put(&mut st, "agent_running", Bool(false));
             }
@@ -3108,7 +3164,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 if text(&st,"phone_access_mode")=="off" {return Err("Device file tools are disabled in Workspace → Setup → Device folders and scope".into());}
                 let tree=text(&st,"phone_uri");if tree.is_empty(){return Err("Grant a device folder first".into());}
                 effect=obj(vec![("kind",s("tool")),("tool",s("phone_read")),("args",get(&st,"edit").clone()),("tree",s(&tree)),("editor",Bool(true)),("editor_dialog",s("phone_update_editor"))]);
-                validate_tool(&effect)?;put(&mut st,"busy",Bool(true));put(&mut st,"agent_running",Bool(false));
+                validate_tool(&effect)?;phone_effect_inside_folder(&effect)?;put(&mut st,"busy",Bool(true));put(&mut st,"agent_running",Bool(false));
             }
             "phone_revision_result" => {
                 let prior=get(&st,"phone_revision").clone();
@@ -3214,7 +3270,17 @@ fn event_inner(v: &Json) -> Result<Json> {
             "approve" => {
                 approval_dispatch_base=st.clone();
                 if text(&st,"dialog")!="approval" || boolean(&st,"busy") {return Err("No current operation is awaiting approval".into());}
-                harness_rules::refresh(&mut st);harness_rules::check(&st,&text(get(&st,"pending"),"tool"),get(get(&st,"pending"),"args"),boolean(&st,"agent_pending"))?;
+                harness_rules::refresh(&mut st);
+                if matches!(text(get(&st,"pending"),"tool").as_str(), "device_shell_connect" | "device_shell_pair") {
+                    let current = get(&st,"pending").clone();
+                    if device_connection_needs_seal(&current) {
+                        let probe = device_scope_probe(&current);
+                        harness_rules::check(&st,&text(&probe,"tool"),get(&probe,"args"),boolean(&st,"agent_pending"))?;
+                    }
+                    let sealed = sealed_device_request(&current)?;
+                    put(&mut st, "pending", sealed);
+                }
+                harness_rules::check(&st,&text(get(&st,"pending"),"tool"),get(get(&st,"pending"),"args"),boolean(&st,"agent_pending"))?;
                 if requested_action=="approve_matching_rule" && !automatic_approval(&st){return Ok(());}
                 if matches!(requested_action,"approve_session"|"approve_always"){
                     approval_rule=approval_rules::candidate(&st,if requested_action=="approve_session"{"session"}else{"always"})?;
@@ -3229,7 +3295,11 @@ fn event_inner(v: &Json) -> Result<Json> {
                     put(&mut owner,"automatic_public_read",Bool(true));
                     put(&mut pending,"web_owner",owner);
                 }
-                if text(&pending,"tool")=="web_search"&&(number(&pending,"search_revision")!=number(&st,"web_settings_revision")||text(&pending,"destination")!=search::template(&st,&pending)?){return Err("Search settings changed since this proposal was displayed; request a new proposal for the current destination".into());}
+                if text(&pending,"tool")=="web_search" {
+                    let current_destination=search::template(&st,&pending)?;
+                    if number(&pending,"search_revision")!=number(&st,"web_settings_revision"){return Err("Search settings changed since this proposal was displayed; request a new proposal for the current destination".into());}
+                    if text(&pending,"destination")!=current_destination{return Err("Search settings changed since this proposal was displayed; request a new proposal for the current destination".into());}
+                }
                 if boolean(&st,"agent_pending"){harness::allowed_tool(&st,&pending)?;}
                 let steps = number(&st, "steps");
                 if boolean(&st, "agent_pending") && !harness::has_operation_room(&st) {
@@ -3252,6 +3322,15 @@ fn event_inner(v: &Json) -> Result<Json> {
                 if active_tool=="observations"{
                     let output=observation_records::query(&st,get(&pending,"args"),boolean(&st,"agent_pending"));synchronous_tool_failed=output.is_err();synchronous_tool_completed=!synchronous_tool_failed;if synchronous_tool_failed{put(&mut st,"approval_rules",previous_rules.clone());}let next=st.clone();effect=synchronous_result(&mut st,next,"observations",output,steps)?;return Ok(());
                 }
+                if crate::adb_client::TOOLS.contains(&active_tool.as_str()) {
+                    let output=device_service_call(&pending);
+                    synchronous_tool_failed=output.is_err();
+                    synchronous_tool_completed=!synchronous_tool_failed;
+                    if synchronous_tool_failed {put(&mut st,"approval_rules",previous_rules.clone());}
+                    let next=st.clone();
+                    effect=synchronous_result(&mut st,next,&active_tool,output,steps)?;
+                    return Ok(());
+                }
                 effect = pending;
                 put(&mut effect, "kind", s("tool"));
                 if text(&effect, "tool").starts_with("phone_") {
@@ -3262,6 +3341,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     }else{
                         let tree=text(&st,"phone_uri");if tree.is_empty(){return Err("Grant a device folder first".into());}put(&mut effect,"tree",s(&tree));
                     }
+                    phone_effect_inside_folder(&effect)?;
                 }
                 if text(&effect, "tool").starts_with("drive_") {
                     effect = drive_tool_effect(&mut st, &effect)?;
@@ -3269,7 +3349,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 if active_tool=="web_read" || active_tool=="web_search" {let proposal=effect.clone();effect=investigation::web_effect(&mut st,&proposal)?;web_operation::bind(&mut st,&mut effect,&proposal)?;}
                 if active_tool=="service" {effect=services::start(&mut st,&effect)?;}
                 if active_tool=="mcp" {effect=harness::mcp_client_tool_effect(&mut st,get(&effect,"args"))?;}
-                if active_tool=="phone_update" {
+                if active_tool=="phone_update" && !native_device_path(&text(get(&effect,"args"),"path")) {
                     let revision=super::document::begin(get(&effect,"args"),&text(&st,"phone_uri"),&now(),&stamp())?;
                     effect=super::document::effect(&revision)?;put(&mut effect,"purpose",s("phone_revision"));
                     put(&mut st,"phone_revision",revision);
@@ -3303,7 +3383,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                         let mut edit=get(&st,"edit").clone();put(&mut edit,"expected",s(&output));put(&mut st,"edit",edit);put(&mut st,"dialog",s("phone_update_editor"));
                     } else {put(&mut st, "dialog", s("editor"));}
                 } else if active_tool=="phone_snapshot" {
-                    put(&mut st,"notice",s(&format!("Conversation snapshot saved to the selected device folder and verified: {output}")));
+                    effect=phone_snapshot_result(&mut st,&output)?;
                 } else {
                     let mut output=output;
                     if experiment_descriptor!=Null{observation_records::retain(&mut st,&observation_descriptor,&output,&graphs,&graph_note);let summary=experiment_records::finish(&mut st,&experiment_descriptor,&text(&observation_descriptor,"id"));output.push_str("\n\n");output.push_str(&summary);}
@@ -3608,6 +3688,251 @@ fn automatic_approval(st:&Json)->bool{
      ||(boolean(st,"agent_pending")&&web_operation::standing_read(st,pending))||approval_rules::matches(st)
      ||permissions::stands_down(st,subject))
 }
+fn retired_storage_action(action: &str) -> bool {
+    action.as_bytes() == [103, 111, 111, 103, 108, 101, 95, 100, 114, 105, 118, 101]
+}
+fn native_device_path(path: &str) -> bool {
+    crate::host_fs::windows_folder_path(path)
+        || (!cfg!(windows) && path.starts_with('/') && !path.contains('\\') && !path.chars().any(char::is_control))
+}
+fn phone_tool_path(tool: &str, path: &str) -> Result<()> {
+    if path.contains('\0') || path.chars().any(char::is_control) {
+        return Err("Invalid relative tool path".into());
+    }
+    if path.split(['/', '\\']).any(|part| part == "..") {
+        return Err("Invalid relative tool path".into());
+    }
+    if path.is_empty() {
+        return if matches!(tool, "phone_list" | "phone_search" | "phone_stat") {
+            Ok(())
+        } else {
+            Err("Enter a file or directory path".into())
+        };
+    }
+    if crate::host_fs::windows_folder_path(path) {
+        return Ok(());
+    }
+    if path.starts_with('/') || path.starts_with('\\') {
+        return if !cfg!(windows) && path.starts_with('/') && !path.contains('\\') {
+            Ok(())
+        } else {
+            Err("Invalid relative tool path".into())
+        };
+    }
+    if path.contains('\\') && !cfg!(windows) {
+        return Err("Invalid relative tool path".into());
+    }
+    Ok(())
+}
+fn phone_path_absolute(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    if crate::host_fs::windows_folder_path(path) || path.starts_with('/') || path.starts_with('\\') {
+        return true;
+    }
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+fn phone_scope_key(path: &str) -> String {
+    let windows = crate::host_fs::windows_folder_path(path)
+        || path.contains('\\')
+        || path.starts_with(r"\\?\")
+        || {
+            let bytes = path.as_bytes();
+            bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+        };
+    let mut text = if windows { path.replace('/', "\\") } else { path.to_string() };
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        text = format!(r"\\{rest}");
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        text = rest.to_string();
+    }
+    let sep = if windows { '\\' } else { '/' };
+    let minimum = if windows { 3 } else { 1 };
+    while text.len() > minimum && text.ends_with(sep) {
+        text.pop();
+    }
+    if windows { text.to_ascii_lowercase() } else { text }
+}
+fn phone_path_inside_selected(tree: &str, path: &str) -> bool {
+    if path.is_empty() || !phone_path_absolute(path) {
+        return true;
+    }
+    if !phone_path_absolute(tree) {
+        return false;
+    }
+    let root = phone_scope_key(tree);
+    let child = phone_scope_key(path);
+    if root.is_empty() || child.is_empty() {
+        return false;
+    }
+    let root_windows = root.contains('\\') || root.contains(':');
+    let child_windows = child.contains('\\') || child.contains(':');
+    if root_windows != child_windows {
+        return false;
+    }
+    if child == root {
+        return true;
+    }
+    let sep = if root_windows { '\\' } else { '/' };
+    // A filesystem root already ends with its separator. Adding another one
+    // asks for `//` or `c:\\`, which normal absolute descendants do not have.
+    let rooted = if root_windows {
+        let bytes = root.as_bytes();
+        bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\'
+    } else {
+        root == "/"
+    };
+    if rooted {
+        return child.starts_with(root.as_str()) && child.len() > root.len();
+    }
+    child.starts_with(&format!("{root}{sep}"))
+}
+fn phone_effect_inside_folder(effect: &Json) -> Result<()> {
+    let tree = text(effect, "tree");
+    let args = get(effect, "args");
+    for key in ["path", "destination"] {
+        let value = text(args, key);
+        if !value.is_empty() && !phone_path_inside_selected(&tree, &value) {
+            return Err("The path is outside the selected folder".into());
+        }
+    }
+    Ok(())
+}
+fn installation_identity_seal(data_dir: &str) -> Result<String> {
+    if data_dir.is_empty() || data_dir.contains('\0') || data_dir.len() > 1024 {
+        return Err("a device identity directory is required".into());
+    }
+    let dir = Path::new(data_dir);
+    fs::create_dir_all(dir).map_err(|err| format!("the identity directory is not usable ({err})"))?;
+    let path = dir.join("installation-seal.bin");
+    if let Ok(bytes) = fs::read(&path) {
+        if bytes.len() != 32 {
+            return Err("the installation identity seal must be 32 bytes".into());
+        }
+        return Ok(network::b64(&bytes));
+    }
+    let bytes = crate::state_crypto::random_bytes(32)?;
+    if bytes.len() != 32 {
+        return Err("the installation identity seal must be 32 bytes".into());
+    }
+    match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut file) => {
+            file.write_all(&bytes).map_err(|err| format!("the installation identity seal could not be stored ({err})"))?;
+            file.sync_all().map_err(|err| format!("the installation identity seal could not be stored ({err})"))?;
+            Ok(network::b64(&bytes))
+        }
+        Err(_) => {
+            let stored = fs::read(&path).map_err(|err| format!("the installation identity seal could not be read ({err})"))?;
+            if stored.len() != 32 {
+                return Err("the installation identity seal must be 32 bytes".into());
+            }
+            Ok(network::b64(&stored))
+        }
+    }
+}
+fn device_service_arguments(v: &Json) -> Result<String> {
+    let args = get(v, "args");
+    if args == &Null {
+        return Ok("{}".into());
+    }
+    let tool = text(v, "tool");
+    if matches!(tool.as_str(), "device_shell_connect" | "device_shell_pair") && text(args, "seal_b64").is_empty() {
+        let dir = text(args, "data_dir");
+        if !dir.is_empty() {
+            let mut supplied = args.clone();
+            put(&mut supplied, "seal_b64", s(&installation_identity_seal(&dir)?));
+            return Ok(supplied.string());
+        }
+    }
+    Ok(args.string())
+}
+fn device_connection_needs_seal(v: &Json) -> bool {
+    matches!(text(v, "tool").as_str(), "device_shell_connect" | "device_shell_pair")
+        && matches!(get(v, "args"), Obj(_))
+        && text(get(v, "args"), "seal_b64").is_empty()
+        && !text(get(v, "args"), "data_dir").is_empty()
+}
+// A format-valid stand-in lets the existing scope check run before any directory
+// or installation-seal.bin is created. The stand-in is never stored or sent.
+fn device_scope_probe(v: &Json) -> Json {
+    if !device_connection_needs_seal(v) {
+        return v.clone();
+    }
+    let mut copy = v.clone();
+    let mut args = get(v, "args").clone();
+    put(&mut args, "seal_b64", s(&network::b64(&[0u8; 32])));
+    put(&mut copy, "args", args);
+    copy
+}
+fn sealed_device_request(v: &Json) -> Result<Json> {
+    if !matches!(text(v, "tool").as_str(), "device_shell_connect" | "device_shell_pair") {
+        return Ok(v.clone());
+    }
+    let args = get(v, "args");
+    if !matches!(args, Obj(_)) || !text(args, "seal_b64").is_empty() || text(args, "data_dir").is_empty() {
+        return Ok(v.clone());
+    }
+    let mut supplied = v.clone();
+    let mut next = args.clone();
+    put(&mut next, "seal_b64", s(&installation_identity_seal(&text(args, "data_dir"))?));
+    put(&mut supplied, "args", next);
+    Ok(supplied)
+}
+fn device_service_call(v: &Json) -> Result<String> {
+    crate::adb_client::call(&text(v, "tool"), &device_service_arguments(v)?)
+}
+fn phone_snapshot_result(st: &mut Json, output: &str) -> Result<Json> {
+    let pending = get(st, "phone_snapshot").clone();
+    let phase = text(&pending, "phase");
+    let path = text(&pending, "path");
+    let tree = text(&pending, "tree");
+    let expected = text(&pending, "content");
+    if path.is_empty() || tree.is_empty() || expected.is_empty() {
+        put(st, "phone_snapshot", Null);
+        put(st, "busy", Bool(false));
+        put(st, "active_tool", Null);
+        return Err("Device snapshot has no pending bytes to compare. It is partial and is not reported as saved.".into());
+    }
+    if phase == "writing" {
+        let effect = obj(vec![
+            ("kind", s("tool")),
+            ("tool", s("phone_read")),
+            ("tree", s(&tree)),
+            ("purpose", s("phone_snapshot_readback")),
+            ("args", obj(vec![("path", s(&path))])),
+        ]);
+        validate_tool(&effect)?;
+        phone_effect_inside_folder(&effect)?;
+        let mut next = pending;
+        put(&mut next, "phase", s("verifying"));
+        put(st, "phone_snapshot", next);
+        put(st, "active_tool", s("phone_snapshot"));
+        put(st, "busy", Bool(true));
+        put(st, "notice", s("Conversation snapshot written. Reading it back before reporting it saved. Coverage is partial until the bytes match."));
+        let _ignored_write_text = output;
+        return Ok(effect);
+    }
+    if phase == "verifying" {
+        if output != expected {
+            let mut next = pending;
+            put(&mut next, "phase", s("interrupted"));
+            put(st, "phone_snapshot", next);
+            put(st, "busy", Bool(false));
+            put(st, "active_tool", Null);
+            return Err("Conversation snapshot readback did not match the pending bytes. Coverage is partial because the file was not verified. It is not reported as saved.".into());
+        }
+        put(st, "phone_snapshot", Null);
+        put(st, "busy", Bool(false));
+        put(st, "active_tool", Null);
+        put(st, "notice", s("Conversation snapshot saved to the selected device folder and exact bytes verified"));
+        return Ok(Null);
+    }
+    put(st, "busy", Bool(false));
+    put(st, "active_tool", Null);
+    Err("Conversation snapshot is not in a verifiable state. It is partial and is not reported as saved.".into())
+}
 fn validate_tool(v: &Json) -> Result<()> {
     if text(v,"tool")=="service"{return services::validate_args(get(v,"args"));}
     if text(v,"tool")=="reconstruct"{return reconstruction::validate(get(v,"args"));}
@@ -3623,6 +3948,14 @@ fn validate_tool(v: &Json) -> Result<()> {
     if text(v,"tool")=="observations"{return observation_records::validate(get(v,"args"));}
     if text(v,"tool")=="delegate"{return delegation::validate(v);}
     if investigation::validate_remote(v)? {return Ok(());}
+    let name = text(v, "tool");
+    if crate::adb_client::TOOLS.contains(&name.as_str()) {
+        let args = get(v, "args");
+        if args != &Null && !matches!(args, Obj(_)) {
+            return Err("Device service arguments must be an object".into());
+        }
+        return Ok(());
+    }
     if ![
         "compare",
         "capture",
@@ -3635,41 +3968,60 @@ fn validate_tool(v: &Json) -> Result<()> {
         "script_run",
         "phone_list",
         "phone_read",
+        "phone_stat",
+        "phone_search",
         "phone_create",
+        "phone_create_file",
+        "phone_write",
         "phone_update",
+        "phone_mkdir",
+        "phone_create_folder",
+        "phone_rename",
+        "phone_move",
+        "phone_copy",
         "drive_list",
         "drive_read",
         "drive_create",
         "drive_update",
         "drive_folder",
     ]
-    .contains(&text(v, "tool").as_str())
+    .contains(&name.as_str())
     {
         return Err("Model proposed an unsupported tool".into());
     }
-    if matches!(text(v,"tool").as_str(),"inspect"|"compare"){file_evidence::validate_mode(get(v,"args"))?;}
-    if text(v,"tool")=="capture" {capture_file::validate(get(v,"args"))?;}
-    if text(v,"tool")=="compare" {
+    if matches!(name.as_str(),"inspect"|"compare"){file_evidence::validate_mode(get(v,"args"))?;}
+    if name=="capture" {capture_file::validate(get(v,"args"))?;}
+    if name=="compare" {
         let other=get(v,"args").get("other")?.text()?;
         if other.starts_with('/')||other.split('/').any(|v|v=="..")||other.contains('\\')||other.contains('\0')||other.len()>1024{return Err("Invalid comparison path".into());}
     }
     let p = get(v, "args").get("path")?.text()?;
-    if p.starts_with('/')
+    let phone = name.starts_with("phone_");
+    if phone {
+        phone_tool_path(&name, p)?;
+        if matches!(name.as_str(), "phone_rename" | "phone_move" | "phone_copy") {
+            let destination = get(v, "args").get("destination").and_then(|value| value.text()).unwrap_or("");
+            if destination.is_empty() {
+                return Err("Enter a destination path".into());
+            }
+            phone_tool_path(&name, destination)?;
+        }
+    } else if p.starts_with('/')
         || p.split('/').any(|part| part == "..")
         || p.contains('\\')
         || p.contains('\0')
     {
         return Err("Invalid relative tool path".into());
     }
-    if ["write", "drive_create", "drive_update", "phone_create", "phone_update"].contains(&text(v, "tool").as_str())
+    if ["write", "drive_create", "drive_update"].contains(&name.as_str())
     {
         let content = get(v, "args").get("content")?.text()?;
         if content.len() > 1024 * 1024 || content.contains('\0') {
             return Err("Text file exceeds 1 MiB or contains NUL".into());
         }
     }
-    if text(v,"tool")=="phone_update" {super::document::validate(get(v,"args"))?;}
-    if text(v, "tool") == "phone_create" {
+    if name=="phone_update" && !native_device_path(p) {super::document::validate(get(v,"args"))?;}
+    if matches!(name.as_str(), "phone_create" | "phone_create_file") && !native_device_path(p) {
         let name = p.rsplit('/').next().unwrap_or("");
         if p.split('/')
             .any(|segment| segment.is_empty() || segment == ".")
@@ -3740,7 +4092,20 @@ pub fn capture_document_cancel(v:&Json)->Result<Json>{capture_job::cancel(field(
 pub fn local_tool_start(v:&Json)->Result<Json>{operation::authorize(v)?;Ok(Null)}
 pub fn local_tool_cancel(v:&Json)->Result<Json>{Ok(Bool(operation::cancel(v)?))}
 pub fn tool(v: &Json) -> Result<Json> {
+    if device_connection_needs_seal(v) {
+        operation::authorize_scoped(&device_scope_probe(v))?;
+    }
+    let prepared = if matches!(text(v, "tool").as_str(), "device_shell_connect" | "device_shell_pair") {
+        Some(sealed_device_request(v)?)
+    } else {
+        None
+    };
+    let v = prepared.as_ref().unwrap_or(v);
     let inspection_access=operation::authorize_scoped(v)?;
+    if crate::adb_client::TOOLS.contains(&text(v,"tool").as_str()) {
+        validate_tool(v)?;
+        return device_service_call(v).map(|value| s(&value));
+    }
     tool_access(v,inspection_access)
 }
 /// An owned host binding may narrow an operation to an already-selected root.
@@ -3801,8 +4166,18 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
         "packets" => subject_reports::run_packets(&root,&p,args,&|| inspection_access.cancelled())?,
         "compare" => if text(args,"content")=="complete_digest"{file_evidence::compare(&root,args,&inspection_access)?}else{investigation::compare_scoped(&root,&p,&path(&root,&text(args,"other"))?,args,&inspection_access)?},
         "list" => {
+            let started = std::time::Instant::now();
             let mut entries = Vec::new();
-            for e in fs::read_dir(&p).map_err(|e| e.to_string())?.take(501) {
+            for e in fs::read_dir(&p).map_err(|e| e.to_string())? {
+                if super::execution::cancelled() || inspection_access.cancelled() {
+                    return Err("Listing cancelled".into());
+                }
+                if started.elapsed() >= std::time::Duration::from_secs(30) {
+                    return Err("Listing stopped before completion; coverage is partial because the time budget was reached".into());
+                }
+                if entries.len() >= 501 {
+                    break;
+                }
                 let e = e.map_err(|e| e.to_string())?;
                 entries.push(format!(
                     "{}{}",
@@ -3858,11 +4233,18 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
             if query.is_empty() {
                 return Err("Enter search text".into());
             }
+            let started = std::time::Instant::now();
+            let budget = std::time::Duration::from_secs(30);
             let mut queue = vec![p];
             let mut files = Vec::new();
-            let mut examined = 0;
+            let mut examined = 0usize;
+            let mut bounded = false;
             while let Some(path) = queue.pop() {
-                if examined >= 500 {
+                if super::execution::cancelled() || inspection_access.cancelled() {
+                    return Err("Search cancelled".into());
+                }
+                if started.elapsed() >= budget || examined >= 500 {
+                    bounded = true;
                     break;
                 }
                 examined += 1;
@@ -3871,20 +4253,33 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
                     continue;
                 }
                 if metadata.is_dir() {
-                    let mut children = fs::read_dir(path)
-                        .map_err(|e| e.to_string())?
-                        .take(500)
-                        .map(|e| e.map(|v| v.path()))
-                        .collect::<std::io::Result<Vec<_>>>()
-                        .map_err(|e| e.to_string())?;
+                    let mut children = Vec::new();
+                    let mut listed = 0usize;
+                    for entry in fs::read_dir(&path).map_err(|e| e.to_string())? {
+                        if super::execution::cancelled() || inspection_access.cancelled() {
+                            return Err("Search cancelled".into());
+                        }
+                        if started.elapsed() >= budget {
+                            bounded = true;
+                            break;
+                        }
+                        listed += 1;
+                        if listed > 500 {
+                            bounded = true;
+                            break;
+                        }
+                        children.push(entry.map_err(|e| e.to_string())?.path());
+                    }
                     children.sort();
-                    for p in children.into_iter().rev() {
-                        if queue.len() + examined < 500 {
-                            queue.push(p)
+                    for child in children.into_iter().rev() {
+                        if queue.len().saturating_add(examined) < 500 {
+                            queue.push(child);
+                        } else {
+                            bounded = true;
                         }
                     }
                 } else if metadata.is_file() {
-                    files.push(path)
+                    files.push(path);
                 }
             }
             files.sort();
@@ -3905,11 +4300,16 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
                     jobs.push(scope.spawn(move || {
                         let mut matches = Vec::new();
                         for p in chunk {
-                            if super::execution::cancelled() {
+                            if super::execution::cancelled() || started.elapsed() >= budget {
                                 break;
                             }
                             if let Ok(content) = read_file(p) {
+                                let mut stop=false;
                                 for (i, line) in content.lines().enumerate() {
+                                    if super::execution::cancelled() || started.elapsed() >= budget {
+                                        stop=true;
+                                        break;
+                                    }
                                     if line.contains(query) {
                                         matches.push(format!(
                                             "{}:{}: {}",
@@ -3922,6 +4322,7 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
                                         }
                                     }
                                 }
+                                if stop { break; }
                             }
                         }
                         matches
@@ -3933,12 +4334,16 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
                 }
                 Ok(output)
             })?;
-            if super::execution::cancelled() {
+            if super::execution::cancelled() || inspection_access.cancelled() {
                 return Err("Search cancelled".into());
+            }
+            if started.elapsed() >= budget {
+                bounded = true;
             }
             matches.sort();
             matches.truncate(100);
-            format!("{}\nExamined {examined} entries and {} candidate files with up to {workers} workers. Binary, oversized or unreadable files are skipped; at most 100 matches are shown.",matches.join("\n"),files.len())
+            let coverage = if bounded { " Coverage is partial because the walk reached its entry or time budget." } else { "" };
+            format!("{}\nExamined {examined} entries and {} candidate files with up to {workers} workers. Binary, oversized or unreadable files are skipped; at most 100 matches are shown.{coverage}",matches.join("\n"),files.len())
         }
         "script_check" | "script_run" => {
             let source = read_file(&p)?;
@@ -3963,14 +4368,26 @@ pub fn cancel() {
 fn phone_read_scope(st:&Json,effect:&mut Json)->Result<()> {
     workspace::check_tool(st,"phone_read")?;
     if text(st,"phone_access_mode")=="off"{return Err("Device file tools are disabled in Workspace → Setup → Device folders and scope".into());}
-    if text(st,"phone_access_mode")=="limited" {
-        let tree=text(st,"phone_uri");if tree.is_empty(){return Err("Choose a permitted device folder in Workspace → Setup → Device folders and scope".into());}
-        put(effect,"tree",s(&tree));put(effect,"phone_scope",s("limited"));
-    }else{
-        if !boolean(st,"phone_access_granted"){return Err("Enable broad file access in Workspace → Setup → Device folders and scope, or select limited folder browsing".into());}
-        put(effect,"phone_scope",s("shared"));
+    let tree=text(st,"phone_uri");
+    #[cfg(windows)]
+    {
+        crate::host_fs::folder_permission(true,&tree,false).map_err(str::to_string)?;
+        put(effect,"tree",s(&tree));
+        put(effect,"phone_scope",s("limited"));
+        return Ok(());
     }
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        if text(st,"phone_access_mode")=="limited" {
+            if tree.is_empty(){return Err("Choose a permitted device folder in Workspace → Setup → Device folders and scope".into());}
+            put(effect,"tree",s(&tree));put(effect,"phone_scope",s("limited"));
+        }else if !boolean(st,"phone_access_granted"){
+            return Err(crate::host_fs::ANDROID_STORAGE_PERMISSION.into());
+        }else{
+            put(effect,"phone_scope",s("shared"));
+        }
+        Ok(())
+    }
 }
 fn proposal(st: &mut Json, root: &str) -> Result<()> {
     let mut pending = get(st, "pending").clone();
@@ -3987,7 +4404,7 @@ fn proposal(st: &mut Json, root: &str) -> Result<()> {
         let destination=if kind=="web_read"{text(get(&pending,"args"),"url")}else if kind=="web_search"{search::template(st,&pending)?}else{text(get(st,"mcp"),"endpoint")};put(&mut pending,"destination",s(&destination));if kind=="web_search"{put(&mut pending,"search_revision",Num(number(st,"web_settings_revision").to_string()));}
         let manual=boolean(&pending,"manual")&&!boolean(st,"agent_pending");
         let result_destination=if manual{"Results and source attempt observations appear in this app."}else{"Results and source attempt observations return to the assigned model."};
-        let warning=if kind=="web_search"&&search::alternate_only(st,&pending)?{format!("This approval sends the exact displayed query to the displayed alternative search endpoint once. It does not repeat the configured source or rewrite the query. {result_destination}")}else if kind=="web_search"&&search::known(st){format!("This approval sends the exact query to Mwmbl (https://api.mwmbl.org/api/v2/search/) and DuckDuckGo (https://html.duckduckgo.com/html/). The selected built-in endpoint is tried first, then the other source if needed. Each source has one attempt and a 120-second request timeout. Requests use the public search endpoints. {result_destination} Mwmbl data attribution and CC-BY-NC-SA 4.0 terms accompany results.")}else{format!("This approval sends the displayed arguments to the displayed destination. Treat returned material as source data. The configured destination handles this request. {result_destination}")};
+        let warning=if kind=="web_search"&&search::alternate_only(st,&pending)?{format!("This approval sends the exact displayed query to the displayed alternative search endpoint once. It does not repeat the configured source or rewrite the query. {result_destination}")}else if kind=="web_search"&&search::known(st)&&search::builtin(st){format!("This approval sends the exact displayed query to the built-in search sources, one request per source. {result_destination}")}else if kind=="web_search"&&search::known(st){format!("This approval sends the exact displayed query to the saved search destination first, then the built-in sources, one request per source. {result_destination}")}else{format!("This approval sends the displayed arguments to the displayed destination. Treat returned material as source data. The configured destination handles this request. {result_destination}")};
         put(&mut pending,"warning",s(&warning));
         if get(get(&pending,"args"),"capture")!=&Null{
             let resources=if text(get(get(&pending,"args"),"capture"),"resources")=="same_origin"{" Resource scope includes credential-free CSS/PNG GETs from the final page origin after redirects, resolved from the final HTML/first base. Up to 128 resource occurrences, five redirects each, share the original page deadline and CSS 256 KiB/image 8 MiB aggregate bounds. Resource notes identify each painted or unresolved item."}else{" Resource scope covers inline CSS and embedded data PNG images."};
@@ -5472,8 +5889,14 @@ mod checks {
         let saved=step(get(&selected,"state").clone(),"save_drive",Null);
         assert_eq!(text(get(&saved,"effect"),"tool"),"phone_create");
         assert_eq!(text(get(&saved,"effect"),"tree"),"content://provider/tree/root");
-        let done=step(get(&saved,"state").clone(),"tool_result",obj(vec![("output",s("Created and verified device file snapshot.json (99 bytes)."))]));
-        assert!(text(get(&done,"state"),"notice").contains("verified"));
+        let body=text(get(get(&saved,"effect"),"args"),"content");
+        let claimed=step(get(&saved,"state").clone(),"tool_result",obj(vec![("output",s("Created and verified device file snapshot.json (99 bytes)."))]));
+        assert_eq!(text(get(&claimed,"effect"),"tool"),"phone_read");
+        assert!(!text(get(&claimed,"state"),"notice").contains("exact bytes verified"));
+        assert!(text(get(&claimed,"state"),"notice").contains("partial"));
+        let done=step(get(&claimed,"state").clone(),"tool_result",obj(vec![("output",s(&body))]));
+        assert!(text(get(&done,"state"),"notice").contains("exact bytes verified"));
+        assert_eq!(get(get(&done,"state"),"phone_snapshot"),&Null);
     }
     #[test]
     fn metrics_callbacks_preserve_visible_edits_without_saving_transport_payloads() {
@@ -5539,3 +5962,690 @@ pub fn project_readback(v:&Json)->Result<Json>{project_store::readback(v)}
 pub fn project_close(v:&Json)->Result<Json>{project_store::close(v)}
 
 pub fn project_chunks(v:&Json)->Result<Json>{project_store::chunks(v)}
+
+#[cfg(any(test, rllm_module_tests))]
+mod registry_checks {
+    use super::*;
+
+    fn ready() -> Json {
+        let mut st = blank();
+        new_chat(&mut st).unwrap();
+        put(&mut st, "dialog", s("approval"));
+        put(&mut st, "phone_access_mode", s("limited"));
+        put(&mut st, "phone_uri", s("content://test/tree/folder"));
+        st
+    }
+    fn run(state: Json, action: &str) -> Result<Json> {
+        event(&obj(vec![
+            ("state", state),
+            ("action", s(action)),
+            ("inputs", obj(vec![])),
+            ("root", s("toolchain/check-workspace")),
+        ]))
+    }
+    fn proposal(tool: &str, args: Json) -> Json {
+        obj(vec![("tool", s(tool)), ("args", args)])
+    }
+    #[cfg(rllm_module_tests)]
+    #[no_mangle]
+    pub extern "C" fn g7_registry_tests() {
+        admitted_phone_tools_reach_the_folder_handler();
+        device_service_tools_route_to_the_client();
+        retired_route_is_rejected_while_busy();
+        super::super::har_evidence::registry_reader_limits();
+    }
+    #[cfg(rllm_module_tests)]
+    #[no_mangle]
+    pub extern "C" fn g7_fix_application_tests() {
+        g7_registry_tests();
+        absolute_phone_paths_stay_inside_the_selected_folder();
+        filesystem_root_descendants_stay_inside_the_selected_folder();
+        empty_destination_reaches_builtin_search_endpoints();
+        saved_remote_default_reaches_saved_then_builtin_endpoints();
+        saved_remote_alternative_only_reaches_builtin_endpoints();
+        loopback_saved_destination_stays_out_of_the_builtin_chain();
+        phone_snapshot_is_unverified_until_exact_readback();
+        published_device_shell_forms_supply_the_identity_seal();
+        workspace_search_reports_partial_when_the_walk_stops();
+        refused_device_proposal_leaves_no_directory_or_file();
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn admitted_phone_tools_reach_the_folder_handler() {
+        let admitted = [
+            ("phone_stat", obj(vec![("path", s("notes"))])),
+            ("phone_search", obj(vec![("path", s("notes")), ("query", s("needle"))])),
+            ("phone_write", obj(vec![("path", s("notes/a.txt")), ("content", s("hello"))])),
+            ("phone_create_file", obj(vec![("path", s("notes/b.txt")), ("content", s("hello"))])),
+            ("phone_mkdir", obj(vec![("path", s("notes/dir"))])),
+            ("phone_create_folder", obj(vec![("path", s("notes/dir2"))])),
+            ("phone_rename", obj(vec![("path", s("notes/a.txt")), ("destination", s("notes/c.txt"))])),
+            ("phone_move", obj(vec![("path", s("notes/a.txt")), ("destination", s("notes/d.txt"))])),
+            ("phone_copy", obj(vec![("path", s("notes/a.txt")), ("destination", s("notes/e.txt"))])),
+        ];
+        for (name, args) in admitted {
+            assert!(harness::known_tool(name), "{name}");
+            assert!(validate_tool(&proposal(name, args.clone())).is_ok(), "{name}");
+            let mut st = ready();
+            put(&mut st, "pending", proposal(name, args.clone()));
+            let approved = run(st, "approve").unwrap_or_else(|error| panic!("{name}: {error}"));
+            let effect = get(&approved, "effect");
+            assert_eq!(text(effect, "kind"), "tool", "{name} {}", text(get(&approved, "state"), "notice"));
+            assert_eq!(text(effect, "tool"), name, "{name}");
+            let mut escaped = args.clone();
+            put(&mut escaped, "path", s("notes/../../secret"));
+            assert!(validate_tool(&proposal(name, escaped)).is_err(), "{name} traversal");
+        }
+        let native = proposal("phone_stat", obj(vec![("path", s(r"C:\folder\file.txt"))]));
+        assert!(validate_tool(&native).is_ok(), "{}", "drive path");
+        assert!(validate_tool(&proposal("phone_stat", obj(vec![("path", s("C:/folder/file.txt"))]))).is_ok());
+        assert!(validate_tool(&proposal("phone_stat", obj(vec![("path", s(r"\\server\share\file.txt"))]))).is_ok());
+        assert!(validate_tool(&proposal("phone_write", obj(vec![("path", s(r"C:\folder\..\secret")), ("content", s("x"))]))).is_err());
+        assert!(validate_tool(&proposal("phone_copy", obj(vec![("path", s("notes/a.txt")), ("destination", s(r"notes\..\secret"))]))).is_err());
+        #[cfg(windows)]
+        assert!(validate_tool(&proposal("phone_stat", obj(vec![("path", s(r"notes\file.txt"))]))).is_ok());
+        #[cfg(windows)]
+        assert!(validate_tool(&proposal("phone_stat", obj(vec![("path", s("/etc/passwd"))]))).is_err());
+        #[cfg(not(windows))]
+        assert!(validate_tool(&proposal("phone_stat", obj(vec![("path", s("/tmp/folder/file.txt"))]))).is_ok());
+        let wide = "x".repeat(1024 * 1024 + 1);
+        assert!(validate_tool(&proposal("phone_write", obj(vec![("path", s("notes/big.bin")), ("content", s(&wide))]))).is_ok());
+        assert!(validate_tool(&proposal("phone_create", obj(vec![("path", s(r"C:\folder\new.txt")), ("content", s(&wide))]))).is_ok());
+        assert!(validate_tool(&proposal("write", obj(vec![("path", s("notes/big.txt")), ("content", s(&wide))]))).is_err());
+        assert!(validate_tool(&proposal("write", obj(vec![("path", s(r"C:\folder\file.txt")), ("content", s("x"))]))).is_err());
+        for name in ["", "./new.txt", "notes/", "notes/%2e%2e", "notes/odd:name"] {
+            assert!(validate_tool(&proposal("phone_create", obj(vec![("path", s(name)), ("content", s("text"))]))).is_err(), "{name}");
+        }
+        assert!(!harness::known_tool("phone_delete"));
+        assert!(validate_tool(&proposal("phone_delete", obj(vec![("path", s("notes/a.txt"))]))).is_err());
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn device_service_tools_route_to_the_client() {
+        for name in crate::adb_client::TOOLS {
+            assert!(harness::known_tool(name), "{name}");
+            let err = tool(&obj(vec![("tool", s(name)), ("args", obj(vec![])), ("root", s("."))])).expect_err(name);
+            assert!(err.contains("the request is missing"), "{name}: {err}");
+            assert!(!err.contains("unsupported tool"), "{name}: {err}");
+        }
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn retired_route_is_rejected_while_busy() {
+        let retired = String::from_utf8([103, 111, 111, 103, 108, 101, 95, 100, 114, 105, 118, 101].to_vec()).unwrap();
+        assert!(retired_storage_action(&retired));
+        let mut busy = blank();
+        put(&mut busy, "busy", Bool(true));
+        let refused = run(busy, &retired).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(get(&refused, "effect"), &Null);
+        assert!(text(get(&refused, "state"), "notice").contains("Wait for the current operation"), "{}", text(get(&refused, "state"), "notice"));
+        assert!(boolean(get(&refused, "state"), "notice_error"));
+        let mut open = blank();
+        put(&mut open, "busy", Bool(true));
+        assert!(run(open, "status").is_ok());
+        let mut idle = blank();
+        put(&mut idle, "busy", Bool(false));
+        let migrated = run(idle.clone(), &retired).unwrap_or_else(|error| panic!("an idle saved route still migrates: {error}"));
+        assert_eq!(get(&migrated, "effect"), &Null);
+        assert_eq!(text(get(&migrated, "state"), "dialog"), if cfg!(target_os = "android") { "document_providers" } else { "workspace_storage" });
+        assert!(run(idle, "document_providers").is_ok());
+    }
+    fn folder_state(tree: &str) -> Json {
+        let mut st = ready();
+        put(&mut st, "phone_uri", s(tree));
+        put(&mut st, "phone_access_mode", s("limited"));
+        st
+    }
+    fn approve_phone(tree: &str, tool: &str, args: Json) -> Json {
+        let mut st = folder_state(tree);
+        let mut pending = proposal(tool, args);
+        if matches!(tool, "phone_read" | "phone_list") {
+            put(&mut pending, "tree", s(tree));
+            put(&mut pending, "phone_scope", s("limited"));
+        }
+        put(&mut st, "pending", pending);
+        run(st, "approve").unwrap_or_else(|error| panic!("{tool}: {error}"))
+    }
+    fn refused_outside(tree: &str, tool: &str, args: Json) {
+        let approved = approve_phone(tree, tool, args);
+        let state = get(&approved, "state");
+        let notice = text(state, "notice");
+        assert_eq!(get(&approved, "effect"), &Null, "{tool} {notice}");
+        assert!(notice.contains("outside the selected folder"), "{tool} {notice}");
+        assert!(!boolean(state, "busy"), "{tool}");
+        assert!(!boolean(state, "agent_running"), "{tool}");
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn absolute_phone_paths_stay_inside_the_selected_folder() {
+        let tree = r"C:\work\selected";
+        let outside = [
+            r"C:\Windows\win.ini",
+            r"C:\work\selected-evil\a.txt",
+            r"C:\work\selected2\a.txt",
+            r"D:\work\selected\a.txt",
+            r"\\server\other\a.txt",
+            r"\\?\C:\Windows\win.ini",
+            "C:/Windows/win.ini",
+            "C:relative.txt",
+        ];
+        for path in outside {
+            refused_outside(tree, "phone_read", obj(vec![("path", s(path))]));
+            refused_outside(tree, "phone_stat", obj(vec![("path", s(path))]));
+            refused_outside(tree, "phone_write", obj(vec![("path", s(path)), ("content", s("x"))]));
+            refused_outside(tree, "phone_copy", obj(vec![("path", s(r"C:\work\selected\a.txt")), ("destination", s(path))]));
+        }
+        refused_outside("content://test/tree/folder", "phone_stat", obj(vec![("path", s(r"C:\Windows\win.ini"))]));
+        refused_outside("content://test/tree/folder", "phone_write", obj(vec![("path", s(r"\\?\C:\Windows\win.ini")), ("content", s("x"))]));
+        refused_outside(r"\\server\share\projects", "phone_read", obj(vec![("path", s(r"\\server\share\other\a.txt"))]));
+        refused_outside(r"D:/work/tree", "phone_stat", obj(vec![("path", s(r"D:\work\tree-other\a.txt"))]));
+        let traversal = approve_phone(tree, "phone_read", obj(vec![("path", s(r"C:\work\selected\..\Windows\win.ini"))]));
+        assert_eq!(get(&traversal, "effect"), &Null, "{}", text(get(&traversal, "state"), "notice"));
+        let mut editor = folder_state(tree);
+        put(&mut editor, "edit", obj(vec![("path", s(r"C:\Windows\win.ini"))]));
+        let loaded = run(editor, "phone_update_load").unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(get(&loaded, "effect"), &Null, "{}", text(get(&loaded, "state"), "notice"));
+        assert!(text(get(&loaded, "state"), "notice").contains("outside the selected folder"));
+        let admitted = [
+            (tree, r"C:\work\selected\notes\a.txt"),
+            (tree, r"C:/work/selected/notes/a.txt"),
+            (tree, r"\\?\C:\work\selected\notes\a.txt"),
+            (tree, r"c:\WORK\selected\notes\A.TXT"),
+            (tree, r"C:\work\selected"),
+            (tree, r"C:\work\selected\"),
+            (r"D:/work/tree", r"D:\work\tree\a.txt"),
+            (r"\\server\share\projects", r"\\server\share\projects\a.txt"),
+            (r"\\?\C:\work\selected", r"C:\work\selected\a.txt"),
+        ];
+        for (folder, path) in admitted {
+            let approved = approve_phone(folder, "phone_stat", obj(vec![("path", s(path))]));
+            let effect = get(&approved, "effect");
+            assert_eq!(text(effect, "kind"), "tool", "{folder} {path} {}", text(get(&approved, "state"), "notice"));
+            assert_eq!(text(effect, "tool"), "phone_stat");
+            assert_eq!(text(get(effect, "args"), "path"), path);
+            assert_eq!(text(effect, "tree"), folder);
+        }
+        let copied = approve_phone(tree, "phone_copy", obj(vec![("path", s(r"C:\work\selected\a.txt")), ("destination", s(r"C:\work\selected\b.txt"))]));
+        assert_eq!(text(get(&copied, "effect"), "kind"), "tool", "{}", text(get(&copied, "state"), "notice"));
+        let relative = approve_phone(tree, "phone_write", obj(vec![("path", s(r"notes\a.txt")), ("content", s("hello"))]));
+        assert_eq!(text(get(&relative, "effect"), "tool"), "phone_write", "{}", text(get(&relative, "state"), "notice"));
+        let listed = approve_phone(tree, "phone_list", obj(vec![("path", s(""))]));
+        assert_eq!(text(get(&listed, "effect"), "kind"), "tool", "{}", text(get(&listed, "state"), "notice"));
+        let mut inside = folder_state(tree);
+        put(&mut inside, "edit", obj(vec![("path", s(r"C:\work\selected\a.txt"))]));
+        let reading = run(inside, "phone_update_load").unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(text(get(&reading, "effect"), "tool"), "phone_read", "{}", text(get(&reading, "state"), "notice"));
+        assert_eq!(text(get(&reading, "effect"), "tree"), tree);
+    }
+    fn chatting() -> Json {
+        let mut st = blank();
+        new_chat(&mut st).unwrap();
+        st
+    }
+    const FIRST_SOURCE:&str="api.mwmbl.org/api/v2/search/";
+    const SECOND_SOURCE:&str="html.duckduckgo.com/html/";
+    const SAVED_URL:&str="https://search.example.test/find?q={query}";
+    const SAVED_TARGET:&str="search.example.test/find";
+    fn set_search(mut st:Json,url:Option<&str>,without_review:Option<bool>)->Json{
+        if url.is_none()&&without_review.is_none(){return st;}
+        let mut web=get(&st,"web").clone();
+        if web==Null{web=obj(vec![]);}
+        if let Some(url)=url{put(&mut web,"search_url",s(url));}
+        if let Some(value)=without_review{put(&mut web,"search_without_review",Bool(value));}
+        put(&mut st,"web",web);
+        st
+    }
+    fn open_search(st:Json,query:&str,source:Option<&str>)->Json{
+        let opened=run(st,"web_search").unwrap_or_else(|error|panic!("{error}"));
+        let mut st=get(&opened,"state").clone();
+        let mut edit=obj(vec![("query",s(query))]);
+        if let Some(source)=source{put(&mut edit,"source",s(source));}
+        put(&mut st,"edit",edit);
+        run(st,"web_search_review").unwrap_or_else(|error|panic!("{error}"))
+    }
+    fn request_target(effect:&Json)->String{
+        let wire=text(effect,"wire");
+        let path=wire.split_whitespace().nth(1).unwrap_or("");
+        let path=path.split('?').next().unwrap_or(path);
+        format!("{}{path}",text(effect,"host"))
+    }
+    fn search_endpoints(mut decided:Json)->(Vec<String>,String){
+        let mut found=Vec::new();
+        let mut notice=String::new();
+        for _ in 0..4{
+            let effect=get(&decided,"effect").clone();
+            notice=text(get(&decided,"state"),"notice");
+            if text(&effect,"kind")!="network"||text(&effect,"purpose")!="web_tool"{break;}
+            let wire=text(&effect,"wire");
+            assert!(wire.starts_with("GET "),"{notice} {wire}");
+            assert!(wire.contains("q=scopeprobe"),"{wire}");
+            assert!(!text(&effect,"web_ticket").is_empty(),"{notice}");
+            let wait=number(&effect,"search_delay_ms");
+            if wait>0{std::thread::sleep(std::time::Duration::from_millis(wait as u64));}
+            found.push(request_target(&effect));
+            let state=get(&decided,"state").clone();
+            decided=event(&obj(vec![
+                ("state",state),
+                ("action",s("network_result")),
+                ("inputs",obj(vec![
+                    ("purpose",s("web_tool")),
+                    ("web_ticket",s(&text(&effect,"web_ticket"))),
+                    ("data",s(&network::b64(b"HTTP/1.1 500 Unavailable\r\nContent-Length: 0\r\n\r\n"))),
+                ])),
+                ("root",s("toolchain/check-workspace")),
+            ])).unwrap_or_else(|error|panic!("{error}"));
+        }
+        (found,notice)
+    }
+    fn assert_endpoints(decided:&Json,expected:&[&str]){
+        assert_eq!(text(get(decided,"effect"),"kind"),"network","{}",text(get(decided,"state"),"notice"));
+        assert!(boolean(get(decided,"state"),"busy"),"{}",text(get(decided,"state"),"notice"));
+        let (found,notice)=search_endpoints(decided.clone());
+        assert_eq!(found,expected.iter().map(|item|(*item).to_string()).collect::<Vec<_>>(),"{notice}");
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn empty_destination_reaches_builtin_search_endpoints(){
+        let expected=[FIRST_SOURCE,SECOND_SOURCE];
+        for without in [None,Some(true),Some(false)]{
+            let reviewed=open_search(set_search(chatting(),None,without),"scopeprobe",None);
+            assert_eq!(text(get(&reviewed,"effect"),"purpose"),"web_tool","{}",text(get(&reviewed,"state"),"notice"));
+            assert_endpoints(&reviewed,&expected);
+        }
+        let mut pending=set_search(chatting(),None,Some(false));
+        put(&mut pending,"dialog",s("approval"));
+        put(&mut pending,"pending",obj(vec![("tool",s("web_search")),("format_review",Bool(true)),("manual",Bool(true)),("args",obj(vec![("query",s("scopeprobe"))]))]));
+        let shown=run(pending,"review").unwrap_or_else(|error|panic!("{error}"));
+        assert_eq!(get(&shown,"effect"),&Null,"{}",text(get(&shown,"state"),"notice"));
+        let warning=text(get(get(&shown,"state"),"pending"),"warning");
+        assert!(warning.contains("built-in search sources"),"{warning}");
+        assert!(!warning.contains("not sent")&&!warning.contains("owns the listener"),"{warning}");
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn saved_remote_default_reaches_saved_then_builtin_endpoints(){
+        let expected=[SAVED_TARGET,FIRST_SOURCE,SECOND_SOURCE];
+        for without in [None,Some(true)]{
+            let reviewed=open_search(set_search(chatting(),Some(SAVED_URL),without),"scopeprobe",Some("default"));
+            assert!(text(get(&reviewed,"effect"),"wire").contains("search.example.test"),"{}",text(get(&reviewed,"effect"),"wire"));
+            assert_endpoints(&reviewed,&expected);
+        }
+        let reviewed=open_search(set_search(chatting(),Some(SAVED_URL),Some(false)),"scopeprobe",Some("default"));
+        assert_eq!(get(&reviewed,"effect"),&Null,"{}",text(get(&reviewed,"state"),"notice"));
+        assert_eq!(text(get(&reviewed,"state"),"dialog"),"approval");
+        assert!(!boolean(get(&reviewed,"state"),"busy"));
+        assert_eq!(text(get(get(&reviewed,"state"),"pending"),"destination"),SAVED_URL);
+        let warning=text(get(get(&reviewed,"state"),"pending"),"warning");
+        assert!(warning.contains("saved search destination"),"{warning}");
+        assert!(!warning.contains("not sent")&&!warning.contains("owns the listener"),"{warning}");
+        let approved=run(get(&reviewed,"state").clone(),"approve").unwrap_or_else(|error|panic!("{error}"));
+        assert_endpoints(&approved,&expected);
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn saved_remote_alternative_only_reaches_builtin_endpoints(){
+        let expected=[SECOND_SOURCE];
+        for without in [None,Some(false),Some(true)]{
+            let reviewed=open_search(set_search(chatting(),Some(SAVED_URL),without),"scopeprobe",Some("alternative"));
+            let wire=text(get(&reviewed,"effect"),"wire");
+            assert!(!wire.contains("search.example.test"),"{wire}");
+            assert_endpoints(&reviewed,&expected);
+        }
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn loopback_saved_destination_stays_out_of_the_builtin_chain(){
+        let url="http://127.0.0.1:9/search?q={query}";
+        let reviewed=open_search(set_search(chatting(),Some(url),None),"scopeprobe",None);
+        let effect=get(&reviewed,"effect");
+        let notice=text(get(&reviewed,"state"),"notice");
+        assert_eq!(text(effect,"kind"),"network","{notice}");
+        assert_eq!(text(effect,"host"),"127.0.0.1","{notice}");
+        assert_eq!(number(effect,"port"),9,"{notice}");
+        let wire=text(effect,"wire");
+        assert!(wire.contains("q=scopeprobe"),"{wire}");
+        assert!(!wire.contains("/api/v2/search/")&&!wire.contains("/html/"),"{wire}");
+        let alternate=open_search(set_search(chatting(),Some(url),Some(false)),"scopeprobe",Some("alternative"));
+        let notice=text(get(&alternate,"state"),"notice");
+        assert_eq!(get(&alternate,"effect"),&Null,"{notice}");
+        assert!(notice.contains("retained"),"{notice}");
+        assert!(!boolean(get(&alternate,"state"),"busy"));
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn workspace_search_reports_partial_when_the_walk_stops() {
+        let root = std::path::Path::new(r"C:\Users\Public\RLLM\loops-lanes\G7-fix3-application-proof");
+        let small = root.join("search-small");
+        let large = root.join("search-budget");
+        let _ = std::fs::remove_dir_all(&small);
+        let _ = std::fs::remove_dir_all(&large);
+        std::fs::create_dir_all(&small).unwrap();
+        std::fs::create_dir_all(&large).unwrap();
+        std::fs::write(small.join("hit.txt"), "needle\n").unwrap();
+        std::fs::write(small.join("miss.txt"), "other\n").unwrap();
+        let search_at = |dir: &std::path::Path| {
+            tool(&obj(vec![
+                ("tool", s("search")),
+                ("args", obj(vec![("path", s("")), ("query", s("needle"))])),
+                ("root", s(dir.to_str().unwrap())),
+            ])).unwrap_or_else(|error| panic!("{error}")).text().unwrap().to_string()
+        };
+        let complete = search_at(&small);
+        assert!(complete.contains("hit.txt"), "{complete}");
+        assert!(complete.contains("needle"), "{complete}");
+        assert!(!complete.contains("partial"), "{complete}");
+        for index in 0..520 {
+            let body = if index == 0 { "needle\n" } else { "x\n" };
+            std::fs::write(large.join(format!("f{index:04}.txt")), body).unwrap();
+        }
+        let partial = search_at(&large);
+        assert!(partial.contains("partial"), "{partial}");
+        assert!(partial.contains("entry or time budget"), "{partial}");
+        assert!(!partial.contains("complete"), "{partial}");
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn filesystem_root_descendants_stay_inside_the_selected_folder() {
+        assert!(phone_path_inside_selected("/", "/"));
+        assert!(phone_path_inside_selected("/", "/tmp"));
+        assert!(phone_path_inside_selected("/", "/tmp/file"));
+        assert!(phone_path_inside_selected("//", "/tmp/file"));
+        assert!(phone_path_inside_selected("/tmp", "/tmp/file"));
+        assert!(!phone_path_inside_selected("/tmp", "/tmp-evil"));
+        assert!(!phone_path_inside_selected("/tmp", "/"));
+        assert!(!phone_path_inside_selected("/tmp", "/var/tmp"));
+        assert!(phone_path_inside_selected(r"C:\", r"C:\"));
+        assert!(phone_path_inside_selected(r"C:\", r"C:\Windows\win.ini"));
+        assert!(phone_path_inside_selected(r"C:\", "C:/Windows/win.ini"));
+        assert!(phone_path_inside_selected(r"C:\\", r"C:\Windows\win.ini"));
+        assert!(phone_path_inside_selected("C:/", r"c:\Windows\System32\ntdll.dll"));
+        assert!(!phone_path_inside_selected(r"C:\", r"D:\Windows\win.ini"));
+        assert!(!phone_path_inside_selected(r"C:\", "C:relative.txt"));
+        assert!(phone_path_inside_selected(r"C:\work", r"C:\work\a.txt"));
+        assert!(!phone_path_inside_selected(r"C:\work", r"C:\work-evil\a.txt"));
+        assert!(!phone_path_inside_selected(r"C:\work", r"C:\Windows\win.ini"));
+        let admitted = approve_phone(r"C:\", "phone_stat", obj(vec![("path", s(r"C:\Windows\win.ini"))]));
+        assert_eq!(text(get(&admitted, "effect"), "kind"), "tool", "{}", text(get(&admitted, "state"), "notice"));
+        assert_eq!(text(get(get(&admitted, "effect"), "args"), "path"), r"C:\Windows\win.ini");
+        refused_outside(r"C:\", "phone_stat", obj(vec![("path", s(r"D:\Windows\win.ini"))]));
+        let nested = approve_phone(r"C:\", "phone_write", obj(vec![("path", s(r"C:\notes\a.txt")), ("content", s("x"))]));
+        assert_eq!(text(get(&nested, "effect"), "tool"), "phone_write", "{}", text(get(&nested, "state"), "notice"));
+    }
+    fn snapshot_callback(state: &Json, action: &str, inputs: Json) -> Json {
+        event(&obj(vec![
+            ("state", state.clone()),
+            ("action", s(action)),
+            ("inputs", inputs),
+            ("root", s("toolchain/check-workspace")),
+        ])).unwrap_or_else(|error| panic!("{action}: {error}"))
+    }
+    fn snapshot_inputs(state: &Json, mut inputs: Json) -> Json {
+        let local = get(state, "operation_expected");
+        if local != &Null {
+            if get(&inputs, "purpose") == &Null { put(&mut inputs, "purpose", s("local_tool")); }
+            if get(&inputs, "tool_ticket") == &Null { put(&mut inputs, "tool_ticket", get(local, "ticket").clone()); }
+        }
+        inputs
+    }
+    fn snapshot_result(state: &Json, output: &str) -> Json {
+        snapshot_callback(state, "tool_result", snapshot_inputs(state, obj(vec![("output", s(output))])))
+    }
+    fn snapshot_write(write_output: &str) -> (Json, String) {
+        let mut st = ready();
+        put(&mut st, "drive", obj(vec![("phone_default", Bool(true))]));
+        put(&mut st, "phone_uri", s("content://provider/tree/root"));
+        let saved = run(st, "save_drive").unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(text(get(&saved, "effect"), "tool"), "phone_create", "{}", text(get(&saved, "state"), "notice"));
+        let body = text(get(get(&saved, "effect"), "args"), "content");
+        assert!(!body.is_empty());
+        assert!(text(get(&saved, "state"), "notice").contains("not reported as saved"));
+        assert!(!text(get(&saved, "state"), "notice").contains("exact bytes verified"));
+        let written = snapshot_result(get(&saved, "state"), write_output);
+        (written, body)
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn phone_snapshot_is_unverified_until_exact_readback() {
+        let (claimed, body) = snapshot_write("Created and verified device file snapshot.json (99 bytes).");
+        assert_eq!(text(get(&claimed, "effect"), "tool"), "phone_read", "{}", text(get(&claimed, "state"), "notice"));
+        let notice = text(get(&claimed, "state"), "notice");
+        assert!(notice.contains("partial"), "{notice}");
+        assert!(!notice.contains("exact bytes verified"), "{notice}");
+        assert!(!notice.contains("Created and verified"), "{notice}");
+        assert_eq!(text(get(get(&claimed, "state"), "phone_snapshot"), "phase"), "verifying");
+        let mut fresh = ready();
+        put(&mut fresh, "drive", obj(vec![("phone_default", Bool(true))]));
+        put(&mut fresh, "phone_uri", s("content://provider/tree/root"));
+        let saved = run(fresh, "save_drive").unwrap_or_else(|error| panic!("{error}"));
+        let exact = text(get(get(&saved, "effect"), "args"), "content");
+        let echoed = snapshot_result(get(&saved, "state"), &exact);
+        assert_eq!(text(get(&echoed, "effect"), "tool"), "phone_read", "{}", text(get(&echoed, "state"), "notice"));
+        assert!(!text(get(&echoed, "state"), "notice").contains("exact bytes verified"));
+        let matched = snapshot_result(get(&claimed, "state"), &body);
+        assert!(text(get(&matched, "state"), "notice").contains("exact bytes verified"), "{}", text(get(&matched, "state"), "notice"));
+        assert_eq!(get(get(&matched, "state"), "phone_snapshot"), &Null);
+        assert!(!boolean(get(&matched, "state"), "busy"));
+        for bad in [
+            String::new(),
+            body[..body.len().saturating_sub(1)].to_string(),
+            format!("{body} "),
+            format!("{body}x"),
+            "Created and verified".into(),
+        ] {
+            let (pending, _) = snapshot_write("Created and verified");
+            let mismatch = snapshot_result(get(&pending, "state"), &bad);
+            let notice = text(get(&mismatch, "state"), "notice");
+            assert!(notice.contains("partial"), "{notice}");
+            assert!(notice.contains("not reported as saved"), "{notice}");
+            assert!(!notice.contains("exact bytes verified"), "{notice}");
+            assert_eq!(get(&mismatch, "effect"), &Null, "{notice}");
+            assert_eq!(text(get(get(&mismatch, "state"), "phone_snapshot"), "phase"), "interrupted");
+            assert!(!boolean(get(&mismatch, "state"), "busy"));
+        }
+        let mut writing_state = ready();
+        put(&mut writing_state, "drive", obj(vec![("phone_default", Bool(true))]));
+        put(&mut writing_state, "phone_uri", s("content://provider/tree/root"));
+        let started = run(writing_state, "save_drive").unwrap_or_else(|error| panic!("{error}"));
+        let writing = get(&started, "state").clone();
+        let cancelled = snapshot_callback(&writing, "cancel", obj(vec![]));
+        let notice = text(get(&cancelled, "state"), "notice");
+        assert!(notice.contains("not reported as saved"), "{notice}");
+        assert!(!notice.contains("exact bytes verified"), "{notice}");
+        assert_eq!(text(get(get(&cancelled, "state"), "phone_snapshot"), "phase"), "interrupted");
+        let mut fail_ready = ready();
+        put(&mut fail_ready, "drive", obj(vec![("phone_default", Bool(true))]));
+        put(&mut fail_ready, "phone_uri", s("content://provider/tree/root"));
+        let failing = run(fail_ready, "save_drive").unwrap_or_else(|error| panic!("{error}"));
+        let live = get(&failing, "state").clone();
+        let failed = snapshot_callback(&live, "failure", snapshot_inputs(&live, obj(vec![("error", s("device write failed")), ("purpose", s("local_tool"))])));
+        let notice = text(get(&failed, "state"), "notice");
+        assert!(notice.contains("partial"), "{notice}");
+        assert!(notice.contains("not reported as saved"), "{notice}");
+        assert!(!notice.contains("exact bytes verified"), "{notice}");
+        assert_eq!(text(get(get(&failed, "state"), "phone_snapshot"), "phase"), "interrupted");
+        let (verifying, _) = snapshot_write("Created and verified");
+        let resumed = snapshot_callback(get(&verifying, "state"), "resume", obj(vec![]));
+        let notice = text(get(&resumed, "state"), "notice");
+        assert!(notice.contains("not reported as saved"), "{notice}");
+        assert!(!notice.contains("exact bytes verified"), "{notice}");
+        assert_eq!(text(get(get(&resumed, "state"), "phone_snapshot"), "phase"), "interrupted");
+    }
+    struct RestoreEnv {
+        key: &'static str,
+        previous: Option<String>,
+    }
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            unsafe {
+                match self.previous.take() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+    fn hold_env(key: &'static str, value: &str) -> RestoreEnv {
+        let previous = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, value); }
+        RestoreEnv { key, previous }
+    }
+    fn device_connect_args(dir: &str) -> Json {
+        obj(vec![
+            ("host", s("127.0.0.1")),
+            ("port", Num("1".into())),
+            ("data_dir", s(dir)),
+            ("opt_in_root", Bool(false)),
+            ("timeout_ms", Num("200".into())),
+        ])
+    }
+    fn model_turn(state: Json, action: &str, mut inputs: Json, root: &str) -> Result<Json> {
+        if matches!(action, "network_result" | "failure") && text(&inputs, "purpose") == "model" {
+            if inputs == Null { inputs = obj(vec![]); }
+            put(&mut inputs, "model_ticket", get(&state, "model_expected").clone());
+        }
+        event(&obj(vec![
+            ("state", state),
+            ("action", s(action)),
+            ("inputs", inputs),
+            ("root", s(root)),
+        ]))
+    }
+    fn device_chat(workspace: &str) -> Json {
+        let mut st = blank();
+        new_chat(&mut st).unwrap();
+        put(&mut st, "profiles", Arr(vec![obj(vec![
+            ("name", s("Lab")),
+            ("endpoint", s("http://127.0.0.1:9/v1/chat/completions")),
+            ("model", s("manual-model")),
+            ("protocol", s("chat")),
+            ("plain", Bool(true)),
+        ])]));
+        let mut current = chat(&st);
+        put(&mut current, "answer_mode", s("investigate"));
+        replace_chat(&mut st, current);
+        put(&mut st, "approval_root", s(workspace));
+        put(&mut st, "draft", s("connect the selected device"));
+        st
+    }
+    fn propose_device(st: Json, dir: &str, root: &str) -> Result<Json> {
+        let sent = model_turn(st, "send", obj(vec![]), root)?;
+        let content = obj(vec![
+            ("tool", s("device_shell_connect")),
+            ("args", device_connect_args(dir)),
+        ]).string();
+        let body = obj(vec![(
+            "choices",
+            Arr(vec![obj(vec![
+                ("message", obj(vec![("role", s("assistant")), ("content", s(&content))])),
+                ("finish_reason", s("stop")),
+            ])]),
+        )]).string();
+        let wire = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        model_turn(
+            get(&sent, "state").clone(),
+            "network_result",
+            obj(vec![("purpose", s("model")), ("data", s(&network::b64(wire.as_bytes())))]),
+            root,
+        )
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn published_device_shell_forms_supply_the_identity_seal() {
+        let home = std::path::Path::new(r"C:\Users\Public\RLLM\loops-lanes\G7-fix5-application-proof\device-data-home");
+        let _ = std::fs::remove_dir_all(home);
+        std::fs::create_dir_all(home).unwrap();
+        let _restore = hold_env("XDG_DATA_HOME", home.to_str().unwrap());
+        let dir = harness::product_data_directory().join("device-seal");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_text = dir.to_str().unwrap();
+        let connect = tool(&obj(vec![
+            ("tool", s("device_shell_connect")),
+            ("args", obj(vec![
+                ("host", s("127.0.0.1")),
+                ("port", Num("1".into())),
+                ("data_dir", s(dir_text)),
+                ("opt_in_root", Bool(false)),
+                ("timeout_ms", Num("200".into())),
+            ])),
+            ("root", s(".")),
+        ]));
+        let err = connect.expect_err("published connect form");
+        assert!(!err.contains("seal_b64"), "{err}");
+        assert!(!err.contains("unsupported tool"), "{err}");
+        assert!(!err.contains("32 bytes"), "{err}");
+        let stored = std::fs::read(dir.join("installation-seal.bin")).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(stored.len(), 32);
+        let seal = network::b64(&stored);
+        let wired = crate::adb_client::call(
+            "device_shell_connect",
+            &format!("{{\"host\":\"127.0.0.1\",\"port\":1,\"data_dir\":\"x\",\"opt_in_root\":false,\"timeout_ms\":200,\"seal_b64\":\"{seal}\"}}"),
+        );
+        if let Err(err) = wired {
+            assert!(!err.contains("seal_b64"), "{err}");
+            assert!(!err.contains("32 bytes"), "{err}");
+        }
+        let pair = tool(&obj(vec![
+            ("tool", s("device_shell_pair")),
+            ("args", obj(vec![
+                ("host", s("127.0.0.1")),
+                ("port", Num("1".into())),
+                ("code", s("123456")),
+                ("data_dir", s(dir_text)),
+                ("timeout_ms", Num("200".into())),
+            ])),
+            ("root", s(".")),
+        ]));
+        let err = pair.expect_err("published pair form");
+        assert!(!err.contains("seal_b64"), "{err}");
+        let kept = tool(&obj(vec![
+            ("tool", s("device_shell_connect")),
+            ("args", obj(vec![
+                ("host", s("127.0.0.1")),
+                ("port", Num("1".into())),
+                ("data_dir", s(dir_text)),
+                ("seal_b64", s("YQ==")),
+                ("timeout_ms", Num("200".into())),
+            ])),
+            ("root", s(".")),
+        ]));
+        let err = kept.expect_err("supplied seal");
+        assert!(err.contains("32 bytes"), "{err}");
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn refused_device_proposal_leaves_no_directory_or_file() {
+        let proof = std::path::Path::new(r"C:\Users\Public\RLLM\loops-lanes\G7-fix5-application-proof");
+        let outside = proof.join("refused-seal");
+        let _ = std::fs::remove_dir_all(&outside);
+        assert!(!outside.exists());
+        let dir = outside.join("identity");
+        let dir_text = dir.to_str().unwrap();
+        for name in ["device_shell_connect", "device_shell_pair"] {
+            let mut args = device_connect_args(dir_text);
+            if name == "device_shell_pair" { put(&mut args, "code", s("123456")); }
+            let refused = tool(&obj(vec![("tool", s(name)), ("args", args), ("root", s("."))]));
+            let err = refused.expect_err(name);
+            assert!(err.contains("identity directory"), "{name} {err}");
+            assert!(!outside.exists(), "{name} created {}", outside.display());
+        }
+        let workspace = proof.join("device-workspace");
+        let _ = std::fs::remove_dir_all(&workspace);
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace_text = workspace.to_str().unwrap();
+        let proposed = propose_device(device_chat(workspace_text), dir_text, workspace_text);
+        match &proposed {
+            Ok(value) => assert!(value.string().contains("identity directory"), "{}", value.string()),
+            Err(error) => assert!(error.contains("identity directory"), "{error}"),
+        }
+        assert!(!outside.exists(), "refused model proposal created {}", outside.display());
+        assert!(!dir.join("installation-seal.bin").exists());
+        let inside = workspace.join("approved-identity");
+        let _ = std::fs::remove_dir_all(&inside);
+        let inside_text = inside.to_str().unwrap();
+        let shown = propose_device(device_chat(workspace_text), inside_text, workspace_text).unwrap_or_else(|error| panic!("{error}"));
+        assert!(!inside.exists(), "proposal created the identity directory before approval");
+        let state = get(&shown, "state");
+        if text(state, "dialog") == "approval" {
+            assert!(text(get(get(state, "pending"), "args"), "seal_b64").is_empty(), "{}", state.string());
+            let rejected = model_turn(state.clone(), "reject", obj(vec![]), workspace_text).unwrap_or_else(|error| panic!("{error}"));
+            assert!(!inside.exists(), "{}", rejected.string());
+        }
+        let mut pending = chatting();
+        put(&mut pending, "approval_root", s(workspace_text));
+        put(&mut pending, "dialog", s("approval"));
+        put(&mut pending, "pending", proposal("device_shell_connect", device_connect_args(inside_text)));
+        assert!(!inside.exists());
+        let approved = model_turn(pending, "approve", obj(vec![]), workspace_text);
+        let seal = inside.join("installation-seal.bin");
+        assert!(seal.is_file(), "approved request did not store the seal ({approved:?})");
+        assert_eq!(std::fs::read(&seal).unwrap().len(), 32);
+    }
+}
