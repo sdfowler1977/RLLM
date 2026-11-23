@@ -38,6 +38,8 @@ fn write_row(out: &mut String, number: usize, row: &str) {
 }
 
 /// Bundle UTF-8 lines that follow the `EVB1` marker.
+/// The marker line is `marker EVB1` when that prefix is present.
+/// A missing prefix does not invent a marker.
 pub fn evidence_bundle_bytes(bytes: &[u8]) -> String {
     let Some(rest) = bytes.strip_prefix(b"EVB1\n") else {
         return "The bundle was not installed.\n".to_string();
@@ -45,7 +47,12 @@ pub fn evidence_bundle_bytes(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(rest);
     let owned: Vec<String> = text.lines().map(str::to_string).collect();
     let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
-    evidence_bundle(&refs)
+    let mut out = evidence_bundle(&refs);
+    let header = "evidence bundle\n";
+    if out.starts_with(header) {
+        out.insert_str(header.len(), "marker EVB1\n");
+    }
+    out
 }
 
 #[cfg(test)]
@@ -66,8 +73,9 @@ mod tests {
         let text = evidence_bundle_bytes(b"EVB1\nalpha\nbeta\n");
         assert_eq!(
             text,
-            "evidence bundle\nrow 1 alpha\nrow 2 beta\nbundle rows 2\nThe bundle was not installed.\n"
+            "evidence bundle\nmarker EVB1\nrow 1 alpha\nrow 2 beta\nbundle rows 2\nThe bundle was not installed.\n"
         );
+        assert!(text.contains("marker EVB1\n"), "{text}");
     }
 
     #[test]
