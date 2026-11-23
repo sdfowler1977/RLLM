@@ -137,7 +137,7 @@ pub(super) fn dashboard(st:&Json)->Json{
         plot(rows,"APP-ESTIMATED TOKEN THROUGHPUT",&[("estimated","Visible characters ÷ 4 / device time","success")],"estimated tok/s"),
         plot(rows,"RESPONSE LATENCY",&[("elapsed_ms","Total","accent"),("first_text_ms","First text","violet")],"ms"),
         plot(rows,"OBSERVED TEXT THROUGHPUT",&[("characters","Counted characters / device time","success")],"chars/s"),
-        plot(rows,"REPORTED TOKEN THROUGHPUT",&[("tokens","Server token count / device time","violet")],"tokens/s"),
+        plot(rows,"TOKEN COUNT FROM THE HARNESS REPLY",&[("tokens","Token count inside the harness reply / device time","violet")],"tokens/s"),
         heat(rows),
     ];
     cards.push(obj(vec![("kind",s("text")),("title",s("MEASUREMENTS")),
@@ -145,7 +145,7 @@ pub(super) fn dashboard(st:&Json)->Json{
     let identity=if filter==&Null{"All models".into()}else{format!("{} · {}",model_label(filter),text(filter,"endpoint"))};
     obj(vec![("subtitle",s(&format!("{identity} · {} · {} recorded requests",if get(st,"request_record")!=&Null{"Request in progress"}else{"Request history"},rows.len()))),
         ("window",Num(count.to_string())),("range_label",s(&format!("Average over last {count} runs · {} retained",rows.len()))),("live",live_gauge),("gauges",Arr(gauges)),("cards",Arr(cards)),
-        ("actions",Arr(vec![button("Server monitor","server_monitor"),button("Models and statistics","monitor:models"),button("All models","monitor:all"),button("Request details","monitor:details"),button("Measurement details","monitor:measurements")]))])
+        ("actions",Arr(vec![button("Calculated record","server_monitor"),button("Models and statistics","monitor:models"),button("All models","monitor:all"),button("Request details","monitor:details"),button("Measurement details","monitor:measurements")]))])
 }
 fn model_label(row:&Json)->String{let name=text(row,"model");if name.is_empty(){"Model unrecorded".into()}else{name}}
 fn statistic(row:&Json,key:&str,unit:&str)->String{label(numeric(row,key),unit)}
