@@ -70,12 +70,24 @@ fn stale(sample:&Json)->bool{match(text(sample,"received_ns").parse::<u128>(),no
 fn age(sample:&Json)->String{let timestamp=text(sample,"received_ns").parse::<u128>().ok();let clock=now().parse::<u128>().ok();match(timestamp,clock){(Some(t),Some(n))if n>=t=>format!("{:.1} s",(n-t)as f64/1e9),_=>"Unavailable".into()}}
 fn quantile(rows:&[Json],key:&str,p:usize)->String{let mut values=rows.iter().filter_map(|r|finite(get(r,key))).collect::<Vec<_>>();if values.is_empty(){return "Unavailable".into();}values.sort_by(|a,b|a.total_cmp(b));format!("{:.3} s",values[(values.len()*p+99)/100-1])}
 fn row(key:&str,title:&str,value:String)->Json{field_ui(key,title,&value,"readonly")}
+fn local_record(st:&Json)->Vec<Json>{
+ let rows=array(st,"requests");
+ let completed=rows.iter().filter(|r|text(r,"outcome")=="success").count();
+ vec![
+  row("basis","Calculated here","Elapsed time, first text, character counts, and character÷4 estimates come from harness requests this app completed. A token count is kept only when that count was already inside the harness reply. These local counts stay beside the server-reported sample.".into()),
+  row("count","Retained requests",format!("{} retained · {completed} completed",rows.len())),
+ ]
+}
 pub(super) fn modal(st:&Json)->Json{
  if text(st,"dialog")=="server_monitor_settings"{
-  let e=get(st,"edit");return super::modal("Server monitor connection",vec![field_ui("url","Exact metrics JSON URL",&text(e,"url"),"uri"),field_ui("key","Separate bearer key (optional)",&text(e,"key"),"secret"),field_ui("scope","Source","Enter the direct server /metrics URL or your monitor's /monitor/metrics URL. Refresh is manual. Model, search and tool keys are never reused. Server readings are reported values, not device measurements.","readonly")],vec![button("Save monitor connection","server_monitor_save")]);
+  let e=get(st,"edit");
+  let mut fields=vec![field_ui("url","Exact metrics JSON URL",&text(e,"url"),"uri"),field_ui("key","Separate bearer key (optional)",&text(e,"key"),"secret"),field_ui("scope","Source","Enter the direct server /metrics URL or your monitor's /monitor/metrics URL. Refresh is manual. Model, search and tool keys are never reused. Server readings are reported values, not device measurements.","readonly")];
+  fields.extend(local_record(st));
+  return super::modal("Server monitor connection",fields,vec![button("Save monitor connection","server_monitor_save")]);
  }
  let sample=get(st,"server_monitor_sample");let live=get(sample,"live");let hw=get(sample,"hardware");let config=get(st,"server_monitor");
  let mut fields=vec![row("source","Source and freshness",format!("Configured: {}\nRecorded source: {}\nSample age: {}\n{}\nManual snapshot; values may have changed. All values below are reported by the server.",endpoint_summary(&text(config,"url")),endpoint_summary(&text(sample,"url")),age(sample),if !text(st,"server_monitor_error").is_empty(){text(st,"server_monitor_error")}else if sample==&Null{"No sample received".into()}else if text(config,"url")!=text(sample,"url"){"STALE: source changed".into()}else if stale(sample){"STALE: more than 60 seconds old or clock unavailable; refresh for current values".into()}else{"Last received sample; refresh for current values".into()}))];
+ fields.extend(local_record(st));
  match text(st,"server_monitor_panel").as_str(){
   "hardware"=>{
    fields.push(row("host","Server hardware",format!("CPU: {}\nRAM used / total: {} / {}\nGPU memory used / total: {} / {}\nGPU power: {}",val(hw,"cpu"," %"),val(hw,"ram_used"," bytes"),val(hw,"ram_total"," bytes"),val(hw,"gpu_mem_used"," bytes"),val(hw,"gpu_mem_total"," bytes"),val(hw,"gpu_power"," W"))));
@@ -91,12 +103,68 @@ pub(super) fn modal(st:&Json)->Json{
  }
  super::modal("Server monitor",fields,vec![button("Refresh now","server_monitor_refresh"),button("Connection","server_monitor_settings"),button("Overview","server_monitor_panel:overview"),button("GPU and memory","server_monitor_panel:hardware"),button("Request flow","server_monitor_panel:flow"),button("Performance","server_monitor_panel:performance"),button("Sample history","server_monitor_panel:history")])
 }
-#[cfg(test)]mod checks{
+#[cfg(any(test, rllm_module_tests))]
+mod checks{
  use super::*;
- #[test]fn missing_and_invalid_measurements_are_not_zero(){let s=summarize(r#"{"live":{"tok_s":0,"queued":-1},"hardware":{"cpu":"40","ram_used":1e999}}"#).unwrap();assert_eq!(get(get(&s,"live"),"tok_s"),&Num("0".into()));assert_eq!(get(get(&s,"live"),"queued"),&Null);assert_eq!(get(get(&s,"hardware"),"cpu"),&Null);assert_eq!(get(get(&s,"hardware"),"ram_used"),&Null);assert!(summarize("{}").is_err());}
- #[test]fn shape_and_history_inputs_are_bounded(){let raw=obj(vec![("live",obj(vec![("slots",Arr(vec![obj(vec![]);200]))])),("hardware",obj(vec![("gpus",Arr(vec![obj(vec![]);200]))])),("requests",Arr(vec![obj(vec![("duration_s",Num("1".into()))]);200]))]);let sample=summarize(&raw.string()).unwrap();assert_eq!(array(get(&sample,"live"),"slots").len(),32);assert_eq!(array(get(&sample,"hardware"),"gpus").len(),16);assert_eq!(array(&sample,"requests").len(),64);assert_eq!(quantile(&array(&sample,"requests"),"duration_s",95),"1.000 s");}
- #[test]fn credentials_and_callback_purpose_are_isolated(){let mut st=obj(vec![("server_monitor",obj(vec![("url",s("http://metrics.test/metrics")),("key",s("monitor-only"))])),("profiles",Arr(vec![obj(vec![("key",s("model-secret"))])]))]);let effect=event(&mut st,"server_monitor_refresh",&Null).unwrap();assert!(text(&effect,"wire").contains("monitor-only"));assert!(!text(&effect,"wire").contains("model-secret"));let unchanged=st.clone();network_event(&mut st,"failure",&obj(vec![("purpose",s("server_metrics:obsolete"))])).unwrap();assert_eq!(st,unchanged);let purpose=text(&effect,"purpose");network_event(&mut st,"failure",&obj(vec![("purpose",s(&purpose))])).unwrap();assert_eq!(get(&st,"server_monitor_pending"),&Null);assert!(!boolean(&st,"busy"));}
- #[test]fn exact_source_success_retention_and_manual_history_limit(){
+ fn field_value(view:&Json,key:&str)->String{array(view,"fields").into_iter().find(|f|text(f,"key")==key).map(|f|text(&f,"value")).unwrap_or_default()}
+ fn field_label(view:&Json,key:&str)->String{array(view,"fields").into_iter().find(|f|text(f,"key")==key).map(|f|text(&f,"label")).unwrap_or_default()}
+ #[cfg_attr(not(rllm_module_tests), test)]
+ fn refresh_returns_a_request_and_the_dialog_keeps_server_views_and_local_counts(){
+  let mut st=obj(vec![
+   ("server_monitor",obj(vec![("url",s("http://metrics.test/metrics")),("key",s("monitor-only"))])),
+   ("requests",Arr(vec![obj(vec![("outcome",s("success"))]),obj(vec![("outcome",s("stopped"))])])),
+  ]);
+  let effect=event(&mut st,"server_monitor_refresh",&Null).unwrap();
+  assert_ne!(effect,Null);
+  assert_eq!(text(&effect,"kind"),"network");
+  assert!(text(&effect,"purpose").starts_with(PREFIX));
+  assert!(text(&effect,"wire").starts_with("GET "));
+  assert!(text(&effect,"wire").contains("metrics.test"));
+  assert!(text(&effect,"wire").contains("monitor-only"));
+  assert_eq!(text(&st,"dialog"),"server_monitor");
+  let view=modal(&st);
+  assert_eq!(text(&view,"title"),"Server monitor");
+  let buttons:Vec<String>=array(&view,"buttons").iter().map(|b|text(b,"event")).collect();
+  for name in ["server_monitor_refresh","server_monitor_panel:overview","server_monitor_panel:hardware","server_monitor_panel:flow","server_monitor_panel:performance","server_monitor_panel:history"]{
+   assert!(buttons.iter().any(|event|event==name),"{name}");
+  }
+  assert_eq!(field_value(&view,"count"),"2 retained · 1 completed");
+  assert!(field_value(&view,"basis").contains("harness requests"));
+  assert!(field_value(&view,"overview").contains("Reported decode"));
+  event(&mut st,"server_monitor_panel:hardware",&Null).unwrap();
+  let hardware=modal(&st);
+  assert!(field_value(&hardware,"host").contains("GPU memory"));
+  assert_eq!(field_value(&hardware,"count"),"2 retained · 1 completed");
+  event(&mut st,"server_monitor_panel:flow",&Null).unwrap();
+  assert!(field_value(&modal(&st),"queue").contains("Outside slots"));
+  event(&mut st,"server_monitor_panel:performance",&Null).unwrap();
+  let performance=field_value(&modal(&st),"performance");
+  assert!(performance.contains("p50"));
+  assert!(performance.contains("p95"));
+  event(&mut st,"server_monitor_panel:history",&Null).unwrap();
+  assert_eq!(text(&st,"server_monitor_panel"),"history");
+  assert_eq!(field_value(&modal(&st),"count"),"2 retained · 1 completed");
+  let body=r#"{"live":{"state":"busy","phase":"decode","queued":1,"running":2,"tok_s":3.5},"hardware":{"cpu":11,"gpus":[{"index":0,"name":"adapter","util":10}]},"totals":{"requests":9},"requests":[{"duration_s":1.5}]}"#;
+  let wire=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",body.len());
+  network_event(&mut st,"network_result",&obj(vec![("purpose",get(&effect,"purpose").clone()),("data",s(&network::b64(wire.as_bytes())))])).unwrap();
+  let history=modal(&st);
+  assert!(field_value(&history,"sample_0").contains("metrics.test"));
+  assert_eq!(field_value(&history,"count"),"2 retained · 1 completed");
+  event(&mut st,"server_monitor_panel:hardware",&Null).unwrap();
+  assert!(field_label(&modal(&st),"gpu_0").contains("adapter"));
+  event(&mut st,"server_monitor_panel:overview",&Null).unwrap();
+  assert!(field_value(&modal(&st),"overview").contains("busy"));
+  event(&mut st,"server_monitor_panel:performance",&Null).unwrap();
+  assert!(field_value(&modal(&st),"performance").contains("1 retained request"));
+ }
+ #[cfg_attr(not(rllm_module_tests), test)]
+ fn missing_and_invalid_measurements_are_not_zero(){let s=summarize(r#"{"live":{"tok_s":0,"queued":-1},"hardware":{"cpu":"40","ram_used":1e999}}"#).unwrap();assert_eq!(get(get(&s,"live"),"tok_s"),&Num("0".into()));assert_eq!(get(get(&s,"live"),"queued"),&Null);assert_eq!(get(get(&s,"hardware"),"cpu"),&Null);assert_eq!(get(get(&s,"hardware"),"ram_used"),&Null);assert!(summarize("{}").is_err());}
+ #[cfg_attr(not(rllm_module_tests), test)]
+ fn shape_and_history_inputs_are_bounded(){let raw=obj(vec![("live",obj(vec![("slots",Arr(vec![obj(vec![]);200]))])),("hardware",obj(vec![("gpus",Arr(vec![obj(vec![]);200]))])),("requests",Arr(vec![obj(vec![("duration_s",Num("1".into()))]);200]))]);let sample=summarize(&raw.string()).unwrap();assert_eq!(array(get(&sample,"live"),"slots").len(),32);assert_eq!(array(get(&sample,"hardware"),"gpus").len(),16);assert_eq!(array(&sample,"requests").len(),64);assert_eq!(quantile(&array(&sample,"requests"),"duration_s",95),"1.000 s");}
+ #[cfg_attr(not(rllm_module_tests), test)]
+ fn credentials_and_callback_purpose_are_isolated(){let mut st=obj(vec![("server_monitor",obj(vec![("url",s("http://metrics.test/metrics")),("key",s("monitor-only"))])),("profiles",Arr(vec![obj(vec![("key",s("model-secret"))])]))]);let effect=event(&mut st,"server_monitor_refresh",&Null).unwrap();assert!(text(&effect,"wire").contains("monitor-only"));assert!(!text(&effect,"wire").contains("model-secret"));let unchanged=st.clone();network_event(&mut st,"failure",&obj(vec![("purpose",s("server_metrics:obsolete"))])).unwrap();assert_eq!(st,unchanged);let purpose=text(&effect,"purpose");network_event(&mut st,"failure",&obj(vec![("purpose",s(&purpose))])).unwrap();assert_eq!(get(&st,"server_monitor_pending"),&Null);assert!(!boolean(&st,"busy"));}
+ #[cfg_attr(not(rllm_module_tests), test)]
+ fn exact_source_success_retention_and_manual_history_limit(){
   let mut st=obj(vec![("server_monitor",obj(vec![("url",s("http://metrics.test/metrics"))]))]);
   let body=r#"{"live":{"tok_s":0,"queued":2},"hardware":{"cpu":0},"requests":[{"duration_s":2},{"duration_s":10}]}"#;
   let wire=format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",body.len());
@@ -108,12 +176,21 @@ pub(super) fn modal(st:&Json)->Json{
   let e=event(&mut st,"server_monitor_refresh",&Null).unwrap();let failed="HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nshorter";
   network_event(&mut st,"network_result",&obj(vec![("purpose",get(&e,"purpose").clone()),("data",s(&network::b64(failed.as_bytes())))])).unwrap();assert_eq!(get(&st,"server_monitor_sample"),&saved);assert!(!text(&st,"server_monitor_error").is_empty());
  }
-
- #[test]fn unrelated_cancellation_does_not_change_sample_status(){
+ #[cfg_attr(not(rllm_module_tests), test)]
+ fn unrelated_cancellation_does_not_change_sample_status(){
   let mut st=obj(vec![("server_monitor_sample",obj(vec![("url",s("http://metrics.test/metrics"))]))]);
   interrupt(&mut st,"Metrics cancelled");assert_eq!(get(&st,"server_monitor_error"),&Null);
   put(&mut st,"server_monitor_pending",obj(vec![("purpose",s("server_metrics:pending"))]));
   interrupt(&mut st,"Metrics cancelled");assert_eq!(text(&st,"server_monitor_error"),"Metrics cancelled");assert_eq!(get(&st,"server_monitor_pending"),&Null);
  }
-
+ #[cfg(rllm_module_tests)]
+ #[no_mangle]
+ pub extern "C" fn x2_remote_monitor_tests(){
+  refresh_returns_a_request_and_the_dialog_keeps_server_views_and_local_counts();
+  missing_and_invalid_measurements_are_not_zero();
+  shape_and_history_inputs_are_bounded();
+  credentials_and_callback_purpose_are_isolated();
+  exact_source_success_retention_and_manual_history_limit();
+  unrelated_cancellation_does_not_change_sample_status();
+ }
 }
