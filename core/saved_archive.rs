@@ -1,7 +1,8 @@
 //! Stored-method and raw-deflate zip members, including one HAR text member.
 //! At most 16 entry names are listed. The first name that ends with `.har`
 //! is extracted when its method is stored (method 0) or a raw deflate block
-//! (method 8) using fixed Huffman codes. A dynamic Huffman block is not read.
+//! (method 8) using fixed Huffman codes, including a length-distance copy.
+//! A dynamic Huffman block is not read.
 //! At most 16 URL rows are taken from the literal marker `"url": "`.
 //! The 17th entry is named when another entry exists, and later rows are
 //! reported as not listed when another URL exists.
@@ -669,6 +670,36 @@ mod checks {
             saved_archive(&zip),
             "entry 0 capture.har\nrow 1 https://example.test/z\nThe archive was not installed.\nThe session was not replayed.\n"
         );
+    }
+
+    #[test]
+    fn fixed_huffman_backreference_is_read() {
+        let har = br#"{"url": "https://example.test/aaaa"}"#;
+        // Final fixed-Huffman block. One literal a, then a length-3 distance-1 copy.
+        let packed = [
+            171, 86, 42, 45, 202, 81, 178, 82, 80, 202, 40, 41, 41, 40, 182, 210, 215, 79, 173, 72, 204, 45, 200, 73, 213, 43, 73, 45, 46, 209, 79, 4, 2, 165, 90, 0,
+        ];
+        let zip = method_eight_packed("capture.har", har, &packed);
+        assert_eq!(
+            saved_archive(&zip),
+            "entry 0 capture.har\nrow 1 https://example.test/aaaa\nThe archive was not installed.\nThe session was not replayed.\n"
+        );
+    }
+
+    #[test]
+    fn dynamic_huffman_block_is_not_read() {
+        let har = br#""url": "https://example.test/hidden""#;
+        // Final dynamic-Huffman block: BFINAL = 1, BTYPE = 2. HLIT, HDIST, and HCLEN are zero.
+        let packed = [0x05u8, 0x00, 0x00];
+        assert_eq!(packed[0] & 0b111, 0b101);
+        let zip = method_eight_packed("capture.har", har, &packed);
+        let text = saved_archive(&zip);
+        assert!(text.contains("entry 0 capture.har\n"), "{text}");
+        assert!(text.contains("member capture.har was not extracted: deflate block was not read\n"), "{text}");
+        assert!(!text.contains("https://example.test/hidden"), "{text}");
+        assert!(!text.contains("row "), "{text}");
+        assert!(text.contains("The archive was not installed.\n"), "{text}");
+        assert!(text.contains("The session was not replayed.\n"), "{text}");
     }
 
     fn method_eight(name: &str, body: &[u8]) -> Vec<u8> {
