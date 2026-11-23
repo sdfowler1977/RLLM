@@ -137,11 +137,32 @@ fn encode_base64(bytes: &[u8]) -> Result<String> {
     Ok(out)
 }
 fn prefix_limit() -> u64 { entry_limit().saturating_mul(64) }
-fn stop_unless_running() -> Result<()> {
+/// Which cancellation check an unpack uses. `ProcessWide` is the process-wide flag.
+#[derive(Clone, Copy)]
+pub(crate) enum ArchiveStop {
+    ProcessWide,
+    Token(u64),
+}
+thread_local! {
+    static UNPACK_STOP: std::cell::Cell<Option<ArchiveStop>> = const { std::cell::Cell::new(None) };
+}
+fn process_wide_stop() -> Result<()> {
     if crate::execution::cancelled() {
         Err("Archive operation cancelled before completion".into())
     } else {
         Ok(())
+    }
+}
+fn stop_unless_running() -> Result<()> {
+    match UNPACK_STOP.with(|slot| slot.get()) {
+        Some(ArchiveStop::Token(token)) => {
+            if crate::execution::token_cancelled(token) {
+                Err("Archive operation cancelled before completion".into())
+            } else {
+                Ok(())
+            }
+        }
+        Some(ArchiveStop::ProcessWide) | None => process_wide_stop(),
     }
 }
 fn vec_string_bytes(values: &Vec<String>) -> u64 {
@@ -4967,6 +4988,20 @@ fn member_bytes(method: u16, flags: u16, compressed: &[u8], expanded: usize, dic
     }
 }
 pub(crate) fn unpack(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
+    unpack_checked(bytes, ArchiveStop::ProcessWide)
+}
+/// Same expansion as `unpack`. `stop` replaces the process-wide check for this call,
+/// including every check inside member expansion. The previous check is restored on return.
+pub(crate) fn unpack_checked(bytes: &[u8], stop: ArchiveStop) -> Result<Vec<(String, Vec<u8>)>> {
+    struct Restore(Option<ArchiveStop>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0;
+            UNPACK_STOP.with(|slot| slot.set(previous));
+        }
+    }
+    let previous = UNPACK_STOP.with(|slot| slot.replace(Some(stop)));
+    let _restore = Restore(previous);
     unpack_resident(bytes, 0)
 }
 fn unpack_resident(bytes: &[u8], outside: u64) -> Result<Vec<(String, Vec<u8>)>> {

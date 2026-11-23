@@ -80,7 +80,7 @@ pub(super) fn saved_file_capture(root:&Path,relative:&str,access:&operation::Ins
     let (n,_digest)=held.scan(&g,|chunk|{kept.extend_from_slice(chunk);Ok(())})?;
     if n!=expected||kept.len() as u64!=n{return Err("Selected file changed during saved-capture observation".into());}
     g.check()?;
-    Ok(super::super::har_evidence::file_capture(&kept,true))
+    Ok(super::super::har_evidence::file_capture_scoped(&kept,true,access.cancellation_token))
 }
 /// JavaScript and ASAR bytes use the same reader limit as a saved capture.
 /// A file above the limit is a named refusal. The bytes are not parsed.
@@ -230,4 +230,60 @@ fn write_clean_room(held:&mut Held,g:&Guard,args:&Json,bound:&Json,n:u64,hash:&s
   assert!(kept.contains("kept-specifier"),"{kept}");
   assert!(kept.contains("specifier \"kept-specifier\" bare."),"{kept}");
  }
+}
+#[cfg(any(test, rllm_module_tests))]
+mod scoped_capture_checks {
+    use super::*;
+    #[cfg(rllm_module_tests)]
+    #[no_mangle]
+    pub extern "C" fn g7_file_evidence_scoped_capture_test() {
+        public_inspection_is_not_refused_by_unrelated_global_cancellation();
+    }
+    #[cfg_attr(not(rllm_module_tests), test)]
+    fn public_inspection_is_not_refused_by_unrelated_global_cancellation() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                super::super::super::execution::reset();
+            }
+        }
+        let _reset = Reset;
+        super::super::super::execution::reset();
+        let dir = std::env::temp_dir().join(format!("rllm-saved-scope-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        struct DropDir(std::path::PathBuf);
+        impl Drop for DropDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _drop = DropDir(dir.clone());
+        let root = dir.canonicalize().unwrap();
+        let raw = br#"{"log":{"entries":[{"request":{"method":"GET","url":"https://e.test/saved-scope","headers":[{"name":"Content-Type","value":"text/plain"}]},"response":{"status":200,"content":{"mimeType":"text/plain","size":1},"bodySize":1}}]}}"#;
+        fs::write(root.join("saved-scope.json"), raw).unwrap();
+        let flag = Arc::new(AtomicBool::new(false));
+        let scope = super::super::super::execution::CancellationScope::new(flag.clone()).expect("scoped inspection");
+        let token = scope.token();
+        super::super::super::execution::cancel();
+        assert!(super::super::super::execution::cancelled());
+        assert!(!super::super::super::execution::token_cancelled(token));
+        let access = operation::InspectionAccess {
+            list: true,
+            read: true,
+            graph: false,
+            budget: 2 * 1024 * 1024,
+            root_identity: None,
+            cancellation_token: token,
+            deadline: Instant::now() + std::time::Duration::from_secs(30),
+        };
+        let view = saved_file_capture(&root, "saved-scope.json", &access).unwrap_or_else(|error| panic!("{error}"));
+        let text = view.string();
+        assert!(text.contains("https://e.test/saved-scope"), "{text}");
+        assert!(!text.contains("partial"), "{text}");
+        assert!(!text.contains("cancelled"), "{text}");
+        assert!(!text.contains("unusable"), "{text}");
+    }
 }
