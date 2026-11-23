@@ -1,7 +1,10 @@
 //! Provider-owned search. Returned blocks are untrusted evidence and cannot
 //! authorize a phone operation.
 use super::*;
-pub const MODE:&str="messages_search_v1";
+pub const MODE:&str="messages_search";
+pub const RESPONSES_SEARCH:&str="responses_search";
+pub const GOOGLE_SEARCH:&str="google_search";
+const MESSAGES_TOOL_TYPE:&str="web_search_20250305";
 pub const MAX_BLOCK_BYTES:usize=256*1024;
 pub const MAX_BODY:usize=4*1024*1024;
 fn text<'a>(v:&'a Json,k:&str)->&'a str{v.get(k).and_then(Json::text).unwrap_or("")}
@@ -26,8 +29,8 @@ pub fn mode(p:&Json)->Option<Mode>{
  match text(p,"hosted_search"){
   ""|"auto"=>official(p),
   MODE=>Some(Mode::Messages),
-  "responses_search_v1"=>Some(Mode::Responses),
-  "google_search_v1"=>Some(Mode::Google),
+  RESPONSES_SEARCH=>Some(Mode::Responses),
+  GOOGLE_SEARCH=>Some(Mode::Google),
   _=>None,
  }
 }
@@ -35,7 +38,7 @@ pub fn automatic_continuation(p:&Json)->bool{official(p)==Some(Mode::Messages)}
 pub fn enabled(p:&Json)->bool{mode(p).is_some()}
 pub fn validate(p:&Json)->Result<()>{
  if let Ok(value)=p.get("hosted_search"){if !matches!(value,Null|Str(_)){return Err("Choose a provider-hosted search mode".into());}}
- if !["","auto","off",MODE,"responses_search_v1","google_search_v1"].contains(&text(p,"hosted_search")){return Err("Unknown provider-hosted search mode".into());}
+ if !["","auto","off",MODE,RESPONSES_SEARCH,GOOGLE_SEARCH].contains(&text(p,"hosted_search")){return Err("Unknown provider-hosted search mode".into());}
  match mode(p){
   Some(Mode::Messages) if text(p,"protocol")!="messages"=>Err("Hosted search requires the Messages API. Enter its Messages endpoint explicitly.".into()),
   Some(Mode::Google) if text(p,"protocol")!="content"=>Err("Google grounding requires the Content API.".into()),
@@ -57,7 +60,7 @@ pub fn identity()->Result<Json>{static SERIAL:std::sync::atomic::AtomicU64=std::
 pub fn declare(body:&mut Json,mode:Mode,profile:&Json)->Result<()>{
  let tool=match mode{
   Mode::Messages=>{
-   let mut tool=obj(vec![("type",s("web_search_20250305")),("name",s("web_search"))]);
+   let mut tool=obj(vec![("type",s(MESSAGES_TOOL_TYPE)),("name",s("web_search"))]);
    if official(profile)==Some(Mode::Messages){put(&mut tool,"max_uses",Num("3".into()));}
    tool
   },
