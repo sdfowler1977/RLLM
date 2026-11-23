@@ -6,6 +6,25 @@
 
 const EDGE_LIMIT: usize = 32;
 
+/// One direct edge calculated from saved bytes. The subject process was not attached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReachEdge {
+    pub at: usize,
+    pub kind: &'static str,
+    pub target: i64,
+}
+
+/// Direct encodings already present in this file, written in one slice. The subject process was not attached.
+const FIXTURE: &[u8] = &[
+    0xE8, 0x10, 0x00, 0x00, 0x00, 0xE8, 0xF0, 0xFF, 0xFF, 0xFF, 0xE9, 0x10, 0x00, 0x00, 0x00, 0xEB,
+    0x05, 0x74, 0x05, 0x70, 0x00, 0x7F, 0xFE,
+];
+
+/// Edges calculated from this file's saved fixture bytes. The subject process was not attached.
+pub fn fixture_reach_edges() -> Vec<ReachEdge> {
+    listed_edges(FIXTURE)
+}
+
 enum Note {
     Edge { len: usize, kind: &'static str, target: i64 },
     Unresolved { len: usize },
@@ -179,9 +198,35 @@ fn target_at(at: usize, len: usize, displacement: i64) -> Option<i64> {
     next.checked_add(displacement)
 }
 
+fn listed_edges(bytes: &[u8]) -> Vec<ReachEdge> {
+    let mut edges = Vec::new();
+    let mut at = 0usize;
+    while at < bytes.len() {
+        match note_at(bytes, at) {
+            Note::Edge { len, kind, target } => {
+                if edges.len() >= EDGE_LIMIT {
+                    break;
+                }
+                edges.push(ReachEdge { at, kind, target });
+                match at.checked_add(len) {
+                    Some(next) => at = next,
+                    None => break,
+                }
+            }
+            Note::Unresolved { len } | Note::Skip { len } => match at.checked_add(len) {
+                Some(next) => at = next,
+                None => break,
+            },
+            Note::Truncated => break,
+            Note::Byte => at += 1,
+        }
+    }
+    edges
+}
+
 #[cfg(test)]
 mod tests {
-    use super::reach_edges;
+    use super::{fixture_reach_edges, reach_edges, ReachEdge, FIXTURE};
 
     #[test]
     fn direct_call_records_concrete_target() {
@@ -250,6 +295,33 @@ mod tests {
         assert_eq!(
             reach_edges(&[0x70, 0x00, 0x7F, 0xFE]),
             "jo at 0x0 targets 0x2\njg at 0x2 targets 0x2\nThe subject process was not attached."
+        );
+    }
+
+    #[test]
+    fn fixture_reach_edges_names_the_saved_edges() {
+        assert_eq!(
+            reach_edges(FIXTURE),
+            "call at 0x0 targets 0x15\n\
+             call at 0x5 targets 0xfffffffffffffffa\n\
+             jump at 0xa targets 0x1f\n\
+             short jump at 0xf targets 0x16\n\
+             je at 0x11 targets 0x18\n\
+             jo at 0x13 targets 0x15\n\
+             jg at 0x15 targets 0x15\n\
+             The subject process was not attached."
+        );
+        assert_eq!(
+            fixture_reach_edges(),
+            vec![
+                ReachEdge { at: 0x0, kind: "call", target: 0x15 },
+                ReachEdge { at: 0x5, kind: "call", target: -6 },
+                ReachEdge { at: 0xa, kind: "jump", target: 0x1f },
+                ReachEdge { at: 0xf, kind: "short jump", target: 0x16 },
+                ReachEdge { at: 0x11, kind: "je", target: 0x18 },
+                ReachEdge { at: 0x13, kind: "jo", target: 0x15 },
+                ReachEdge { at: 0x15, kind: "jg", target: 0x15 },
+            ]
         );
     }
 }
