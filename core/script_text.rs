@@ -287,4 +287,14 @@ mod tests {
         let out = script_text(r#""say \"\x41""#);
         assert_eq!(out, "\"say \\\"A\"\nThe script was not executed.", "{out}");
     }
+
+    #[test]
+    fn a_lone_surrogate_stays_source_text() {
+        let high = script_text(r#""\uD800""#);
+        assert_eq!(high, "\"\\uD800\"\nThe script was not executed.", "{high}");
+        let low = script_text(r#""\uDC00""#);
+        assert_eq!(low, "\"\\uDC00\"\nThe script was not executed.", "{low}");
+        let followed = script_text(r#""\uD800\u0041""#);
+        assert_eq!(followed, "\"\\uD800A\"\nThe script was not executed.", "{followed}");
+    }
 }
