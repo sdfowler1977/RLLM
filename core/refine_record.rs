@@ -520,3 +520,46 @@ fn leakage_and_budget_block_acceptance() {
     let kept = RefineRecord::judge_round(4, 1, 4, "plain", "", "");
     assert_eq!(RefineRecord::blocking_refusal(&kept), None);
 }
+
+#[cfg(test)]
+#[test]
+fn a_noise_floor_refusal_does_not_block_acceptance() {
+    let noisy = RefineRecord::judge_round(4, 4, 4, "plain", "", "");
+    assert!(
+        noisy.contains("gain inside the noise floor was refused\n"),
+        "{noisy}"
+    );
+    assert_eq!(RefineRecord::blocking_refusal(&noisy), None);
+}
+
+#[cfg(test)]
+#[test]
+fn later_edits_are_not_run_after_stop() {
+    let mut record = RefineRecord::new(64, 0, "sealed-token");
+    record.propose(3, 0, 1, "candidate");
+    record.stop();
+    record.record_edit(9, 0, 40_000, "sealed-token after-stop-edit");
+    let report = record.report();
+    assert_eq!(
+        report,
+        joined(&[
+            "round 1 score 3 gain 3 cost 1 bytes kept true leakage false stall false",
+            "edit 1 round 1 cost 1 bytes kept true",
+            "rounds 1 of 8",
+            "edit history 1 of 32",
+            "edit budget 64 bytes remaining 63 bytes",
+            "noise floor 0",
+            "stall clear",
+            "leakage clear",
+            "candidate was kept",
+            "STOP ends the record",
+            "the instructions were not executed",
+            "the product process was not restarted",
+        ])
+    );
+    assert!(!report.contains("after-stop-edit"), "{report}");
+    assert!(!report.contains("edit 2 "), "{report}");
+    assert!(!report.contains("leakage was refused"), "{report}");
+    assert!(!report.contains("cost outside the byte budget was refused"), "{report}");
+    assert_eq!(RefineRecord::blocking_refusal(&report), None);
+}
