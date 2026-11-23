@@ -88,7 +88,7 @@ fn symbol_lines(bytes: &[u8], table: &Symtab) -> String {
         let section = bytes[at + 5];
         let value = read_u64(bytes, at + 8).unwrap_or(0);
         let name = symbol_name(bytes, table.stroff, table.strsize, strx);
-        out.push_str(&format!("symbol {index} {name} type 0x{kind:x} sect {section} value 0x{value:x}\n"));
+        out.push_str(&format!("symbol {index} {name} strx {strx} type 0x{kind:x} sect {section} value 0x{value:x}\n"));
         listed += 1;
     }
     if missing || listed < table.nsyms.min(MAX_SYMBOLS) {
@@ -207,7 +207,7 @@ mod tests {
         bytes[73..78].copy_from_slice(b"_main");
         assert_eq!(
             mach_symbols(&bytes),
-            "symbol 0 _main type 0xf sect 1 value 0x1000\nThe symbols were not linked.\n"
+            "symbol 0 _main strx 1 type 0xf sect 1 value 0x1000\nThe symbols were not linked.\n"
         );
     }
 
@@ -220,8 +220,8 @@ mod tests {
         bytes[40..44].copy_from_slice(&56u32.to_le_bytes());
         bytes[44..48].copy_from_slice(&17u32.to_le_bytes());
         let report = mach_symbols(&bytes);
-        assert!(report.starts_with("symbol 0 (unnamed) type 0x0 sect 0 value 0x0\n"), "{report}");
-        assert!(report.contains("symbol 15 (unnamed) type 0x0 sect 0 value 0x0\n"), "{report}");
+        assert!(report.starts_with("symbol 0 (unnamed) strx 0 type 0x0 sect 0 value 0x0\n"), "{report}");
+        assert!(report.contains("symbol 15 (unnamed) strx 0 type 0x0 sect 0 value 0x0\n"), "{report}");
         assert!(report.contains("later symbols were not listed\nThe symbols were not linked.\n"), "{report}");
         assert!(!report.contains("symbol 16 "), "{report}");
     }
@@ -241,7 +241,27 @@ mod tests {
         let shown = "A".repeat(64);
         assert_eq!(
             mach_symbols(&bytes),
-            format!("symbol 0 {shown}... type 0x0 sect 0 value 0x0\nThe symbols were not linked.\n")
+            format!("symbol 0 {shown}... strx 1 type 0x0 sect 0 value 0x0\nThe symbols were not linked.\n")
+        );
+    }
+
+    #[test]
+    fn string_index_is_listed() {
+        let mut bytes = header(1, 24, 80);
+        bytes[32..36].copy_from_slice(&0x2u32.to_le_bytes());
+        bytes[36..40].copy_from_slice(&24u32.to_le_bytes());
+        bytes[40..44].copy_from_slice(&56u32.to_le_bytes());
+        bytes[44..48].copy_from_slice(&1u32.to_le_bytes());
+        bytes[48..52].copy_from_slice(&72u32.to_le_bytes());
+        bytes[52..56].copy_from_slice(&7u32.to_le_bytes());
+        bytes[56..60].copy_from_slice(&2u32.to_le_bytes());
+        bytes[60] = 0x0f;
+        bytes[61] = 1;
+        bytes[64..72].copy_from_slice(&0x1000u64.to_le_bytes());
+        bytes[73..78].copy_from_slice(b"_main");
+        assert_eq!(
+            mach_symbols(&bytes),
+            "symbol 0 main strx 2 type 0xf sect 1 value 0x1000\nThe symbols were not linked.\n"
         );
     }
 
