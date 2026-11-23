@@ -1,5 +1,7 @@
 mod application;
 mod host_fs;
+#[path = "adb_client.rs"]
+mod adb_client;
 mod self_build;
 mod rrsi;
 mod archive;

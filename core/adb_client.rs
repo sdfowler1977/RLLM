@@ -1,0 +1,8379 @@
+//! Client for the device debugging service.
+//!
+//! The wire layout, secure upgrade, pairing transcript, file records, and
+//! command stream follow the service's published message definitions.
+//! Research: RFC 7932, RFC 8446, RFC 8878, FIPS 180-4, FIPS 186-5, NIST SP 800-38D.
+
+mod adb_tls;
+
+use std::collections::HashMap;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
+
+pub const TOOLS: &[&str] = &[
+    "device_shell_connect",
+    "device_shell_pair",
+    "device_shell_status",
+    "device_shell_command",
+    "device_shell_list",
+    "device_shell_stat",
+    "device_shell_read",
+    "device_shell_write",
+    "device_shell_install",
+    "device_shell_close",
+];
+
+const A_CNXN: u32 = 0x4e58_4e43;
+const A_OPEN: u32 = 0x4e45_504f;
+const A_OKAY: u32 = 0x5941_4b4f;
+const A_CLSE: u32 = 0x4553_4c43;
+const A_WRTE: u32 = 0x4554_5257;
+const A_AUTH: u32 = 0x4854_5541;
+const A_STLS: u32 = 0x534c_5453;
+const TOKEN: u32 = 1;
+const SIGNATURE: u32 = 2;
+const RSAPUBLICKEY: u32 = 3;
+const PROTOCOL: u32 = 0x0100_0001;
+const MIN_VERSION: u32 = 0x0100_0000;
+const MAX_VERSION: u32 = PROTOCOL;
+const MIN_MAXDATA: u32 = 4 * 1024;
+const MAX_PAYLOAD: usize = 1024 * 1024;
+const MAX_OUTPUT: usize = 8 * 1024 * 1024;
+const MAX_FILE: usize = 32 * 1024 * 1024;
+const MAX_STREAM_FRAMES: usize = 16 * 1024 * 1024;
+const MAX_STORED_RECORD: u64 = 1024 * 1024;
+const DATA_CHUNK: usize = 64 * 1024;
+const MAX_DIR_ENTRIES: usize = 8_192;
+const MAX_NAME: usize = 4_096;
+const MAX_PATH: usize = 1024;
+const MAX_SESSIONS: usize = 8;
+const MAX_DISCOVERY: usize = 64;
+const MAX_PACKETS: usize = 1_024;
+const MAX_EMPTY: usize = 32;
+const MAX_PAIR_PAYLOAD: usize = 64 * 1024;
+const PEER_INFO_LEN: usize = 8_192;
+const PEER_INFO_PUBLIC_KEY: u8 = 0;
+const PEER_INFO_DEVICE_GUID: u8 = 1;
+const SYNC_ENOENT: u32 = 2;
+const SYNC_FLAG_BROTLI: u32 = 1;
+const SYNC_FLAG_LZ4: u32 = 2;
+const SYNC_FLAG_ZSTD: u32 = 4;
+const SYNC_FLAG_DRY_RUN: u32 = 0x8000_0000;
+const HOST_BANNER: &[u8] = b"host::features=shell_v2,cmd,stat_v2,ls_v2,sendrecv_v2,sendrecv_v2_brotli,sendrecv_v2_lz4,sendrecv_v2_zstd,sendrecv_v2_dry_run_send\0";
+const FRAME_MAGIC: u32 = 0x184D_2204;
+const FRAME_BLOCK: usize = 64 * 1024;
+
+pub struct ConnectOptions {
+    pub host: String,
+    pub port: u16,
+    pub data_dir: String,
+    pub seal: Option<Vec<u8>>,
+    pub opt_in_root: bool,
+    pub built_in_ready: bool,
+    pub timeout_ms: u64,
+}
+
+pub struct PairOptions {
+    pub host: String,
+    pub port: u16,
+    pub code: String,
+    pub data_dir: String,
+    pub seal: Option<Vec<u8>>,
+    pub timeout_ms: u64,
+}
+
+#[derive(Clone)]
+pub struct Status {
+    pub connected: bool,
+    pub secure: bool,
+    pub command_tier: String,
+    pub file_tier: String,
+    pub built_in_ready: bool,
+    pub identity_confirmed: bool,
+    pub root_note: String,
+    pub features: String,
+}
+
+pub struct CommandOutput {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub exit_code: Option<u8>,
+    pub partial: bool,
+    pub reason: String,
+}
+
+pub struct FileChunk {
+    pub bytes: Vec<u8>,
+    pub partial: bool,
+    pub reason: String,
+    pub next_offset: u64,
+}
+
+#[derive(Clone)]
+pub struct DirEntry {
+    pub name: String,
+    pub mode: u32,
+    pub size: u64,
+    pub mtime: i64,
+    pub error: u32,
+}
+
+#[derive(Clone)]
+pub struct FileStat {
+    pub present: bool,
+    pub mode: u32,
+    pub size: u64,
+    pub mtime: i64,
+}
+
+#[derive(Clone)]
+pub struct ServiceAddress {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+}
+
+struct Frame {
+    cmd: u32,
+    arg0: u32,
+    arg1: u32,
+    data: Vec<u8>,
+}
+
+struct ShellSplit {
+    kind: u8,
+    remaining: usize,
+}
+
+struct ShellHold {
+    local: u32,
+    remote: u32,
+    extended: bool,
+    pending: Vec<u8>,
+    closed: bool,
+    split: Option<ShellSplit>,
+}
+
+struct ReadHold {
+    path: String,
+    next_offset: u64,
+    stash: Vec<u8>,
+    decoder: Option<PayloadDecoder>,
+}
+
+struct WriteHold {
+    path: String,
+    sent: u64,
+    mode: u32,
+    flags: u32,
+    encoder: Option<PayloadEncoder>,
+}
+
+struct InstallHold {
+    local: u32,
+    remote: u32,
+    tool: String,
+    session_id: String,
+    expected: u64,
+    sent: u64,
+}
+
+enum Io {
+    Plain(TcpStream),
+    Secure(adb_tls::SecurePipe),
+}
+
+pub struct Session {
+    io: Io,
+    next_id: u32,
+    peer_max: u32,
+    features: Vec<String>,
+    banner: String,
+    secure: bool,
+    connected: bool,
+    command_tier: String,
+    identity_confirmed: bool,
+    root_wrap: bool,
+    root_note: String,
+    key: adb_tls::PrivateKey,
+    public_line: String,
+    sync_local: u32,
+    sync_remote: u32,
+    sync_buf: Vec<u8>,
+    io_timeout: Duration,
+    deadline: Instant,
+    shell_hold: Option<ShellHold>,
+    read_hold: Option<ReadHold>,
+    write_hold: Option<WriteHold>,
+    install_hold: Option<InstallHold>,
+    link: Option<Shuttle>,
+}
+
+struct SlotMap<T> {
+    live: HashMap<String, T>,
+    out: HashMap<String, bool>,
+}
+
+impl<T> SlotMap<T> {
+    fn new() -> Self {
+        Self { live: HashMap::new(), out: HashMap::new() }
+    }
+
+    fn occupied(&self) -> usize {
+        self.live.len().saturating_add(self.out.len())
+    }
+
+    fn len(&self) -> usize {
+        self.occupied()
+    }
+
+    fn contains_key(&self, id: &str) -> bool {
+        self.live.contains_key(id) || self.out.contains_key(id)
+    }
+
+    fn ensure(&self, id: &str) -> Result<(), String> {
+        if self.out.contains_key(id) {
+            return Err("that device session is in use".into());
+        }
+        if self.live.contains_key(id) || self.occupied() < MAX_SESSIONS {
+            Ok(())
+        } else {
+            Err(session_limit_message())
+        }
+    }
+
+    fn insert(&mut self, id: String, value: T) -> Result<(), String> {
+        if self.out.contains_key(&id) {
+            drop(value);
+            return Err("that device session is in use".into());
+        }
+        if !self.live.contains_key(&id) && self.occupied() >= MAX_SESSIONS {
+            drop(value);
+            return Err(session_limit_message());
+        }
+        self.live.insert(id, value);
+        Ok(())
+    }
+
+    fn take(&mut self, id: &str) -> Result<T, String> {
+        let value = self.live.remove(id).ok_or_else(|| "there is no device session with that name".to_string())?;
+        self.out.insert(id.to_string(), false);
+        Ok(value)
+    }
+
+    fn restore(&mut self, id: String, value: T) {
+        match self.out.remove(&id) {
+            Some(true) => drop(value),
+            Some(false) => {
+                self.live.insert(id, value);
+            }
+            None if self.occupied() < MAX_SESSIONS => {
+                self.live.insert(id, value);
+            }
+            None => drop(value),
+        }
+    }
+
+    fn close(&mut self, id: &str) -> Result<(), String> {
+        if self.live.remove(id).is_some() {
+            return Ok(());
+        }
+        match self.out.get_mut(id) {
+            Some(flag) => {
+                *flag = true;
+                Ok(())
+            }
+            None => Err("there is no device session with that name".into()),
+        }
+    }
+}
+
+fn sessions() -> &'static Mutex<SlotMap<Session>> {
+    static SESSIONS: OnceLock<Mutex<SlotMap<Session>>> = OnceLock::new();
+    SESSIONS.get_or_init(|| Mutex::new(SlotMap::new()))
+}
+
+fn lock_sessions() -> std::sync::MutexGuard<'static, SlotMap<Session>> {
+    sessions().lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+pub fn call(tool: &str, arguments: &str) -> Result<String, String> {
+    if arguments.len() > max_encoded_len(MAX_FILE).saturating_add(65_536) {
+        return Err("the request is too large".into());
+    }
+    let args = parse_object(arguments)?;
+    match tool {
+        "device_shell_connect" => {
+            let options = ConnectOptions {
+                host: required_str(&args, "host")?,
+                port: required_u16(&args, "port")?,
+                data_dir: required_str(&args, "data_dir")?,
+                seal: required_seal(&args)?,
+                opt_in_root: optional_bool(&args, "opt_in_root")?,
+                built_in_ready: claimed_ready(&args)?,
+                timeout_ms: optional_u64(&args, "timeout_ms", 10_000)?,
+            };
+            let id = match args.get("session") {
+                Some(Json::Str(name)) if !name.is_empty() => name.clone(),
+                _ => hex_bytes(&adb_tls::random_bytes(8)?),
+            };
+            ensure_session_slot(&id)?;
+            let session = connect(&options)?;
+            let status = session.status();
+            insert_session(id.clone(), session)?;
+            Ok(format!("{{\"session\":\"{}\",\"status\":{}}}", esc(&id), status_json(&status)))
+        }
+        "device_shell_pair" => {
+            let options = PairOptions {
+                host: required_str(&args, "host")?,
+                port: required_u16(&args, "port")?,
+                code: required_str(&args, "code")?,
+                data_dir: required_str(&args, "data_dir")?,
+                seal: required_seal(&args)?,
+                timeout_ms: optional_u64(&args, "timeout_ms", 10_000)?,
+            };
+            pair(&options)?;
+            Ok("{\"paired\":true}".to_string())
+        }
+        "device_shell_status" => {
+            let id = required_str(&args, "session")?;
+            let map = lock_sessions();
+            match map.live.get(&id) {
+                Some(session) => Ok(status_json(&session.status())),
+                None => Ok(status_json(&Status {
+                    connected: false,
+                    secure: false,
+                    command_tier: "unavailable".into(),
+                    file_tier: "unavailable".into(),
+                    built_in_ready: {
+                        let _claimed = claimed_ready(&args)?;
+                        built_in_access_ready()
+                    },
+                    identity_confirmed: false,
+                    root_note: String::new(),
+                    features: String::new(),
+                })),
+            }
+        }
+        "device_shell_command" => {
+            let id = required_str(&args, "session")?;
+            let resume = optional_flag(&args, "resume", false)?;
+            let mut session = take_session(&id)?;
+            let result = if resume {
+                session.shell_resume()
+            } else {
+                let command = required_str(&args, "command")?;
+                session.shell(&command)
+            };
+            restore_session(id, session);
+            let output = result?;
+            Ok(format!(
+                "{{\"stdout_b64\":\"{}\",\"stderr_b64\":\"{}\",\"exit_code\":{},\"partial\":{},\"reason\":\"{}\"}}",
+                adb_tls::b64(&output.stdout),
+                adb_tls::b64(&output.stderr),
+                exit_json(output.exit_code),
+                bool_json(output.partial),
+                esc(&output.reason)
+            ))
+        }
+        "device_shell_list" => {
+            let id = required_str(&args, "session")?;
+            let path = required_str(&args, "path")?;
+            let mut session = take_session(&id)?;
+            let result = session.list(&path);
+            restore_session(id, session);
+            let entries = result?;
+            let mut body = String::from("[");
+            for (index, entry) in entries.iter().enumerate() {
+                if index > 0 {
+                    body.push(',');
+                }
+                body.push_str(&format!(
+                    "{{\"name\":\"{}\",\"mode\":{},\"size\":{},\"mtime\":{},\"error\":{}}}",
+                    esc(&entry.name),
+                    entry.mode,
+                    entry.size,
+                    entry.mtime,
+                    entry.error
+                ));
+            }
+            body.push(']');
+            Ok(body)
+        }
+        "device_shell_stat" => {
+            let id = required_str(&args, "session")?;
+            let path = required_str(&args, "path")?;
+            let mut session = take_session(&id)?;
+            let result = session.stat(&path);
+            restore_session(id, session);
+            let stat = result?;
+            Ok(format!(
+                "{{\"present\":{},\"mode\":{},\"size\":{},\"mtime\":{}}}",
+                if stat.present { "true" } else { "false" },
+                stat.mode,
+                stat.size,
+                stat.mtime
+            ))
+        }
+        "device_shell_read" => {
+            let id = required_str(&args, "session")?;
+            let path = required_str(&args, "path")?;
+            let offset = optional_u64(&args, "offset", 0)?;
+            let mut session = take_session(&id)?;
+            let result = session.read_window(&path, offset);
+            restore_session(id, session);
+            let chunk = result?;
+            Ok(format!(
+                "{{\"content_b64\":\"{}\",\"partial\":{},\"reason\":\"{}\",\"next_offset\":{}}}",
+                adb_tls::b64(&chunk.bytes),
+                bool_json(chunk.partial),
+                esc(&chunk.reason),
+                chunk.next_offset
+            ))
+        }
+        "device_shell_write" => {
+            let id = required_str(&args, "session")?;
+            let path = required_str(&args, "path")?;
+            let mode = file_mode(&args)?;
+            let content = required_b64(&args, "content_b64")?;
+            let mtime = optional_mtime(&args)?;
+            let finish = optional_flag(&args, "finish", true)?;
+            let dry_run = optional_flag(&args, "dry_run", false)?;
+            let mut session = take_session(&id)?;
+            let result = session.write_timed(&path, mode, &content, mtime, finish, dry_run);
+            restore_session(id, session);
+            let stored = result?;
+            if !finish {
+                Ok("{\"written\":false,\"partial\":true,\"reason\":\"the file write is still open\"}".to_string())
+            } else if stored {
+                Ok("{\"written\":true,\"partial\":false,\"reason\":\"\"}".to_string())
+            } else {
+                Ok("{\"written\":false,\"partial\":false,\"reason\":\"the device accepted the dry run and did not store the file\"}".to_string())
+            }
+        }
+        "device_shell_install" => {
+            let id = required_str(&args, "session")?;
+            let finish = optional_flag(&args, "finish", true)?;
+            let apk = match args.get("content_b64") {
+                Some(Json::Str(value)) => decode_bounded(value, MAX_FILE)?,
+                None if finish => return Err("the request is missing content_b64".into()),
+                None => Vec::new(),
+                _ => return Err("the request is missing content_b64".into()),
+            };
+            let package_size = match args.get("package_size") {
+                Some(Json::Num(value)) => Some(*value),
+                None | Some(Json::Null) => None,
+                _ => return Err("the request field package_size is not usable".into()),
+            };
+            let mut session = take_session(&id)?;
+            let result = session.install_stream(&apk, package_size, finish);
+            restore_session(id, session);
+            result?;
+            if finish {
+                Ok("{\"installed\":true,\"partial\":false,\"reason\":\"\"}".to_string())
+            } else {
+                Ok("{\"installed\":false,\"partial\":true,\"reason\":\"the package write is still open\"}".to_string())
+            }
+        }
+        "device_shell_close" => {
+            let id = required_str(&args, "session")?;
+            lock_sessions().close(&id)?;
+            Ok("{\"closed\":true}".to_string())
+        }
+        _ => Err("unknown device service request".into()),
+    }
+}
+
+fn session_limit_message() -> String {
+    format!("the device session limit of {MAX_SESSIONS} is reached; close a session and try again")
+}
+
+fn ensure_session_slot(id: &str) -> Result<(), String> {
+    lock_sessions().ensure(id)
+}
+
+fn insert_session(id: String, session: Session) -> Result<(), String> {
+    lock_sessions().insert(id, session)
+}
+
+fn take_session(id: &str) -> Result<Session, String> {
+    lock_sessions().take(id)
+}
+
+fn restore_session(id: String, session: Session) {
+    lock_sessions().restore(id, session);
+}
+
+fn file_mode(args: &HashMap<String, Json>) -> Result<u32, String> {
+    match args.get("mode") {
+        None | Some(Json::Null) => Ok(0o644),
+        Some(Json::Num(value)) if *value <= u64::from(u32::MAX) => Ok(*value as u32),
+        _ => Err("the file mode is not usable".into()),
+    }
+}
+
+pub fn connect(options: &ConnectOptions) -> Result<Session, String> {
+    if options.host.is_empty() || options.port == 0 {
+        return Err("a device address is required".into());
+    }
+    let _ready = report_built_in(options.built_in_ready);
+    let (key, public_line) = load_or_create_identity(Path::new(&options.data_dir), options.seal.as_deref())?;
+    let stored_pin = load_pin(Path::new(&options.data_dir), &options.host, options.seal.as_deref())?;
+    let paired = matches!(stored_pin.as_ref(), Some(pin) if !pin.is_empty());
+    let timeout = Duration::from_millis(options.timeout_ms.max(1));
+    let deadline = Instant::now() + timeout;
+    let addr = resolve_until(&options.host, options.port, deadline)?;
+    let wait = remaining(deadline)?;
+    let mut stream = match TcpStream::connect_timeout(&addr, wait) {
+        Ok(stream) => stream,
+        Err(_err) if Instant::now() >= deadline => return Err(timeout_message()),
+        Err(err) => return Err(format!("the device debugging service is not reachable ({err})")),
+    };
+    prepare_socket(&stream, wait)?;
+    write_socket(&mut stream, &frame_bytes(A_CNXN, PROTOCOL, MAX_PAYLOAD as u32, HOST_BANNER)?, deadline)?;
+    let first = read_socket_frame(&mut stream, deadline)?;
+    let (io, mut incoming, secure, link) = if first.cmd == A_STLS {
+        match &stored_pin {
+            Some(pin) if !pin.is_empty() => {}
+            _ => return Err("the device has not been paired, so the secure connection cannot be authenticated".into()),
+        };
+        let arg = if first.arg0 == 1 || first.arg0 == 0x0100_0000 { first.arg0 } else { 0x0100_0000 };
+        write_socket(&mut stream, &frame_bytes(A_STLS, arg, 0, &[])?, deadline)?;
+        let clock = Arc::new(IoClock::new());
+        let (local, shuttle) = shuttle_socket(stream, Arc::clone(&clock))?;
+        // Pairing and transport use different device certificates. The client
+        // presents its key and accepts the transport certificate.
+        let mut pipe = secure_call(&clock, deadline, || adb_tls::client_handshake(local, &key, None))?;
+        let banner = frame_bytes(A_CNXN, PROTOCOL, MAX_PAYLOAD as u32, HOST_BANNER)?;
+        secure_call(&clock, deadline, || write_pipe(&mut pipe, &banner))?;
+        let next = secure_call(&clock, deadline, || read_pipe_frame(&mut pipe))?;
+        (Io::Secure(pipe), next, true, Some(shuttle))
+    } else if paired {
+        return Err("the paired device did not offer a secure connection".into());
+    } else {
+        (Io::Plain(stream), first, false, None)
+    };
+    let mut session = Session {
+        io,
+        next_id: 1,
+        peer_max: MAX_PAYLOAD as u32,
+        features: Vec::new(),
+        banner: String::new(),
+        secure,
+        connected: true,
+        command_tier: "shell".into(),
+        identity_confirmed: false,
+        root_wrap: false,
+        root_note: String::new(),
+        key,
+        public_line,
+        sync_local: 0,
+        sync_remote: 0,
+        sync_buf: Vec::new(),
+        io_timeout: timeout,
+        deadline,
+        shell_hold: None,
+        read_hold: None,
+        write_hold: None,
+        install_hold: None,
+        link,
+    };
+    let mut guards = 0;
+    loop {
+        guards += 1;
+        if guards > 6 {
+            return Err("the device debugging service did not accept the connection".into());
+        }
+        session.check_deadline()?;
+        match incoming.cmd {
+            A_CNXN => {
+                session.peer_max = accept_peer_link(incoming.arg0, incoming.arg1)?;
+                let (text, features) = parse_banner(&incoming.data);
+                session.banner = text;
+                session.features = features;
+                break;
+            }
+            A_AUTH if incoming.arg0 == TOKEN => {
+                if guards == 1 || session_sent_signature(guards) {
+                    let sig = session.key.sign_sha1_pkcs1(&incoming.data)?;
+                    session.write_frame(A_AUTH, SIGNATURE, 0, &sig)?;
+                } else {
+                    let mut payload = session.public_line.as_bytes().to_vec();
+                    payload.push(0);
+                    session.write_frame(A_AUTH, RSAPUBLICKEY, 0, &payload)?;
+                }
+                incoming = session.read_frame()?;
+            }
+            A_STLS => return Err("the secure upgrade was repeated".into()),
+            _ => return Err("the device debugging service sent an unexpected greeting".into()),
+        }
+    }
+    session.learn_identity(options.opt_in_root)?;
+    Ok(session)
+}
+
+fn session_sent_signature(guards: u32) -> bool {
+    guards <= 1
+}
+
+pub fn pair(options: &PairOptions) -> Result<(), String> {
+    if options.host.is_empty() || options.port == 0 {
+        return Err("a device address is required".into());
+    }
+    if options.code.is_empty() {
+        return Err("a pairing code is required".into());
+    }
+    let (key, public_line) = load_or_create_identity(Path::new(&options.data_dir), options.seal.as_deref())?;
+    let timeout = Duration::from_millis(options.timeout_ms.max(1));
+    let deadline = Instant::now() + timeout;
+    let addr = resolve_until(&options.host, options.port, deadline)?;
+    let wait = remaining(deadline)?;
+    let stream = match TcpStream::connect_timeout(&addr, wait) {
+        Ok(stream) => stream,
+        Err(_err) if Instant::now() >= deadline => return Err(timeout_message()),
+        Err(err) => return Err(format!("the device debugging service is not reachable ({err})")),
+    };
+    prepare_socket(&stream, wait)?;
+    let clock = Arc::new(IoClock::new());
+    let (local, shuttle) = shuttle_socket(stream, Arc::clone(&clock))?;
+    let mut pipe = secure_call(&clock, deadline, || adb_tls::client_handshake(local, &key, None))?;
+    let peer_cert = pipe.peer_certificate().to_vec();
+    let mut password = options.code.as_bytes().to_vec();
+    let exported = pipe.exporter(b"adb-label\0", 64);
+    let exported = exported.material().map_err(|err| err.to_string())?;
+    password.extend_from_slice(exported);
+    let alice = adb_tls::Spake2::alice(&password)?;
+    let hello = pair_packet(0, alice.message())?;
+    secure_call(&clock, deadline, || pipe.write_all(&hello))?;
+    let (kind, their) = secure_call(&clock, deadline, || read_pair_packet(&mut pipe))?;
+    if kind != 0 || their.len() != 32 {
+        return Err("the pairing message was not accepted".into());
+    }
+    let material = alice.finish(&their)?;
+    let mut cipher = adb_tls::PairCipher::new(&material);
+    let info = peer_info(PEER_INFO_PUBLIC_KEY, public_line.as_bytes())?;
+    let sealed_info = pair_packet(1, &cipher.seal(&info)?)?;
+    secure_call(&clock, deadline, || pipe.write_all(&sealed_info))?;
+    let (kind, sealed) = secure_call(&clock, deadline, || read_pair_packet(&mut pipe))?;
+    if kind != 1 {
+        return Err("the pairing identity was not accepted".into());
+    }
+    let opened = cipher.open(&sealed)?;
+    require_device_guid(&opened)?;
+    save_pin(Path::new(&options.data_dir), &options.host, options.seal.as_deref(), &peer_cert)?;
+    drop(pipe);
+    drop(shuttle);
+    Ok(())
+}
+
+pub fn discover(timeout_ms: u64) -> Result<Vec<ServiceAddress>, String> {
+    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|err| format!("discovery could not open a socket ({err})"))?;
+    let wait = Duration::from_millis(timeout_ms.max(1));
+    socket.set_read_timeout(Some(wait)).map_err(|err| format!("discovery could not set a timeout ({err})"))?;
+    let _ = socket.join_multicast_v4(&Ipv4Addr::new(224, 0, 0, 251), &Ipv4Addr::UNSPECIFIED);
+    let queries = [
+        dns_query(1, "_adb-tls-connect._tcp.local")?,
+        dns_query(2, "_adb-tls-pairing._tcp.local")?,
+    ];
+    for query in &queries {
+        socket.send_to(query, "224.0.0.251:5353").map_err(|err| format!("discovery could not send a query ({err})"))?;
+    }
+    let deadline = Instant::now() + wait;
+    let mut found = Vec::new();
+    let mut buf = [0u8; 1500];
+    let mut packets = 0usize;
+    while Instant::now() < deadline && packets < MAX_PACKETS && found.len() < MAX_DISCOVERY {
+        packets += 1;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        socket.set_read_timeout(Some(remaining)).map_err(|err| format!("discovery could not set a timeout ({err})"))?;
+        match socket.recv_from(&mut buf) {
+            Ok((count, from)) => {
+                if let Some(hit) = parse_dns(&buf[..count], &from) {
+                    if !found.iter().any(|item: &ServiceAddress| item.host == hit.host && item.port == hit.port && item.name == hit.name) {
+                        found.push(hit);
+                    }
+                }
+            }
+            Err(err) if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut => break,
+            Err(err) => return Err(format!("discovery stopped ({err})")),
+        }
+    }
+    Ok(found)
+}
+
+impl Session {
+    pub fn status(&self) -> Status {
+        Status {
+            connected: self.connected,
+            secure: self.secure,
+            command_tier: self.command_tier.clone(),
+            file_tier: self.file_tier(),
+            built_in_ready: built_in_access_ready(),
+            identity_confirmed: self.identity_confirmed,
+            root_note: self.root_note.clone(),
+            features: self.features.join(","),
+        }
+    }
+
+    pub fn shell(&mut self, command: &str) -> Result<CommandOutput, String> {
+        if command.is_empty() {
+            return Err("a command is required".into());
+        }
+        if self.shell_hold.is_some() {
+            return Err("a command response is still open".into());
+        }
+        let wrapped = if self.root_wrap { quote_privilege(command) } else { command.to_string() };
+        self.shell_raw(&wrapped)
+    }
+
+    pub fn shell_resume(&mut self) -> Result<CommandOutput, String> {
+        let hold = self.shell_hold.take().ok_or_else(|| "there is no command response to continue".to_string())?;
+        self.collect_shell(hold.local, hold.remote, hold.extended, hold.pending, hold.closed, hold.split)
+    }
+
+    pub fn list(&mut self, path: &str) -> Result<Vec<DirEntry>, String> {
+        self.begin_operation()?;
+        self.require_clear_transfer()?;
+        if path.is_empty() {
+            return Err("a path is required".into());
+        }
+        let v2 = self.has_feature("ls_v2");
+        let id = if v2 { b"LIS2" } else { b"LIST" };
+        self.sync_request(&sync_path(id, path)?)?;
+        let mut entries = Vec::new();
+        let mut name_bytes = 0usize;
+        loop {
+            self.check_deadline()?;
+            let record = self.pull(4)?;
+            if record == b"DONE" {
+                let tail = if v2 { 72 } else { 16 };
+                let _rest = self.pull(tail)?;
+                break;
+            }
+            if record == b"FAIL" {
+                return Err(self.fail_text()?);
+            }
+            let expect = if v2 { b"DNT2" } else { b"DENT" };
+            if record != expect {
+                self.drop_sync();
+                return Err("the file service sent an unknown record".into());
+            }
+            let (error, mode, size, mtime, name_len) = if v2 {
+                let body = self.pull(72)?;
+                parse_dent_v2(&body)?
+            } else {
+                let mode = read_u32(&self.pull(4)?)?;
+                let size = u64::from(read_u32(&self.pull(4)?)?);
+                let mtime = i64::from(read_u32(&self.pull(4)?)?);
+                let name_len = read_u32(&self.pull(4)?)?;
+                (0, mode, size, mtime, name_len)
+            };
+            let name_len = name_len as usize;
+            if name_len > MAX_NAME
+                || entries.len() >= MAX_DIR_ENTRIES
+                || name_bytes.saturating_add(name_len) > MAX_FILE
+            {
+                self.drop_sync();
+                return Err("the file service listing is too large".into());
+            }
+            let name = String::from_utf8_lossy(&self.pull(name_len)?).to_string();
+            name_bytes += name_len;
+            entries.push(DirEntry { name, mode, size, mtime, error });
+        }
+        Ok(entries)
+    }
+
+    pub fn stat(&mut self, path: &str) -> Result<FileStat, String> {
+        self.begin_operation()?;
+        self.require_clear_transfer()?;
+        if path.is_empty() {
+            return Err("a path is required".into());
+        }
+        if self.features.iter().any(|feature| feature == "stat_v2") {
+            self.sync_request(&sync_path(b"STA2", path)?)?;
+            let id = self.pull(4)?;
+            if id == b"FAIL" {
+                return Err(self.fail_text()?);
+            }
+            if id != b"STA2" {
+                self.drop_sync();
+                return Err("the file service sent an unknown record".into());
+            }
+            file_stat_v2(&self.pull(68)?)
+        } else {
+            self.sync_request(&sync_path(b"STAT", path)?)?;
+            let id = self.pull(4)?;
+            if id == b"FAIL" {
+                return Err(self.fail_text()?);
+            }
+            if id != b"STAT" {
+                self.drop_sync();
+                return Err("the file service sent an unknown record".into());
+            }
+            let mode = read_u32(&self.pull(4)?)?;
+            let size = u64::from(read_u32(&self.pull(4)?)?);
+            let mtime = i64::from(read_u32(&self.pull(4)?)?);
+            Ok(FileStat { present: mode != 0, mode, size, mtime })
+        }
+    }
+
+    pub fn read(&mut self, path: &str) -> Result<Vec<u8>, String> {
+        let chunk = self.read_window(path, 0)?;
+        if chunk.partial {
+            return Err(format!("{}; continue from offset {}", chunk.reason, chunk.next_offset));
+        }
+        Ok(chunk.bytes)
+    }
+
+    pub fn read_window(&mut self, path: &str, offset: u64) -> Result<FileChunk, String> {
+        self.begin_operation()?;
+        if path.is_empty() {
+            return Err("a path is required".into());
+        }
+        if path.as_bytes().contains(&0) {
+            return Err("the path is not usable".into());
+        }
+        if self.write_hold.is_some() {
+            return Err("a file write is still open".into());
+        }
+        if let Some(hold) = &self.read_hold {
+            if hold.path != path || hold.next_offset != offset {
+                return Err("a file read is still open".into());
+            }
+        } else if offset != 0 {
+            return Err("the file read has not reached that offset".into());
+        } else {
+            let codec = self.open_recv(path)?;
+            self.read_hold = Some(ReadHold {
+                path: path.to_string(),
+                next_offset: 0,
+                stash: Vec::new(),
+                decoder: PayloadDecoder::open(codec),
+            });
+        }
+        let mut file = Vec::new();
+        if let Some(hold) = &mut self.read_hold {
+            if !hold.stash.is_empty() {
+                let room = MAX_FILE.saturating_sub(file.len());
+                let n = hold.stash.len().min(room);
+                file.extend(hold.stash.drain(..n));
+            }
+        }
+        let mut empty = 0usize;
+        loop {
+            if file.len() >= MAX_FILE {
+                let next = offset.saturating_add(file.len() as u64);
+                if let Some(hold) = &mut self.read_hold {
+                    hold.next_offset = next;
+                }
+                return Ok(FileChunk {
+                    bytes: file,
+                    partial: true,
+                    reason: "the response window is full".into(),
+                    next_offset: next,
+                });
+            }
+            self.check_deadline()?;
+            let id = self.pull(4)?;
+            if id == b"DONE" {
+                let _mtime = self.pull(4)?;
+                if let Err(err) = self.finish_read() {
+                    self.drop_sync();
+                    self.read_hold = None;
+                    return Err(err);
+                }
+                self.read_hold = None;
+                let next = offset.saturating_add(file.len() as u64);
+                return Ok(FileChunk {
+                    bytes: file,
+                    partial: false,
+                    reason: String::new(),
+                    next_offset: next,
+                });
+            }
+            if id == b"FAIL" {
+                self.read_hold = None;
+                return Err(self.fail_text()?);
+            }
+            if id != b"DATA" {
+                self.drop_sync();
+                self.read_hold = None;
+                return Err("the file service sent an unknown record".into());
+            }
+            let len = read_u32(&self.pull(4)?)? as usize;
+            if len == 0 {
+                empty += 1;
+                if empty > MAX_EMPTY {
+                    self.drop_sync();
+                    self.read_hold = None;
+                    return Err("the file service sent too many empty records".into());
+                }
+                continue;
+            }
+            empty = 0;
+            if len > DATA_CHUNK {
+                self.drop_sync();
+                self.read_hold = None;
+                return Err("the file service response is too large".into());
+            }
+            let raw = self.pull(len)?;
+            let chunk = match self.expand_read(&raw) {
+                Ok(chunk) => chunk,
+                Err(err) => {
+                    self.drop_sync();
+                    self.read_hold = None;
+                    return Err(err);
+                }
+            };
+            let room = MAX_FILE - file.len();
+            if chunk.len() > room {
+                file.extend_from_slice(&chunk[..room]);
+                let rest = chunk[room..].to_vec();
+                let next = offset.saturating_add(file.len() as u64);
+                if let Some(hold) = &mut self.read_hold {
+                    hold.stash = rest;
+                    hold.next_offset = next;
+                }
+                return Ok(FileChunk {
+                    bytes: file,
+                    partial: true,
+                    reason: "the response window is full".into(),
+                    next_offset: next,
+                });
+            }
+            file.extend_from_slice(&chunk);
+        }
+    }
+
+    pub fn write(&mut self, path: &str, mode: u32, data: &[u8]) -> Result<(), String> {
+        self.write_timed(path, mode, data, None, true, false)?;
+        Ok(())
+    }
+
+    fn write_timed(&mut self, path: &str, mode: u32, data: &[u8], mtime: Option<u32>, finish: bool, dry_run: bool) -> Result<bool, String> {
+        self.begin_operation()?;
+        if path.is_empty() {
+            return Err("a path is required".into());
+        }
+        if path.as_bytes().contains(&0) {
+            return Err("the path is not usable".into());
+        }
+        if self.read_hold.is_some() {
+            return Err("a file read is still open".into());
+        }
+        let stamp_mode = if mode == 0 { 0o644 } else { mode };
+        let continuing = self.write_hold.as_ref().is_some_and(|hold| hold.path == path && hold.mode == stamp_mode);
+        if self.write_hold.is_some() && !continuing {
+            return Err("a file write is still open".into());
+        }
+        if !continuing {
+            let v2 = self.has_feature("sendrecv_v2");
+            let flags = if v2 {
+                self.transfer_flags(dry_run)?
+            } else if dry_run {
+                return Err("the device does not support a dry run".into());
+            } else {
+                0
+            };
+            if v2 {
+                self.sync_request(&sync_path(b"SND2", path)?)?;
+                let mut setup = Vec::with_capacity(12);
+                setup.extend_from_slice(b"SND2");
+                setup.extend_from_slice(&stamp_mode.to_le_bytes());
+                setup.extend_from_slice(&flags.to_le_bytes());
+                self.sync_request(&setup)?;
+            } else {
+                let spec = format!("{path},{stamp_mode}");
+                self.sync_request(&sync_path(b"SEND", &spec)?)?;
+            }
+            self.write_hold = Some(WriteHold {
+                path: path.to_string(),
+                sent: 0,
+                mode: stamp_mode,
+                flags,
+                encoder: PayloadEncoder::open(codec_from_flags(flags)?),
+            });
+        } else if dry_run != self.write_hold.as_ref().is_some_and(|hold| hold.flags & SYNC_FLAG_DRY_RUN != 0) {
+            return Err("a file write is still open".into());
+        }
+        if data.len() > MAX_FILE {
+            return Err("the file service response is too large".into());
+        }
+        let encoded = {
+            let hold = self.write_hold.as_mut().ok_or_else(|| "a file write is still open".to_string())?;
+            if hold.sent.checked_add(data.len() as u64).is_none() {
+                return Err("the file is too large".into());
+            }
+            hold.sent = hold.sent.saturating_add(data.len() as u64);
+            match &mut hold.encoder {
+                Some(encoder) => Some(encoder.push(data)?),
+                None => None,
+            }
+        };
+        match encoded {
+            Some(bytes) => self.send_data_chunks(&bytes)?,
+            None => self.send_data_chunks(data)?,
+        }
+        if !finish {
+            return Ok(false);
+        }
+        let tail = match self.write_hold.as_mut().and_then(|hold| hold.encoder.take()) {
+            Some(encoder) => encoder.finish()?,
+            None => Vec::new(),
+        };
+        if !tail.is_empty() {
+            self.send_data_chunks(&tail)?;
+        }
+        let stamp = match mtime {
+            Some(0) => return Err("the file time must not be the epoch".into()),
+            Some(stamp) => stamp,
+            None => unix_seconds()?,
+        };
+        let mut done = Vec::new();
+        done.extend_from_slice(b"DONE");
+        done.extend_from_slice(&stamp.to_le_bytes());
+        self.sync_request(&done)?;
+        let id = self.pull(4)?;
+        if id == b"FAIL" {
+            self.write_hold = None;
+            return Err(self.fail_text()?);
+        }
+        if id != b"OKAY" {
+            self.drop_sync();
+            self.write_hold = None;
+            return Err("the file service did not accept the file".into());
+        }
+        let _arg = self.pull(4)?;
+        let stored = match &self.write_hold {
+            Some(hold) => hold.flags & SYNC_FLAG_DRY_RUN == 0,
+            None => true,
+        };
+        self.write_hold = None;
+        Ok(stored)
+    }
+
+    pub fn install_apk(&mut self, apk: &[u8]) -> Result<(), String> {
+        self.install_stream(apk, Some(apk.len() as u64), true)
+    }
+
+    fn install_stream(&mut self, apk: &[u8], package_size: Option<u64>, finish: bool) -> Result<(), String> {
+        self.begin_operation()?;
+        if self.install_hold.is_none() && finish && package_size.unwrap_or(apk.len() as u64) == apk.len() as u64 {
+            if apk.is_empty() {
+                return Err("a package is required".into());
+            }
+            return match self.install_with("cmd package", apk) {
+                Err(err) if command_missing(&err) => self.install_with("pm", apk),
+                other => other,
+            };
+        }
+        if self.install_hold.is_none() {
+            let expected = package_size.ok_or_else(|| "the request is missing package_size".to_string())?;
+            if expected == 0 {
+                return Err("a package is required".into());
+            }
+            self.install_open(expected)?;
+        }
+        let adding = apk.len() as u64;
+        if let Some(hold) = &self.install_hold {
+            if hold.sent.saturating_add(adding) > hold.expected {
+                return Err("the package is larger than the declared size".into());
+            }
+        }
+        if !apk.is_empty() {
+            let (local, remote) = match &self.install_hold {
+                Some(hold) => (hold.local, hold.remote),
+                None => return Err("the package write is not open".into()),
+            };
+            self.write_payload(local, remote, apk, &mut Vec::new())?;
+            if let Some(hold) = &mut self.install_hold {
+                hold.sent = hold.sent.saturating_add(adding);
+            }
+        }
+        if !finish {
+            return Ok(());
+        }
+        let hold = self.install_hold.take().ok_or_else(|| "the package write is not open".to_string())?;
+        if hold.sent != hold.expected {
+            return Err("the package is shorter than the declared size".into());
+        }
+        let written = self.exec_finish(hold.local, hold.remote)?;
+        let write_text = String::from_utf8_lossy(&written);
+        if write_text.contains("Failure") {
+            return Err(write_text.to_string());
+        }
+        let committed = self.exec(&format!("{} install-commit {}", hold.tool, hold.session_id), None)?;
+        let commit_text = String::from_utf8_lossy(&committed).to_string();
+        if commit_text.contains("Success") && !commit_text.contains("Failure") {
+            Ok(())
+        } else {
+            Err(if commit_text.is_empty() { "the package service did not commit the session".into() } else { commit_text })
+        }
+    }
+
+    fn install_open(&mut self, expected: u64) -> Result<(), String> {
+        let mut failure = String::new();
+        for tool in ["cmd package", "pm"] {
+            match self.exec(&format!("{tool} install-create -S {expected}"), None) {
+                Ok(created) => {
+                    let text = String::from_utf8_lossy(&created).to_string();
+                    if command_missing(&text) {
+                        failure = text;
+                        continue;
+                    }
+                    if !text.contains("Success") {
+                        return Err(if text.is_empty() { "the package service did not create a session".into() } else { text });
+                    }
+                    let session_id = bracket_id(&text)?;
+                    let (local, remote) = self.open_service(&format!("exec:{tool} install-write -S {expected} {session_id} base.apk -"))?;
+                    self.install_hold = Some(InstallHold {
+                        local,
+                        remote,
+                        tool: tool.to_string(),
+                        session_id,
+                        expected,
+                        sent: 0,
+                    });
+                    return Ok(());
+                }
+                Err(err) if command_missing(&err) => failure = err,
+                Err(err) => return Err(err),
+            }
+        }
+        Err(if failure.is_empty() { "the package service did not create a session".into() } else { failure })
+    }
+
+    fn install_with(&mut self, tool: &str, apk: &[u8]) -> Result<(), String> {
+        let created = self.exec(&format!("{tool} install-create -S {}", apk.len()), None)?;
+        let text = String::from_utf8_lossy(&created).to_string();
+        if command_missing(&text) {
+            return Err(text);
+        }
+        if !text.contains("Success") {
+            return Err(if text.is_empty() { "the package service did not create a session".into() } else { text });
+        }
+        let id = bracket_id(&text)?;
+        let written = self.exec(&format!("{tool} install-write -S {} {id} base.apk -", apk.len()), Some(apk))?;
+        let write_text = String::from_utf8_lossy(&written);
+        if write_text.contains("Failure") {
+            return Err(write_text.to_string());
+        }
+        let committed = self.exec(&format!("{tool} install-commit {id}"), None)?;
+        let commit_text = String::from_utf8_lossy(&committed).to_string();
+        if commit_text.contains("Success") && !commit_text.contains("Failure") {
+            Ok(())
+        } else {
+            Err(if commit_text.is_empty() { "the package service did not commit the session".into() } else { commit_text })
+        }
+    }
+
+    fn learn_identity(&mut self, opt_in_root: bool) -> Result<(), String> {
+        let probed = self.shell_raw("id")?;
+        let (confirmed, rooted) = identity_from_output(&probed);
+        self.identity_confirmed = confirmed;
+        if rooted {
+            self.command_tier = "root".into();
+            self.root_note = "the service is already privileged".into();
+            return Ok(());
+        }
+        self.command_tier = "shell".into();
+        if !opt_in_root {
+            return Ok(());
+        }
+        match self.shell_raw("su -c id") {
+            Ok(output) => {
+                let body = String::from_utf8_lossy(&output.stdout);
+                let err = String::from_utf8_lossy(&output.stderr);
+                if output.exit_code == Some(0) && !output.partial && parsed_uid(&body).as_deref() == Some("0") {
+                    self.root_wrap = true;
+                    self.command_tier = "root".into();
+                    self.root_note = "privilege was granted by the device".into();
+                } else {
+                    let detail = format!("{body}{err}").trim().to_string();
+                    self.root_note = if detail.is_empty() {
+                        "the device did not grant privilege".into()
+                    } else {
+                        format!("the device did not grant privilege: {detail}")
+                    };
+                }
+            }
+            Err(err) => {
+                self.root_note = format!("the privilege command failed: {err}");
+                if self.shell_raw("id").is_err() {
+                    return Err(err);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn shell_raw(&mut self, command: &str) -> Result<CommandOutput, String> {
+        self.begin_operation()?;
+        if self.shell_hold.is_some() {
+            return Err("a command response is still open".into());
+        }
+        self.suspend_sync()?;
+        let extended = self.features.iter().any(|feature| feature == "shell_v2");
+        let dest = if extended { format!("shell,v2,raw:{command}") } else { format!("shell:{command}") };
+        let (local, remote) = self.open_service(&dest)?;
+        let mut raw = Vec::new();
+        if extended {
+            self.write_payload(local, remote, &[4, 0, 0, 0, 0], &mut raw)?;
+        }
+        self.collect_shell(local, remote, extended, raw, false, None)
+    }
+
+    fn collect_shell(
+        &mut self,
+        local: u32,
+        remote: u32,
+        extended: bool,
+        mut pending: Vec<u8>,
+        mut closed: bool,
+        mut split: Option<ShellSplit>,
+    ) -> Result<CommandOutput, String> {
+        self.begin_operation()?;
+        let mut steps = 0usize;
+        let mut empty = 0usize;
+        let mut acc_out = Vec::new();
+        let mut acc_err = Vec::new();
+        let mut acc_exit = None;
+        loop {
+            if acc_out.len() >= MAX_OUTPUT || acc_err.len() >= MAX_OUTPUT {
+                self.shell_hold = Some(ShellHold { local, remote, extended, pending, closed, split });
+                return Ok(CommandOutput {
+                    stdout: acc_out,
+                    stderr: acc_err,
+                    exit_code: None,
+                    partial: true,
+                    reason: "the response window is full".into(),
+                });
+            }
+            let window = MAX_OUTPUT.saturating_sub(acc_out.len().max(acc_err.len()));
+            if let Some(taken) = take_shell_window(extended, &pending, window, closed, &mut split)? {
+                pending.drain(..taken.consumed.min(pending.len()));
+                if !taken.ready {
+                    if taken.consumed == 0 {
+                        return Err("the command response was truncated".into());
+                    }
+                    acc_out.extend_from_slice(&taken.output.stdout);
+                    acc_err.extend_from_slice(&taken.output.stderr);
+                    if taken.output.exit_code.is_some() {
+                        acc_exit = taken.output.exit_code;
+                    }
+                    continue;
+                }
+                let mut output = taken.output;
+                if !acc_out.is_empty() {
+                    let mut merged = std::mem::take(&mut acc_out);
+                    merged.append(&mut output.stdout);
+                    output.stdout = merged;
+                }
+                if !acc_err.is_empty() {
+                    let mut merged = std::mem::take(&mut acc_err);
+                    merged.append(&mut output.stderr);
+                    output.stderr = merged;
+                }
+                if !output.partial && output.exit_code.is_none() {
+                    output.exit_code = acc_exit;
+                }
+                if output.partial {
+                    output.exit_code = None;
+                    self.shell_hold = Some(ShellHold { local, remote, extended, pending, closed, split });
+                    return Ok(output);
+                }
+                self.shell_hold = None;
+                return Ok(output);
+            }
+            if closed {
+                self.shell_hold = None;
+                if extended {
+                    if !pending.is_empty() {
+                        let (stdout, stderr, exit_code) = parse_extended(&pending)?;
+                        acc_out.extend_from_slice(&stdout);
+                        acc_err.extend_from_slice(&stderr);
+                        if exit_code.is_some() {
+                            acc_exit = exit_code;
+                        }
+                    }
+                    return Ok(CommandOutput { stdout: acc_out, stderr: acc_err, exit_code: acc_exit, partial: false, reason: String::new() });
+                }
+                acc_out.extend_from_slice(&pending);
+                return Ok(CommandOutput { stdout: acc_out, stderr: Vec::new(), exit_code: None, partial: false, reason: String::new() });
+            }
+            steps += 1;
+            if steps > MAX_STREAM_FRAMES {
+                return Err("the device service sent too many messages".into());
+            }
+            let frame = self.read_frame()?;
+            match frame.cmd {
+                A_OKAY => {}
+                A_WRTE if frame.arg1 == local => {
+                    self.write_frame(A_OKAY, local, frame.arg0, &[])?;
+                    if frame.data.is_empty() {
+                        empty += 1;
+                        if empty > MAX_EMPTY {
+                            return Err("the device service sent too many empty messages".into());
+                        }
+                    } else {
+                        empty = 0;
+                        if pending.len().saturating_add(frame.data.len()) > MAX_OUTPUT.saturating_add(MAX_PAYLOAD) {
+                            if take_shell_window(extended, &pending, MAX_OUTPUT, false, &mut split)?.is_none() && pending.len() > MAX_OUTPUT {
+                                return Err("the device service output is too large".into());
+                            }
+                        }
+                        pending.extend_from_slice(&frame.data);
+                    }
+                }
+                A_CLSE => {
+                    if !close_matches(frame.arg0, frame.arg1, local, remote) {
+                        return Err("the device service closed a different stream".into());
+                    }
+                    closed = true;
+                }
+                _ => return Err("unexpected device service message".into()),
+            }
+        }
+    }
+
+    fn exec(&mut self, command: &str, stdin: Option<&[u8]>) -> Result<Vec<u8>, String> {
+        self.suspend_sync()?;
+        let (local, remote) = self.open_service(&format!("exec:{command}"))?;
+        let mut out = Vec::new();
+        if let Some(data) = stdin {
+            let max = self.chunk_size();
+            let mut offset = 0;
+            while offset < data.len() {
+                let n = (data.len() - offset).min(max);
+                self.write_payload(local, remote, &data[offset..offset + n], &mut out)?;
+                offset += n;
+            }
+            self.write_frame(A_CLSE, local, remote, &[])?;
+        }
+        self.read_until_close(local, remote, &mut out)?;
+        Ok(out)
+    }
+
+    fn exec_finish(&mut self, local: u32, remote: u32) -> Result<Vec<u8>, String> {
+        self.write_frame(A_CLSE, local, remote, &[])?;
+        let mut out = Vec::new();
+        self.read_until_close(local, remote, &mut out)?;
+        Ok(out)
+    }
+
+    fn ensure_sync(&mut self) -> Result<(), String> {
+        if self.sync_remote != 0 {
+            return Ok(());
+        }
+        let (local, remote) = self.open_service("sync:")?;
+        self.sync_local = local;
+        self.sync_remote = remote;
+        self.sync_buf.clear();
+        Ok(())
+    }
+
+    fn require_clear_transfer(&self) -> Result<(), String> {
+        if self.read_hold.is_some() {
+            return Err("a file read is still open".into());
+        }
+        if self.write_hold.is_some() {
+            return Err("a file write is still open".into());
+        }
+        Ok(())
+    }
+
+    fn suspend_sync(&mut self) -> Result<(), String> {
+        self.require_clear_transfer()?;
+        if self.sync_remote == 0 {
+            return Ok(());
+        }
+        let mut quit = Vec::new();
+        quit.extend_from_slice(b"QUIT");
+        quit.extend_from_slice(&0u32.to_le_bytes());
+        let local = self.sync_local;
+        let remote = self.sync_remote;
+        let mut ignored = Vec::new();
+        self.write_payload(local, remote, &quit, &mut ignored)?;
+        self.read_until_close(local, remote, &mut ignored)?;
+        self.sync_local = 0;
+        self.sync_remote = 0;
+        self.sync_buf.clear();
+        Ok(())
+    }
+
+    fn drop_sync(&mut self) {
+        if self.sync_remote != 0 {
+            let _ = self.write_frame(A_CLSE, self.sync_local, self.sync_remote, &[]);
+        }
+        self.sync_local = 0;
+        self.sync_remote = 0;
+        self.sync_buf.clear();
+        self.read_hold = None;
+        self.write_hold = None;
+    }
+
+    fn sync_request(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.ensure_sync()?;
+        let local = self.sync_local;
+        let remote = self.sync_remote;
+        let mut early = std::mem::take(&mut self.sync_buf);
+        let result = self.write_payload(local, remote, bytes, &mut early);
+        self.sync_buf = early;
+        result
+    }
+
+    fn pull(&mut self, n: usize) -> Result<Vec<u8>, String> {
+        if n > MAX_FILE {
+            self.drop_sync();
+            return Err("the file service response is too large".into());
+        }
+        let local = self.sync_local;
+        let mut steps = 0usize;
+        let mut empty = 0usize;
+        while self.sync_buf.len() < n {
+            self.check_deadline()?;
+            steps += 1;
+            if steps > MAX_FILE {
+                self.drop_sync();
+                return Err("the device service sent too many messages".into());
+            }
+            let frame = self.read_frame()?;
+            match frame.cmd {
+                A_WRTE if frame.arg1 == local => {
+                    self.write_frame(A_OKAY, local, frame.arg0, &[])?;
+                    if frame.data.is_empty() {
+                        empty += 1;
+                        if empty > MAX_EMPTY {
+                            self.drop_sync();
+                            return Err("the device service sent too many empty messages".into());
+                        }
+                        continue;
+                    }
+                    empty = 0;
+                    if frame.data.len() > MAX_FILE || self.sync_buf.len() > MAX_FILE - frame.data.len() {
+                        self.drop_sync();
+                        return Err("the file service response is too large".into());
+                    }
+                    self.sync_buf.extend_from_slice(&frame.data);
+                }
+                A_OKAY => {}
+                A_CLSE => {
+                    let matched = close_matches(frame.arg0, frame.arg1, local, self.sync_remote);
+                    self.drop_sync();
+                    if !matched {
+                        return Err("the device service closed a different stream".into());
+                    }
+                    return Err("the file service closed the stream".into());
+                }
+                _ => return Err("unexpected device service message".into()),
+            }
+        }
+        let out = self.sync_buf[..n].to_vec();
+        self.sync_buf.drain(..n);
+        Ok(out)
+    }
+
+    fn fail_text(&mut self) -> Result<String, String> {
+        let len = read_u32(&self.pull(4)?)? as usize;
+        if len > 64 * 1024 {
+            self.drop_sync();
+            return Err("the file service failure is too large".into());
+        }
+        Ok(String::from_utf8_lossy(&self.pull(len)?).to_string())
+    }
+
+    fn open_service(&mut self, name: &str) -> Result<(u32, u32), String> {
+        let local = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        let mut dest = name.as_bytes().to_vec();
+        if dest.last() != Some(&0) {
+            dest.push(0);
+        }
+        if dest.len() > self.chunk_size() {
+            return Err("the service name is too large".into());
+        }
+        self.write_frame(A_OPEN, local, 0, &dest)?;
+        let frame = self.read_frame()?;
+        match frame.cmd {
+            A_OKAY if frame.arg1 == local => Ok((local, frame.arg0)),
+            A_CLSE => Err("the device service refused the request".into()),
+            _ => Err("unexpected device service message".into()),
+        }
+    }
+
+    fn write_payload(&mut self, local: u32, remote: u32, data: &[u8], early: &mut Vec<u8>) -> Result<(), String> {
+        let max = self.chunk_size();
+        let mut offset = 0;
+        let mut steps = 0usize;
+        loop {
+            steps += 1;
+            if steps > MAX_FILE {
+                return Err("the device service sent too many messages".into());
+            }
+            let end = (offset + max).min(data.len());
+            self.check_deadline()?;
+            self.write_frame(A_WRTE, local, remote, &data[offset..end])?;
+            self.wait_ok(local, remote, early)?;
+            offset = end;
+            if offset >= data.len() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn wait_ok(&mut self, local: u32, remote: u32, early: &mut Vec<u8>) -> Result<(), String> {
+        let mut steps = 0usize;
+        let mut empty = 0usize;
+        loop {
+            steps += 1;
+            if steps > MAX_OUTPUT {
+                return Err("the device service sent too many messages".into());
+            }
+            let frame = self.read_frame()?;
+            match frame.cmd {
+                A_OKAY if frame.arg1 == local => return Ok(()),
+                A_WRTE if frame.arg1 == local => {
+                    self.write_frame(A_OKAY, local, frame.arg0, &[])?;
+                    if frame.data.is_empty() {
+                        empty += 1;
+                        if empty > MAX_EMPTY {
+                            return Err("the device service sent too many empty messages".into());
+                        }
+                    } else {
+                        empty = 0;
+                        push_capped(early, &frame.data)?;
+                    }
+                }
+                A_CLSE => {
+                    if !close_matches(frame.arg0, frame.arg1, local, remote) {
+                        return Err("the device service closed a different stream".into());
+                    }
+                    return Err("the device service closed the stream".into());
+                }
+                _ => return Err("unexpected device service message".into()),
+            }
+        }
+    }
+
+    fn read_until_close(&mut self, local: u32, remote: u32, out: &mut Vec<u8>) -> Result<(), String> {
+        let mut steps = 0usize;
+        let mut empty = 0usize;
+        loop {
+            steps += 1;
+            if steps > MAX_OUTPUT {
+                return Err("the device service sent too many messages".into());
+            }
+            let frame = self.read_frame()?;
+            match frame.cmd {
+                A_OKAY => {}
+                A_WRTE if frame.arg1 == local => {
+                    self.write_frame(A_OKAY, local, frame.arg0, &[])?;
+                    if frame.data.is_empty() {
+                        empty += 1;
+                        if empty > MAX_EMPTY {
+                            return Err("the device service sent too many empty messages".into());
+                        }
+                    } else {
+                        empty = 0;
+                        push_capped(out, &frame.data)?;
+                    }
+                }
+                A_CLSE => {
+                    if !close_matches(frame.arg0, frame.arg1, local, remote) {
+                        return Err("the device service closed a different stream".into());
+                    }
+                    return Ok(());
+                }
+                _ => return Err("unexpected device service message".into()),
+            }
+        }
+    }
+
+    fn has_feature(&self, name: &str) -> bool {
+        self.features.iter().any(|feature| feature == name)
+    }
+
+    fn file_tier(&self) -> String {
+        if self.has_feature("sendrecv_v2") || self.has_feature("ls_v2") {
+            "sync_v2".into()
+        } else {
+            "shell".into()
+        }
+    }
+
+    fn transfer_flags(&self, dry_run: bool) -> Result<u32, String> {
+        let mut flags = preferred_codec_flag(&self.features);
+        if dry_run {
+            if !self.has_feature("sendrecv_v2_dry_run_send") {
+                return Err("the device does not support a dry run".into());
+            }
+            flags |= SYNC_FLAG_DRY_RUN;
+        }
+        Ok(flags)
+    }
+
+    fn open_recv(&mut self, path: &str) -> Result<Codec, String> {
+        if self.has_feature("sendrecv_v2") {
+            self.sync_request(&sync_path(b"RCV2", path)?)?;
+            let flags = self.transfer_flags(false)?;
+            let mut setup = Vec::with_capacity(8);
+            setup.extend_from_slice(b"RCV2");
+            setup.extend_from_slice(&flags.to_le_bytes());
+            self.sync_request(&setup)?;
+            codec_from_flags(flags)
+        } else {
+            self.sync_request(&sync_path(b"RECV", path)?)?;
+            Ok(Codec::None)
+        }
+    }
+
+    fn expand_read(&mut self, raw: &[u8]) -> Result<Vec<u8>, String> {
+        match self.read_hold.as_mut().and_then(|hold| hold.decoder.as_mut()) {
+            Some(decoder) => decoder.push(raw),
+            None => Ok(raw.to_vec()),
+        }
+    }
+
+    fn finish_read(&mut self) -> Result<(), String> {
+        match self.read_hold.as_mut().and_then(|hold| hold.decoder.as_mut()) {
+            Some(decoder) => decoder.finish(),
+            None => Ok(()),
+        }
+    }
+
+    fn send_data_chunks(&mut self, data: &[u8]) -> Result<(), String> {
+        let mut offset = 0;
+        while offset < data.len() {
+            self.check_deadline()?;
+            let n = (data.len() - offset).min(DATA_CHUNK);
+            if n > u32::MAX as usize {
+                return Err("the file service response is too large".into());
+            }
+            let mut chunk = Vec::with_capacity(8 + n);
+            chunk.extend_from_slice(b"DATA");
+            chunk.extend_from_slice(&(n as u32).to_le_bytes());
+            chunk.extend_from_slice(&data[offset..offset + n]);
+            self.sync_request(&chunk)?;
+            offset += n;
+        }
+        Ok(())
+    }
+
+    fn begin_operation(&mut self) -> Result<(), String> {
+        if !self.connected {
+            return Err("the device session is not connected".into());
+        }
+        self.deadline = Instant::now() + self.io_timeout;
+        Ok(())
+    }
+
+    fn check_deadline(&self) -> Result<(), String> {
+        if Instant::now() >= self.deadline {
+            Err("the device debugging service did not answer in time".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn write_frame(&mut self, cmd: u32, arg0: u32, arg1: u32, data: &[u8]) -> Result<(), String> {
+        self.check_deadline()?;
+        if data.len() > self.chunk_size() {
+            return Err("the device service message is too large".into());
+        }
+        let bytes = frame_bytes(cmd, arg0, arg1, data)?;
+        let deadline = self.deadline;
+        let clock = self.link.as_ref().map(|link| Arc::clone(&link.clock));
+        if let Some(clock) = &clock {
+            clock.arm(deadline);
+        }
+        let result = match &mut self.io {
+            Io::Plain(stream) => write_socket(stream, &bytes, deadline),
+            Io::Secure(pipe) => write_pipe(pipe, &bytes),
+        };
+        if let Some(clock) = &clock {
+            clock.disarm();
+        }
+        let result = bound(deadline, result);
+        if result.is_err() {
+            self.connected = false;
+        }
+        result
+    }
+
+    fn read_frame(&mut self) -> Result<Frame, String> {
+        self.check_deadline()?;
+        let deadline = self.deadline;
+        let clock = self.link.as_ref().map(|link| Arc::clone(&link.clock));
+        if let Some(clock) = &clock {
+            clock.arm(deadline);
+        }
+        let result = match &mut self.io {
+            Io::Plain(stream) => read_socket_frame(stream, deadline),
+            Io::Secure(pipe) => read_pipe_frame(pipe),
+        };
+        if let Some(clock) = &clock {
+            clock.disarm();
+        }
+        let result = bound(deadline, result);
+        if result.is_err() {
+            self.connected = false;
+        }
+        result
+    }
+
+    fn chunk_size(&self) -> usize {
+        (self.peer_max as usize).clamp(1, MAX_PAYLOAD)
+    }
+}
+
+fn push_capped(out: &mut Vec<u8>, data: &[u8]) -> Result<(), String> {
+    if data.len() > MAX_FILE || out.len() > MAX_FILE.saturating_sub(data.len()) {
+        return Err("the device service output is too large".into());
+    }
+    out.extend_from_slice(data);
+    Ok(())
+}
+
+fn accept_peer_link(version: u32, maxdata: u32) -> Result<u32, String> {
+    if version < MIN_VERSION || version > MAX_VERSION {
+        return Err("the device debugging service version is not supported".into());
+    }
+    if maxdata < MIN_MAXDATA {
+        return Err("the device debugging service message size is too small".into());
+    }
+    Ok(maxdata.min(MAX_PAYLOAD as u32))
+}
+
+struct TakenShell {
+    output: CommandOutput,
+    consumed: usize,
+    ready: bool,
+}
+
+fn take_shell_window(
+    extended: bool,
+    data: &[u8],
+    window: usize,
+    closed: bool,
+    split: &mut Option<ShellSplit>,
+) -> Result<Option<TakenShell>, String> {
+    if !extended {
+        if split.is_some() {
+            return Err("the command response was truncated".into());
+        }
+        if !closed && data.len() < window {
+            return Ok(None);
+        }
+        let partial = if closed { data.len() > window } else { data.len() >= window };
+        let n = if partial { window.min(data.len()) } else { data.len() };
+        return Ok(Some(TakenShell {
+            output: CommandOutput {
+                stdout: data[..n].to_vec(),
+                stderr: Vec::new(),
+                exit_code: None,
+                partial,
+                reason: if partial { "the response window is full".into() } else { String::new() },
+            },
+            consumed: n,
+            ready: true,
+        }));
+    }
+    let mut index = 0usize;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut exit_code = None;
+    if let Some(split_state) = split.take() {
+        let room = window;
+        if data.is_empty() && !closed {
+            *split = Some(split_state);
+            return Ok(None);
+        }
+        let take_n = split_state.remaining.min(data.len()).min(room);
+        if take_n == 0 && !closed {
+            *split = Some(split_state);
+            return Ok(None);
+        }
+        append_shell(&mut stdout, &mut stderr, split_state.kind, &data[..take_n]);
+        index = take_n;
+        if take_n < split_state.remaining {
+            *split = Some(ShellSplit { kind: split_state.kind, remaining: split_state.remaining - take_n });
+            return Ok(Some(partial_shell(stdout, stderr, index)));
+        }
+    }
+    loop {
+        if stdout.len() >= window || stderr.len() >= window {
+            if closed && index >= data.len() && split.is_none() {
+                return Ok(Some(complete_shell(stdout, stderr, exit_code, index)));
+            }
+            return Ok(Some(partial_shell(stdout, stderr, index)));
+        }
+        if index + 5 > data.len() {
+            if closed && index < data.len() {
+                return Err("the command response was truncated".into());
+            }
+            if closed {
+                return Ok(Some(complete_shell(stdout, stderr, exit_code, index)));
+            }
+            return held_shell(stdout, stderr, exit_code, index);
+        }
+        let kind = data[index];
+        let len = u32::from_le_bytes(data[index + 1..index + 5].try_into().unwrap()) as usize;
+        let body_at = index + 5;
+        let body_end = body_at.checked_add(len).ok_or_else(|| "the command response was truncated".to_string())?;
+        let have = data.len().saturating_sub(body_at);
+        if kind == 1 || kind == 2 {
+            let used = if kind == 2 { stderr.len() } else { stdout.len() };
+            let room = window.saturating_sub(used);
+            if have < len {
+                if closed {
+                    return Err("the command response was truncated".into());
+                }
+                if have == 0 || have < room {
+                    return held_shell(stdout, stderr, exit_code, index);
+                }
+                append_shell(&mut stdout, &mut stderr, kind, &data[body_at..body_at + room]);
+                *split = Some(ShellSplit { kind, remaining: len - room });
+                return Ok(Some(partial_shell(stdout, stderr, body_at + room)));
+            }
+            if len > room {
+                if room == 0 {
+                    return Ok(Some(partial_shell(stdout, stderr, index)));
+                }
+                append_shell(&mut stdout, &mut stderr, kind, &data[body_at..body_at + room]);
+                *split = Some(ShellSplit { kind, remaining: len - room });
+                return Ok(Some(partial_shell(stdout, stderr, body_at + room)));
+            }
+            append_shell(&mut stdout, &mut stderr, kind, &data[body_at..body_end]);
+            index = body_end;
+        } else if have < len {
+            if closed {
+                return Err("the command response was truncated".into());
+            }
+            return held_shell(stdout, stderr, exit_code, index);
+        } else if kind == 3 && len == 1 {
+            exit_code = Some(data[body_at]);
+            index = body_end;
+        } else {
+            index = body_end;
+        }
+    }
+}
+
+fn append_shell(stdout: &mut Vec<u8>, stderr: &mut Vec<u8>, kind: u8, body: &[u8]) {
+    if kind == 2 {
+        stderr.extend_from_slice(body);
+    } else if kind == 1 {
+        stdout.extend_from_slice(body);
+    }
+}
+
+fn held_shell(stdout: Vec<u8>, stderr: Vec<u8>, exit_code: Option<u8>, consumed: usize) -> Result<Option<TakenShell>, String> {
+    if consumed == 0 {
+        return Ok(None);
+    }
+    Ok(Some(TakenShell {
+        output: CommandOutput { stdout, stderr, exit_code, partial: false, reason: String::new() },
+        consumed,
+        ready: false,
+    }))
+}
+
+fn partial_shell(stdout: Vec<u8>, stderr: Vec<u8>, consumed: usize) -> TakenShell {
+    TakenShell {
+        output: CommandOutput {
+            stdout,
+            stderr,
+            exit_code: None,
+            partial: true,
+            reason: "the response window is full".into(),
+        },
+        consumed,
+        ready: true,
+    }
+}
+
+fn complete_shell(stdout: Vec<u8>, stderr: Vec<u8>, exit_code: Option<u8>, consumed: usize) -> TakenShell {
+    TakenShell {
+        output: CommandOutput { stdout, stderr, exit_code, partial: false, reason: String::new() },
+        consumed,
+        ready: true,
+    }
+}
+
+fn parsed_uid(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index + 4 <= bytes.len() {
+        let boundary = index == 0 || bytes[index - 1].is_ascii_whitespace();
+        if boundary && bytes[index..].starts_with(b"uid=") {
+            let start = index + 4;
+            let mut end = start;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            let closed = end == bytes.len() || bytes[end] == b'(' || bytes[end].is_ascii_whitespace();
+            if end > start && closed {
+                return Some(String::from_utf8_lossy(&bytes[start..end]).into_owned());
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn identity_from_output(output: &CommandOutput) -> (bool, bool) {
+    if output.partial {
+        return (false, false);
+    }
+    let uid = parsed_uid(&String::from_utf8_lossy(&output.stdout));
+    let confirmed = output.exit_code == Some(0) && uid.is_some();
+    let rooted = uid.as_deref() == Some("0") && matches!(output.exit_code, Some(0) | None);
+    (confirmed, rooted)
+}
+
+fn parse_extended(data: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Option<u8>), String> {
+    let mut index = 0;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut exit_code = None;
+    while index < data.len() {
+        let header = index.checked_add(5).ok_or("the command response was truncated")?;
+        if header > data.len() {
+            return Err("the command response was truncated".into());
+        }
+        let kind = data[index];
+        let len = u32::from_le_bytes(data[index + 1..index + 5].try_into().unwrap()) as usize;
+        let body_end = header.checked_add(len).ok_or("the command response was truncated")?;
+        if body_end > data.len() {
+            return Err("the command response was truncated".into());
+        }
+        let body = &data[header..body_end];
+        index = body_end;
+        match kind {
+            1 => {
+                if body.len() > MAX_OUTPUT || stdout.len() > MAX_OUTPUT - body.len() {
+                    return Err("the device service output is too large".into());
+                }
+                stdout.extend_from_slice(body);
+            }
+            2 => {
+                if body.len() > MAX_OUTPUT || stderr.len() > MAX_OUTPUT - body.len() {
+                    return Err("the device service output is too large".into());
+                }
+                stderr.extend_from_slice(body);
+            }
+            3 if body.len() == 1 => exit_code = Some(body[0]),
+            _ => {}
+        }
+    }
+    Ok((stdout, stderr, exit_code))
+}
+
+fn quote_privilege(command: &str) -> String {
+    format!("su -c '{}'", command.replace('\'', "'\\''"))
+}
+
+fn command_missing(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("not found") || lower.contains("inaccessible")
+}
+
+fn bracket_id(text: &str) -> Result<String, String> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'[' {
+            let start = index + 1;
+            let mut end = start;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end > start && end < bytes.len() && bytes[end] == b']' {
+                return Ok(text[start..end].to_string());
+            }
+        }
+        index += 1;
+    }
+    Err("the package service did not return a session".into())
+}
+
+fn sync_path(id: &[u8; 4], path: &str) -> Result<Vec<u8>, String> {
+    if path.len() > MAX_PATH {
+        return Err("the path is too large".into());
+    }
+    if path.as_bytes().contains(&0) {
+        return Err("the path is not usable".into());
+    }
+    let mut out = Vec::with_capacity(8 + path.len());
+    out.extend_from_slice(id);
+    out.extend_from_slice(&(path.len() as u32).to_le_bytes());
+    out.extend_from_slice(path.as_bytes());
+    Ok(out)
+}
+
+fn read_u32(bytes: &[u8]) -> Result<u32, String> {
+    let arr: [u8; 4] = bytes.try_into().map_err(|_| "the service record is truncated".to_string())?;
+    Ok(u32::from_le_bytes(arr))
+}
+
+fn read_u64(bytes: &[u8]) -> Result<u64, String> {
+    let arr: [u8; 8] = bytes.try_into().map_err(|_| "the service record is truncated".to_string())?;
+    Ok(u64::from_le_bytes(arr))
+}
+
+fn read_i64(bytes: &[u8]) -> Result<i64, String> {
+    let arr: [u8; 8] = bytes.try_into().map_err(|_| "the service record is truncated".to_string())?;
+    Ok(i64::from_le_bytes(arr))
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for byte in data {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn frame_bytes(cmd: u32, arg0: u32, arg1: u32, data: &[u8]) -> Result<Vec<u8>, String> {
+    if data.len() > MAX_PAYLOAD {
+        return Err("the device service message is too large".into());
+    }
+    let mut out = Vec::with_capacity(24 + data.len());
+    for word in [cmd, arg0, arg1, data.len() as u32, crc32(data), cmd ^ 0xffff_ffff] {
+        out.extend_from_slice(&word.to_le_bytes());
+    }
+    out.extend_from_slice(data);
+    Ok(out)
+}
+
+fn parse_header(header: &[u8]) -> Result<(u32, u32, u32, usize, u32), String> {
+    if header.len() < 24 {
+        return Err("the device service header is truncated".into());
+    }
+    let cmd = u32::from_le_bytes(header[0..4].try_into().unwrap());
+    let arg0 = u32::from_le_bytes(header[4..8].try_into().unwrap());
+    let arg1 = u32::from_le_bytes(header[8..12].try_into().unwrap());
+    let len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+    let crc = u32::from_le_bytes(header[16..20].try_into().unwrap());
+    let magic = u32::from_le_bytes(header[20..24].try_into().unwrap());
+    if magic != cmd ^ 0xffff_ffff {
+        return Err("the device service header is not intact".into());
+    }
+    if len > MAX_PAYLOAD {
+        return Err("the device service message is too large".into());
+    }
+    Ok((cmd, arg0, arg1, len, crc))
+}
+
+fn finish_frame(header: &[u8], data: Vec<u8>) -> Result<Frame, String> {
+    let (cmd, arg0, arg1, len, crc) = parse_header(header)?;
+    if data.len() != len {
+        return Err("the device service message is truncated".into());
+    }
+    if crc != 0 && crc != crc32(&data) {
+        return Err("the device service checksum did not match".into());
+    }
+    Ok(Frame { cmd, arg0, arg1, data })
+}
+
+fn read_socket_frame(stream: &mut TcpStream, deadline: Instant) -> Result<Frame, String> {
+    let header = read_socket(stream, 24, deadline)?;
+    let (_, _, _, len, _) = parse_header(&header)?;
+    let data = if len == 0 { Vec::new() } else { read_socket(stream, len, deadline)? };
+    finish_frame(&header, data)
+}
+
+fn read_pipe_frame(pipe: &mut adb_tls::SecurePipe) -> Result<Frame, String> {
+    let header = pipe.read_exact(24)?;
+    let (_, _, _, len, _) = parse_header(&header)?;
+    let data = if len == 0 { Vec::new() } else { pipe.read_exact(len)? };
+    finish_frame(&header, data)
+}
+
+fn read_socket(stream: &mut TcpStream, len: usize, deadline: Instant) -> Result<Vec<u8>, String> {
+    if len > MAX_PAYLOAD {
+        return Err("the device service message is too large".into());
+    }
+    let mut buf = vec![0u8; len];
+    let mut filled = 0;
+    while filled < len {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err("the device debugging service did not answer in time".into());
+        }
+        stream
+            .set_read_timeout(Some(deadline.saturating_duration_since(now)))
+            .map_err(|err| format!("the connection could not be prepared ({err})"))?;
+        match stream.read(&mut buf[filled..]) {
+            Ok(0) => return Err("the device debugging service closed the connection".into()),
+            Ok(n) => filled += n,
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(err) if err.kind() == ErrorKind::TimedOut || err.kind() == ErrorKind::WouldBlock => {
+                return Err("the device debugging service did not answer in time".into());
+            }
+            Err(err) => return Err(format!("the device debugging service closed the connection ({err})")),
+        }
+    }
+    Ok(buf)
+}
+
+fn write_socket(stream: &mut TcpStream, bytes: &[u8], deadline: Instant) -> Result<(), String> {
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err("the device debugging service did not answer in time".into());
+        }
+        stream
+            .set_write_timeout(Some(deadline.saturating_duration_since(now)))
+            .map_err(|err| format!("the connection could not be prepared ({err})"))?;
+        match stream.write(rest) {
+            Ok(0) => return Err("the device debugging service did not accept the message".into()),
+            Ok(n) => rest = &rest[n..],
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(err) if err.kind() == ErrorKind::TimedOut || err.kind() == ErrorKind::WouldBlock => {
+                return Err("the device debugging service did not answer in time".into());
+            }
+            Err(err) => return Err(format!("the device debugging service did not accept the message ({err})")),
+        }
+    }
+    Ok(())
+}
+
+fn write_pipe(pipe: &mut adb_tls::SecurePipe, bytes: &[u8]) -> Result<(), String> {
+    pipe.write_all(bytes)
+}
+
+fn prepare_socket(stream: &TcpStream, timeout: Duration) -> Result<(), String> {
+    stream.set_nodelay(true).map_err(|err| format!("the connection could not be prepared ({err})"))?;
+    stream.set_read_timeout(Some(timeout)).map_err(|err| format!("the connection could not be prepared ({err})"))?;
+    stream.set_write_timeout(Some(timeout)).map_err(|err| format!("the connection could not be prepared ({err})"))?;
+    Ok(())
+}
+
+const RESOLVER_LIMIT: usize = 4;
+static RESOLVER_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+struct ResolveJob {
+    host: String,
+    port: u16,
+    reply: std::sync::mpsc::Sender<std::io::Result<Option<SocketAddr>>>,
+}
+
+#[cfg(test)]
+static LOOKUP_HOOK: Mutex<Option<fn(&str, u16) -> std::io::Result<Option<SocketAddr>>>> = Mutex::new(None);
+
+fn lookup_socket(host: &str, port: u16) -> std::io::Result<Option<SocketAddr>> {
+    #[cfg(test)]
+    {
+        let hook = *LOOKUP_HOOK.lock().unwrap_or_else(|poison| poison.into_inner());
+        if let Some(hook) = hook {
+            return hook(host, port);
+        }
+    }
+    (host, port).to_socket_addrs().map(|mut addrs| addrs.next())
+}
+
+fn resolver_pool() -> &'static std::sync::mpsc::Sender<ResolveJob> {
+    static POOL: OnceLock<std::sync::mpsc::Sender<ResolveJob>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<ResolveJob>();
+        let rx = Arc::new(Mutex::new(rx));
+        for _ in 0..RESOLVER_LIMIT {
+            let rx = Arc::clone(&rx);
+            let spawned = thread::Builder::new().name("resolver".into()).spawn(move || {
+                RESOLVER_THREADS.fetch_add(1, Ordering::SeqCst);
+                loop {
+                    let job = {
+                        let guard = rx.lock().unwrap_or_else(|poison| poison.into_inner());
+                        guard.recv()
+                    };
+                    let Ok(job) = job else { break };
+                    let found = lookup_socket(&job.host, job.port);
+                    let _ = job.reply.send(found);
+                }
+            });
+            if spawned.is_err() {
+                break;
+            }
+        }
+        tx
+    })
+}
+
+fn resolve_until(host: &str, port: u16, deadline: Instant) -> Result<SocketAddr, String> {
+    if Instant::now() >= deadline {
+        return Err("the device address could not be resolved in time".into());
+    }
+    if host.len() > 255 || host.as_bytes().contains(&0) {
+        return Err("the device address could not be resolved".into());
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(SocketAddr::new(ip, port));
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    resolver_pool()
+        .send(ResolveJob { host: host.to_string(), port, reply: tx })
+        .map_err(|_| "the device address could not be resolved".to_string())?;
+    loop {
+        if Instant::now() >= deadline {
+            return Err("the device address could not be resolved in time".into());
+        }
+        let slice = deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(50));
+        if slice.is_zero() {
+            return Err("the device address could not be resolved in time".into());
+        }
+        match rx.recv_timeout(slice) {
+            Ok(Ok(Some(addr))) => return Ok(addr),
+            Ok(Ok(None)) => return Err("the device address could not be resolved".into()),
+            Ok(Err(err)) => return Err(format!("the device address could not be resolved ({err})")),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err("the device address could not be resolved".into()),
+        }
+    }
+}
+
+fn parse_banner(data: &[u8]) -> (String, Vec<String>) {
+    let text = String::from_utf8_lossy(data).trim_matches('\0').to_string();
+    let mut features = Vec::new();
+    if let Some(start) = text.find("features=") {
+        let rest = &text[start + "features=".len()..];
+        let end = rest.find([';', '\0', ' ']).unwrap_or(rest.len());
+        for part in rest[..end].split(',') {
+            let part = part.trim();
+            if !part.is_empty() {
+                features.push(part.to_string());
+            }
+        }
+    }
+    (text, features)
+}
+
+fn pair_packet(kind: u8, payload: &[u8]) -> Result<Vec<u8>, String> {
+    if payload.len() > MAX_PAIR_PAYLOAD {
+        return Err("the pairing payload is too large".into());
+    }
+    let mut out = Vec::with_capacity(6 + payload.len());
+    out.push(1);
+    out.push(kind);
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload);
+    Ok(out)
+}
+
+fn read_pair_packet(pipe: &mut adb_tls::SecurePipe) -> Result<(u8, Vec<u8>), String> {
+    let header = pipe.read_exact(6)?;
+    if header[0] != 1 {
+        return Err("the pairing version is not supported".into());
+    }
+    let len = u32::from_be_bytes(header[2..6].try_into().unwrap()) as usize;
+    if len > MAX_PAIR_PAYLOAD {
+        return Err("the pairing payload is too large".into());
+    }
+    Ok((header[1], pipe.read_exact(len)?))
+}
+
+fn peer_info(kind: u8, data: &[u8]) -> Result<Vec<u8>, String> {
+    if data.len() >= PEER_INFO_LEN {
+        return Err("the pairing identity is too large".into());
+    }
+    let mut body = vec![0u8; PEER_INFO_LEN];
+    body[0] = kind;
+    body[1..1 + data.len()].copy_from_slice(data);
+    Ok(body)
+}
+
+fn require_device_guid(info: &[u8]) -> Result<(), String> {
+    if info.len() != PEER_INFO_LEN || info[0] != PEER_INFO_DEVICE_GUID {
+        return Err("the pairing identity is not a device guid".into());
+    }
+    let payload = &info[1..];
+    let end = payload.iter().position(|byte| *byte == 0).unwrap_or(payload.len());
+    if end == 0 || end == payload.len() {
+        return Err("the pairing identity is not a device guid".into());
+    }
+    Ok(())
+}
+
+fn file_stat_v2(body: &[u8]) -> Result<FileStat, String> {
+    if body.len() != 68 {
+        return Err("the file service record is truncated".into());
+    }
+    let error = read_u32(&body[0..4])?;
+    if error != 0 {
+        if error == SYNC_ENOENT {
+            return Ok(FileStat { present: false, mode: 0, size: 0, mtime: 0 });
+        }
+        return Err(sync_error(error));
+    }
+    let mode = read_u32(&body[20..24])?;
+    let size = read_u64(&body[36..44])?;
+    let mtime = read_i64(&body[52..60])?;
+    Ok(FileStat { present: mode != 0, mode, size, mtime })
+}
+
+fn parse_dent_v2(body: &[u8]) -> Result<(u32, u32, u64, i64, u32), String> {
+    if body.len() != 72 {
+        return Err("the file service record is truncated".into());
+    }
+    let error = read_u32(&body[0..4])?;
+    let mode = read_u32(&body[20..24])?;
+    let size = read_u64(&body[36..44])?;
+    let mtime = read_i64(&body[52..60])?;
+    let name_len = read_u32(&body[68..72])?;
+    Ok((error, mode, size, mtime, name_len))
+}
+
+fn sync_error(error: u32) -> String {
+    let kind = match error {
+        1 | 13 => "permission",
+        5 => "input/output",
+        30 => "read-only",
+        _ => "status",
+    };
+    format!("the file service reported {kind} {error}")
+}
+
+fn unix_seconds() -> Result<u32, String> {
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "the file time is not available".to_string())?;
+    let secs = duration.as_secs();
+    if secs == 0 || secs > u64::from(u32::MAX) {
+        return Err("the file time is not available".into());
+    }
+    Ok(secs as u32)
+}
+
+fn load_or_create_identity(dir: &Path, seal: Option<&[u8]>) -> Result<(adb_tls::PrivateKey, String), String> {
+    let key_bytes = seal_key(seal)?;
+    std::fs::create_dir_all(dir).map_err(|err| format!("the identity directory is not usable ({err})"))?;
+    let path = dir.join("identity.bin");
+    if path.exists() {
+        let stored = read_capped(&path, MAX_STORED_RECORD, "stored identity")?;
+        let plain = open_blob(&key_bytes, &stored)?;
+        if plain.len() < 4 {
+            return Err("the stored identity could not be opened".into());
+        }
+        let comment_len = u32::from_be_bytes(plain[0..4].try_into().unwrap()) as usize;
+        let comment_end = 4usize.checked_add(comment_len).ok_or("the stored identity could not be opened")?;
+        if plain.len() < comment_end {
+            return Err("the stored identity could not be opened".into());
+        }
+        let comment = std::str::from_utf8(&plain[4..comment_end]).map_err(|_| "the stored identity could not be opened".to_string())?;
+        let key = adb_tls::PrivateKey::load_bytes(&plain[comment_end..])?;
+        let line = key.device_public_line(comment)?;
+        return Ok((key, line));
+    }
+    let key = adb_tls::PrivateKey::generate(2048)?;
+    let comment = "local";
+    let line = key.device_public_line(comment)?;
+    let mut plain = Vec::new();
+    plain.extend_from_slice(&(comment.len() as u32).to_be_bytes());
+    plain.extend_from_slice(comment.as_bytes());
+    plain.extend_from_slice(&key.store_bytes());
+    let sealed = seal_blob(&key_bytes, &plain)?;
+    std::fs::write(&path, &sealed).map_err(|err| format!("the identity could not be stored ({err})"))?;
+    tighten(&path);
+    Ok((key, line))
+}
+
+fn seal_key(provided: Option<&[u8]>) -> Result<[u8; 32], String> {
+    let Some(bytes) = provided else {
+        return Err("the identity seal must be 32 bytes".into());
+    };
+    if bytes.len() != 32 {
+        return Err("the identity seal must be 32 bytes".into());
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(bytes);
+    Ok(key)
+}
+
+fn read_capped(path: &Path, limit: u64, what: &str) -> Result<Vec<u8>, String> {
+    let mut file = std::fs::File::open(path).map_err(|err| format!("the {what} could not be read ({err})"))?;
+    let announced = file.metadata().map(|meta| meta.len()).unwrap_or(limit.saturating_add(1));
+    if announced > limit {
+        return Err(format!("the {what} is too large"));
+    }
+    let mut buf = Vec::new();
+    std::io::Read::by_ref(&mut file).take(limit.saturating_add(1)).read_to_end(&mut buf).map_err(|err| format!("the {what} could not be read ({err})"))?;
+    if buf.len() as u64 > limit {
+        return Err(format!("the {what} is too large"));
+    }
+    Ok(buf)
+}
+
+fn seal_blob(key: &[u8; 32], plain: &[u8]) -> Result<Vec<u8>, String> {
+    let nonce_bytes = adb_tls::random_bytes(12)?;
+    let mut nonce = [0u8; 12];
+    nonce.copy_from_slice(&nonce_bytes);
+    let boxed = adb_tls::aes_gcm_seal(key, &nonce, b"", plain)?;
+    let mut out = nonce.to_vec();
+    out.extend_from_slice(&boxed);
+    Ok(out)
+}
+
+fn open_blob(key: &[u8; 32], stored: &[u8]) -> Result<Vec<u8>, String> {
+    if stored.len() < 12 + 16 {
+        return Err("the stored identity could not be opened".into());
+    }
+    let mut nonce = [0u8; 12];
+    nonce.copy_from_slice(&stored[..12]);
+    adb_tls::aes_gcm_open(key, &nonce, b"", &stored[12..]).map_err(|_| "the stored identity could not be opened".to_string())
+}
+
+fn pin_path(dir: &Path, host: &str) -> PathBuf {
+    dir.join("peers").join(hex_bytes(host.as_bytes()))
+}
+
+fn load_pin(dir: &Path, host: &str, seal: Option<&[u8]>) -> Result<Option<Vec<u8>>, String> {
+    let path = pin_path(dir, host);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let key = seal_key(seal)?;
+    let stored = read_capped(&path, MAX_STORED_RECORD, "paired identity")?;
+    Ok(Some(open_blob(&key, &stored)?))
+}
+
+fn save_pin(dir: &Path, host: &str, seal: Option<&[u8]>, cert: &[u8]) -> Result<(), String> {
+    let key = seal_key(seal)?;
+    let path = pin_path(dir, host);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| format!("the paired identity could not be stored ({err})"))?;
+    }
+    let sealed = seal_blob(&key, cert)?;
+    std::fs::write(&path, sealed).map_err(|err| format!("the paired identity could not be stored ({err})"))?;
+    tighten(&path);
+    Ok(())
+}
+
+fn tighten(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    let _ = path;
+}
+
+fn hex_bytes(data: &[u8]) -> String {
+    const HEX: &[u8] = b"0123456789abcdef";
+    let mut out = String::with_capacity(data.len() * 2);
+    for byte in data {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn dns_query(id: u16, name: &str) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&id.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    out.extend_from_slice(&0u16.to_be_bytes());
+    encode_name(&mut out, name)?;
+    out.extend_from_slice(&12u16.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    Ok(out)
+}
+
+fn encode_name(out: &mut Vec<u8>, name: &str) -> Result<(), String> {
+    if name.is_empty() || name.len() > 255 {
+        return Err("the discovery name is not usable".into());
+    }
+    for label in name.split('.') {
+        let bytes = label.as_bytes();
+        if bytes.is_empty() || bytes.len() > 63 {
+            return Err("the discovery name is not usable".into());
+        }
+        out.push(bytes.len() as u8);
+        out.extend_from_slice(bytes);
+    }
+    out.push(0);
+    Ok(())
+}
+
+fn parse_dns(packet: &[u8], from: &std::net::SocketAddr) -> Option<ServiceAddress> {
+    if packet.len() < 12 {
+        return None;
+    }
+    let questions = u16::from_be_bytes(packet[4..6].try_into().ok()?) as usize;
+    let answers = u16::from_be_bytes(packet[6..8].try_into().ok()?) as usize;
+    let mut cursor = 12;
+    for _ in 0..questions {
+        cursor = skip_name(packet, cursor)?;
+        cursor = cursor.checked_add(4)?;
+    }
+    let mut name = String::new();
+    let mut port = 0u16;
+    let mut host = String::new();
+    for _ in 0..answers {
+        cursor = skip_name(packet, cursor)?;
+        if cursor + 10 > packet.len() {
+            return None;
+        }
+        let kind = u16::from_be_bytes(packet[cursor..cursor + 2].try_into().ok()?);
+        let len = u16::from_be_bytes(packet[cursor + 8..cursor + 10].try_into().ok()?) as usize;
+        cursor += 10;
+        if cursor + len > packet.len() {
+            return None;
+        }
+        let body = &packet[cursor..cursor + len];
+        if kind == 12 {
+            name = read_name(packet, cursor).unwrap_or_default();
+        } else if kind == 33 && body.len() >= 6 {
+            port = u16::from_be_bytes(body[4..6].try_into().ok()?);
+            host = read_name(packet, cursor + 6).unwrap_or_default();
+        } else if kind == 1 && body.len() == 4 {
+            host = format!("{}.{}.{}.{}", body[0], body[1], body[2], body[3]);
+        }
+        cursor += len;
+    }
+    if port == 0 {
+        return None;
+    }
+    if host.is_empty() {
+        host = from.ip().to_string();
+    }
+    Some(ServiceAddress { name, host, port })
+}
+
+fn skip_name(packet: &[u8], mut cursor: usize) -> Option<usize> {
+    let mut hops = 0;
+    loop {
+        if cursor >= packet.len() || hops > 16 {
+            return None;
+        }
+        let len = packet[cursor] as usize;
+        if len == 0 {
+            return cursor.checked_add(1);
+        }
+        if len & 0xc0 == 0xc0 {
+            if cursor.checked_add(1)? >= packet.len() {
+                return None;
+            }
+            return cursor.checked_add(2);
+        }
+        if len & 0xc0 != 0 {
+            return None;
+        }
+        cursor = cursor.checked_add(1 + len)?;
+        if cursor > packet.len() {
+            return None;
+        }
+        hops += 1;
+    }
+}
+
+fn read_name(packet: &[u8], cursor: usize) -> Option<String> {
+    read_name_at(packet, cursor, 0)
+}
+
+fn read_name_at(packet: &[u8], mut cursor: usize, depth: usize) -> Option<String> {
+    if depth > 8 {
+        return None;
+    }
+    let mut labels = Vec::new();
+    let mut hops = 0;
+    loop {
+        if cursor >= packet.len() || hops > 16 {
+            return None;
+        }
+        let len = packet[cursor] as usize;
+        if len == 0 {
+            break;
+        }
+        if len & 0xc0 == 0xc0 {
+            if cursor.checked_add(1)? >= packet.len() {
+                return None;
+            }
+            let pointed = ((len & 0x3f) << 8) | packet[cursor + 1] as usize;
+            let rest = read_name_at(packet, pointed, depth + 1)?;
+            if !rest.is_empty() {
+                labels.push(rest);
+            }
+            break;
+        }
+        if len & 0xc0 != 0 {
+            return None;
+        }
+        cursor = cursor.checked_add(1)?;
+        let next = cursor.checked_add(len)?;
+        if next > packet.len() {
+            return None;
+        }
+        labels.push(String::from_utf8_lossy(&packet[cursor..next]).to_string());
+        cursor = next;
+        hops += 1;
+    }
+    Some(labels.join("."))
+}
+
+fn status_json(status: &Status) -> String {
+    format!(
+        "{{\"connected\":{},\"secure\":{},\"command_tier\":\"{}\",\"file_tier\":\"{}\",\"built_in_ready\":{},\"identity_confirmed\":{},\"root_note\":\"{}\",\"features\":\"{}\"}}",
+        bool_json(status.connected),
+        bool_json(status.secure),
+        esc(&status.command_tier),
+        esc(&status.file_tier),
+        bool_json(status.built_in_ready),
+        bool_json(status.identity_confirmed),
+        esc(&status.root_note),
+        esc(&status.features)
+    )
+}
+
+fn bool_json(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
+fn exit_json(code: Option<u8>) -> String {
+    match code {
+        Some(code) => code.to_string(),
+        None => "null".into(),
+    }
+}
+
+fn esc(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            ch if ch.is_control() => out.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+enum Json {
+    Str(String),
+    Num(u64),
+    Bool(bool),
+    Null,
+}
+
+fn parse_object(text: &str) -> Result<HashMap<String, Json>, String> {
+    let mut parser = Parser { text, index: 0 };
+    parser.skip();
+    if parser.peek() != Some('{') {
+        return Err("the request must be an object".into());
+    }
+    parser.bump();
+    let mut map = HashMap::new();
+    parser.skip();
+    if parser.peek() != Some('}') {
+        loop {
+            let key = parser.string()?;
+            parser.skip();
+            if parser.peek() != Some(':') {
+                return Err("the request is not valid".into());
+            }
+            parser.bump();
+            parser.skip();
+            let value = parser.value()?;
+            map.insert(key, value);
+            parser.skip();
+            match parser.peek() {
+                Some(',') => {
+                    parser.bump();
+                    parser.skip();
+                }
+                Some('}') => break,
+                _ => return Err("the request is not valid".into()),
+            }
+        }
+    }
+    if parser.peek() != Some('}') {
+        return Err("the request is not valid".into());
+    }
+    parser.bump();
+    parser.skip();
+    if parser.peek().is_some() {
+        return Err("the request is not valid".into());
+    }
+    Ok(map)
+}
+
+struct Parser<'a> {
+    text: &'a str,
+    index: usize,
+}
+
+impl<'a> Parser<'a> {
+    fn skip(&mut self) {
+        while let Some(ch) = self.peek() {
+            if ch.is_whitespace() {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+    }
+    fn peek(&self) -> Option<char> {
+        self.text[self.index..].chars().next()
+    }
+    fn bump(&mut self) {
+        if let Some(ch) = self.peek() {
+            self.index += ch.len_utf8();
+        }
+    }
+    fn string(&mut self) -> Result<String, String> {
+        self.skip();
+        if self.peek() != Some('"') {
+            return Err("the request is not valid".into());
+        }
+        self.bump();
+        let mut out = String::new();
+        loop {
+            match self.peek() {
+                Some('"') => {
+                    self.bump();
+                    return Ok(out);
+                }
+                Some('\\') => {
+                    self.bump();
+                    match self.peek() {
+                        Some('"') => out.push('"'),
+                        Some('\\') => out.push('\\'),
+                        Some('/') => out.push('/'),
+                        Some('n') => out.push('\n'),
+                        Some('r') => out.push('\r'),
+                        Some('t') => out.push('\t'),
+                        Some('u') => {
+                            self.bump();
+                            let code = self.hex4()?;
+                            let ch = if (0xD800..=0xDBFF).contains(&code) {
+                                if self.peek() != Some('\\') {
+                                    return Err("the request is not valid".into());
+                                }
+                                self.bump();
+                                if self.peek() != Some('u') {
+                                    return Err("the request is not valid".into());
+                                }
+                                self.bump();
+                                let low = self.hex4()?;
+                                if !(0xDC00..=0xDFFF).contains(&low) {
+                                    return Err("the request is not valid".into());
+                                }
+                                let joined = 0x10000 + (((code - 0xD800) << 10) | (low - 0xDC00));
+                                char::from_u32(joined).ok_or_else(|| "the request is not valid".to_string())?
+                            } else {
+                                char::from_u32(code).ok_or_else(|| "the request is not valid".to_string())?
+                            };
+                            out.push(ch);
+                            continue;
+                        }
+                        _ => return Err("the request is not valid".into()),
+                    }
+                    self.bump();
+                }
+                Some(ch) => {
+                    out.push(ch);
+                    self.bump();
+                }
+                None => return Err("the request is not valid".into()),
+            }
+        }
+    }
+    fn value(&mut self) -> Result<Json, String> {
+        self.skip();
+        match self.peek() {
+            Some('"') => Ok(Json::Str(self.string()?)),
+            Some('t') => {
+                self.word("true")?;
+                Ok(Json::Bool(true))
+            }
+            Some('f') => {
+                self.word("false")?;
+                Ok(Json::Bool(false))
+            }
+            Some('n') => {
+                self.word("null")?;
+                Ok(Json::Null)
+            }
+            Some(ch) if ch.is_ascii_digit() => {
+                let start = self.index;
+                while matches!(self.peek(), Some(ch) if ch.is_ascii_digit()) {
+                    self.bump();
+                }
+                let num = self.text[start..self.index].parse::<u64>().map_err(|_| "the request is not valid".to_string())?;
+                Ok(Json::Num(num))
+            }
+            _ => Err("the request is not valid".into()),
+        }
+    }
+    fn hex4(&mut self) -> Result<u32, String> {
+        let bytes = self.text.as_bytes();
+        let start = self.index;
+        let end = start.checked_add(4).ok_or_else(|| "the request is not valid".to_string())?;
+        if end > bytes.len() {
+            return Err("the request is not valid".into());
+        }
+        let hex = &bytes[start..end];
+        if !hex.iter().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("the request is not valid".into());
+        }
+        self.index = end;
+        let text = std::str::from_utf8(hex).map_err(|_| "the request is not valid".to_string())?;
+        u32::from_str_radix(text, 16).map_err(|_| "the request is not valid".to_string())
+    }
+    fn word(&mut self, word: &str) -> Result<(), String> {
+        if self.text[self.index..].starts_with(word) {
+            self.index += word.len();
+            Ok(())
+        } else {
+            Err("the request is not valid".into())
+        }
+    }
+}
+
+fn required_str(args: &HashMap<String, Json>, key: &str) -> Result<String, String> {
+    match args.get(key) {
+        Some(Json::Str(value)) if !value.is_empty() => Ok(value.clone()),
+        _ => Err(format!("the request is missing {key}")),
+    }
+}
+
+fn required_u16(args: &HashMap<String, Json>, key: &str) -> Result<u16, String> {
+    match args.get(key) {
+        Some(Json::Num(value)) if *value >= 1 && *value <= 65535 => Ok(*value as u16),
+        _ => Err(format!("the request is missing {key}")),
+    }
+}
+
+fn required_b64(args: &HashMap<String, Json>, key: &str) -> Result<Vec<u8>, String> {
+    match args.get(key) {
+        Some(Json::Str(value)) => decode_bounded(value, MAX_FILE),
+        _ => Err(format!("the request is missing {key}")),
+    }
+}
+
+fn optional_b64(args: &HashMap<String, Json>, key: &str) -> Result<Option<Vec<u8>>, String> {
+    match args.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::Str(value)) => Ok(Some(decode_bounded(value, 32)?)),
+        _ => Err(format!("the request field {key} is not usable")),
+    }
+}
+
+fn optional_mtime(args: &HashMap<String, Json>) -> Result<Option<u32>, String> {
+    match args.get("mtime") {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::Num(0)) => Err("the file time must not be the epoch".into()),
+        Some(Json::Num(value)) if *value <= u64::from(u32::MAX) => Ok(Some(*value as u32)),
+        _ => Err("the request field mtime is not usable".into()),
+    }
+}
+
+fn max_encoded_len(max_decoded: usize) -> usize {
+    max_decoded.saturating_add(2) / 3 * 4
+}
+
+fn decode_bounded(text: &str, max_decoded: usize) -> Result<Vec<u8>, String> {
+    if text.len() > max_encoded_len(max_decoded) {
+        return Err("the encoded field is too large".into());
+    }
+    let decoded = adb_tls::unb64(text)?;
+    if decoded.len() > max_decoded {
+        return Err("the encoded field is too large".into());
+    }
+    Ok(decoded)
+}
+
+fn optional_bool(args: &HashMap<String, Json>, key: &str) -> Result<bool, String> {
+    match args.get(key) {
+        None | Some(Json::Null) => Ok(false),
+        Some(Json::Bool(value)) => Ok(*value),
+        _ => Err(format!("the request field {key} is not usable")),
+    }
+}
+
+fn claimed_ready(args: &HashMap<String, Json>) -> Result<bool, String> {
+    optional_bool(args, "built_in_ready")
+}
+
+fn report_built_in(claimed: bool) -> bool {
+    let _ = claimed;
+    built_in_access_ready()
+}
+
+fn built_in_access_ready() -> bool {
+    built_in_storage_roots().into_iter().any(|root| std::fs::read_dir(root).is_ok())
+}
+
+fn built_in_storage_roots() -> Vec<PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        return vec![PathBuf::from("/storage/emulated/0")];
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Vec::new()
+    }
+}
+
+fn required_seal(args: &HashMap<String, Json>) -> Result<Option<Vec<u8>>, String> {
+    match optional_b64(args, "seal_b64")? {
+        None => Err("the request is missing seal_b64".into()),
+        Some(bytes) if bytes.len() == 32 => Ok(Some(bytes)),
+        Some(_) => Err("the identity seal must be 32 bytes".into()),
+    }
+}
+
+fn optional_flag(args: &HashMap<String, Json>, key: &str, default: bool) -> Result<bool, String> {
+    match args.get(key) {
+        None | Some(Json::Null) => Ok(default),
+        Some(Json::Bool(value)) => Ok(*value),
+        _ => Err(format!("the request field {key} is not usable")),
+    }
+}
+
+fn optional_u64(args: &HashMap<String, Json>, key: &str, default: u64) -> Result<u64, String> {
+    match args.get(key) {
+        None | Some(Json::Null) => Ok(default),
+        Some(Json::Num(value)) => Ok(*value),
+        _ => Err(format!("the request field {key} is not usable")),
+    }
+}
+
+#[cfg(test)]
+fn frame_encode(data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut encoder = Lz4Encoder::new();
+    let mut out = encoder.push(data)?;
+    out.extend(encoder.finish()?);
+    Ok(out)
+}
+
+struct FrameDecoder {
+    input: Vec<u8>,
+    pos: usize,
+    stage: u8,
+    block_size: usize,
+    raw_block: bool,
+    block_max: usize,
+    content_checksum: bool,
+    block_checksum: bool,
+    xxh: Xxh32,
+    block_hash: u32,
+}
+
+impl FrameDecoder {
+    fn new() -> Self {
+        Self {
+            input: Vec::new(),
+            pos: 0,
+            stage: 0,
+            block_size: 0,
+            raw_block: false,
+            block_max: FRAME_BLOCK,
+            content_checksum: false,
+            block_checksum: false,
+            xxh: Xxh32::new(0),
+            block_hash: 0,
+        }
+    }
+
+    fn push(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
+        if self.stage == 5 {
+            return Err("the file service response is not intact".into());
+        }
+        if self.input.len().saturating_add(data.len()) > MAX_FILE.saturating_add(FRAME_BLOCK) {
+            return Err("the file service response is too large".into());
+        }
+        self.input.extend_from_slice(data);
+        let mut out = Vec::new();
+        self.drain(&mut out)?;
+        if self.pos > 0 {
+            self.input.drain(..self.pos);
+            self.pos = 0;
+        }
+        Ok(out)
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        if self.stage == 5 && self.pos == self.input.len() {
+            Ok(())
+        } else {
+            Err("the file service response is not intact".into())
+        }
+    }
+
+    fn remaining(&self) -> usize {
+        self.input.len().saturating_sub(self.pos)
+    }
+
+    fn drain(&mut self, out: &mut Vec<u8>) -> Result<(), String> {
+        loop {
+            if self.stage == 5 {
+                if self.remaining() != 0 {
+                    return Err("the file service response is not intact".into());
+                }
+                return Ok(());
+            }
+            if self.stage == 0 {
+                if self.remaining() < 7 {
+                    return Ok(());
+                }
+                let flg = self.input[self.pos + 4];
+                let mut header_len = 7usize;
+                if flg & 0x08 != 0 {
+                    header_len += 8;
+                }
+                if flg & 0x01 != 0 {
+                    header_len += 4;
+                }
+                if self.remaining() < header_len {
+                    return Ok(());
+                }
+                let magic = u32::from_le_bytes(self.input[self.pos..self.pos + 4].try_into().unwrap());
+                if magic != FRAME_MAGIC || flg & 0xC0 != 0x40 || flg & 0x02 != 0 {
+                    return Err("the file service response is not intact".into());
+                }
+                let bd = self.input[self.pos + 5];
+                if bd & 0x8F != 0 {
+                    return Err("the file service response is not intact".into());
+                }
+                let block_id = (bd >> 4) & 0x7;
+                self.block_max = match block_id {
+                    4 => 64 * 1024,
+                    5 => 256 * 1024,
+                    6 => 1024 * 1024,
+                    7 => 4 * 1024 * 1024,
+                    _ => return Err("the file service response is not intact".into()),
+                };
+                if self.block_max > MAX_FILE {
+                    return Err("the file service response is too large".into());
+                }
+                let covered = &self.input[self.pos + 4..self.pos + header_len - 1];
+                let hc = self.input[self.pos + header_len - 1];
+                if (xxh32(covered, 0) >> 8) as u8 != hc {
+                    return Err("the file service response is not intact".into());
+                }
+                self.content_checksum = flg & 0x04 != 0;
+                self.block_checksum = flg & 0x10 != 0;
+                self.pos += header_len;
+                self.stage = 1;
+                continue;
+            }
+            if self.stage == 1 {
+                if self.remaining() < 4 {
+                    return Ok(());
+                }
+                let raw = u32::from_le_bytes(self.input[self.pos..self.pos + 4].try_into().unwrap());
+                self.pos += 4;
+                if raw == 0 {
+                    self.stage = if self.content_checksum { 4 } else { 5 };
+                    continue;
+                }
+                self.raw_block = raw & 0x8000_0000 != 0;
+                self.block_size = (raw & 0x7fff_ffff) as usize;
+                if self.block_size == 0 || self.block_size > self.block_max {
+                    return Err("the file service response is too large".into());
+                }
+                self.stage = 2;
+                continue;
+            }
+            if self.stage == 2 {
+                if self.remaining() < self.block_size {
+                    return Ok(());
+                }
+                let block = self.input[self.pos..self.pos + self.block_size].to_vec();
+                self.block_hash = xxh32(&block, 0);
+                self.pos += self.block_size;
+                let plain = if self.raw_block {
+                    block
+                } else {
+                    block_expand(&block, self.block_max)?
+                };
+                if out.len().saturating_add(plain.len()) > MAX_FILE {
+                    return Err("the file service response is too large".into());
+                }
+                self.xxh.update(&plain);
+                out.extend_from_slice(&plain);
+                self.stage = if self.block_checksum { 3 } else { 1 };
+                continue;
+            }
+            if self.stage == 3 {
+                if self.remaining() < 4 {
+                    return Ok(());
+                }
+                let got = u32::from_le_bytes(self.input[self.pos..self.pos + 4].try_into().unwrap());
+                self.pos += 4;
+                if got != self.block_hash {
+                    return Err("the file service response is not intact".into());
+                }
+                self.stage = 1;
+                continue;
+            }
+            if self.remaining() < 4 {
+                return Ok(());
+            }
+            let got = u32::from_le_bytes(self.input[self.pos..self.pos + 4].try_into().unwrap());
+            self.pos += 4;
+            if got != self.xxh.digest() {
+                return Err("the file service response is not intact".into());
+            }
+            self.stage = 5;
+        }
+    }
+}
+
+fn block_compress(src: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    if src.len() < 13 {
+        emit_sequence(&mut out, src, None);
+        return out;
+    }
+    let mut table = [0u32; 4096];
+    let mut anchor = 0usize;
+    let mut cursor = 0usize;
+    let limit = src.len() - 5;
+    while cursor + 4 <= limit {
+        let sequence = u32::from_le_bytes(src[cursor..cursor + 4].try_into().unwrap());
+        let slot = (sequence.wrapping_mul(2_654_435_761) >> 20) as usize;
+        let candidate = table[slot] as usize;
+        table[slot] = cursor as u32;
+        let matched = candidate < cursor
+            && cursor - candidate <= 65_535
+            && src.get(candidate..candidate + 4) == Some(&src[cursor..cursor + 4]);
+        if !matched {
+            cursor += 1;
+            continue;
+        }
+        let mut length = 4usize;
+        while cursor + length < limit && src[candidate + length] == src[cursor + length] {
+            length += 1;
+        }
+        emit_sequence(&mut out, &src[anchor..cursor], Some(((cursor - candidate) as u16, length)));
+        cursor += length;
+        anchor = cursor;
+    }
+    emit_sequence(&mut out, &src[anchor..], None);
+    out
+}
+
+fn emit_sequence(out: &mut Vec<u8>, literals: &[u8], matched: Option<(u16, usize)>) {
+    let token_at = out.len();
+    out.push(0);
+    let mut remain = literals.len();
+    out[token_at] = (remain.min(15) as u8) << 4;
+    if remain >= 15 {
+        remain -= 15;
+        while remain >= 255 {
+            out.push(255);
+            remain -= 255;
+        }
+        out.push(remain as u8);
+    }
+    out.extend_from_slice(literals);
+    let Some((offset, length)) = matched else {
+        return;
+    };
+    if offset == 0 || length < 4 {
+        return;
+    }
+    out.extend_from_slice(&offset.to_le_bytes());
+    let mut extra = length - 4;
+    out[token_at] |= extra.min(15) as u8;
+    if extra >= 15 {
+        extra -= 15;
+        while extra >= 255 {
+            out.push(255);
+            extra -= 255;
+        }
+        out.push(extra as u8);
+    }
+}
+
+fn block_expand(src: &[u8], cap: usize) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut index = 0usize;
+    while index < src.len() {
+        let token = src[index];
+        index += 1;
+        let mut literals = (token >> 4) as usize;
+        if literals == 15 {
+            loop {
+                if index >= src.len() {
+                    return Err("the file service response is not intact".into());
+                }
+                let extra = src[index] as usize;
+                index += 1;
+                literals = literals.checked_add(extra).ok_or_else(|| "the file service response is too large".to_string())?;
+                if extra != 255 {
+                    break;
+                }
+            }
+        }
+        if literals > cap || out.len().saturating_add(literals) > cap || index.saturating_add(literals) > src.len() {
+            return Err("the file service response is not intact".into());
+        }
+        out.extend_from_slice(&src[index..index + literals]);
+        index += literals;
+        if index == src.len() {
+            break;
+        }
+        if index + 2 > src.len() {
+            return Err("the file service response is not intact".into());
+        }
+        let offset = u16::from_le_bytes([src[index], src[index + 1]]) as usize;
+        index += 2;
+        if offset == 0 || offset > out.len() {
+            return Err("the file service response is not intact".into());
+        }
+        let mut matched = ((token & 0x0f) as usize).saturating_add(4);
+        if token & 0x0f == 15 {
+            loop {
+                if index >= src.len() {
+                    return Err("the file service response is not intact".into());
+                }
+                let extra = src[index] as usize;
+                index += 1;
+                matched = matched.checked_add(extra).ok_or_else(|| "the file service response is too large".to_string())?;
+                if extra != 255 {
+                    break;
+                }
+            }
+        }
+        if out.len().saturating_add(matched) > cap {
+            return Err("the file service response is too large".into());
+        }
+        for _ in 0..matched {
+            let byte = out[out.len() - offset];
+            out.push(byte);
+        }
+    }
+    Ok(out)
+}
+
+fn xxh32(data: &[u8], seed: u32) -> u32 {
+    let mut hash = Xxh32::new(seed);
+    hash.update(data);
+    hash.digest()
+}
+
+struct Xxh32 {
+    total: u64,
+    acc: [u32; 4],
+    buf: [u8; 16],
+    nbuf: usize,
+    large: bool,
+    seed: u32,
+}
+
+impl Xxh32 {
+    fn new(seed: u32) -> Self {
+        const P1: u32 = 0x9E37_79B1;
+        const P2: u32 = 0x85EB_CA77;
+        Self {
+            total: 0,
+            acc: [seed.wrapping_add(P1).wrapping_add(P2), seed.wrapping_add(P2), seed, seed.wrapping_sub(P1)],
+            buf: [0; 16],
+            nbuf: 0,
+            large: false,
+            seed,
+        }
+    }
+
+    fn update(&mut self, mut data: &[u8]) {
+        self.total = self.total.saturating_add(data.len() as u64);
+        if self.nbuf + data.len() < 16 {
+            self.buf[self.nbuf..self.nbuf + data.len()].copy_from_slice(data);
+            self.nbuf += data.len();
+            return;
+        }
+        if self.nbuf > 0 {
+            let need = 16 - self.nbuf;
+            self.buf[self.nbuf..].copy_from_slice(&data[..need]);
+            let stripe = self.buf;
+            self.consume(&stripe);
+            self.large = true;
+            data = &data[need..];
+            self.nbuf = 0;
+        }
+        while data.len() >= 16 {
+            let mut stripe = [0u8; 16];
+            stripe.copy_from_slice(&data[..16]);
+            self.consume(&stripe);
+            self.large = true;
+            data = &data[16..];
+        }
+        self.buf[..data.len()].copy_from_slice(data);
+        self.nbuf = data.len();
+    }
+
+    fn consume(&mut self, stripe: &[u8; 16]) {
+        const P1: u32 = 0x9E37_79B1;
+        const P2: u32 = 0x85EB_CA77;
+        for lane in 0..4 {
+            let input = u32::from_le_bytes(stripe[lane * 4..lane * 4 + 4].try_into().unwrap());
+            let mixed = self.acc[lane].wrapping_add(input.wrapping_mul(P2)).rotate_left(13).wrapping_mul(P1);
+            self.acc[lane] = mixed;
+        }
+    }
+
+    fn digest(&self) -> u32 {
+        const P1: u32 = 0x9E37_79B1;
+        const P2: u32 = 0x85EB_CA77;
+        const P3: u32 = 0xC2B2_AE3D;
+        const P4: u32 = 0x27D4_EB2F;
+        const P5: u32 = 0x1656_67B1;
+        let mut hash = if self.large {
+            self.acc[0].rotate_left(1)
+                .wrapping_add(self.acc[1].rotate_left(7))
+                .wrapping_add(self.acc[2].rotate_left(12))
+                .wrapping_add(self.acc[3].rotate_left(18))
+        } else {
+            self.seed.wrapping_add(P5)
+        };
+        hash = hash.wrapping_add(self.total as u32);
+        let buf = &self.buf[..self.nbuf];
+        let mut offset = 0;
+        while offset + 4 <= buf.len() {
+            let input = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap());
+            hash = hash.wrapping_add(input.wrapping_mul(P3)).rotate_left(17).wrapping_mul(P4);
+            offset += 4;
+        }
+        while offset < buf.len() {
+            hash = hash.wrapping_add(u32::from(buf[offset]).wrapping_mul(P5)).rotate_left(11).wrapping_mul(P1);
+            offset += 1;
+        }
+        hash ^= hash >> 15;
+        hash = hash.wrapping_mul(P2);
+        hash ^= hash >> 13;
+        hash = hash.wrapping_mul(P3);
+        hash ^= hash >> 16;
+        hash
+    }
+}
+
+fn timeout_message() -> String {
+    "the device debugging service did not answer in time".into()
+}
+
+fn remaining(deadline: Instant) -> Result<Duration, String> {
+    let now = Instant::now();
+    if now >= deadline {
+        Err(timeout_message())
+    } else {
+        Ok(deadline.saturating_duration_since(now))
+    }
+}
+
+fn bound<T>(deadline: Instant, result: Result<T, String>) -> Result<T, String> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(_) if Instant::now() >= deadline => Err(timeout_message()),
+        Err(err) => Err(err),
+    }
+}
+
+fn secure_call<T>(clock: &IoClock, deadline: Instant, op: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    if Instant::now() >= deadline {
+        return Err(timeout_message());
+    }
+    clock.arm(deadline);
+    let result = op();
+    clock.disarm();
+    bound(deadline, result)
+}
+
+fn close_matches(arg0: u32, arg1: u32, local: u32, remote: u32) -> bool {
+    arg1 == local && (remote == 0 || arg0 == remote)
+}
+
+fn preferred_codec_flag(features: &[String]) -> u32 {
+    if features.iter().any(|feature| feature == "sendrecv_v2_zstd") {
+        SYNC_FLAG_ZSTD
+    } else if features.iter().any(|feature| feature == "sendrecv_v2_lz4") {
+        SYNC_FLAG_LZ4
+    } else if features.iter().any(|feature| feature == "sendrecv_v2_brotli") {
+        SYNC_FLAG_BROTLI
+    } else {
+        0
+    }
+}
+
+fn codec_from_flags(flags: u32) -> Result<Codec, String> {
+    match flags & (SYNC_FLAG_BROTLI | SYNC_FLAG_LZ4 | SYNC_FLAG_ZSTD) {
+        0 => Ok(Codec::None),
+        SYNC_FLAG_BROTLI => Ok(Codec::Brotli),
+        SYNC_FLAG_LZ4 => Ok(Codec::Lz4),
+        SYNC_FLAG_ZSTD => Ok(Codec::Zstd),
+        _ => Err("the file service compression choice is not usable".into()),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Codec {
+    None,
+    Brotli,
+    Lz4,
+    Zstd,
+}
+
+struct IoClock {
+    deadline: Mutex<Option<Instant>>,
+}
+
+impl IoClock {
+    fn new() -> Self {
+        Self { deadline: Mutex::new(None) }
+    }
+
+    fn arm(&self, deadline: Instant) {
+        *self.deadline.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(deadline);
+    }
+
+    fn disarm(&self) {
+        *self.deadline.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
+    }
+
+    fn current(&self) -> Option<Instant> {
+        *self.deadline.lock().unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    fn expired(&self) -> bool {
+        self.current().is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    fn wait_slice(&self) -> Duration {
+        match self.current() {
+            None => Duration::from_millis(200),
+            Some(deadline) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    Duration::ZERO
+                } else {
+                    deadline.saturating_duration_since(now).min(Duration::from_millis(50)).max(Duration::from_millis(1))
+                }
+            }
+        }
+    }
+}
+
+struct Shuttle {
+    stop: Arc<AtomicBool>,
+    device: TcpStream,
+    peer: TcpStream,
+    clock: Arc<IoClock>,
+    threads: Vec<thread::JoinHandle<()>>,
+}
+
+impl Drop for Shuttle {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = self.device.shutdown(Shutdown::Both);
+        let _ = self.peer.shutdown(Shutdown::Both);
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn shuttle_socket(device: TcpStream, clock: Arc<IoClock>) -> Result<(TcpStream, Shuttle), String> {
+    let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).map_err(|err| format!("the secure connection could not be prepared ({err})"))?;
+    let port = listener.local_addr().map_err(|err| format!("the secure connection could not be prepared ({err})"))?.port();
+    let local = TcpStream::connect(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).map_err(|err| format!("the secure connection could not be prepared ({err})"))?;
+    let (peer, _) = listener.accept().map_err(|err| format!("the secure connection could not be prepared ({err})"))?;
+    local.set_nodelay(true).map_err(|err| format!("the secure connection could not be prepared ({err})"))?;
+    let _ = peer.set_nodelay(true);
+    let _ = device.set_nodelay(true);
+    let stop = Arc::new(AtomicBool::new(false));
+    let device_read = device.try_clone().map_err(|err| format!("the secure connection could not be prepared ({err})"))?;
+    let device_write = device.try_clone().map_err(|err| format!("the secure connection could not be prepared ({err})"))?;
+    let peer_read = peer.try_clone().map_err(|err| format!("the secure connection could not be prepared ({err})"))?;
+    let peer_write = peer.try_clone().map_err(|err| format!("the secure connection could not be prepared ({err})"))?;
+    let stop_in = Arc::clone(&stop);
+    let stop_out = Arc::clone(&stop);
+    let clock_in = Arc::clone(&clock);
+    let clock_out = Arc::clone(&clock);
+    let inbound = thread::spawn(move || copy_until(device_read, peer_write, clock_in, stop_in));
+    let outbound = thread::spawn(move || copy_until(peer_read, device_write, clock_out, stop_out));
+    Ok((local, Shuttle { stop, device, peer, clock, threads: vec![inbound, outbound] }))
+}
+
+fn copy_until(mut from: TcpStream, mut to: TcpStream, clock: Arc<IoClock>, stop: Arc<AtomicBool>) {
+    let mut buf = [0u8; 16 * 1024];
+    while !stop.load(Ordering::SeqCst) {
+        if clock.expired() {
+            let _ = from.shutdown(Shutdown::Both);
+            let _ = to.shutdown(Shutdown::Both);
+            break;
+        }
+        let wait = clock.wait_slice();
+        if wait.is_zero() {
+            let _ = from.shutdown(Shutdown::Both);
+            let _ = to.shutdown(Shutdown::Both);
+            break;
+        }
+        if from.set_read_timeout(Some(wait)).is_err() {
+            break;
+        }
+        match from.read(&mut buf) {
+            Ok(0) => {
+                let _ = to.shutdown(Shutdown::Write);
+                break;
+            }
+            Ok(n) => {
+                if write_until_stop(&mut to, &buf[..n], &clock, &stop).is_err() {
+                    break;
+                }
+            }
+            Err(err) if err.kind() == ErrorKind::TimedOut || err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => {
+                let _ = to.shutdown(Shutdown::Write);
+                break;
+            }
+        }
+    }
+}
+
+fn write_until_stop(to: &mut TcpStream, mut data: &[u8], clock: &IoClock, stop: &AtomicBool) -> Result<(), ()> {
+    while !data.is_empty() {
+        if stop.load(Ordering::SeqCst) || clock.expired() {
+            return Err(());
+        }
+        let wait = clock.wait_slice();
+        if wait.is_zero() || to.set_write_timeout(Some(wait)).is_err() {
+            return Err(());
+        }
+        match to.write(data) {
+            Ok(0) => return Err(()),
+            Ok(n) => data = &data[n..],
+            Err(err) if err.kind() == ErrorKind::TimedOut || err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => return Err(()),
+        }
+    }
+    Ok(())
+}
+
+enum PayloadEncoder {
+    Lz4(Lz4Encoder),
+    Zstd(ZstdEncoder),
+    Brotli(BrotliEncoder),
+}
+
+impl PayloadEncoder {
+    fn open(codec: Codec) -> Option<Self> {
+        match codec {
+            Codec::None => None,
+            Codec::Lz4 => Some(Self::Lz4(Lz4Encoder::new())),
+            Codec::Zstd => Some(Self::Zstd(ZstdEncoder::new())),
+            Codec::Brotli => Some(Self::Brotli(BrotliEncoder::new())),
+        }
+    }
+
+    fn push(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Lz4(encoder) => encoder.push(data),
+            Self::Zstd(encoder) => encoder.push(data),
+            Self::Brotli(encoder) => encoder.push(data),
+        }
+    }
+
+    fn finish(self) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Lz4(encoder) => encoder.finish(),
+            Self::Zstd(encoder) => encoder.finish(),
+            Self::Brotli(encoder) => encoder.finish(),
+        }
+    }
+}
+
+enum PayloadDecoder {
+    Lz4(FrameDecoder),
+    Zstd(ZstdDecoder),
+    Brotli(BrotliDecoder),
+}
+
+impl PayloadDecoder {
+    fn open(codec: Codec) -> Option<Self> {
+        match codec {
+            Codec::None => None,
+            Codec::Lz4 => Some(Self::Lz4(FrameDecoder::new())),
+            Codec::Zstd => Some(Self::Zstd(ZstdDecoder::new())),
+            Codec::Brotli => Some(Self::Brotli(BrotliDecoder::new())),
+        }
+    }
+
+    fn push(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Lz4(decoder) => decoder.push(data),
+            Self::Zstd(decoder) => decoder.push(data),
+            Self::Brotli(decoder) => decoder.push(data),
+        }
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        match self {
+            Self::Lz4(decoder) => decoder.finish(),
+            Self::Zstd(decoder) => decoder.finish(),
+            Self::Brotli(decoder) => decoder.finish(),
+        }
+    }
+}
+
+#[cfg(test)]
+fn encode_for_flags(flags: u32, data: &[u8]) -> Result<Vec<u8>, String> {
+    match codec_from_flags(flags)? {
+        Codec::None => Ok(data.to_vec()),
+        codec => {
+            let mut encoder = PayloadEncoder::open(codec).ok_or_else(|| "the file service response is not intact".to_string())?;
+            let mut out = encoder.push(data)?;
+            out.extend(encoder.finish()?);
+            Ok(out)
+        }
+    }
+}
+
+#[cfg(test)]
+fn decode_for_flags(flags: u32, data: &[u8]) -> Result<Vec<u8>, String> {
+    match codec_from_flags(flags)? {
+        Codec::None => Ok(data.to_vec()),
+        codec => {
+            let mut decoder = PayloadDecoder::open(codec).ok_or_else(|| "the file service response is not intact".to_string())?;
+            let out = decoder.push(data)?;
+            decoder.finish()?;
+            Ok(out)
+        }
+    }
+}
+
+struct Lz4Encoder {
+    started: bool,
+    xxh: Xxh32,
+    pending: Vec<u8>,
+}
+
+impl Lz4Encoder {
+    fn new() -> Self {
+        Self { started: false, xxh: Xxh32::new(0), pending: Vec::new() }
+    }
+
+    fn push(&mut self, mut data: &[u8]) -> Result<Vec<u8>, String> {
+        let mut out = Vec::new();
+        self.header(&mut out);
+        while !data.is_empty() {
+            let room = FRAME_BLOCK - self.pending.len();
+            let n = data.len().min(room);
+            self.pending.extend_from_slice(&data[..n]);
+            data = &data[n..];
+            if self.pending.len() == FRAME_BLOCK {
+                self.emit_block(&mut out);
+            }
+        }
+        Ok(out)
+    }
+
+    fn finish(mut self) -> Result<Vec<u8>, String> {
+        let mut out = Vec::new();
+        self.header(&mut out);
+        if !self.pending.is_empty() {
+            self.emit_block(&mut out);
+        }
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&self.xxh.digest().to_le_bytes());
+        Ok(out)
+    }
+
+    fn header(&mut self, out: &mut Vec<u8>) {
+        if self.started {
+            return;
+        }
+        self.started = true;
+        out.extend_from_slice(&FRAME_MAGIC.to_le_bytes());
+        let flg = 0x64u8;
+        let bd = 0x40u8;
+        out.push(flg);
+        out.push(bd);
+        out.push((xxh32(&[flg, bd], 0) >> 8) as u8);
+    }
+
+    fn emit_block(&mut self, out: &mut Vec<u8>) {
+        let n = self.pending.len().min(FRAME_BLOCK);
+        let block = self.pending.drain(..n).collect::<Vec<_>>();
+        self.xxh.update(&block);
+        let compressed = block_compress(&block);
+        if compressed.len() < block.len() && compressed.len() <= FRAME_BLOCK {
+            out.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+            out.extend_from_slice(&compressed);
+        } else {
+            out.extend_from_slice(&((n as u32) | 0x8000_0000).to_le_bytes());
+            out.extend_from_slice(&block);
+        }
+    }
+}
+
+struct ZstdEncoder {
+    started: bool,
+    pending: Vec<u8>,
+}
+
+impl ZstdEncoder {
+    fn new() -> Self {
+        Self { started: false, pending: Vec::new() }
+    }
+
+    fn push(&mut self, mut data: &[u8]) -> Result<Vec<u8>, String> {
+        let mut out = Vec::new();
+        self.header(&mut out);
+        while !data.is_empty() {
+            let room = FRAME_BLOCK - self.pending.len();
+            let n = data.len().min(room);
+            self.pending.extend_from_slice(&data[..n]);
+            data = &data[n..];
+            if self.pending.len() == FRAME_BLOCK {
+                out.extend(self.emit_block(false));
+            }
+        }
+        Ok(out)
+    }
+
+    fn finish(mut self) -> Result<Vec<u8>, String> {
+        let mut out = Vec::new();
+        self.header(&mut out);
+        out.extend(self.emit_block(true));
+        Ok(out)
+    }
+
+    fn header(&mut self, out: &mut Vec<u8>) {
+        if self.started {
+            return;
+        }
+        self.started = true;
+        out.extend_from_slice(&0xFD2F_B528u32.to_le_bytes());
+        out.push(0x00);
+        out.push(0x38);
+    }
+
+    fn emit_block(&mut self, last: bool) -> Vec<u8> {
+        let n = if last { self.pending.len() } else { FRAME_BLOCK.min(self.pending.len()) };
+        let block = self.pending.drain(..n).collect::<Vec<_>>();
+        let header = u32::from(last) | ((n as u32) << 3);
+        let mut out = vec![header as u8, (header >> 8) as u8, (header >> 16) as u8];
+        out.extend(block);
+        out
+    }
+}
+
+struct BrotliEncoder {
+    pending: Vec<u8>,
+    writer: BitWriter,
+    started: bool,
+}
+
+impl BrotliEncoder {
+    fn new() -> Self {
+        Self { pending: Vec::new(), writer: BitWriter::new(), started: false }
+    }
+
+    fn push(&mut self, mut data: &[u8]) -> Result<Vec<u8>, String> {
+        let mut out = Vec::new();
+        while !data.is_empty() {
+            let room = FRAME_BLOCK - self.pending.len();
+            let n = data.len().min(room);
+            self.pending.extend_from_slice(&data[..n]);
+            data = &data[n..];
+            if self.pending.len() == FRAME_BLOCK {
+                let block = std::mem::take(&mut self.pending);
+                out.extend(self.emit_raw(&block));
+            }
+        }
+        Ok(out)
+    }
+
+    fn finish(mut self) -> Result<Vec<u8>, String> {
+        let block = std::mem::take(&mut self.pending);
+        let mut out = self.emit_raw(&block);
+        out.extend(self.emit_end());
+        Ok(out)
+    }
+
+    fn begin(&mut self) {
+        if self.started {
+            return;
+        }
+        self.started = true;
+        self.writer.write_bits(0, 1);
+    }
+
+    fn emit_raw(&mut self, data: &[u8]) -> Vec<u8> {
+        if data.is_empty() {
+            return Vec::new();
+        }
+        self.begin();
+        self.writer.write_bits(0, 1);
+        let size = data.len() - 1;
+        let nibbles = if size < (1 << 16) { 0u64 } else if size < (1 << 20) { 1 } else { 2 };
+        let width = (nibbles as u8 + 4) * 4;
+        self.writer.write_bits(nibbles, 2);
+        self.writer.write_bits(size as u64, width);
+        self.writer.write_bits(1, 1);
+        self.writer.align();
+        self.writer.bytes.extend_from_slice(data);
+        self.writer.take_bytes()
+    }
+
+    fn emit_end(&mut self) -> Vec<u8> {
+        self.begin();
+        self.writer.write_bits(1, 1);
+        self.writer.write_bits(1, 1);
+        self.writer.align();
+        self.writer.take_bytes()
+    }
+}
+
+struct BitWriter {
+    bytes: Vec<u8>,
+    acc: u64,
+    bits: u8,
+}
+
+impl BitWriter {
+    fn new() -> Self {
+        Self { bytes: Vec::new(), acc: 0, bits: 0 }
+    }
+
+    fn write_bits(&mut self, value: u64, n: u8) {
+        if n == 0 {
+            return;
+        }
+        self.acc |= (value & ((1u64 << n) - 1)) << self.bits;
+        self.bits += n;
+        while self.bits >= 8 {
+            self.bytes.push(self.acc as u8);
+            self.acc >>= 8;
+            self.bits -= 8;
+        }
+    }
+
+    fn align(&mut self) {
+        if self.bits > 0 {
+            self.bytes.push(self.acc as u8);
+            self.acc = 0;
+            self.bits = 0;
+        }
+    }
+
+    fn take_bytes(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.bytes)
+    }
+}
+
+
+const BROTLI_LUT0: [u8; 256] = [0,0,0,0,0,0,0,0,0,4,4,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8,12,16,12,12,20,12,16,24,28,12,12,32,12,36,12,44,44,44,44,44,44,44,44,44,44,32,32,24,40,28,12,12,48,52,52,52,48,52,52,52,48,52,52,52,52,52,48,52,52,52,52,52,48,52,52,52,52,52,24,12,28,12,12,12,56,60,60,60,56,60,60,60,56,60,60,60,60,60,56,60,60,60,60,60,56,60,60,60,60,60,24,12,28,12,0,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3,2,3];
+const BROTLI_LUT1: [u8; 256] = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,1,1,1,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2];
+const BROTLI_LUT2: [u8; 256] = [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,7];
+const BROTLI_DICT_B64: &str = "dGltZWRvd25saWZlbGVmdGJhY2tjb2RlZGF0YXNob3dvbmx5c2l0ZWNpdHlvcGVuanVzdGxpa2VmcmVld29ya3RleHR5ZWFyb3ZlcmJvZHlsb3ZlZm9ybWJvb2twbGF5bGl2ZWxpbmVoZWxwaG9tZXNpZGVtb3Jld29yZGxvbmd0aGVtdmlld2ZpbmRwYWdlZGF5c2Z1bGxoZWFkdGVybWVhY2hhcmVhZnJvbXRydWVtYXJrYWJsZXVwb25oaWdoZGF0ZWxhbmRuZXdzZXZlbm5leHRjYXNlYm90aHBvc3R1c2VkbWFkZWhhbmRoZXJld2hhdG5hbWVMaW5rYmxvZ3NpemViYXNlaGVsZG1ha2VtYWludXNlcicpICtob2xkZW5kc3dpdGhOZXdzcmVhZHdlcmVzaWdudGFrZWhhdmVnYW1lc2VlbmNhbGxwYXRod2VsbHBsdXNtZW51ZmlsbXBhcnRqb2ludGhpc2xpc3Rnb29kbmVlZHdheXN3ZXN0am9ic21pbmRhbHNvbG9nb3JpY2h1c2VzbGFzdHRlYW1hcm15Zm9vZGtpbmd3aWxsZWFzdHdhcmRiZXN0ZmlyZVBhZ2Vrbm93YXdheS5wbmdtb3ZldGhhbmxvYWRnaXZlc2VsZm5vdGVtdWNoZmVlZG1hbnlyb2NraWNvbm9uY2Vsb29raGlkZWRpZWRIb21lcnVsZWhvc3RhamF4aW5mb2NsdWJsYXdzbGVzc2hhbGZzb21lc3VjaHpvbmUxMDAlb25lc2NhcmVUaW1lcmFjZWJsdWVmb3Vyd2Vla2ZhY2Vob3BlZ2F2ZWhhcmRsb3N0d2hlbnBhcmtrZXB0cGFzc3NoaXByb29tSFRNTHBsYW5UeXBlZG9uZXNhdmVrZWVwZmxhZ2xpbmtzb2xkZml2ZXRvb2tyYXRldG93bmp1bXB0aHVzZGFya2NhcmRmaWxlZmVhcnN0YXlraWxsdGhhdGZhbGxhdXRvZXZlci5jb210YWxrc2hvcHZvdGVkZWVwbW9kZXJlc3R0dXJuYm9ybmJhbmRmZWxscm9zZXVybChza2lucm9sZWNvbWVhY3RzYWdlc21lZXRnb2xkLmpwZ2l0ZW12YXJ5ZmVsdHRoZW5zZW5kZHJvcFZpZXdjb3B5MS4wIjwvYT5zdG9wZWxzZWxpZXN0b3VycGFjay5naWZwYXN0Y3NzP2dyYXltZWFuJmd0O3JpZGVzaG90bGF0ZXNhaWRyb2FkdmFyIGZlZWxqb2hucmlja3BvcnRmYXN0J1VBLWRlYWQ8L2I+cG9vcmJpbGx0eXBlVS5TLndvb2RtdXN0MnB4O0luZm9yYW5rd2lkZXdhbnR3YWxsbGVhZFswXTtwYXVsd2F2ZXN1cmUkKCcjd2FpdG1hc3Nhcm1zZ29lc2dhaW5sYW5ncGFpZCEtLSBsb2NrdW5pdHJvb3R3YWxrZmlybXdpZmV4bWwic29uZ3Rlc3QyMHB4a2luZHJvd3N0b29sZm9udG1haWxzYWZlc3Rhcm1hcHNjb3JlcmFpbmZsb3diYWJ5c3BhbnNheXM0cHg7NnB4O2FydHNmb290cmVhbHdpa2loZWF0c3RlcHRyaXBvcmcvbGFrZXdlYWt0b2xkRm9ybWNhc3RmYW5zYmFua3ZlcnlydW5zanVseXRhc2sxcHg7Z29hbGdyZXdzbG93ZWRnZWlkPSJzZXRzNXB4Oy5qcz80MHB4aWYgKHNvb25zZWF0bm9uZXR1YmV6ZXJvc2VudHJlZWRmYWN0aW50b2dpZnRoYXJtMThweGNhbWVoaWxsYm9sZHpvb212b2lkZWFzeXJpbmdmaWxscGVha2luaXRjb3N0M3B4O2phY2t0YWdzYml0c3JvbGxlZGl0a25ld25lYXI8IS0tZ3Jvd0pTT05kdXR5TmFtZXNhbGV5b3UgbG90c3BhaW5qYXp6Y29sZGV5ZXNmaXNod3d3LnJpc2t0YWJzcHJldjEwcHhyaXNlMjVweEJsdWVkaW5nMzAwLGJhbGxmb3JkZWFybndpbGRib3guZmFpcmxhY2t2ZXJzcGFpcmp1bmV0ZWNoaWYoIXBpY2tldmlsJCgiI3dhcm1sb3JkZG9lc3B1bGwsMDAwaWRlYWRyYXdodWdlc3BvdGZ1bmRidXJuaHJlZmNlbGxrZXlzdGlja2hvdXJsb3NzZnVlbDEycHhzdWl0ZGVhbFJTUyJhZ2VkZ3JleUdFVCJlYXNlYWltc2dpcmxhaWRzOHB4O25hdnlncmlkdGlwcyM5OTl3YXJzbGFkeWNhcnMpOyB9cGhwP2hlbGx0YWxsd2hvbXpoOuUqLw0KIDEwMGhhbGwuCgpBN3B4O3B1c2hjaGF0MHB4O2NyZXcqLzwvaGFzaDc1cHhmbGF0cmFyZSAmJiB0ZWxsY2FtcG9udG9sYWlkbWlzc3NraXB0ZW50ZmluZW1hbGVnZXRzcGxvdDQwMCwNCg0KY29vbGZlZXQucGhwPGJyPmVyaWNtb3N0Z3VpZGJlbGxkZXNjaGFpcm1hdGhhdG9tL2ltZyYjODJsdWNrY2VudDAwMDt0aW55Z29uZWh0bWxzZWxsZHJ1Z0ZSRUVub2Rlbmljaz9pZD1sb3NlbnVsbHZhc3R3aW5kUlNTIHdlYXJyZWx5YmVlbnNhbWVkdWtlbmFzYWNhcGV3aXNoZ3VsZlQyMzpoaXRzc2xvdGdhdGVraWNrYmx1cnRoZXkxNXB4JycpOyk7Ij5tc2lld2luc2JpcmRzb3J0YmV0YXNlZWtUMTg6b3Jkc3RyZWVtYWxsNjBweGZhcm3igJlzYm95c1swXS4nKTsiUE9TVGJlYXJraWRzKTt9fW1hcnl0ZW5kKFVLKXF1YWR6aDrmLXNpei0tLS1wcm9wJyk7DWxpZnRUMTk6dmljZWFuZHlkZWJ0PlJTU3Bvb2xuZWNrYmxvd1QxNjpkb29yZXZhbFQxNzpsZXRzZmFpbG9yYWxwb2xsbm92YWNvbHNnZW5lIOKAlHNvZnRyb21ldGlsbHJvc3M8aDM+cG91cmZhZGVwaW5rPHRyPm1pbmkpfCEobWluZXpoOuhiYXJzaGVhcjAwKTttaWxrIC0tPmlyb25mcmVkZGlza3dlbnRzb2lscHV0cy9qcy9ob2x5VDIyOklTQk5UMjA6YWRhbXNlZXM8aDI+anNvbicsICdjb250VDIxOiBSU1Nsb29wYXNpYW1vb248L3A+c291bExJTkVmb3J0Y2FydFQxNDo8aDE+ODBweCEtLTw5cHg7VDA0Om1pa2U6NDZabmljZWluY2hZb3JrcmljZXpoOuQnKSk7cHVyZW1hZ2VwYXJhdG9uZWJvbmQ6MzdaX29mXyddKTswMDAsemg653Rhbmt5YXJkYm93bGJ1c2g6NTZaSmF2YTMwcHgKfH0KJUMzJTozNFpqZWZmRVhQSWNhc2h2aXNhZ29sZnNub3d6aDrpcXVlci5jc3NzaWNrbWVhdG1pbi5iaW5kZGVsbGhpcmVwaWNzcmVudDozNlpIVFRQLTIwMWZvdG93b2xmRU5EIHhib3g6NTRaQk9EWWRpY2s7Cn0KZXhpdDozNVp2YXJzYmVhdCd9KTtkaWV0OTk5O2FubmV9fTwvW2ldLkxhbmdrbcKyd2lyZXRveXNhZGRzc2VhbGFsZXg7Cgl9ZWNob25pbmUub3JnMDA1KXRvbnlqZXdzc2FuZGxlZ3Nyb29mMDAwKSAyMDB3aW5lZ2VhcmRvZ3Nib290Z2FyeWN1dHN0eWxldGVtcHRpb24ueG1sY29ja2dhbmckKCcuNTBweFBoLkRtaXNjYWxhbmxvYW5kZXNrbWlsZXJ5YW51bml4ZGlzYyk7fQpkdXN0Y2xpcCkuCgo3MHB4LTIwMERWRHM3XT48dGFwZWRlbW9pKyspd2FnZWV1cm9waGlsb3B0c2hvbGVGQVFzYXNpbi0yNlRsYWJzcGV0c1VSTCBidWxrY29vazt9DQpIRUFEWzBdKWFiYnJqdWFuKDE5OGxlc2h0d2luPC9pPnNvbnlndXlzZnVja3BpcGV8LQohMDAyKW5kb3dbMV07W107CkxvZyBzYWx0DQoJCWJhbmd0cmltYmF0aCl7DQowMHB4Cn0pO2tvOuxmZWVzYWQ+DXM6Ly8gW107dG9sbHBsdWcoKXsKew0KIC5qcycyMDBwZHVhbGJvYXQuSlBHKTsKfXF1b3QpOwoKJyk7Cg0KfQ0yMDE0MjAxNTIwMTYyMDE3MjAxODIwMTkyMDIwMjAyMTIwMjIyMDIzMjAyNDIwMjUyMDI2MjAyNzIwMjgyMDI5MjAzMDIwMzEyMDMyMjAzMzIwMzQyMDM1MjAzNjIwMzcyMDEzMjAxMjIwMTEyMDEwMjAwOTIwMDgyMDA3MjAwNjIwMDUyMDA0MjAwMzIwMDIyMDAxMjAwMDE5OTkxOTk4MTk5NzE5OTYxOTk1MTk5NDE5OTMxOTkyMTk5MTE5OTAxOTg5MTk4ODE5ODcxOTg2MTk4NTE5ODQxOTgzMTk4MjE5ODExOTgwMTk3OTE5NzgxOTc3MTk3NjE5NzUxOTc0MTk3MzE5NzIxOTcxMTk3MDE5NjkxOTY4MTk2NzE5NjYxOTY1MTk2NDE5NjMxOTYyMTk2MTE5NjAxOTU5MTk1ODE5NTcxOTU2MTk1NTE5NTQxOTUzMTk1MjE5NTExOTUwMTAwMDEwMjQxMzk0MDAwMDk5OTljb21vbcOhc2VzdGVlc3RhcGVyb3RvZG9oYWNlY2FkYWHDsW9iaWVuZMOtYWFzw612aWRhY2Fzb290cm9mb3Jvc29sb290cmFjdWFsZGlqb3NpZG9ncmFudGlwb3RlbWFkZWJlYWxnb3F1w6llc3RvbmFkYXRyZXNwb2NvY2FzYWJham90b2Rhc2lub2FndWFwdWVzdW5vc2FudGVkaWNlbHVpc2VsbGFtYXlvem9uYWFtb3JwaXNvb2JyYWNsaWNlbGxvZGlvc2hvcmFjYXNp0LfQsNC90LDQvtC80YDQsNGA0YPRgtCw0L3QtdC/0L7QvtGC0LjQt9C90L7QtNC+0YLQvtC20LXQvtC90LjRhdCd0LDQtdC10LHRi9C80YvQktGL0YHQvtCy0YvQstC+0J3QvtC+0LHQn9C+0LvQuNC90LjQoNCk0J3QtdCc0YvRgtGL0J7QvdC40LzQtNCw0JfQsNCU0LDQndGD0J7QsdGC0LXQmNC30LXQudC90YPQvNC80KLRi9GD0LbZgdmK2KPZhtmF2KfZhdi52YPZhNij2YjYsdiv2YrYp9mB2YnZh9mI2YTZhdmE2YPYp9mI2YTZh9io2LPYp9mE2KXZhtmH2YrYo9mK2YLYr9mH2YTYq9mF2KjZh9mE2YjZhNmK2KjZhNin2YrYqNmD2LTZitin2YXYo9mF2YbYqtio2YrZhNmG2K3YqNmH2YXZhdi02YjYtGZpcnN0dmlkZW9saWdodHdvcmxkbWVkaWF3aGl0ZWNsb3NlYmxhY2tyaWdodHNtYWxsYm9va3NwbGFjZW11c2ljZmllbGRvcmRlcnBvaW50dmFsdWVsZXZlbHRhYmxlYm9hcmRob3VzZWdyb3Vwd29ya3N5ZWFyc3N0YXRldG9kYXl3YXRlcnN0YXJ0c3R5bGVkZWF0aHBvd2VycGhvbmVuaWdodGVycm9yaW5wdXRhYm91dHRlcm1zdGl0bGV0b29sc2V2ZW50bG9jYWx0aW1lc2xhcmdld29yZHNnYW1lc3Nob3J0c3BhY2Vmb2N1c2NsZWFybW9kZWxibG9ja2d1aWRlcmFkaW9zaGFyZXdvbWVuYWdhaW5tb25leWltYWdlbmFtZXN5b3VuZ2xpbmVzbGF0ZXJjb2xvcmdyZWVuZnJvbnQmYW1wO3dhdGNoZm9yY2VwcmljZXJ1bGVzYmVnaW5hZnRlcnZpc2l0aXNzdWVhcmVhc2JlbG93aW5kZXh0b3RhbGhvdXJzbGFiZWxwcmludHByZXNzYnVpbHRsaW5rc3NwZWVkc3R1ZHl0cmFkZWZvdW5kc2Vuc2V1bmRlcnNob3duZm9ybXNyYW5nZWFkZGVkc3RpbGxtb3ZlZHRha2VuYWJvdmVmbGFzaGZpeGVkb2Z0ZW5vdGhlcnZpZXdzY2hlY2tsZWdhbHJpdmVyaXRlbXNxdWlja3NoYXBlaHVtYW5leGlzdGdvaW5nbW92aWV0aGlyZGJhc2ljcGVhY2VzdGFnZXdpZHRobG9naW5pZGVhc3dyb3RlcGFnZXN1c2Vyc2RyaXZlc3RvcmVicmVha3NvdXRodm9pY2VzaXRlc21vbnRod2hlcmVidWlsZHdoaWNoZWFydGhmb3J1bXRocmVlc3BvcnRwYXJ0eUNsaWNrbG93ZXJsaXZlc2NsYXNzbGF5ZXJlbnRyeXN0b3J5dXNhZ2Vzb3VuZGNvdXJ0eW91ciBiaXJ0aHBvcHVwdHlwZXNhcHBseUltYWdlYmVpbmd1cHBlcm5vdGVzZXZlcnlzaG93c21lYW5zZXh0cmFtYXRjaHRyYWNra25vd25lYXJseWJlZ2Fuc3VwZXJwYXBlcm5vcnRobGVhcm5naXZlbm5hbWVkZW5kZWRUZXJtc3BhcnRzR3JvdXBicmFuZHVzaW5nd29tYW5mYWxzZXJlYWR5YXVkaW90YWtlc3doaWxlLmNvbS9saXZlZGNhc2VzZGFpbHljaGlsZGdyZWF0anVkZ2V0aG9zZXVuaXRzbmV2ZXJicm9hZGNvYXN0Y292ZXJhcHBsZWZpbGVzY3ljbGVzY2VuZXBsYW5zY2xpY2t3cml0ZXF1ZWVucGllY2VlbWFpbGZyYW1lb2xkZXJwaG90b2xpbWl0Y2FjaGVjaXZpbHNjYWxlZW50ZXJ0aGVtZXRoZXJldG91Y2hib3VuZHJveWFsYXNrZWR3aG9sZXNpbmNlc3RvY2sgbmFtZWZhaXRoaGVhcnRlbXB0eW9mZmVyc2NvcGVvd25lZG1pZ2h0YWxidW10aGlua2Jsb29kYXJyYXltYWpvcnRydXN0Y2Fub251bmlvbmNvdW50dmFsaWRzdG9uZVN0eWxlTG9naW5oYXBweW9jY3VybGVmdDpmcmVzaHF1aXRlZmlsbXNncmFkZW5lZWRzdXJiYW5maWdodGJhc2lzaG92ZXJhdXRvO3JvdXRlLmh0bWxtaXhlZGZpbmFsWW91ciBzbGlkZXRvcGljYnJvd25hbG9uZWRyYXduc3BsaXRyZWFjaFJpZ2h0ZGF0ZXNtYXJjaHF1b3RlZ29vZHNMaW5rc2RvdWJ0YXN5bmN0aHVtYmFsbG93Y2hpZWZ5b3V0aG5vdmVsMTBweDtzZXJ2ZXVudGlsaGFuZHNDaGVja1NwYWNlcXVlcnlqYW1lc2VxdWFsdHdpY2UwLDAwMFN0YXJ0cGFuZWxzb25nc3JvdW5kZWlnaHRzaGlmdHdvcnRocG9zdHNsZWFkc3dlZWtzYXZvaWR0aGVzZW1pbGVzcGxhbmVzbWFydGFscGhhcGxhbnRtYXJrc3JhdGVzcGxheXNjbGFpbXNhbGVzdGV4dHNzdGFyc3dyb25nPC9oMz50aGluZy5vcmcvbXVsdGloZWFyZFBvd2Vyc3RhbmR0b2tlbnNvbGlkKHRoaXNicmluZ3NoaXBzc3RhZmZ0cmllZGNhbGxzZnVsbHlmYWN0c2FnZW50VGhpcyAvLy0tPmFkbWluZWd5cHRFdmVudDE1cHg7RW1haWx0cnVlImNyb3Nzc3BlbnRibG9nc2JveCI+bm90ZWRsZWF2ZWNoaW5hc2l6ZXNndWVzdDwvaDQ+cm9ib3RoZWF2eXRydWUsc2V2ZW5ncmFuZGNyaW1lc2lnbnNhd2FyZWRhbmNlcGhhc2U+PCEtLWVuX1VTJiMzOTsyMDBweF9uYW1lbGF0aW5lbmpveWFqYXguYXRpb25zbWl0aFUuUy4gaG9sZHNwZXRlcmluZGlhbmF2Ij5jaGFpbnNjb3JlY29tZXNkb2luZ3ByaW9yU2hhcmUxOTkwc3JvbWFubGlzdHNqYXBhbmZhbGxzdHJpYWxvd25lcmFncmVlPC9oMj5hYnVzZWFsZXJ0b3BlcmEiLS8vV2NhcmRzaGlsbHN0ZWFtc1Bob3RvdHJ1dGhjbGVhbi5waHA/c2FpbnRtZXRhbGxvdWlzbWVhbnRwcm9vZmJyaWVmcm93Ij5nZW5yZXRydWNrbG9va3NWYWx1ZUZyYW1lLm5ldC8tLT4KPHRyeSB7CnZhciBtYWtlc2Nvc3RzcGxhaW5hZHVsdHF1ZXN0dHJhaW5sYWJvcmhlbHBzY2F1c2VtYWdpY21vdG9ydGhlaXIyNTBweGxlYXN0c3RlcHNDb3VudGNvdWxkZ2xhc3NzaWRlc2Z1bmRzaG90ZWxhd2FyZG1vdXRobW92ZXNwYXJpc2dpdmVzZHV0Y2h0ZXhhc2ZydWl0bnVsbCx8fFtdO3RvcCI+CjwhLS1QT1NUIm9jZWFuPGJyLz5mbG9vcnNwZWFrZGVwdGggc2l6ZWJhbmtzY2F0Y2hjaGFydDIwcHg7YWxpZ25kZWFsc3dvdWxkNTBweDt1cmw9InBhcmtzbW91c2VNb3N0IC4uLjwvYW1vbmdicmFpbmJvZHkgbm9uZTtiYXNlZGNhcnJ5ZHJhZnRyZWZlcnBhZ2VfaG9tZS5tZXRlcmRlbGF5ZHJlYW1wcm92ZWpvaW50PC90cj5kcnVnczwhLS0gYXByaWxpZGVhbGFsbGVuZXhhY3Rmb3J0aGNvZGVzbG9naWNWaWV3IHNlZW1zYmxhbmtwb3J0cyAoMjAwc2F2ZWRfbGlua2dvYWxzZ3JhbnRncmVla2hvbWVzcmluZ3NyYXRlZDMwcHg7d2hvc2VwYXJzZSgpOyIgQmxvY2tsaW51eGpvbmVzcGl4ZWwnKTsiPik7aWYoLWxlZnRkYXZpZGhvcnNlRm9jdXNyYWlzZWJveGVzVHJhY2tlbWVudDwvZW0+YmFyIj4uc3JjPXRvd2VyYWx0PSJjYWJsZWhlbnJ5MjRweDtzZXR1cGl0YWx5c2hhcnBtaW5vcnRhc3Rld2FudHN0aGlzLnJlc2V0d2hlZWxnaXJscy9jc3MvMTAwJTtjbHVic3N0dWZmYmlibGV2b3RlcyAxMDAwa29yZWF9KTsNCmJhbmRzcXVldWU9IHt9OzgwcHg7Y2tpbmd7DQoJCWFoZWFkY2xvY2tpcmlzaGxpa2UgcmF0aW9zdGF0c0Zvcm0ieWFob28pWzBdO0Fib3V0ZmluZHM8L2gxPmRlYnVndGFza3NVUkwgPWNlbGxzfSkoKTsxMnB4O3ByaW1ldGVsbHN0dXJuczB4NjAwLmpwZyJzcGFpbmJlYWNodGF4ZXNtaWNyb2FuZ2VsLS0+PC9naWZ0c3N0ZXZlLWxpbmtib2R5Ln0pOwoJbW91bnQgKDE5OUZBUTwvcm9nZXJmcmFua0NsYXNzMjhweDtmZWVkczxoMT48c2NvdHR0ZXN0czIycHg7ZHJpbmspIHx8IGxld2lzc2hhbGwjMDM5OyBmb3IgbG92ZWR3YXN0ZTAwcHg7amE644JzaW1vbjxmb250cmVwbHltZWV0c3VudGVyY2hlYXB0aWdodEJyYW5kKSAhPSBkcmVzc2NsaXBzcm9vbXNvbmtleW1vYmlsbWFpbi5OYW1lIHBsYXRlZnVubnl0cmVlc2NvbS8iMS5qcGd3bW9kZXBhcmFtU1RBUlRsZWZ0IGlkZGVuLCAyMDEpOwp9CmZvcm0udmlydXNjaGFpcnRyYW5zd29yc3RQYWdlc2l0aW9ucGF0Y2g8IS0tCm8tY2FjZmlybXN0b3VycywwMDAgYXNpYW5pKyspe2Fkb2JlJylbMF1pZD0xMGJvdGg7bWVudSAuMi5taS5wbmcia2V2aW5jb2FjaENoaWxkYnJ1Y2UyLmpwZ1VSTCkrLmpwZ3xzdWl0ZXNsaWNlaGFycnkxMjAiIHN3ZWV0dHI+DQpuYW1lPWRpZWdvcGFnZSBzd2lzcy0tPgoKI2ZmZjsiPkxvZy5jb20idHJlYXRzaGVldCkgJiYgMTRweDtzbGVlcG50ZW50ZmlsZWRqYTrjg2lkPSJjTmFtZSJ3b3JzZXNob3RzLWJveC1kZWx0YQombHQ7YmVhcnM6NDhaPGRhdGEtcnVyYWw8L2E+IHNwZW5kYmFrZXJzaG9wcz0gIiI7cGhwIj5jdGlvbjEzcHg7YnJpYW5oZWxsb3NpemU9bz0lMkYgam9pbm1heWJlPGltZyBpbWciPiwgZmpzaW1nIiAiKVswXU1Ub3BCVHlwZSJuZXdseURhbnNrY3plY2h0cmFpbGtub3dzPC9oNT5mYXEiPnpoLWNuMTApOwotMSIpO3R5cGU9Ymx1ZXN0cnVseWRhdmlzLmpzJzs+DQo8IXN0ZWVsIHlvdSBoMj4NCmZvcm0gamVzdXMxMDAlIG1lbnUuDQoJDQp3YWxlc3Jpc2tzdW1lbnRkZGluZ2ItbGlrdGVhY2hnaWYiIHZlZ2FzZGFuc2tlZXN0aXNocWlwc3VvbWlzb2JyZWRlc2RlZW50cmV0b2Rvc3B1ZWRlYcOxb3Nlc3TDoXRpZW5laGFzdGFvdHJvc3BhcnRlZG9uZGVudWV2b2hhY2VyZm9ybWFtaXNtb21lam9ybXVuZG9hcXXDrWTDrWFzc8OzbG9heXVkYWZlY2hhdG9kYXN0YW50b21lbm9zZGF0b3NvdHJhc3NpdGlvbXVjaG9haG9yYWx1Z2FybWF5b3Jlc3Rvc2hvcmFzdGVuZXJhbnRlc2ZvdG9zZXN0YXNwYcOtc251ZXZhc2FsdWRmb3Jvc21lZGlvcXVpZW5tZXNlc3BvZGVyY2hpbGVzZXLDoXZlY2VzZGVjaXJqb3PDqWVzdGFydmVudGFncnVwb2hlY2hvZWxsb3N0ZW5nb2FtaWdvY29zYXNuaXZlbGdlbnRlbWlzbWFhaXJlc2p1bGlvdGVtYXNoYWNpYWZhdm9yanVuaW9saWJyZXB1bnRvYnVlbm9hdXRvcmFicmlsYnVlbmF0ZXh0b21hcnpvc2FiZXJsaXN0YWx1ZWdvY8OzbW9lbmVyb2p1ZWdvcGVyw7poYWJlcmVzdG95bnVuY2FtdWplcnZhbG9yZnVlcmFsaWJyb2d1c3RhaWd1YWx2b3Rvc2Nhc29zZ3XDrWFwdWVkb3NvbW9zYXZpc291c3RlZGRlYmVubm9jaGVidXNjYWZhbHRhZXVyb3NzZXJpZWRpY2hvY3Vyc29jbGF2ZWNhc2FzbGXDs25wbGF6b2xhcmdvb2JyYXN2aXN0YWFwb3lvanVudG90cmF0YXZpc3RvY3JlYXJjYW1wb2hlbW9zY2luY29jYXJnb3Bpc29zb3JkZW5oYWNlbsOhcmVhZGlzY29wZWRyb2NlcmNhcHVlZGFwYXBlbG1lbm9yw7p0aWxjbGFyb2pvcmdlY2FsbGVwb25lcnRhcmRlbmFkaWVtYXJjYXNpZ3VlZWxsYXNzaWdsb2NvY2hlbW90b3NtYWRyZWNsYXNlcmVzdG9uacOxb3F1ZWRhcGFzYXJiYW5jb2hpam9zdmlhamVwYWJsb8Opc3RldmllbmVyZWlub2RlamFyZm9uZG9jYW5hbG5vcnRlbGV0cmFjYXVzYXRvbWFybWFub3NsdW5lc2F1dG9zdmlsbGF2ZW5kb3Blc2FydGlwb3N0ZW5nYW1hcmNvbGxldmFwYWRyZXVuaWRvdmFtb3N6b25hc2FtYm9zYmFuZGFtYXJpYWFidXNvbXVjaGFzdWJpcnJpb2phdml2aXJncmFkb2NoaWNhYWxsw61qb3ZlbmRpY2hhZXN0YW50YWxlc3NhbGlyc3VlbG9wZXNvc2ZpbmVzbGxhbWFidXNjb8Opc3RhbGxlZ2FuZWdyb3BsYXphaHVtb3JwYWdhcmp1bnRhZG9ibGVpc2xhc2JvbHNhYmHDsW9oYWJsYWx1Y2hhw4FyZWFkaWNlbmp1Z2Fybm90YXN2YWxsZWFsbMOhY2FyZ2Fkb2xvcmFiYWpvZXN0w6lndXN0b21lbnRlbWFyaW9maXJtYWNvc3RvZmljaGFwbGF0YWhvZ2FyYXJ0ZXNsZXllc2FxdWVsbXVzZW9iYXNlc3BvY29zbWl0YWRjaWVsb2NoaWNvbWllZG9nYW5hcnNhbnRvZXRhcGFkZWJlc3BsYXlhcmVkZXNzaWV0ZWNvcnRlY29yZWFkdWRhc2Rlc2Vvdmllam9kZXNlYWFndWFzJnF1b3Q7ZG9tYWluY29tbW9uc3RhdHVzZXZlbnRzbWFzdGVyc3lzdGVtYWN0aW9uYmFubmVycmVtb3Zlc2Nyb2xsdXBkYXRlZ2xvYmFsbWVkaXVtZmlsdGVybnVtYmVyY2hhbmdlcmVzdWx0cHVibGljc2NyZWVuY2hvb3Nlbm9ybWFsdHJhdmVsaXNzdWVzc291cmNldGFyZ2V0c3ByaW5nbW9kdWxlbW9iaWxlc3dpdGNocGhvdG9zYm9yZGVycmVnaW9uaXRzZWxmc29jaWFsYWN0aXZlY29sdW1ucmVjb3JkZm9sbG93dGl0bGU+ZWl0aGVybGVuZ3RoZmFtaWx5ZnJpZW5kbGF5b3V0YXV0aG9yY3JlYXRlcmV2aWV3c3VtbWVyc2VydmVycGxheWVkcGxheWVyZXhwYW5kcG9saWN5Zm9ybWF0ZG91YmxlcG9pbnRzc2VyaWVzcGVyc29ubGl2aW5nZGVzaWdubW9udGhzZm9yY2VzdW5pcXVld2VpZ2h0cGVvcGxlZW5lcmd5bmF0dXJlc2VhcmNoZmlndXJlaGF2aW5nY3VzdG9tb2Zmc2V0bGV0dGVyd2luZG93c3VibWl0cmVuZGVyZ3JvdXBzdXBsb2FkaGVhbHRobWV0aG9kdmlkZW9zc2Nob29sZnV0dXJlc2hhZG93ZGViYXRldmFsdWVzT2JqZWN0b3RoZXJzcmlnaHRzbGVhZ3VlY2hyb21lc2ltcGxlbm90aWNlc2hhcmVkZW5kaW5nc2Vhc29ucmVwb3J0b25saW5lc3F1YXJlYnV0dG9uaW1hZ2VzZW5hYmxlbW92aW5nbGF0ZXN0d2ludGVyRnJhbmNlcGVyaW9kc3Ryb25ncmVwZWF0TG9uZG9uZGV0YWlsZm9ybWVkZGVtYW5kc2VjdXJlcGFzc2VkdG9nZ2xlcGxhY2VzZGV2aWNlc3RhdGljY2l0aWVzc3RyZWFteWVsbG93YXR0YWNrc3RyZWV0ZmxpZ2h0aGlkZGVuaW5mbyI+b3BlbmVkdXNlZnVsdmFsbGV5Y2F1c2VzbGVhZGVyc2VjcmV0c2Vjb25kZGFtYWdlc3BvcnRzZXhjZXB0cmF0aW5nc2lnbmVkdGhpbmdzZWZmZWN0ZmllbGRzc3RhdGVzb2ZmaWNldmlzdWFsZWRpdG9ydm9sdW1lUmVwb3J0bXVzZXVtbW92aWVzcGFyZW50YWNjZXNzbW9zdGx5bW90aGVyIiBpZD0ibWFya2V0Z3JvdW5kY2hhbmNlc3VydmV5YmVmb3Jlc3ltYm9sbW9tZW50c3BlZWNobW90aW9uaW5zaWRlbWF0dGVyQ2VudGVyb2JqZWN0ZXhpc3RzbWlkZGxlRXVyb3BlZ3Jvd3RobGVnYWN5bWFubmVyZW5vdWdoY2FyZWVyYW5zd2Vyb3JpZ2lucG9ydGFsY2xpZW50c2VsZWN0cmFuZG9tY2xvc2VkdG9waWNzY29taW5nZmF0aGVyb3B0aW9uc2ltcGx5cmFpc2VkZXNjYXBlY2hvc2VuY2h1cmNoZGVmaW5lcmVhc29uY29ybmVyb3V0cHV0bWVtb3J5aWZyYW1lcG9saWNlbW9kZWxzTnVtYmVyZHVyaW5nb2ZmZXJzc3R5bGVza2lsbGVkbGlzdGVkY2FsbGVkc2lsdmVybWFyZ2luZGVsZXRlYmV0dGVyYnJvd3NlbGltaXRzR2xvYmFsc2luZ2xld2lkZ2V0Y2VudGVyYnVkZ2V0bm93cmFwY3JlZGl0Y2xhaW1zZW5naW5lc2FmZXR5Y2hvaWNlc3Bpcml0LXN0eWxlc3ByZWFkbWFraW5nbmVlZGVkcnVzc2lhcGxlYXNlZXh0ZW50U2NyaXB0YnJva2VuYWxsb3dzY2hhcmdlZGl2aWRlZmFjdG9ybWVtYmVyLWJhc2VkdGhlb3J5Y29uZmlnYXJvdW5kd29ya2VkaGVscGVkQ2h1cmNoaW1wYWN0c2hvdWxkYWx3YXlzbG9nbyIgYm90dG9tbGlzdCI+KXt2YXIgcHJlZml4b3JhbmdlSGVhZGVyLnB1c2goY291cGxlZ2FyZGVuYnJpZGdlbGF1bmNoUmV2aWV3dGFraW5ndmlzaW9ubGl0dGxlZGF0aW5nQnV0dG9uYmVhdXR5dGhlbWVzZm9yZ290U2VhcmNoYW5jaG9yYWxtb3N0bG9hZGVkQ2hhbmdlcmV0dXJuc3RyaW5ncmVsb2FkTW9iaWxlaW5jb21lc3VwcGx5U291cmNlb3JkZXJzdmlld2VkJm5ic3A7Y291cnNlQWJvdXQgaXNsYW5kPGh0bWwgY29va2llbmFtZT0iYW1hem9ubW9kZXJuYWR2aWNlaW48L2E+OiBUaGUgZGlhbG9naG91c2VzQkVHSU4gTWV4aWNvc3RhcnRzY2VudHJlaGVpZ2h0YWRkaW5nSXNsYW5kYXNzZXRzRW1waXJlU2Nob29sZWZmb3J0ZGlyZWN0bmVhcmx5bWFudWFsU2VsZWN0LgoKT25lam9pbmVkbWVudSI+UGhpbGlwYXdhcmRzaGFuZGxlaW1wb3J0T2ZmaWNlcmVnYXJkc2tpbGxzbmF0aW9uU3BvcnRzZGVncmVld2Vla2x5IChlLmcuYmVoaW5kZG9jdG9ybG9nZ2VkdW5pdGVkPC9iPjwvYmVnaW5zcGxhbnRzYXNzaXN0YXJ0aXN0aXNzdWVkMzAwcHh8Y2FuYWRhYWdlbmN5c2NoZW1lcmVtYWluQnJhemlsc2FtcGxlbG9nbyI+YmV5b25kLXNjYWxlYWNjZXB0c2VydmVkbWFyaW5lRm9vdGVyY2FtZXJhPC9oMT4KX2Zvcm0ibGVhdmVzc3RyZXNzIiAvPg0KLmdpZiIgb25sb2FkbG9hZGVyT3hmb3Jkc2lzdGVyc3Vydml2bGlzdGVuZmVtYWxlRGVzaWduc2l6ZT0iYXBwZWFsdGV4dCI+bGV2ZWxzdGhhbmtzaGlnaGVyZm9yY2VkYW5pbWFsYW55b25lQWZyaWNhYWdyZWVkcmVjZW50UGVvcGxlPGJyIC8+d29uZGVycHJpY2VzdHVybmVkfHwge307bWFpbiI+aW5saW5lc3VuZGF5d3JhcCI+ZmFpbGVkY2Vuc3VzbWludXRlYmVhY29ucXVvdGVzMTUwcHh8ZXN0YXRlcmVtb3RlZW1haWwibGlua2VkcmlnaHQ7c2lnbmFsZm9ybWFsMS5odG1sc2lnbnVwcHJpbmNlZmxvYXQ6LnBuZyIgZm9ydW0uQWNjZXNzcGFwZXJzc291bmRzZXh0ZW5kSGVpZ2h0c2xpZGVyVVRGLTgiJmFtcDsgQmVmb3JlLiBXaXRoc3R1ZGlvb3duZXJzbWFuYWdlcHJvZml0alF1ZXJ5YW5udWFscGFyYW1zYm91Z2h0ZmFtb3VzZ29vZ2xlbG9uZ2VyaSsrKSB7aXNyYWVsc2F5aW5nZGVjaWRlaG9tZSI+aGVhZGVyZW5zdXJlYnJhbmNocGllY2VzYmxvY2s7c3RhdGVkdG9wIj48cmFjaW5ncmVzaXplLS0mZ3Q7cGFjaXR5c2V4dWFsYnVyZWF1LmpwZyIgMTAsMDAwb2J0YWludGl0bGVzYW1vdW50LCBJbmMuY29tZWR5bWVudSIgbHlyaWNzdG9kYXkuaW5kZWVkY291bnR5X2xvZ28uRmFtaWx5bG9va2VkTWFya2V0bHNlIGlmUGxheWVydHVya2V5KTt2YXIgZm9yZXN0Z2l2aW5nZXJyb3JzRG9tYWlufWVsc2V7aW5zZXJ0QmxvZzwvZm9vdGVybG9naW4uZmFzdGVyYWdlbnRzPGJvZHkgMTBweCAwcHJhZ21hZnJpZGF5anVuaW9yZG9sbGFycGxhY2VkY292ZXJzcGx1Z2luNSwwMDAgcGFnZSI+Ym9zdG9uLnRlc3QoYXZhdGFydGVzdGVkX2NvdW50Zm9ydW1zc2NoZW1haW5kZXgsZmlsbGVkc2hhcmVzcmVhZGVyYWxlcnQoYXBwZWFyU3VibWl0bGluZSI+Ym9keSI+CiogVGhlVGhvdWdoc2VlaW5namVyc2V5TmV3czwvdmVyaWZ5ZXhwZXJ0aW5qdXJ5d2lkdGg9Q29va2llU1RBUlQgYWNyb3NzX2ltYWdldGhyZWFkbmF0aXZlcG9ja2V0Ym94Ij4KU3lzdGVtIERhdmlkY2FuY2VydGFibGVzcHJvdmVkQXByaWwgcmVhbGx5ZHJpdmVyaXRlbSI+bW9yZSI+Ym9hcmRzY29sb3JzY2FtcHVzZmlyc3QgfHwgW107bWVkaWEuZ3VpdGFyZmluaXNod2lkdGg6c2hvd2VkT3RoZXIgLnBocCIgYXNzdW1lbGF5ZXJzd2lsc29uc3RvcmVzcmVsaWVmc3dlZGVuQ3VzdG9tZWFzaWx5IHlvdXIgU3RyaW5nCgpXaGlsdGF5bG9yY2xlYXI6cmVzb3J0ZnJlbmNodGhvdWdoIikgKyAiPGJvZHk+YnV5aW5nYnJhbmRzTWVtYmVybmFtZSI+b3BwaW5nc2VjdG9yNXB4OyI+dnNwYWNlcG9zdGVybWFqb3IgY29mZmVlbWFydGlubWF0dXJlaGFwcGVuPC9uYXY+a2Fuc2FzbGluayI+SW1hZ2VzPWZhbHNld2hpbGUgaHNwYWNlMCZhbXA7IAoKSW4gIHBvd2VyUG9sc2tpLWNvbG9yam9yZGFuQm90dG9tU3RhcnQgLWNvdW50Mi5odG1sbmV3cyI+MDEuanBnT25saW5lLXJpZ2h0bWlsbGVyc2VuaW9ySVNCTiAwMCwwMDAgZ3VpZGVzdmFsdWUpZWN0aW9ucmVwYWlyLnhtbCIgIHJpZ2h0cy5odG1sLWJsb2NrcmVnRXhwOmhvdmVyd2l0aGludmlyZ2lucGhvbmVzPC90cj4NdXNpbmcgCgl2YXIgPicpOwoJPC90ZD4KPC90cj4KYmFoYXNhYnJhc2lsZ2FsZWdvbWFneWFycG9sc2tpc3Jwc2tp2LHYr9mI5Lit5paH566A5L2T57mB6auU5L+h5oGv5Lit5Zu95oiR5Lus5LiA5Liq5YWs5Y+4566h55CG6K665Z2b5Y+v5Lul5pyN5Yqh5pe26Ze05Liq5Lq65Lqn5ZOB6Ieq5bex5LyB5Lia5p+l55yL5bel5L2c6IGU57O75rKh5pyJ572R56uZ5omA5pyJ6K+E6K665Lit5b+D5paH56ug55So5oi36aaW6aG15L2c6ICF5oqA5pyv6Zeu6aKY55u45YWz5LiL6L295pCc57Si5L2/55So6L2v5Lu25Zyo57q/5Li76aKY6LWE5paZ6KeG6aKR5Zue5aSN5rOo5YaM572R57uc5pS26JeP5YaF5a655o6o6I2Q5biC5Zy65raI5oGv56m66Ze05Y+R5biD5LuA5LmI5aW95Y+L55Sf5rS75Zu+54mH5Y+R5bGV5aaC5p6c5omL5py65paw6Ze75pyA5paw5pa55byP5YyX5Lqs5o+Q5L6b5YWz5LqO5pu05aSa6L+Z5Liq57O757uf55+l6YGT5ri45oiP5bm/5ZGK5YW25LuW5Y+R6KGo5a6J5YWo56ys5LiA5Lya5ZGY6L+b6KGM54K55Ye754mI5p2D55S15a2Q5LiW55WM6K6+6K6h5YWN6LS55pWZ6IKy5Yqg5YWl5rS75Yqo5LuW5Lus5ZWG5ZOB5Y2a5a6i546w5Zyo5LiK5rW35aaC5L2V5bey57uP55WZ6KiA6K+m57uG56S+5Yy655m75b2V5pys56uZ6ZyA6KaB5Lu35qC85pSv5oyB5Zu96ZmF6ZO+5o6l5Zu95a625bu66K6+5pyL5Y+L6ZiF6K+75rOV5b6L5L2N572u57uP5rWO6YCJ5oup6L+Z5qC35b2T5YmN5YiG57G75o6S6KGM5Zug5Li65Lqk5piT5pyA5ZCO6Z+z5LmQ5LiN6IO96YCa6L+H6KGM5Lia56eR5oqA5Y+v6IO96K6+5aSH5ZCI5L2c5aSn5a6256S+5Lya56CU56m25LiT5Lia5YWo6YOo6aG555uu6L+Z6YeM6L+Y5piv5byA5aeL5oOF5Ya155S16ISR5paH5Lu25ZOB54mM5biu5Yqp5paH5YyW6LWE5rqQ5aSn5a2m5a2m5Lmg5Zyw5Z2A5rWP6KeI5oqV6LWE5bel56iL6KaB5rGC5oCO5LmI5pe25YCZ5Yqf6IO95Li76KaB55uu5YmN6LWE6K6v5Z+O5biC5pa55rOV55S15b2x5oub6IGY5aOw5piO5Lu75L2V5YGl5bq35pWw5o2u576O5Zu95rG96L2m5LuL57uN5L2G5piv5Lqk5rWB55Sf5Lqn5omA5Lul55S16K+d5pi+56S65LiA5Lqb5Y2V5L2N5Lq65ZGY5YiG5p6Q5Zyw5Zu+5peF5ri45bel5YW35a2m55Sf57O75YiX572R5Y+L5biW5a2Q5a+G56CB6aKR6YGT5o6n5Yi25Zyw5Yy65Z+65pys5YWo5Zu9572R5LiK6YeN6KaB56ys5LqM5Zac5qyi6L+b5YWl5Y+L5oOF6L+Z5Lqb6ICD6K+V5Y+R546w5Z+56K6t5Lul5LiK5pS/5bqc5oiQ5Li6546v5aKD6aaZ5riv5ZCM5pe25aix5LmQ5Y+R6YCB5LiA5a6a5byA5Y+R5L2c5ZOB5qCH5YeG5qyi6L+O6Kej5Yaz5Zyw5pa55LiA5LiL5Lul5Y+K6LSj5Lu75oiW6ICF5a6i5oi35Luj6KGo56ev5YiG5aWz5Lq65pWw56CB6ZSA5ZSu5Ye6546w56a757q/5bqU55So5YiX6KGo5LiN5ZCM57yW6L6R57uf6K6h5p+l6K+i5LiN6KaB5pyJ5YWz5py65p6E5b6I5aSa5pKt5pS+57uE57uH5pS/562W55u05o6l6IO95Yqb5p2l5rqQ5pmC6ZaT55yL5Yiw54Ot6Zeo5YWz6ZSu5LiT5Yy66Z2e5bi46Iux6K+t55m+5bqm5biM5pyb576O5aWz5q+U6L6D55+l6K+G6KeE5a6a5bu66K6u6YOo6Zeo5oSP6KeB57K+5b2p5pel5pys5o+Q6auY5Y+R6KiA5pa56Z2i5Z+66YeR5aSE55CG5p2D6ZmQ5b2x54mH6ZO26KGM6L+Y5pyJ5YiG5Lqr54mp5ZOB57uP6JCl5re75Yqg5LiT5a626L+Z56eN6K+d6aKY6LW35p2l5Lia5Yqh5YWs5ZGK6K6w5b2V566A5LuL6LSo6YeP55S35Lq65b2x5ZON5byV55So5oql5ZGK6YOo5YiG5b+r6YCf5ZKo6K+i5pe25bCa5rOo5oSP55Sz6K+35a2m5qCh5bqU6K+l5Y6G5Y+y5Y+q5piv6L+U5Zue6LSt5Lmw5ZCN56ew5Li65LqG5oiQ5Yqf6K+05piO5L6b5bqU5a2p5a2Q5LiT6aKY56iL5bqP5LiA6Iis5pyD5ZOh5Y+q5pyJ5YW25a6D5L+d5oqk6ICM5LiU5LuK5aSp56qX5Y+j5Yqo5oCB54q25oCB54m55Yir6K6k5Li65b+F6aG75pu05paw5bCP6K+05oiR5YCR5L2c5Li65aqS5L2T5YyF5ous6YKj5LmI5LiA5qC35Zu95YaF5piv5ZCm5qC55o2u55S16KeG5a2m6Zmi5YW35pyJ6L+H56iL55Sx5LqO5Lq65omN5Ye65p2l5LiN6L+H5q2j5Zyo5piO5pif5pWF5LqL5YWz57O75qCH6aKY5ZWG5Yqh6L6T5YWl5LiA55u05Z+656GA5pWZ5a2m5LqG6Kej5bu6562R57uT5p6c5YWo55CD6YCa55+l6K6h5YiS5a+55LqO6Im65pyv55u45YaM5Y+R55Sf55yf55qE5bu656uL562J57qn57G75Z6L57uP6aqM5a6e546w5Yi25L2c5p2l6Ieq5qCH562+5Lul5LiL5Y6f5Yib5peg5rOV5YW25Lit5YCL5Lq65LiA5YiH5oyH5Y2X5YWz6Zet6ZuG5Zui56ys5LiJ5YWz5rOo5Zug5q2k54Wn54mH5rex5Zyz5ZWG5Lia5bm/5bee5pel5pyf6auY57qn5pyA6L+R57u85ZCI6KGo56S65LiT6L6R6KGM5Li65Lqk6YCa6K+E5Lu36KeJ5b6X57K+5Y2O5a625bqt5a6M5oiQ5oSf6KeJ5a6J6KOF5b6X5Yiw6YKu5Lu25Yi25bqm6aOf5ZOB6Jm954S26L2s6L295oql5Lu36K6w6ICF5pa55qGI6KGM5pS/5Lq65rCR55So5ZOB5Lic6KW/5o+Q5Ye66YWS5bqX54S25ZCO5LuY5qy+54Ot54K55Lul5YmN5a6M5YWo5Y+R5biW6K6+572u6aKG5a+85bel5Lia5Yy76Zmi55yL55yL57uP5YW45Y6f5Zug5bmz5Y+w5ZCE56eN5aKe5Yqg5p2Q5paZ5paw5aKe5LmL5ZCO6IGM5Lia5pWI5p6c5LuK5bm06K665paH5oiR5Zu95ZGK6K+J54mI5Li75L+u5pS55Y+C5LiO5omT5Y2w5b+r5LmQ5py65qKw6KeC54K55a2Y5Zyo57K+56We6I635b6X5Yip55So57un57ut5L2g5Lus6L+Z5LmI5qih5byP6K+t6KiA6IO95aSf6ZuF6JmO5pON5L2c6aOO5qC85LiA6LW356eR5a2m5L2T6IKy55+t5L+h5p2h5Lu25rK755aX6L+Q5Yqo5Lqn5Lia5Lya6K6u5a+86Iiq5YWI55Sf6IGU55uf5Y+v5piv5ZWP6aGM57uT5p6E5L2c55So6LCD5p+l6LOH5paZ6Ieq5Yqo6LSf6LSj5Yac5Lia6K6/6Zeu5a6e5pa95o6l5Y+X6K6o6K666YKj5Liq5Y+N6aaI5Yqg5by65aWz5oCn6IyD5Zu05pyN5YuZ5LyR6Zey5LuK5pel5a6i5pyN6KeA55yL5Y+C5Yqg55qE6K+d5LiA54K55L+d6K+B5Zu+5Lmm5pyJ5pWI5rWL6K+V56e75Yqo5omN6IO95Yaz5a6a6IKh56Wo5LiN5pat6ZyA5rGC5LiN5b6X5Yqe5rOV5LmL6Ze06YeH55So6JCl6ZSA5oqV6K+J55uu5qCH54ix5oOF5pGE5b2x5pyJ5Lqb6KSH6KO95paH5a2m5py65Lya5pWw5a2X6KOF5L+u6LSt54mp5Yac5p2R5YWo6Z2i57K+5ZOB5YW25a6e5LqL5oOF5rC05bmz5o+Q56S65LiK5biC6LCi6LCi5pmu6YCa5pWZ5biI5LiK5Lyg57G75Yir5q2M5puy5oul5pyJ5Yib5paw6YWN5Lu25Y+q6KaB5pe25Luj6LOH6KiK6L6+5Yiw5Lq655Sf6K6i6ZiF6ICB5biI5bGV56S65b+D55CG6LS05a2Q57ay56uZ5Li76aGM6Ieq54S257qn5Yir566A5Y2V5pS56Z2p6YKj5Lqb5p2l6K+05omT5byA5Luj56CB5Yig6Zmk6K+B5Yi46IqC55uu6YeN54K55qyh5pW45aSa5bCR6KeE5YiS6LWE6YeR5om+5Yiw5Lul5ZCO5aSn5YWo5Li76aG15pyA5L2z5Zue562U5aSp5LiL5L+d6Zqc546w5Luj5qOA5p+l5oqV56Wo5bCP5pe25rKS5pyJ5q2j5bi455Sa6Iez5Luj55CG55uu5b2V5YWs5byA5aSN5Yi26YeR6J6N5bm456aP54mI5pys5b2i5oiQ5YeG5aSH6KGM5oOF5Zue5Yiw5oCd5oOz5oCO5qC35Y2P6K6u6K6k6K+B5pyA5aW95Lqn55Sf5oyJ54Wn5pyN6KOF5bm/5Lic5Yqo5ryr6YeH6LSt5paw5omL57uE5Zu+6Z2i5p2/5Y+C6ICD5pS/5rK75a655piT5aSp5Zyw5Yqq5Yqb5Lq65Lus5Y2H57qn6YCf5bqm5Lq654mp6LCD5pW05rWB6KGM6YCg5oiQ5paH5a2X6Z+p5Zu96LS45piT5byA5bGV55u46Zec6KGo546w5b2x6KeG5aaC5q2k576O5a655aSn5bCP5oql6YGT5p2h5qy+5b+D5oOF6K645aSa5rOV6KeE5a625bGF5Lmm5bqX6L+e5o6l56uL5Y2z5Li+5oql5oqA5ben5aWl6L+Q55m75YWl5Lul5p2l55CG6K665LqL5Lu26Ieq55Sx5Lit5Y2O5Yqe5YWs5aaI5aaI55yf5q2j5LiN6ZSZ5YWo5paH5ZCI5ZCM5Lu35YC85Yir5Lq655uR552j5YW35L2T5LiW57qq5Zui6Zif5Yib5Lia5om/5ouF5aKe6ZW/5pyJ5Lq65L+d5oyB5ZWG5a6257u05L+u5Y+w5rm+5bem5Y+z6IKh5Lu9562U5qGI5a6e6ZmF55S15L+h57uP55CG55Sf5ZG95a6j5Lyg5Lu75Yqh5q2j5byP54m56Imy5LiL5p2l5Y2P5Lya5Y+q6IO95b2T54S26YeN5paw5YWn5a655oyH5a+86L+Q6KGM5pel5b+X6LOj5a626LaF6L+H5Zyf5Zyw5rWZ5rGf5pSv5LuY5o6o5Ye656uZ6ZW/5p2t5bee5omn6KGM5Yi26YCg5LmL5LiA5o6o5bm/546w5Zy65o+P6L+w5Y+Y5YyW5Lyg57uf5q2M5omL5L+d6Zmp6K++56iL5Yy755aX57uP6L+H6L+H5Y675LmL5YmN5pS25YWl5bm05bqm5p2C5b+X576O5Li95pyA6auY55m76ZmG5pyq5p2l5Yqg5bel5YWN6LSj5pWZ56iL54mI5Z2X6Lqr5L2T6YeN5bqG5Ye65ZSu5oiQ5pys5b2i5byP5Zyf6LGG5Ye65YO55Lic5pa56YKu566x5Y2X5Lqs5rGC6IGM5Y+W5b6X6IGM5L2N55u45L+h6aG16Z2i5YiG6ZKf572R6aG156Gu5a6a5Zu+5L6L572R5Z2A56ev5p6B6ZSZ6K+v55uu55qE5a6d6LSd5py65YWz6aOO6Zmp5o6I5p2D55eF5q+S5a6g54mp6Zmk5LqG6KmV6KuW55a+55eF5Y+K5pe25rGC6LSt56uZ54K55YS/56ul5q+P5aSp5Lit5aSu6K6k6K+G5q+P5Liq5aSp5rSl5a2X5L2T5Y+w54Gj57u05oqk5pys6aG15Liq5oCn5a6Y5pa55bi46KeB55u45py65oiY55Wl5bqU5b2T5b6L5biI5pa55L6/5qCh5Zut6IKh5biC5oi/5bGL5qCP55uu5ZGY5bel5a+86Ie056qB54S26YGT5YW35pys572R57uT5ZCI5qGj5qGI5Yqz5Yqo5Y+m5aSW576O5YWD5byV6LW35pS55Y+Y56ys5Zub5Lya6K6h6Kqq5piO6ZqQ56eB5a6d5a6d6KeE6IyD5raI6LS55YWx5ZCM5b+Y6K6w5L2T57O75bim5p2l5ZCN5a2X55m86KGo5byA5pS+5Yqg55uf5Y+X5Yiw5LqM5omL5aSn6YeP5oiQ5Lq65pWw6YeP5YWx5Lqr5Yy65Z+f5aWz5a2p5Y6f5YiZ5omA5Zyo57uT5p2f6YCa5L+h6LaF57qn6YWN572u5b2T5pe25LyY56eA5oCn5oSf5oi/5Lqn6YGK5oiy5Ye65Y+j5o+Q5Lqk5bCx5Lia5L+d5YGl56iL5bqm5Y+C5pWw5LqL5Lia5pW05Liq5bGx5Lic5oOF5oSf54m55q6K5YiG6aGe5pCc5bCL5bGe5LqO6Zeo5oi36LSi5Yqh5aOw6Z+z5Y+K5YW26LSi57uP5Z2a5oyB5bmy6YOo5oiQ56uL5Yip55uK6ICD6JmR5oiQ6YO95YyF6KOF55So5oi25q+U6LWb5paH5piO5oub5ZWG5a6M5pW055yf5piv55y8552b5LyZ5Ly05aiB5pyb6aKG5Z+f5Y2r55Sf5LyY5oOg6KuW5aOH5YWs5YWx6Imv5aW95YWF5YiG56ym5ZCI6ZmE5Lu254m554K55LiN5Y+v6Iux5paH6LWE5Lqn5qC55pys5piO5pi+5a+G56K85YWs5LyX5rCR5peP5pu05Yqg5Lqr5Y+X5ZCM5a2m5ZCv5Yqo6YCC5ZCI5Y6f5p2l6Zeu562U5pys5paH576O6aOf57u/6Imy56iz5a6a57uI5LqO55Sf54mp5L6b5rGC5pCc54uQ5Yqb6YeP5Lil6YeN5rC46L+c5YaZ55yf5pyJ6ZmQ56ue5LqJ5a+56LGh6LS555So5LiN5aW957ud5a+55Y2B5YiG5L+D6L+b54K56K+E5b2x6Z+z5LyY5Yq/5LiN5bCR5qyj6LWP5bm25LiU5pyJ54K55pa55ZCR5YWo5paw5L+h55So6K6+5pa95b2i6LGh6LWE5qC856qB56C06ZqP552A6YeN5aSn5LqO5piv5q+V5Lia5pm66IO95YyW5bel5a6M576O5ZWG5Z+O57uf5LiA5Ye654mI5omT6YCg55Si5ZOB5qaC5Ya155So5LqO5L+d55WZ5Zug57Sg5Lit5ZyL5a2Y5YKo6LS05Zu+5pyA5oSb6ZW/5pyf5Y+j5Lu355CG6LSi5Z+65Zyw5a6J5o6S5q2m5rGJ6YeM6Z2i5Yib5bu65aSp56m66aaW5YWI5a6M5ZaE6amx5Yqo5LiL6Z2i5LiN5YaN6K+a5L+h5oSP5LmJ6Ziz5YWJ6Iux5Zu95ryC5Lqu5Yab5LqL546p5a62576k5LyX5Yac5rCR5Y2z5Y+v5ZCN56ix5a625YW35Yqo55S75oOz5Yiw5rOo5piO5bCP5a2m5oCn6IO96ICD56CU56Gs5Lu26KeC55yL5riF5qWa5pCe56yR6aaW6aCB6buE6YeR6YCC55So5rGf6IuP55yf5a6e5Li7566h6Zi25q616Ki75YaK57+76K+R5p2D5Yip5YGa5aW95Ly85LmO6YCa6K6v5pa95bel54uA5oWL5Lmf6K64546v5L+d5Z+55YW75qaC5b+15aSn5Z6L5py656Wo55CG6Kej5Yy/5ZCNY3VhbmRvZW52aWFybWFkcmlkYnVzY2FyaW5pY2lvdGllbXBvcG9ycXVlY3VlbnRhZXN0YWRvcHVlZGVuanVlZ29zY29udHJhZXN0w6Fubm9tYnJldGllbmVucGVyZmlsbWFuZXJhYW1pZ29zY2l1ZGFkY2VudHJvYXVucXVlcHVlZGVzZGVudHJvcHJpbWVycHJlY2lvc2Vnw7puYnVlbm9zdm9sdmVycHVudG9zc2VtYW5haGFiw61hYWdvc3RvbnVldm9zdW5pZG9zY2FybG9zZXF1aXBvbmnDsW9zbXVjaG9zYWxndW5hY29ycmVvaW1hZ2VucGFydGlyYXJyaWJhbWFyw61haG9tYnJlZW1wbGVvdmVyZGFkY2FtYmlvbXVjaGFzZnVlcm9ucGFzYWRvbMOtbmVhcGFyZWNlbnVldmFzY3Vyc29zZXN0YWJhcXVpZXJvbGlicm9zY3VhbnRvYWNjZXNvbWlndWVsdmFyaW9zY3VhdHJvdGllbmVzZ3J1cG9zc2Vyw6FuZXVyb3BhbWVkaW9zZnJlbnRlYWNlcmNhZGVtw6Fzb2ZlcnRhY29jaGVzbW9kZWxvaXRhbGlhbGV0cmFzYWxnw7puY29tcHJhY3VhbGVzZXhpc3RlY3VlcnBvc2llbmRvcHJlbnNhbGxlZ2FydmlhamVzZGluZXJvbXVyY2lhcG9kcsOhcHVlc3RvZGlhcmlvcHVlYmxvcXVpZXJlbWFudWVscHJvcGlvY3Jpc2lzY2llcnRvc2VndXJvbXVlcnRlZnVlbnRlY2VycmFyZ3JhbmRlZWZlY3RvcGFydGVzbWVkaWRhcHJvcGlhb2ZyZWNldGllcnJhZS1tYWlsdmFyaWFzZm9ybWFzZnV0dXJvb2JqZXRvc2VndWlycmllc2dvbm9ybWFzbWlzbW9zw7puaWNvY2FtaW5vc2l0aW9zcmF6w7NuZGViaWRvcHJ1ZWJhdG9sZWRvdGVuw61hamVzw7pzZXNwZXJvY29jaW5hb3JpZ2VudGllbmRhY2llbnRvY8OhZGl6aGFibGFyc2Vyw61hbGF0aW5hZnVlcnphZXN0aWxvZ3VlcnJhZW50cmFyw6l4aXRvbMOzcGV6YWdlbmRhdsOtZGVvZXZpdGFycGFnaW5hbWV0cm9zamF2aWVycGFkcmVzZsOhY2lsY2FiZXphw6FyZWFzc2FsaWRhZW52w61vamFww7NuYWJ1c29zYmllbmVzdGV4dG9zbGxldmFycHVlZGFuZnVlcnRlY29tw7puY2xhc2VzaHVtYW5vdGVuaWRvYmlsYmFvdW5pZGFkZXN0w6FzZWRpdGFyY3JlYWRv0LTQu9GP0YfRgtC+0LrQsNC60LjQu9C40Y3RgtC+0LLRgdC10LXQs9C+0L/RgNC40YLQsNC60LXRidC10YPQttC10JrQsNC60LHQtdC30LHRi9C70L7QvdC40JLRgdC10L/QvtC00K3RgtC+0YLQvtC80YfQtdC80L3QtdGC0LvQtdGC0YDQsNC30L7QvdCw0LPQtNC10LzQvdC10JTQu9GP0J/RgNC40L3QsNGB0L3QuNGF0YLQtdC80LrRgtC+0LPQvtC00LLQvtGC0YLQsNC80KHQqNCQ0LzQsNGP0KfRgtC+0LLQsNGB0LLQsNC80LXQvNGD0KLQsNC60LTQstCw0L3QsNC80Y3RgtC40Y3RgtGD0JLQsNC80YLQtdGF0L/RgNC+0YLRg9GC0L3QsNC00LTQvdGP0JLQvtGC0YLRgNC40L3QtdC50JLQsNGB0L3QuNC80YHQsNC80YLQvtGC0YDRg9Cx0J7QvdC40LzQuNGA0L3QtdC10J7QntCe0LvQuNGG0Y3RgtCw0J7QvdCw0L3QtdC80LTQvtC80LzQvtC50LTQstC10L7QvdC+0YHRg9C04KSV4KWH4KS54KWI4KSV4KWA4KS44KWH4KSV4KS+4KSV4KWL4KSU4KSw4KSq4KSw4KSo4KWH4KSP4KSV4KSV4KS/4KSt4KWA4KSH4KS44KSV4KSw4KSk4KWL4KS54KWL4KSG4KSq4KS54KWA4KSv4KS54KSv4KS+4KSk4KSV4KSl4KS+amFncmFu4KSG4KSc4KSc4KWL4KSF4KSs4KSm4KWL4KSX4KSI4KSc4KS+4KSX4KSP4KS54KSu4KSH4KSo4KS14KS54KSv4KWH4KSl4KWH4KSl4KWA4KSY4KSw4KSc4KSs4KSm4KWA4KSV4KSI4KSc4KWA4KS14KWH4KSo4KSI4KSo4KSP4KS54KSw4KSJ4KS44KSu4KWH4KSV4KSu4KS14KWL4KSy4KWH4KS44KSs4KSu4KSI4KSm4KWH4KST4KSw4KSG4KSu4KSs4KS44KSt4KSw4KSs4KSo4KSa4KSy4KSu4KSo4KSG4KSX4KS44KWA4KSy4KWA2LnZhNmJ2KXZhNmJ2YfYsNin2KLYrtix2LnYr9iv2KfZhNmJ2YfYsNmH2LXZiNix2LrZitix2YPYp9mG2YjZhNin2KjZitmG2LnYsdi22LDZhNmD2YfZhtin2YrZiNmF2YLYp9mE2LnZhNmK2KfZhtin2YTZg9mG2K3YqtmJ2YLYqNmE2YjYrdip2KfYrtix2YHZgti32LnYqNiv2LHZg9mG2KXYsNin2YPZhdin2KfYrdiv2KXZhNin2YHZitmH2KjYudi22YPZitmB2KjYrdir2YjZhdmG2YjZh9mI2KPZhtin2KzYr9in2YTZh9in2LPZhNmF2LnZhtiv2YTZitiz2LnYqNix2LXZhNmJ2YXZhtiw2KjZh9in2KPZhtmH2YXYq9mE2YPZhtiq2KfZhNin2K3Zitir2YXYtdix2LTYsdit2K3ZiNmE2YjZgdmK2KfYsNin2YTZg9mE2YXYsdip2KfZhtiq2KfZhNmB2KPYqNmI2K7Yp9i12KPZhtiq2KfZhtmH2KfZhNmK2LnYttmI2YjZgtiv2KfYqNmG2K7Zitix2KjZhtiq2YTZg9mF2LTYp9ih2YjZh9mK2KfYqNmI2YLYtdi12YjZhdin2LHZgtmF2KPYrdiv2YbYrdmG2LnYr9mF2LHYo9mK2KfYrdip2YPYqtio2K/ZiNmG2YrYrNio2YXZhtmH2KrYrdiq2KzZh9ip2LPZhtip2YrYqtmF2YPYsdip2LrYstip2YbZgdiz2KjZitiq2YTZhNmH2YTZhtin2KrZhNmD2YLZhNio2YTZhdin2LnZhtmH2KPZiNmE2LTZitih2YbZiNix2KPZhdin2YHZitmD2KjZg9mE2LDYp9iq2LHYqtio2KjYo9mG2YfZhdiz2KfZhtmD2KjZiti52YHZgtiv2K3Ys9mG2YTZh9mF2LTYudix2KPZh9mE2LTZh9ix2YLYt9ix2LfZhNiocHJvZmlsZXNlcnZpY2VkZWZhdWx0aGltc2VsZmRldGFpbHNjb250ZW50c3VwcG9ydHN0YXJ0ZWRtZXNzYWdlc3VjY2Vzc2Zhc2hpb248dGl0bGU+Y291bnRyeWFjY291bnRjcmVhdGVkc3Rvcmllc3Jlc3VsdHNydW5uaW5ncHJvY2Vzc3dyaXRpbmdvYmplY3RzdmlzaWJsZXdlbGNvbWVhcnRpY2xldW5rbm93bm5ldHdvcmtjb21wYW55ZHluYW1pY2Jyb3dzZXJwcml2YWN5cHJvYmxlbVNlcnZpY2VyZXNwZWN0ZGlzcGxheXJlcXVlc3RyZXNlcnZld2Vic2l0ZWhpc3RvcnlmcmllbmRzb3B0aW9uc3dvcmtpbmd2ZXJzaW9ubWlsbGlvbmNoYW5uZWx3aW5kb3cuYWRkcmVzc3Zpc2l0ZWR3ZWF0aGVyY29ycmVjdHByb2R1Y3RlZGlyZWN0Zm9yd2FyZHlvdSBjYW5yZW1vdmVkc3ViamVjdGNvbnRyb2xhcmNoaXZlY3VycmVudHJlYWRpbmdsaWJyYXJ5bGltaXRlZG1hbmFnZXJmdXJ0aGVyc3VtbWFyeW1hY2hpbmVtaW51dGVzcHJpdmF0ZWNvbnRleHRwcm9ncmFtc29jaWV0eW51bWJlcnN3cml0dGVuZW5hYmxlZHRyaWdnZXJzb3VyY2VzbG9hZGluZ2VsZW1lbnRwYXJ0bmVyZmluYWxseXBlcmZlY3RtZWFuaW5nc3lzdGVtc2tlZXBpbmdjdWx0dXJlJnF1b3Q7LGpvdXJuYWxwcm9qZWN0c3VyZmFjZXMmcXVvdDtleHBpcmVzcmV2aWV3c2JhbGFuY2VFbmdsaXNoQ29udGVudHRocm91Z2hQbGVhc2Ugb3BpbmlvbmNvbnRhY3RhdmVyYWdlcHJpbWFyeXZpbGxhZ2VTcGFuaXNoZ2FsbGVyeWRlY2xpbmVtZWV0aW5nbWlzc2lvbnBvcHVsYXJxdWFsaXR5bWVhc3VyZWdlbmVyYWxzcGVjaWVzc2Vzc2lvbnNlY3Rpb253cml0ZXJzY291bnRlcmluaXRpYWxyZXBvcnRzZmlndXJlc21lbWJlcnNob2xkaW5nZGlzcHV0ZWVhcmxpZXJleHByZXNzZGlnaXRhbHBpY3R1cmVBbm90aGVybWFycmllZHRyYWZmaWNsZWFkaW5nY2hhbmdlZGNlbnRyYWx2aWN0b3J5aW1hZ2VzL3JlYXNvbnNzdHVkaWVzZmVhdHVyZWxpc3RpbmdtdXN0IGJlc2Nob29sc1ZlcnNpb251c3VhbGx5ZXBpc29kZXBsYXlpbmdncm93aW5nb2J2aW91c292ZXJsYXlwcmVzZW50YWN0aW9uczwvdWw+DQp3cmFwcGVyYWxyZWFkeWNlcnRhaW5yZWFsaXR5c3RvcmFnZWFub3RoZXJkZXNrdG9wb2ZmZXJlZHBhdHRlcm51bnVzdWFsRGlnaXRhbGNhcGl0YWxXZWJzaXRlZmFpbHVyZWNvbm5lY3RyZWR1Y2VkQW5kcm9pZGRlY2FkZXNyZWd1bGFyICZhbXA7IGFuaW1hbHNyZWxlYXNlQXV0b21hdGdldHRpbmdtZXRob2Rzbm90aGluZ1BvcHVsYXJjYXB0aW9ubGV0dGVyc2NhcHR1cmVzY2llbmNlbGljZW5zZWNoYW5nZXNFbmdsYW5kPTEmYW1wO0hpc3RvcnkgPSBuZXcgQ2VudHJhbHVwZGF0ZWRTcGVjaWFsTmV0d29ya3JlcXVpcmVjb21tZW50d2FybmluZ0NvbGxlZ2V0b29sYmFycmVtYWluc2JlY2F1c2VlbGVjdGVkRGV1dHNjaGZpbmFuY2V3b3JrZXJzcXVpY2tseWJldHdlZW5leGFjdGx5c2V0dGluZ2Rpc2Vhc2VTb2NpZXR5d2VhcG9uc2V4aGliaXQmbHQ7IS0tQ29udHJvbGNsYXNzZXNjb3ZlcmVkb3V0bGluZWF0dGFja3NkZXZpY2VzKHdpbmRvd3B1cnBvc2V0aXRsZT0iTW9iaWxlIGtpbGxpbmdzaG93aW5nSXRhbGlhbmRyb3BwZWRoZWF2aWx5ZWZmZWN0cy0xJ10pOwpjb25maXJtQ3VycmVudGFkdmFuY2VzaGFyaW5nb3BlbmluZ2RyYXdpbmdiaWxsaW9ub3JkZXJlZEdlcm1hbnlyZWxhdGVkPC9mb3JtPmluY2x1ZGV3aGV0aGVyZGVmaW5lZFNjaWVuY2VjYXRhbG9nQXJ0aWNsZWJ1dHRvbnNsYXJnZXN0dW5pZm9ybWpvdXJuZXlzaWRlYmFyQ2hpY2Fnb2hvbGlkYXlHZW5lcmFscGFzc2FnZSwmcXVvdDthbmltYXRlZmVlbGluZ2Fycml2ZWRwYXNzaW5nbmF0dXJhbHJvdWdobHkuCgpUaGUgYnV0IG5vdGRlbnNpdHlCcml0YWluQ2hpbmVzZWxhY2sgb2Z0cmlidXRlSXJlbGFuZCIgZGF0YS1mYWN0b3JzcmVjZWl2ZXRoYXQgaXNMaWJyYXJ5aHVzYmFuZGluIGZhY3RhZmZhaXJzQ2hhcmxlc3JhZGljYWxicm91Z2h0ZmluZGluZ2xhbmRpbmc6bGFuZz0icmV0dXJuIGxlYWRlcnNwbGFubmVkcHJlbWl1bXBhY2thZ2VBbWVyaWNhRWRpdGlvbl0mcXVvdDtNZXNzYWdlbmVlZCB0b3ZhbHVlPSJjb21wbGV4bG9va2luZ3N0YXRpb25iZWxpZXZlc21hbGxlci1tb2JpbGVyZWNvcmRzd2FudCB0b2tpbmQgb2ZGaXJlZm94eW91IGFyZXNpbWlsYXJzdHVkaWVkbWF4aW11bWhlYWRpbmdyYXBpZGx5Y2xpbWF0ZWtpbmdkb21lbWVyZ2VkYW1vdW50c2ZvdW5kZWRwaW9uZWVyZm9ybXVsYWR5bmFzdHlob3cgdG8gU3VwcG9ydHJldmVudWVlY29ub215UmVzdWx0c2Jyb3RoZXJzb2xkaWVybGFyZ2VseWNhbGxpbmcuJnF1b3Q7QWNjb3VudEVkd2FyZCBzZWdtZW50Um9iZXJ0IGVmZm9ydHNQYWNpZmljbGVhcm5lZHVwIHdpdGhoZWlnaHQ6d2UgaGF2ZUFuZ2VsZXNuYXRpb25zX3NlYXJjaGFwcGxpZWRhY3F1aXJlbWFzc2l2ZWdyYW50ZWQ6IGZhbHNldHJlYXRlZGJpZ2dlc3RiZW5lZml0ZHJpdmluZ1N0dWRpZXNtaW5pbXVtcGVyaGFwc21vcm5pbmdzZWxsaW5naXMgdXNlZHJldmVyc2V2YXJpYW50IHJvbGU9Im1pc3NpbmdhY2hpZXZlcHJvbW90ZXN0dWRlbnRzb21lb25lZXh0cmVtZXJlc3RvcmVib3R0b206ZXZvbHZlZGFsbCB0aGVzaXRlbWFwZW5nbGlzaHdheSB0byAgQXVndXN0c3ltYm9sc0NvbXBhbnltYXR0ZXJzbXVzaWNhbGFnYWluc3RzZXJ2aW5nfSkoKTsNCnBheW1lbnR0cm91YmxlY29uY2VwdGNvbXBhcmVwYXJlbnRzcGxheWVyc3JlZ2lvbnNtb25pdG9yICcnVGhlIHdpbm5pbmdleHBsb3JlYWRhcHRlZEdhbGxlcnlwcm9kdWNlYWJpbGl0eWVuaGFuY2VjYXJlZXJzKS4gVGhlIGNvbGxlY3RTZWFyY2ggYW5jaWVudGV4aXN0ZWRmb290ZXIgaGFuZGxlcnByaW50ZWRjb25zb2xlRWFzdGVybmV4cG9ydHN3aW5kb3dzQ2hhbm5lbGlsbGVnYWxuZXV0cmFsc3VnZ2VzdF9oZWFkZXJzaWduaW5nLmh0bWwiPnNldHRsZWR3ZXN0ZXJuY2F1c2luZy13ZWJraXRjbGFpbWVkSnVzdGljZWNoYXB0ZXJ2aWN0aW1zVGhvbWFzIG1vemlsbGFwcm9taXNlcGFydGllc2VkaXRpb25vdXRzaWRlOmZhbHNlLGh1bmRyZWRPbHltcGljX2J1dHRvbmF1dGhvcnNyZWFjaGVkY2hyb25pY2RlbWFuZHNzZWNvbmRzcHJvdGVjdGFkb3B0ZWRwcmVwYXJlbmVpdGhlcmdyZWF0bHlncmVhdGVyb3ZlcmFsbGltcHJvdmVjb21tYW5kc3BlY2lhbHNlYXJjaC53b3JzaGlwZnVuZGluZ3Rob3VnaHRoaWdoZXN0aW5zdGVhZHV0aWxpdHlxdWFydGVyQ3VsdHVyZXRlc3RpbmdjbGVhcmx5ZXhwb3NlZEJyb3dzZXJsaWJlcmFsfSBjYXRjaFByb2plY3RleGFtcGxlaGlkZSgpO0Zsb3JpZGFhbnN3ZXJzYWxsb3dlZEVtcGVyb3JkZWZlbnNlc2VyaW91c2ZyZWVkb21TZXZlcmFsLWJ1dHRvbkZ1cnRoZXJvdXQgb2YgIT0gbnVsbHRyYWluZWREZW5tYXJrdm9pZCgwKS9hbGwuanNwcmV2ZW50UmVxdWVzdFN0ZXBoZW4KCldoZW4gb2JzZXJ2ZTwvaDI+DQpNb2Rlcm4gcHJvdmlkZSIgYWx0PSJib3JkZXJzLgoKRm9yIAoKTWFueSBhcnRpc3RzcG93ZXJlZHBlcmZvcm1maWN0aW9udHlwZSBvZm1lZGljYWx0aWNrZXRzb3Bwb3NlZENvdW5jaWx3aXRuZXNzanVzdGljZUdlb3JnZSBCZWxnaXVtLi4uPC9hPnR3aXR0ZXJub3RhYmx5d2FpdGluZ3dhcmZhcmUgT3RoZXIgcmFua2luZ3BocmFzZXNtZW50aW9uc3Vydml2ZXNjaG9sYXI8L3A+DQogQ291bnRyeWlnbm9yZWRsb3NzIG9manVzdCBhc0dlb3JnaWFzdHJhbmdlPGhlYWQ+PHN0b3BwZWQxJ10pOw0KaXNsYW5kc25vdGFibGVib3JkZXI6bGlzdCBvZmNhcnJpZWQxMDAsMDAwPC9oMz4KIHNldmVyYWxiZWNvbWVzc2VsZWN0IHdlZGRpbmcwMC5odG1sbW9uYXJjaG9mZiB0aGV0ZWFjaGVyaGlnaGx5IGJpb2xvZ3lsaWZlIG9mb3IgZXZlbnJpc2Ugb2YmcmFxdW87cGx1c29uZWh1bnRpbmcodGhvdWdoRG91Z2xhc2pvaW5pbmdjaXJjbGVzRm9yIHRoZUFuY2llbnRWaWV0bmFtdmVoaWNsZXN1Y2ggYXNjcnlzdGFsdmFsdWUgPVdpbmRvd3NlbmpveWVkYSBzbWFsbGFzc3VtZWQ8YSBpZD0iZm9yZWlnbiBBbGwgcmlob3cgdGhlRGlzcGxheXJldGlyZWRob3dldmVyaGlkZGVuO2JhdHRsZXNzZWVraW5nY2FiaW5ldHdhcyBub3Rsb29rIGF0Y29uZHVjdGdldCB0aGVKYW51YXJ5aGFwcGVuc3R1cm5pbmdhOmhvdmVyT25saW5lIEZyZW5jaCBsYWNraW5ndHlwaWNhbGV4dHJhY3RlbmVtaWVzZXZlbiBpZmdlbmVyYXRkZWNpZGVkYXJlIG5vdC9zZWFyY2hiZWxpZWZzLWltYWdlOmxvY2F0ZWRzdGF0aWMubG9naW4iPmNvbnZlcnR2aW9sZW50ZW50ZXJlZGZpcnN0Ij5jaXJjdWl0RmlubGFuZGNoZW1pc3RzaGUgd2FzMTBweDsiPmFzIHN1Y2hkaXZpZGVkPC9zcGFuPndpbGwgYmVsaW5lIG9mYSBncmVhdG15c3RlcnkvaW5kZXguZmFsbGluZ2R1ZSB0byByYWlsd2F5Y29sbGVnZW1vbnN0ZXJkZXNjZW50aXQgd2l0aG51Y2xlYXJKZXdpc2ggcHJvdGVzdEJyaXRpc2hmbG93ZXJzcHJlZGljdHJlZm9ybXNidXR0b24gd2hvIHdhc2xlY3R1cmVpbnN0YW50c3VpY2lkZWdlbmVyaWNwZXJpb2RzbWFya2V0c1NvY2lhbCBmaXNoaW5nY29tYmluZWdyYXBoaWN3aW5uZXJzPGJyIC8+PGJ5IHRoZSBOYXR1cmFsUHJpdmFjeWNvb2tpZXNvdXRjb21lcmVzb2x2ZVN3ZWRpc2hicmllZmx5UGVyc2lhbnNvIG11Y2hDZW50dXJ5ZGVwaWN0c2NvbHVtbnNob3VzaW5nc2NyaXB0c25leHQgdG9iZWFyaW5nbWFwcGluZ3JldmlzZWRqUXVlcnkoLXdpZHRoOnRpdGxlIj50b29sdGlwU2VjdGlvbmRlc2lnbnNUdXJraXNoeW91bmdlci5tYXRjaCh9KSgpOwoKYnVybmluZ29wZXJhdGVkZWdyZWVzc291cmNlPVJpY2hhcmRjbG9zZWx5cGxhc3RpY2VudHJpZXM8L3RyPg0KY29sb3I6I3VsIGlkPSJwb3NzZXNzcm9sbGluZ3BoeXNpY3NmYWlsaW5nZXhlY3V0ZWNvbnRlc3RsaW5rIHRvRGVmYXVsdDxiciAvPgo6IHRydWUsY2hhcnRlcnRvdXJpc21jbGFzc2ljcHJvY2VlZGV4cGxhaW48L2gxPg0Kb25saW5lLj94bWwgdmVoZWxwaW5nZGlhbW9uZHVzZSB0aGVhaXJsaW5lZW5kIC0tPikuYXR0cihyZWFkZXJzaG9zdGluZyNmZmZmZmZyZWFsaXplVmluY2VudHNpZ25hbHMgc3JjPSIvUHJvZHVjdGRlc3BpdGVkaXZlcnNldGVsbGluZ1B1YmxpYyBoZWxkIGluSm9zZXBoIHRoZWF0cmVhZmZlY3RzPHN0eWxlPmEgbGFyZ2Vkb2Vzbid0bGF0ZXIsIEVsZW1lbnRmYXZpY29uY3JlYXRvckh1bmdhcnlBaXJwb3J0c2VlIHRoZXNvIHRoYXRNaWNoYWVsU3lzdGVtc1Byb2dyYW1zLCBhbmQgIHdpZHRoPWUmcXVvdDt0cmFkaW5nbGVmdCI+CnBlcnNvbnNHb2xkZW4gQWZmYWlyc2dyYW1tYXJmb3JtaW5nZGVzdHJveWlkZWEgb2ZjYXNlIG9mb2xkZXN0IHRoaXMgaXMuc3JjID0gY2FydG9vbnJlZ2lzdHJDb21tb25zTXVzbGltc1doYXQgaXNpbiBtYW55bWFya2luZ3JldmVhbHNJbmRlZWQsZXF1YWxseS9zaG93X2FvdXRkb29yZXNjYXBlKEF1c3RyaWFnZW5ldGljc3lzdGVtLEluIHRoZSBzaXR0aW5nSGUgYWxzb0lzbGFuZHNBY2FkZW15CgkJPCEtLURhbmllbCBiaW5kaW5nYmxvY2siPmltcG9zZWR1dGlsaXplQWJyYWhhbShleGNlcHR7d2lkdGg6cHV0dGluZykuaHRtbCh8fCBbXTsKREFUQVsgKmtpdGNoZW5tb3VudGVkYWN0dWFsIGRpYWxlY3RtYWlubHkgX2JsYW5rJ2luc3RhbGxleHBlcnRzaWYodHlwZUl0IGFsc28mY29weTsgIj5UZXJtc2Jvcm4gaW5PcHRpb25zZWFzdGVybnRhbGtpbmdjb25jZXJuZ2FpbmVkIG9uZ29pbmdqdXN0aWZ5Y3JpdGljc2ZhY3RvcnlpdHMgb3duYXNzYXVsdGludml0ZWRsYXN0aW5naGlzIG93bmhyZWY9Ii8iIHJlbD0iZGV2ZWxvcGNvbmNlcnRkaWFncmFtZG9sbGFyc2NsdXN0ZXJwaHA/aWQ9YWxjb2hvbCk7fSkoKTt1c2luZyBhPjxzcGFuPnZlc3NlbHNyZXZpdmFsQWRkcmVzc2FtYXRldXJhbmRyb2lkYWxsZWdlZGlsbG5lc3N3YWxraW5nY2VudGVyc3F1YWxpZnltYXRjaGVzdW5pZmllZGV4dGluY3REZWZlbnNlZGllZCBpbgoJPCEtLSBjdXN0b21zbGlua2luZ0xpdHRsZSBCb29rIG9mZXZlbmluZ21pbi5qcz9hcmUgdGhla29udGFrdHRvZGF5J3MuaHRtbCIgdGFyZ2V0PXdlYXJpbmdBbGwgUmlnOwp9KSgpO3JhaXNpbmcgQWxzbywgY3J1Y2lhbGFib3V0Ij5kZWNsYXJlLS0+CjxzY2ZpcmVmb3hhcyBtdWNoYXBwbGllc2luZGV4LCBzLCBidXQgdHlwZSA9IAoNCjwhLS10b3dhcmRzUmVjb3Jkc1ByaXZhdGVGb3JlaWduUHJlbWllcmNob2ljZXNWaXJ0dWFscmV0dXJuc0NvbW1lbnRQb3dlcmVkaW5saW5lO3BvdmVydHljaGFtYmVyTGl2aW5nIHZvbHVtZXNBbnRob255bG9naW4iIFJlbGF0ZWRFY29ub215cmVhY2hlc2N1dHRpbmdncmF2aXR5bGlmZSBpbkNoYXB0ZXItc2hhZG93Tm90YWJsZTwvdGQ+DQogcmV0dXJuc3RhZGl1bXdpZGdldHN2YXJ5aW5ndHJhdmVsc2hlbGQgYnl3aG8gYXJld29yayBpbmZhY3VsdHlhbmd1bGFyd2hvIGhhZGFpcnBvcnR0b3duIG9mCgpTb21lICdjbGljaydjaGFyZ2Vza2V5d29yZGl0IHdpbGxjaXR5IG9mKHRoaXMpO0FuZHJldyB1bmlxdWUgY2hlY2tlZG9yIG1vcmUzMDBweDsgcmV0dXJuO3JzaW9uPSJwbHVnaW5zd2l0aGluIGhlcnNlbGZTdGF0aW9uRmVkZXJhbHZlbnR1cmVwdWJsaXNoc2VudCB0b3RlbnNpb25hY3RyZXNzY29tZSB0b2ZpbmdlcnNEdWtlIG9mcGVvcGxlLGV4cGxvaXR3aGF0IGlzaGFybW9ueWEgbWFqb3IiOiJodHRwaW4gaGlzIG1lbnUiPgptb250aGx5b2ZmaWNlcmNvdW5jaWxnYWluaW5nZXZlbiBpblN1bW1hcnlkYXRlIG9mbG95YWx0eWZpdG5lc3NhbmQgd2FzZW1wZXJvcnN1cHJlbWVTZWNvbmQgaGVhcmluZ1J1c3NpYW5sb25nZXN0QWxiZXJ0YWxhdGVyYWxzZXQgb2Ygc21hbGwiPi5hcHBlbmRkbyB3aXRoZmVkZXJhbGJhbmsgb2ZiZW5lYXRoRGVzcGl0ZUNhcGl0YWxncm91bmRzKSwgYW5kIHBlcmNlbnRpdCBmcm9tY2xvc2luZ2NvbnRhaW5JbnN0ZWFkZmlmdGVlbmFzIHdlbGwueWFob28ucmVzcG9uZGZpZ2h0ZXJvYnNjdXJlcmVmbGVjdG9yZ2FuaWM9IE1hdGguZWRpdGluZ29ubGluZSBwYWRkaW5nYSB3aG9sZW9uZXJyb3J5ZWFyIG9mZW5kIG9mIGJhcnJpZXJ3aGVuIGl0aGVhZGVyIGhvbWUgb2ZyZXN1bWVkcmVuYW1lZHN0cm9uZz5oZWF0aW5ncmV0YWluc2Nsb3VkZnJ3YXkgb2YgTWFyY2ggMWtub3dpbmdpbiBwYXJ0QmV0d2Vlbmxlc3NvbnNjbG9zZXN0dmlydHVhbGxpbmtzIj5jcm9zc2VkRU5EIC0tPmZhbW91cyBhd2FyZGVkTGljZW5zZUhlYWx0aCBmYWlybHkgd2VhbHRoeW1pbmltYWxBZnJpY2FuY29tcGV0ZWxhYmVsIj5zaW5naW5nZmFybWVyc0JyYXNpbClkaXNjdXNzcmVwbGFjZUdyZWdvcnlmb250IGNvcHVyc3VlZGFwcGVhcnNtYWtlIHVwcm91bmRlZGJvdGggb2ZibG9ja2Vkc2F3IHRoZW9mZmljZXNjb2xvdXJzaWYoZG9jdXdoZW4gaGVlbmZvcmNlcHVzaChmdUF1Z3VzdCBVVEYtOCI+RmFudGFzeWluIG1vc3Rpbmp1cmVkVXN1YWxseWZhcm1pbmdjbG9zdXJlb2JqZWN0IGRlZmVuY2V1c2Ugb2YgTWVkaWNhbDxib2R5PgpldmlkZW50YmUgdXNlZGtleUNvZGVzaXh0ZWVuSXNsYW1pYyMwMDAwMDBlbnRpcmUgd2lkZWx5IGFjdGl2ZSAodHlwZW9mb25lIGNhbmNvbG9yID1zcGVha2VyZXh0ZW5kc1BoeXNpY3N0ZXJyYWluPHRib2R5PmZ1bmVyYWx2aWV3aW5nbWlkZGxlIGNyaWNrZXRwcm9waGV0c2hpZnRlZGRvY3RvcnNSdXNzZWxsIHRhcmdldGNvbXBhY3RhbGdlYnJhc29jaWFsLWJ1bGsgb2ZtYW4gYW5kPC90ZD4KIGhlIGxlZnQpLnZhbCgpZmFsc2UpO2xvZ2ljYWxiYW5raW5naG9tZSB0b25hbWluZyBBcml6b25hY3JlZGl0cyk7Cn0pOwpmb3VuZGVyaW4gdHVybkNvbGxpbnNiZWZvcmUgQnV0IHRoZWNoYXJnZWRUaXRsZSI+Q2FwdGFpbnNwZWxsZWRnb2RkZXNzVGFnIC0tPkFkZGluZzpidXQgd2FzUmVjZW50IHBhdGllbnRiYWNrIGluPWZhbHNlJkxpbmNvbG53ZSBrbm93Q291bnRlckp1ZGFpc21zY3JpcHQgYWx0ZXJlZCddKTsKICBoYXMgdGhldW5jbGVhckV2ZW50Jyxib3RoIGlubm90IGFsbAoKPCEtLSBwbGFjaW5naGFyZCB0byBjZW50ZXJzb3J0IG9mY2xpZW50c3N0cmVldHNCZXJuYXJkYXNzZXJ0c3RlbmQgdG9mYW50YXN5ZG93biBpbmhhcmJvdXJGcmVlZG9tamV3ZWxyeS9hYm91dC4uc2VhcmNobGVnZW5kc2lzIG1hZGVtb2Rlcm4gb25seSBvbm9ubHkgdG9pbWFnZSIgbGluZWFyIHBhaW50ZXJhbmQgbm90cmFyZWx5IGFjcm9ueW1kZWxpdmVyc2hvcnRlcjAwJmFtcDthcyBtYW55d2lkdGg9Ii8qIDwhW0N0aXRsZSA9b2YgdGhlIGxvd2VzdCBwaWNrZWQgZXNjYXBlZHVzZXMgb2ZwZW9wbGVzIFB1YmxpY01hdHRoZXd0YWN0aWNzZGFtYWdlZHdheSBmb3JsYXdzIG9mZWFzeSB0byB3aW5kb3dzdHJvbmcgIHNpbXBsZX1jYXRjaChzZXZlbnRoaW5mb2JveHdlbnQgdG9wYWludGVkY2l0aXplbkkgZG9uJ3RyZXRyZWF0LiBTb21lIHd3LiIpOwpib21iaW5nbWFpbHRvOm1hZGUgaW4uIE1hbnkgY2Fycmllc3x8e307d2l3b3JrIG9mc3lub255bWRlZmVhdHNmYXZvcmVkb3B0aWNhbHBhZ2VUcmF1bmxlc3Mgc2VuZGluZ2xlZnQiPjxjb21TY29yQWxsIHRoZWpRdWVyeS50b3VyaXN0Q2xhc3NpY2ZhbHNlIiBXaWxoZWxtc3VidXJic2dlbnVpbmViaXNob3BzLnNwbGl0KGdsb2JhbCBmb2xsb3dzYm9keSBvZm5vbWluYWxDb250YWN0c2VjdWxhcmxlZnQgdG9jaGllZmx5LWhpZGRlbi1iYW5uZXI8L2xpPgoKLiBXaGVuIGluIGJvdGhkaXNtaXNzRXhwbG9yZWFsd2F5cyB2aWEgdGhlc3Bhw7FvbHdlbGZhcmVydWxpbmcgYXJyYW5nZWNhcHRhaW5oaXMgc29ucnVsZSBvZmhlIHRvb2tpdHNlbGYsPTAmYW1wOyhjYWxsZWRzYW1wbGVzdG8gbWFrZWNvbS9wYWdNYXJ0aW4gS2VubmVkeWFjY2VwdHNmdWxsIG9maGFuZGxlZEJlc2lkZXMvLy0tPjwvYWJsZSB0b3RhcmdldHNlc3NlbmNlaGltIHRvIGl0cyBieSBjb21tb24ubWluZXJhbHRvIHRha2V3YXlzIHRvcy5vcmcvbGFkdmlzZWRwZW5hbHR5c2ltcGxlOmlmIHRoZXlMZXR0ZXJzYSBzaG9ydEhlcmJlcnRzdHJpa2VzIGdyb3Vwcy5sZW5ndGhmbGlnaHRzb3ZlcmxhcHNsb3dseSBsZXNzZXIgc29jaWFsIDwvcD4KCQlpdCBpbnRvcmFua2VkIHJhdGUgb2Z1bD4NCiAgYXR0ZW1wdHBhaXIgb2ZtYWtlIGl0S29udGFrdEFudG9uaW9oYXZpbmcgcmF0aW5ncyBhY3RpdmVzdHJlYW1zdHJhcHBlZCIpLmNzcyhob3N0aWxlbGVhZCB0b2xpdHRsZSBncm91cHMsUGljdHVyZS0tPg0KDQogcm93cz0iIG9iamVjdGludmVyc2U8Zm9vdGVyQ3VzdG9tVj48XC9zY3Jzb2x2aW5nQ2hhbWJlcnNsYXZlcnl3b3VuZGVkd2hlcmVhcyE9ICd1bmRmb3IgYWxscGFydGx5IC1yaWdodDpBcmFiaWFuYmFja2VkIGNlbnR1cnl1bml0IG9mbW9iaWxlLUV1cm9wZSxpcyBob21lcmlzayBvZmRlc2lyZWRDbGludG9uY29zdCBvZmFnZSBvZiBiZWNvbWUgbm9uZSBvZnAmcXVvdDtNaWRkbGUgZWFkJylbMENyaXRpY3NzdHVkaW9zPiZjb3B5O2dyb3VwIj5hc3NlbWJsbWFraW5nIHByZXNzZWR3aWRnZXQucHM6IiA/IHJlYnVpbHRieSBzb21lRm9ybWVyIGVkaXRvcnNkZWxheWVkQ2Fub25pY2hhZCB0aGVwdXNoaW5nY2xhc3M9ImJ1dCBhcmVwYXJ0aWFsQmFieWxvbmJvdHRvbSBjYXJyaWVyQ29tbWFuZGl0cyB1c2VBcyB3aXRoY291cnNlc2EgdGhpcmRkZW5vdGVzYWxzbyBpbkhvdXN0b24yMHB4OyI+YWNjdXNlZGRvdWJsZSBnb2FsIG9mRmFtb3VzICkuYmluZChwcmllc3RzIE9ubGluZWluIEp1bHlzdCArICJnY29uc3VsdGRlY2ltYWxoZWxwZnVscmV2aXZlZGlzIHZlcnlyJysnaXB0bG9zaW5nIGZlbWFsZXNpcyBhbHNvc3RyaW5nc2RheXMgb2ZhcnJpdmFsZnV0dXJlIDxvYmplY3Rmb3JjaW5nU3RyaW5nKCIgLz4KCQloZXJlIGlzZW5jb2RlZC4gIFRoZSBiYWxsb29uZG9uZSBieS9jb21tb25iZ2NvbG9ybGF3IG9mIEluZGlhbmFhdm9pZGVkYnV0IHRoZTJweCAzcHhqcXVlcnkuYWZ0ZXIgYXBvbGljeS5tZW4gYW5kZm9vdGVyLT0gdHJ1ZTtmb3IgdXNlc2NyZWVuLkluZGlhbiBpbWFnZSA9ZmFtaWx5LGh0dHA6Ly8gJm5ic3A7ZHJpdmVyc2V0ZXJuYWxzYW1lIGFzbm90aWNlZHZpZXdlcnN9KSgpOwogaXMgbW9yZXNlYXNvbnNmb3JtZXIgdGhlIG5ld2lzIGp1c3Rjb25zZW50IFNlYXJjaHdhcyB0aGV3aHkgdGhlc2hpcHBlZGJyPjxicj53aWR0aDogaGVpZ2h0PW1hZGUgb2ZjdWlzaW5laXMgdGhhdGEgdmVyeSBBZG1pcmFsIGZpeGVkO25vcm1hbCBNaXNzaW9uUHJlc3MsIG9udGFyaW9jaGFyc2V0dHJ5IHRvIGludmFkZWQ9InRydWUic3BhY2luZ2lzIG1vc3RhIG1vcmUgdG90YWxseWZhbGwgb2Z9KTsNCiAgaW1tZW5zZXRpbWUgaW5zZXQgb3V0c2F0aXNmeXRvIGZpbmRkb3duIHRvbG90IG9mIFBsYXllcnNpbiBKdW5lcXVhbnR1bW5vdCB0aGV0aW1lIHRvZGlzdGFudEZpbm5pc2hzcmMgPSAoc2luZ2xlIGhlbHAgb2ZHZXJtYW4gbGF3IGFuZGxhYmVsZWRmb3Jlc3RzY29va2luZ3NwYWNlIj5oZWFkZXItd2VsbCBhc1N0YW5sZXlicmlkZ2VzL2dsb2JhbENyb2F0aWEgQWJvdXQgWzBdOwogIGl0LCBhbmRncm91cGVkYmVpbmcgYSl7dGhyb3doZSBtYWRlbGlnaHRlcmV0aGljYWxGRkZGRkYiYm90dG9tImxpa2UgYSBlbXBsb3lzbGl2ZSBpbmFzIHNlZW5wcmludGVybW9zdCBvZnViLWxpbmtyZWplY3RzYW5kIHVzZWltYWdlIj5zdWNjZWVkZmVlZGluZ051Y2xlYXJpbmZvcm1hdG8gaGVscFdvbWVuJ3NOZWl0aGVyTWV4aWNhbnByb3RlaW48dGFibGUgYnkgbWFueWhlYWx0aHlsYXdzdWl0ZGV2aXNlZC5wdXNoKHtzZWxsZXJzc2ltcGx5IFRocm91Z2guY29va2llIEltYWdlKG9sZGVyIj51cy5qcyI+IFNpbmNlIHVuaXZlcnNsYXJnZXIgb3BlbiB0byEtLSBlbmRsaWVzIGluJ10pOw0KICBtYXJrZXR3aG8gaXMgKCJET01Db21hbmFnZWRvbmUgZm9ydHlwZW9mIEtpbmdkb21wcm9maXRzcHJvcG9zZXRvIHNob3djZW50ZXI7bWFkZSBpdGRyZXNzZWR3ZXJlIGlubWl4dHVyZXByZWNpc2VhcmlzaW5nc3JjID0gJ21ha2UgYSBzZWN1cmVkQmFwdGlzdHZvdGluZyAKCQl2YXIgTWFyY2ggMmdyZXcgdXBDbGltYXRlLnJlbW92ZXNraWxsZWR3YXkgdGhlPC9oZWFkPmZhY2Ugb2ZhY3RpbmcgcmlnaHQiPnRvIHdvcmtyZWR1Y2VzaGFzIGhhZGVyZWN0ZWRzaG93KCk7YWN0aW9uPWJvb2sgb2ZhbiBhcmVhPT0gImh0dDxoZWFkZXIKPGh0bWw+Y29uZm9ybWZhY2luZyBjb29raWUucmVseSBvbmhvc3RlZCAuY3VzdG9taGUgd2VudGJ1dCBmb3JzcHJlYWQgRmFtaWx5IGEgbWVhbnNvdXQgdGhlZm9ydW1zLmZvb3RhZ2UiPk1vYmlsQ2xlbWVudHMiIGlkPSJhcyBoaWdoaW50ZW5zZS0tPjwhLS1mZW1hbGUgaXMgc2VlbmltcGxpZWRzZXQgdGhlYSBzdGF0ZWFuZCBoaXNmYXN0ZXN0YmVzaWRlc2J1dHRvbl9ib3VuZGVkIj48aW1nIEluZm9ib3hldmVudHMsYSB5b3VuZ2FuZCBhcmVOYXRpdmUgY2hlYXBlclRpbWVvdXRhbmQgaGFzZW5naW5lc3dvbiB0aGUobW9zdGx5cmlnaHQ6IGZpbmQgYSAtYm90dG9tUHJpbmNlIGFyZWEgb2Ztb3JlIG9mc2VhcmNoX25hdHVyZSxsZWdhbGx5cGVyaW9kLGxhbmQgb2ZvciB3aXRoaW5kdWNlZHByb3ZpbmdtaXNzaWxlbG9jYWxseUFnYWluc3R0aGUgd2F5ayZxdW90O3B4OyI+DQpwdXNoZWQgYWJhbmRvbm51bWVyYWxDZXJ0YWluSW4gdGhpc21vcmUgaW5vciBzb21lbmFtZSBpc2FuZCwgaW5jcm93bmVkSVNCTiAwLWNyZWF0ZXNPY3RvYmVybWF5IG5vdGNlbnRlciBsYXRlIGluRGVmZW5jZWVuYWN0ZWR3aXNoIHRvYnJvYWRseWNvb2xpbmdvbmxvYWQ9aXQuIFRoZXJlY292ZXJNZW1iZXJzaGVpZ2h0IGFzc3VtZXM8aHRtbD4KcGVvcGxlLmluIG9uZSA9d2luZG93Zm9vdGVyX2EgZ29vZCByZWtsYW1hb3RoZXJzLHRvIHRoaXNfY29va2llcGFuZWwiPkxvbmRvbixkZWZpbmVzY3J1c2hlZGJhcHRpc21jb2FzdGFsc3RhdHVzIHRpdGxlIiBtb3ZlIHRvbG9zdCBpbmJldHRlciBpbXBsaWVzcml2YWxyeXNlcnZlcnMgU3lzdGVtUGVyaGFwc2VzIGFuZCBjb250ZW5kZmxvd2luZ2xhc3RlZCByaXNlIGluR2VuZXNpc3ZpZXcgb2ZyaXNpbmcgc2VlbSB0b2J1dCBpbiBiYWNraW5naGUgd2lsbGdpdmVuIGFnaXZpbmcgY2l0aWVzLmZsb3cgb2YgTGF0ZXIgYWxsIGJ1dEhpZ2h3YXlvbmx5IGJ5c2lnbiBvZmhlIGRvZXNkaWZmZXJzYmF0dGVyeSZhbXA7bGFzaW5nbGVzdGhyZWF0c2ludGVnZXJ0YWtlIG9ucmVmdXNlZGNhbGxlZCA9VVMmYW1wU2VlIHRoZW5hdGl2ZXNieSB0aGlzc3lzdGVtLmhlYWQgb2Y6aG92ZXIsbGVzYmlhbnN1cm5hbWVhbmQgYWxsY29tbW9uL2hlYWRlcl9fcGFyYW1zSGFydmFyZC9waXhlbC5yZW1vdmFsc28gbG9uZ3JvbGUgb2Zqb2ludGx5c2t5c2NyYVVuaWNvZGViciAvPg0KQXRsYW50YW51Y2xldXNDb3VudHkscHVyZWx5IGNvdW50Ij5lYXNpbHkgYnVpbGQgYW9uY2xpY2thIGdpdmVucG9pbnRlcmgmcXVvdDtldmVudHMgZWxzZSB7CmRpdGlvbnNub3cgdGhlLCB3aXRoIG1hbiB3aG9vcmcvV2Vib25lIGFuZGNhdmFscnlIZSBkaWVkc2VhdHRsZTAwLDAwMCB7d2luZG93aGF2ZSB0b2lmKHdpbmRhbmQgaXRzc29sZWx5IG0mcXVvdDtyZW5ld2VkRGV0cm9pdGFtb25nc3RlaXRoZXIgdGhlbSBpblNlbmF0b3JVczwvYT48S2luZyBvZkZyYW5jaXMtcHJvZHVjaGUgdXNlZGFydCBhbmRoaW0gYW5kdXNlZCBieXNjb3JpbmdhdCBob21ldG8gaGF2ZXJlbGF0ZXNpYmlsaXR5ZmFjdGlvbkJ1ZmZhbG9saW5rIj48d2hhdCBoZWZyZWUgdG9DaXR5IG9mY29tZSBpbnNlY3RvcnNjb3VudGVkb25lIGRheW5lcnZvdXNzcXVhcmUgfTtpZihnb2luIHdoYXRpbWciIGFsaXMgb25seXNlYXJjaC90dWVzZGF5bG9vc2VseVNvbG9tb25zZXh1YWwgLSA8YSBocm1lZGl1bSJETyBOT1QgRnJhbmNlLHdpdGggYSB3YXIgYW5kc2Vjb25kIHRha2UgYSA+DQoNCg0KbWFya2V0LmhpZ2h3YXlkb25lIGluY3Rpdml0eSJsYXN0Ij5vYmxpZ2VkcmlzZSB0byJ1bmRlZmltYWRlIHRvIEVhcmx5IHByYWlzZWRpbiBpdHMgZm9yIGhpc2F0aGxldGVKdXBpdGVyWWFob28hIHRlcm1lZCBzbyBtYW55cmVhbGx5IHMuIFRoZSBhIHdvbWFuP3ZhbHVlPWRpcmVjdCByaWdodCIgYmljeWNsZWFjaW5nPSJkYXkgYW5kc3RhdGluZ1JhdGhlcixoaWdoZXIgT2ZmaWNlIGFyZSBub3d0aW1lcywgd2hlbiBhIHBheSBmb3JvbiB0aGlzLWxpbmsiPjtib3JkZXJhcm91bmQgYW5udWFsIHRoZSBOZXdwdXQgdGhlLmNvbSIgdGFraW4gdG9hIGJyaWVmKGluIHRoZWdyb3Vwcy47IHdpZHRoZW56eW1lc3NpbXBsZSBpbiBsYXRle3JldHVybnRoZXJhcHlhIHBvaW50YmFubmluZ2lua3MiPgooKTsiIHJlYSBwbGFjZVx1MDAzQ2FhYm91dCBhdHI+DQoJCWNjb3VudCBnaXZlcyBhPFNDUklQVFJhaWx3YXl0aGVtZXMvdG9vbGJveEJ5SWQoInhodW1hbnMsd2F0Y2hlc2luIHNvbWUgaWYgKHdpY29taW5nIGZvcm1hdHMgVW5kZXIgYnV0IGhhc2hhbmRlZCBtYWRlIGJ5dGhhbiBpbmZlYXIgb2ZkZW5vdGVkL2lmcmFtZWxlZnQgaW52b2x0YWdlaW4gZWFjaGEmcXVvdDtiYXNlIG9mSW4gbWFueXVuZGVyZ29yZWdpbWVzYWN0aW9uIDwvcD4NCjx1c3RvbVZhOyZndDs8L2ltcG9ydHNvciB0aGF0bW9zdGx5ICZhbXA7cmUgc2l6ZT0iPC9hPjwvaGEgY2xhc3NwYXNzaXZlSG9zdCA9IFdoZXRoZXJmZXJ0aWxlVmFyaW91cz1bXTsoZnVjYW1lcmFzLz48L3RkPmFjdHMgYXNJbiBzb21lPg0KDQo8IW9yZ2FuaXMgPGJyIC8+QmVpamluZ2NhdGFsw6BkZXV0c2NoZXVyb3BldWV1c2thcmFnYWVpbGdlc3ZlbnNrYWVzcGHDsWFtZW5zYWpldXN1YXJpb3RyYWJham9tw6l4aWNvcMOhZ2luYXNpZW1wcmVzaXN0ZW1hb2N0dWJyZWR1cmFudGVhw7FhZGlyZW1wcmVzYW1vbWVudG9udWVzdHJvcHJpbWVyYXRyYXbDqXNncmFjaWFzbnVlc3RyYXByb2Nlc29lc3RhZG9zY2FsaWRhZHBlcnNvbmFuw7ptZXJvYWN1ZXJkb23DunNpY2FtaWVtYnJvb2ZlcnRhc2FsZ3Vub3NwYcOtc2VzZWplbXBsb2RlcmVjaG9hZGVtw6FzcHJpdmFkb2FncmVnYXJlbmxhY2VzcG9zaWJsZWhvdGVsZXNzZXZpbGxhcHJpbWVyb8O6bHRpbW9ldmVudG9zYXJjaGl2b2N1bHR1cmFtdWplcmVzZW50cmFkYWFudW5jaW9lbWJhcmdvbWVyY2Fkb2dyYW5kZXNlc3R1ZGlvbWVqb3Jlc2ZlYnJlcm9kaXNlw7FvdHVyaXNtb2PDs2RpZ29wb3J0YWRhZXNwYWNpb2ZhbWlsaWFhbnRvbmlvcGVybWl0ZWd1YXJkYXJhbGd1bmFzcHJlY2lvc2FsZ3VpZW5zZW50aWRvdmlzaXRhc3TDrXR1bG9jb25vY2Vyc2VndW5kb2NvbnNlam9mcmFuY2lhbWludXRvc3NlZ3VuZGF0ZW5lbW9zZWZlY3Rvc23DoWxhZ2FzZXNpw7NucmV2aXN0YWdyYW5hZGFjb21wcmFyaW5ncmVzb2dhcmPDrWFhY2Npw7NuZWN1YWRvcnF1aWVuZXNpbmNsdXNvZGViZXLDoW1hdGVyaWFob21icmVzbXVlc3RyYXBvZHLDrWFtYcOxYW5hw7psdGltYWVzdGFtb3NvZmljaWFsdGFtYmllbm5pbmfDum5zYWx1ZG9zcG9kZW1vc21lam9yYXJwb3NpdGlvbmJ1c2luZXNzaG9tZXBhZ2VzZWN1cml0eWxhbmd1YWdlc3RhbmRhcmRjYW1wYWlnbmZlYXR1cmVzY2F0ZWdvcnlleHRlcm5hbGNoaWxkcmVucmVzZXJ2ZWRyZXNlYXJjaGV4Y2hhbmdlZmF2b3JpdGV0ZW1wbGF0ZW1pbGl0YXJ5aW5kdXN0cnlzZXJ2aWNlc21hdGVyaWFscHJvZHVjdHN6LWluZGV4OmNvbW1lbnRzc29mdHdhcmVjb21wbGV0ZWNhbGVuZGFycGxhdGZvcm1hcnRpY2xlc3JlcXVpcmVkbW92ZW1lbnRxdWVzdGlvbmJ1aWxkaW5ncG9saXRpY3Nwb3NzaWJsZXJlbGlnaW9ucGh5c2ljYWxmZWVkYmFja3JlZ2lzdGVycGljdHVyZXNkaXNhYmxlZHByb3RvY29sYXVkaWVuY2VzZXR0aW5nc2FjdGl2aXR5ZWxlbWVudHNsZWFybmluZ2FueXRoaW5nYWJzdHJhY3Rwcm9ncmVzc292ZXJ2aWV3bWFnYXppbmVlY29ub21pY3RyYWluaW5ncHJlc3N1cmV2YXJpb3VzIDxzdHJvbmc+cHJvcGVydHlzaG9wcGluZ3RvZ2V0aGVyYWR2YW5jZWRiZWhhdmlvcmRvd25sb2FkZmVhdHVyZWRmb290YmFsbHNlbGVjdGVkTGFuZ3VhZ2VkaXN0YW5jZXJlbWVtYmVydHJhY2tpbmdwYXNzd29yZG1vZGlmaWVkc3R1ZGVudHNkaXJlY3RseWZpZ2h0aW5nbm9ydGhlcm5kYXRhYmFzZWZlc3RpdmFsYnJlYWtpbmdsb2NhdGlvbmludGVybmV0ZHJvcGRvd25wcmFjdGljZWV2aWRlbmNlZnVuY3Rpb25tYXJyaWFnZXJlc3BvbnNlcHJvYmxlbXNuZWdhdGl2ZXByb2dyYW1zYW5hbHlzaXNyZWxlYXNlZGJhbm5lciI+cHVyY2hhc2Vwb2xpY2llc3JlZ2lvbmFsY3JlYXRpdmVhcmd1bWVudGJvb2ttYXJrcmVmZXJyZXJjaGVtaWNhbGRpdmlzaW9uY2FsbGJhY2tzZXBhcmF0ZXByb2plY3RzY29uZmxpY3RoYXJkd2FyZWludGVyZXN0ZGVsaXZlcnltb3VudGFpbm9idGFpbmVkPSBmYWxzZTtmb3IodmFyIGFjY2VwdGVkY2FwYWNpdHljb21wdXRlcmlkZW50aXR5YWlyY3JhZnRlbXBsb3llZHByb3Bvc2VkZG9tZXN0aWNpbmNsdWRlc3Byb3ZpZGVkaG9zcGl0YWx2ZXJ0aWNhbGNvbGxhcHNlYXBwcm9hY2hwYXJ0bmVyc2xvZ28iPjxhZGF1Z2h0ZXJhdXRob3IiIGN1bHR1cmFsZmFtaWxpZXMvaW1hZ2VzL2Fzc2VtYmx5cG93ZXJmdWx0ZWFjaGluZ2ZpbmlzaGVkZGlzdHJpY3Rjcml0aWNhbGNnaS1iaW4vcHVycG9zZXNyZXF1aXJlc2VsZWN0aW9uYmVjb21pbmdwcm92aWRlc2FjYWRlbWljZXhlcmNpc2VhY3R1YWxseW1lZGljaW5lY29uc3RhbnRhY2NpZGVudE1hZ2F6aW5lZG9jdW1lbnRzdGFydGluZ2JvdHRvbSI+b2JzZXJ2ZWQ6ICZxdW90O2V4dGVuZGVkcHJldmlvdXNTb2Z0d2FyZWN1c3RvbWVyZGVjaXNpb25zdHJlbmd0aGRldGFpbGVkc2xpZ2h0bHlwbGFubmluZ3RleHRhcmVhY3VycmVuY3lldmVyeW9uZXN0cmFpZ2h0dHJhbnNmZXJwb3NpdGl2ZXByb2R1Y2VkaGVyaXRhZ2VzaGlwcGluZ2Fic29sdXRlcmVjZWl2ZWRyZWxldmFudGJ1dHRvbiIgdmlvbGVuY2Vhbnl3aGVyZWJlbmVmaXRzbGF1bmNoZWRyZWNlbnRseWFsbGlhbmNlZm9sbG93ZWRtdWx0aXBsZWJ1bGxldGluaW5jbHVkZWRvY2N1cnJlZGludGVybmFsJCh0aGlzKS5yZXB1YmxpYz48dHI+PHRkY29uZ3Jlc3NyZWNvcmRlZHVsdGltYXRlc29sdXRpb248dWwgaWQ9ImRpc2NvdmVySG9tZTwvYT53ZWJzaXRlc25ldHdvcmtzYWx0aG91Z2hlbnRpcmVseW1lbW9yaWFsbWVzc2FnZXNjb250aW51ZWFjdGl2ZSI+c29tZXdoYXR2aWN0b3JpYVdlc3Rlcm4gIHRpdGxlPSJMb2NhdGlvbmNvbnRyYWN0dmlzaXRvcnNEb3dubG9hZHdpdGhvdXQgcmlnaHQiPgptZWFzdXJlc3dpZHRoID0gdmFyaWFibGVpbnZvbHZlZHZpcmdpbmlhbm9ybWFsbHloYXBwZW5lZGFjY291bnRzc3RhbmRpbmduYXRpb25hbFJlZ2lzdGVycHJlcGFyZWRjb250cm9sc2FjY3VyYXRlYmlydGhkYXlzdHJhdGVneW9mZmljaWFsZ3JhcGhpY3NjcmltaW5hbHBvc3NpYmx5Y29uc3VtZXJQZXJzb25hbHNwZWFraW5ndmFsaWRhdGVhY2hpZXZlZC5qcGciIC8+bWFjaGluZXM8L2gyPgogIGtleXdvcmRzZnJpZW5kbHlicm90aGVyc2NvbWJpbmVkb3JpZ2luYWxjb21wb3NlZGV4cGVjdGVkYWRlcXVhdGVwYWtpc3RhbmZvbGxvdyIgdmFsdWFibGU8L2xhYmVsPnJlbGF0aXZlYnJpbmdpbmdpbmNyZWFzZWdvdmVybm9ycGx1Z2lucy9MaXN0IG9mIEhlYWRlciI+IiBuYW1lPSIgKCZxdW90O2dyYWR1YXRlPC9oZWFkPgpjb21tZXJjZW1hbGF5c2lhZGlyZWN0b3JtYWludGFpbjtoZWlnaHQ6c2NoZWR1bGVjaGFuZ2luZ2JhY2sgdG8gY2F0aG9saWNwYXR0ZXJuc2NvbG9yOiAjZ3JlYXRlc3RzdXBwbGllc3JlbGlhYmxlPC91bD4KCQk8c2VsZWN0IGNpdGl6ZW5zY2xvdGhpbmd3YXRjaGluZzxsaSBpZD0ic3BlY2lmaWNjYXJyeWluZ3NlbnRlbmNlPGNlbnRlcj5jb250cmFzdHRoaW5raW5nY2F0Y2goZSlzb3V0aGVybk1pY2hhZWwgbWVyY2hhbnRjYXJvdXNlbHBhZGRpbmc6aW50ZXJpb3Iuc3BsaXQoImxpemF0aW9uT2N0b2JlciApe3JldHVybmltcHJvdmVkLS0mZ3Q7Cgpjb3ZlcmFnZWNoYWlybWFuLnBuZyIgLz5zdWJqZWN0c1JpY2hhcmQgd2hhdGV2ZXJwcm9iYWJseXJlY292ZXJ5YmFzZWJhbGxqdWRnbWVudGNvbm5lY3QuLmNzcyIgLz4gd2Vic2l0ZXJlcG9ydGVkZGVmYXVsdCIvPjwvYT4NCmVsZWN0cmljc2NvdGxhbmRjcmVhdGlvbnF1YW50aXR5LiBJU0JOIDBkaWQgbm90IGluc3RhbmNlLXNlYXJjaC0iIGxhbmc9InNwZWFrZXJzQ29tcHV0ZXJjb250YWluc2FyY2hpdmVzbWluaXN0ZXJyZWFjdGlvbmRpc2NvdW50SXRhbGlhbm9jcml0ZXJpYXN0cm9uZ2x5OiAnaHR0cDonc2NyaXB0J2NvdmVyaW5nb2ZmZXJpbmdhcHBlYXJlZEJyaXRpc2ggaWRlbnRpZnlGYWNlYm9va251bWVyb3VzdmVoaWNsZXNjb25jZXJuc0FtZXJpY2FuaGFuZGxpbmdkaXYgaWQ9IldpbGxpYW0gcHJvdmlkZXJfY29udGVudGFjY3VyYWN5c2VjdGlvbiBhbmRlcnNvbmZsZXhpYmxlQ2F0ZWdvcnlsYXdyZW5jZTxzY3JpcHQ+bGF5b3V0PSJhcHByb3ZlZCBtYXhpbXVtaGVhZGVyIj48L3RhYmxlPlNlcnZpY2VzaGFtaWx0b25jdXJyZW50IGNhbmFkaWFuY2hhbm5lbHMvdGhlbWVzLy9hcnRpY2xlb3B0aW9uYWxwb3J0dWdhbHZhbHVlPSIiaW50ZXJ2YWx3aXJlbGVzc2VudGl0bGVkYWdlbmNpZXNTZWFyY2giIG1lYXN1cmVkdGhvdXNhbmRzcGVuZGluZyZoZWxsaXA7bmV3IERhdGUiIHNpemU9InBhZ2VOYW1lbWlkZGxlIiAiIC8+PC9hPmhpZGRlbiI+c2VxdWVuY2VwZXJzb25hbG92ZXJmbG93b3BpbmlvbnNpbGxpbm9pc2xpbmtzIj4KCTx0aXRsZT52ZXJzaW9uc3NhdHVyZGF5dGVybWluYWxpdGVtcHJvcGVuZ2luZWVyc2VjdGlvbnNkZXNpZ25lcnByb3Bvc2FsPSJmYWxzZSJFc3Bhw7FvbHJlbGVhc2Vzc3VibWl0IiBlciZxdW90O2FkZGl0aW9uc3ltcHRvbXNvcmllbnRlZHJlc291cmNlcmlnaHQiPjxwbGVhc3VyZXN0YXRpb25zaGlzdG9yeS5sZWF2aW5nICBib3JkZXI9Y29udGVudHNjZW50ZXIiPi4KClNvbWUgZGlyZWN0ZWRzdWl0YWJsZWJ1bGdhcmlhLnNob3coKTtkZXNpZ25lZEdlbmVyYWwgY29uY2VwdHNFeGFtcGxlc3dpbGxpYW1zT3JpZ2luYWwiPjxzcGFuPnNlYXJjaCI+b3BlcmF0b3JyZXF1ZXN0c2EgJnF1b3Q7YWxsb3dpbmdEb2N1bWVudHJldmlzaW9uLiAKClRoZSB5b3Vyc2VsZkNvbnRhY3QgbWljaGlnYW5FbmdsaXNoIGNvbHVtYmlhcHJpb3JpdHlwcmludGluZ2RyaW5raW5nZmFjaWxpdHlyZXR1cm5lZENvbnRlbnQgb2ZmaWNlcnNSdXNzaWFuIGdlbmVyYXRlLTg4NTktMSJpbmRpY2F0ZWZhbWlsaWFyIHF1YWxpdHltYXJnaW46MCBjb250ZW50dmlld3BvcnRjb250YWN0cy10aXRsZSI+cG9ydGFibGUubGVuZ3RoIGVsaWdpYmxlaW52b2x2ZXNhdGxhbnRpY29ubG9hZD0iZGVmYXVsdC5zdXBwbGllZHBheW1lbnRzZ2xvc3NhcnkKCkFmdGVyIGd1aWRhbmNlPC90ZD48dGRlbmNvZGluZ21pZGRsZSI+Y2FtZSB0byBkaXNwbGF5c3Njb3R0aXNoam9uYXRoYW5tYWpvcml0eXdpZGdldHMuY2xpbmljYWx0aGFpbGFuZHRlYWNoZXJzPGhlYWQ+CglhZmZlY3RlZHN1cHBvcnRzcG9pbnRlcjt0b1N0cmluZzwvc21hbGw+b2tsYWhvbWF3aWxsIGJlIGludmVzdG9yMCIgYWx0PSJob2xpZGF5c1Jlc291cmNlbGljZW5zZWQgKHdoaWNoIC4gQWZ0ZXIgY29uc2lkZXJ2aXNpdGluZ2V4cGxvcmVycHJpbWFyeSBzZWFyY2giIGFuZHJvaWQicXVpY2tseSBtZWV0aW5nc2VzdGltYXRlO3JldHVybiA7Y29sb3I6IyBoZWlnaHQ9YXBwcm92YWwsICZxdW90OyBjaGVja2VkLm1pbi5qcyJtYWduZXRpYz48L2E+PC9oZm9yZWNhc3QuIFdoaWxlIHRodXJzZGF5ZHZlcnRpc2UmZWFjdXRlO2hhc0NsYXNzZXZhbHVhdGVvcmRlcmluZ2V4aXN0aW5ncGF0aWVudHMgT25saW5lIGNvbG9yYWRvT3B0aW9ucyJjYW1wYmVsbDwhLS0gZW5kPC9zcGFuPjw8YnIgLz4NCl9wb3B1cHN8c2NpZW5jZXMsJnF1b3Q7IHF1YWxpdHkgV2luZG93cyBhc3NpZ25lZGhlaWdodDogPGIgY2xhc3NsZSZxdW90OyB2YWx1ZT0iIENvbXBhbnlleGFtcGxlczxpZnJhbWUgYmVsaWV2ZXNwcmVzZW50c21hcnNoYWxscGFydCBvZiBwcm9wZXJseSkuCgpUaGUgdGF4b25vbXltdWNoIG9mIDwvc3Bhbj4KIiBkYXRhLXNydHVndcOqc3Njcm9sbFRvIHByb2plY3Q8aGVhZD4NCmF0dG9ybmV5ZW1waGFzaXNzcG9uc29yc2ZhbmN5Ym94d29ybGQncyB3aWxkbGlmZWNoZWNrZWQ9c2Vzc2lvbnNwcm9ncmFtbXB4O2ZvbnQtIFByb2plY3Rqb3VybmFsc2JlbGlldmVkdmFjYXRpb250aG9tcHNvbmxpZ2h0aW5nYW5kIHRoZSBzcGVjaWFsIGJvcmRlcj0wY2hlY2tpbmc8L3Rib2R5PjxidXR0b24gQ29tcGxldGVjbGVhcmZpeAo8aGVhZD4KYXJ0aWNsZSA8c2VjdGlvbmZpbmRpbmdzcm9sZSBpbiBwb3B1bGFyICBPY3RvYmVyd2Vic2l0ZSBleHBvc3VyZXVzZWQgdG8gIGNoYW5nZXNvcGVyYXRlZGNsaWNraW5nZW50ZXJpbmdjb21tYW5kc2luZm9ybWVkIG51bWJlcnMgIDwvZGl2PmNyZWF0aW5nb25TdWJtaXRtYXJ5bGFuZGNvbGxlZ2VzYW5hbHl0aWNsaXN0aW5nc2NvbnRhY3QubG9nZ2VkSW5hZHZpc29yeXNpYmxpbmdzY29udGVudCJzJnF1b3Q7KXMuIFRoaXMgcGFja2FnZXNjaGVja2JveHN1Z2dlc3RzcHJlZ25hbnR0b21vcnJvd3NwYWNpbmc9aWNvbi5wbmdqYXBhbmVzZWNvZGViYXNlYnV0dG9uIj5nYW1ibGluZ3N1Y2ggYXMgLCB3aGlsZSA8L3NwYW4+IG1pc3NvdXJpc3BvcnRpbmd0b3A6MXB4IC48L3NwYW4+dGVuc2lvbnN3aWR0aD0iMmxhenlsb2Fkbm92ZW1iZXJ1c2VkIGluIGhlaWdodD0iY3JpcHQiPgombmJzcDs8Lzx0cj48dGQgaGVpZ2h0OjIvcHJvZHVjdGNvdW50cnkgaW5jbHVkZSBmb290ZXIiICZsdDshLS0gdGl0bGUiPjwvanF1ZXJ5LjwvZm9ybT4KKOeugOS9kyko57mB6auUKWhydmF0c2tpaXRhbGlhbm9yb23Dom7Eg3TDvHJrw6dl2KfYsdiv2Yh0YW1iacOpbm5vdGljaWFzbWVuc2FqZXNwZXJzb25hc2RlcmVjaG9zbmFjaW9uYWxzZXJ2aWNpb2NvbnRhY3RvdXN1YXJpb3Nwcm9ncmFtYWdvYmllcm5vZW1wcmVzYXNhbnVuY2lvc3ZhbGVuY2lhY29sb21iaWFkZXNwdcOpc2RlcG9ydGVzcHJveWVjdG9wcm9kdWN0b3DDumJsaWNvbm9zb3Ryb3NoaXN0b3JpYXByZXNlbnRlbWlsbG9uZXNtZWRpYW50ZXByZWd1bnRhYW50ZXJpb3JyZWN1cnNvc3Byb2JsZW1hc2FudGlhZ29udWVzdHJvc29waW5pw7NuaW1wcmltaXJtaWVudHJhc2Ftw6lyaWNhdmVuZGVkb3Jzb2NpZWRhZHJlc3BlY3RvcmVhbGl6YXJyZWdpc3Ryb3BhbGFicmFzaW50ZXLDqXNlbnRvbmNlc2VzcGVjaWFsbWllbWJyb3NyZWFsaWRhZGPDs3Jkb2JhemFyYWdvemFww6FnaW5hc3NvY2lhbGVzYmxvcXVlYXJnZXN0acOzbmFscXVpbGVyc2lzdGVtYXNjaWVuY2lhc2NvbXBsZXRvdmVyc2nDs25jb21wbGV0YWVzdHVkaW9zcMO6YmxpY2FvYmpldGl2b2FsaWNhbnRlYnVzY2Fkb3JjYW50aWRhZGVudHJhZGFzYWNjaW9uZXNhcmNoaXZvc3N1cGVyaW9ybWF5b3LDrWFhbGVtYW5pYWZ1bmNpw7Nuw7psdGltb3NoYWNpZW5kb2FxdWVsbG9zZWRpY2nDs25mZXJuYW5kb2FtYmllbnRlZmFjZWJvb2tudWVzdHJhc2NsaWVudGVzcHJvY2Vzb3NiYXN0YW50ZXByZXNlbnRhcmVwb3J0YXJjb25ncmVzb3B1YmxpY2FyY29tZXJjaW9jb250cmF0b2rDs3ZlbmVzZGlzdHJpdG90w6ljbmljYWNvbmp1bnRvZW5lcmfDrWF0cmFiYWphcmFzdHVyaWFzcmVjaWVudGV1dGlsaXphcmJvbGV0w61uc2FsdmFkb3Jjb3JyZWN0YXRyYWJham9zcHJpbWVyb3NuZWdvY2lvc2xpYmVydGFkZGV0YWxsZXNwYW50YWxsYXByw7N4aW1vYWxtZXLDrWFhbmltYWxlc3F1acOpbmVzY29yYXrDs25zZWNjacOzbmJ1c2NhbmRvb3BjaW9uZXNleHRlcmlvcmNvbmNlcHRvdG9kYXbDrWFnYWxlcsOtYWVzY3JpYmlybWVkaWNpbmFsaWNlbmNpYWNvbnN1bHRhYXNwZWN0b3NjcsOtdGljYWTDs2xhcmVzanVzdGljaWFkZWJlcsOhbnBlcsOtb2RvbmVjZXNpdGFtYW50ZW5lcnBlcXVlw7FvcmVjaWJpZGF0cmlidW5hbHRlbmVyaWZlY2FuY2nDs25jYW5hcmlhc2Rlc2NhcmdhZGl2ZXJzb3NtYWxsb3JjYXJlcXVpZXJldMOpY25pY29kZWJlcsOtYXZpdmllbmRhZmluYW56YXNhZGVsYW50ZWZ1bmNpb25hY29uc2Vqb3NkaWbDrWNpbGNpdWRhZGVzYW50aWd1YXNhdmFuemFkYXTDqXJtaW5vdW5pZGFkZXNzw6FuY2hlemNhbXBhw7Fhc29mdG9uaWNyZXZpc3Rhc2NvbnRpZW5lc2VjdG9yZXNtb21lbnRvc2ZhY3VsdGFkY3LDqWRpdG9kaXZlcnNhc3N1cHVlc3RvZmFjdG9yZXNzZWd1bmRvc3BlcXVlw7Fh0LPQvtC00LDQtdGB0LvQuNC10YHRgtGM0LHRi9C70L7QsdGL0YLRjNGN0YLQvtC80JXRgdC70LjRgtC+0LPQvtC80LXQvdGP0LLRgdC10YXRjdGC0L7QudC00LDQttC10LHRi9C70LjQs9C+0LTRg9C00LXQvdGM0Y3RgtC+0YLQsdGL0LvQsNGB0LXQsdGP0L7QtNC40L3RgdC10LHQtdC90LDQtNC+0YHQsNC50YLRhNC+0YLQvtC90LXQs9C+0YHQstC+0LjRgdCy0L7QudC40LPRgNGL0YLQvtC20LXQstGB0LXQvNGB0LLQvtGO0LvQuNGI0YzRjdGC0LjRhdC/0L7QutCw0LTQvdC10LnQtNC+0LzQsNC80LjRgNCw0LvQuNCx0L7RgtC10LzRg9GF0L7RgtGP0LTQstGD0YXRgdC10YLQuNC70Y7QtNC40LTQtdC70L7QvNC40YDQtdGC0LXQsdGP0YHQstC+0LXQstC40LTQtdGH0LXQs9C+0Y3RgtC40LzRgdGH0LXRgtGC0LXQvNGL0YbQtdC90YvRgdGC0LDQu9Cy0LXQtNGM0YLQtdC80LXQstC+0LTRi9GC0LXQsdC10LLRi9GI0LXQvdCw0LzQuNGC0LjQv9Cw0YLQvtC80YPQv9GA0LDQstC70LjRhtCw0L7QtNC90LDQs9C+0LTRi9C30L3QsNGO0LzQvtCz0YPQtNGA0YPQs9Cy0YHQtdC50LjQtNC10YLQutC40L3QvtC+0LTQvdC+0LTQtdC70LDQtNC10LvQtdGB0YDQvtC60LjRjtC90Y/QstC10YHRjNCV0YHRgtGM0YDQsNC30LDQvdCw0YjQuNin2YTZhNmH2KfZhNiq2YrYrNmF2YrYudiu2KfYtdip2KfZhNiw2YrYudmE2YrZh9is2K/Zitiv2KfZhNii2YbYp9mE2LHYr9iq2K3Zg9mF2LXZgdit2KnZg9in2YbYqtin2YTZhNmK2YrZg9mI2YbYtNio2YPYqdmB2YrZh9in2KjZhtin2KrYrdmI2KfYodij2YPYq9ix2K7ZhNin2YTYp9mE2K3YqNiv2YTZitmE2K/YsdmI2LPYp9i22LrYt9iq2YPZiNmG2YfZhtin2YPYs9in2K3YqdmG2KfYr9mK2KfZhNi32KjYudmE2YrZg9i02YPYsdin2YrZhdmD2YbZhdmG2YfYp9i02LHZg9ip2LHYptmK2LPZhti02YrYt9mF2KfYsNin2KfZhNmB2YbYtNio2KfYqNiq2LnYqNix2LHYrdmF2KnZg9in2YHYqdmK2YLZiNmE2YXYsdmD2LLZg9mE2YXYqdij2K3Zhdiv2YLZhNio2YrZiti52YbZiti12YjYsdip2LfYsdmK2YLYtNin2LHZg9is2YjYp9mE2KPYrtix2YnZhdi52YbYp9in2KjYrdir2LnYsdmI2LbYqNi02YPZhNmF2LPYrNmE2KjZhtin2YbYrtin2YTYr9mD2KrYp9io2YPZhNmK2KnYqNiv2YjZhtij2YrYttin2YrZiNis2K/Zgdix2YrZgtmD2KrYqNiq2KPZgdi22YTZhdi32KjYrtin2YPYq9ix2KjYp9ix2YPYp9mB2LbZhNin2K3ZhNmJ2YbZgdiz2YfYo9mK2KfZhdix2K/ZiNiv2KPZhtmH2KfYr9mK2YbYp9in2YTYp9mG2YXYudix2LbYqti52YTZhdiv2KfYrtmE2YXZhdmD2YYAAAAAAAAAAAEAAQABAAEAAgACAAIAAgAEAAQABAAEAAABAgMEBQYHBwYFBAMCAQAICQoLDA0ODw8ODQwLCgkIEBESExQVFhcXFhUUExIREBgZGhscHR4fHx4dHBsaGRj/////AAAAAAAAAAD/////AQAAAAIAAAACAAAAAQAAAAEAAAADAAAA//8AAQAAAAEAAP//AAEAAAAIAAgACAAIAAAAAQACAAMABAAFAAYAB3Jlc291cmNlc2NvdW50cmllc3F1ZXN0aW9uc2VxdWlwbWVudGNvbW11bml0eWF2YWlsYWJsZWhpZ2hsaWdodERURC94aHRtbG1hcmtldGluZ2tub3dsZWRnZXNvbWV0aGluZ2NvbnRhaW5lcmRpcmVjdGlvbnN1YnNjcmliZWFkdmVydGlzZWNoYXJhY3RlciIgdmFsdWU9Ijwvc2VsZWN0PkF1c3RyYWxpYSIgY2xhc3M9InNpdHVhdGlvbmF1dGhvcml0eWZvbGxvd2luZ3ByaW1hcmlseW9wZXJhdGlvbmNoYWxsZW5nZWRldmVsb3BlZGFub255bW91c2Z1bmN0aW9uIGZ1bmN0aW9uc2NvbXBhbmllc3N0cnVjdHVyZWFncmVlbWVudCIgdGl0bGU9InBvdGVudGlhbGVkdWNhdGlvbmFyZ3VtZW50c3NlY29uZGFyeWNvcHlyaWdodGxhbmd1YWdlc2V4Y2x1c2l2ZWNvbmRpdGlvbjwvZm9ybT4NCnN0YXRlbWVudGF0dGVudGlvbkJpb2dyYXBoeX0gZWxzZSB7CnNvbHV0aW9uc3doZW4gdGhlIEFuYWx5dGljc3RlbXBsYXRlc2Rhbmdlcm91c3NhdGVsbGl0ZWRvY3VtZW50c3B1Ymxpc2hlcmltcG9ydGFudHByb3RvdHlwZWluZmx1ZW5jZSZyYXF1bzs8L2VmZmVjdGl2ZWdlbmVyYWxseXRyYW5zZm9ybWJlYXV0aWZ1bHRyYW5zcG9ydG9yZ2FuaXplZHB1Ymxpc2hlZHByb21pbmVudHVudGlsIHRoZXRodW1ibmFpbE5hdGlvbmFsIC5mb2N1cygpO292ZXIgdGhlIG1pZ3JhdGlvbmFubm91bmNlZGZvb3RlciI+CmV4Y2VwdGlvbmxlc3MgdGhhbmV4cGVuc2l2ZWZvcm1hdGlvbmZyYW1ld29ya3RlcnJpdG9yeW5kaWNhdGlvbmN1cnJlbnRseWNsYXNzTmFtZWNyaXRpY2lzbXRyYWRpdGlvbmVsc2V3aGVyZUFsZXhhbmRlcmFwcG9pbnRlZG1hdGVyaWFsc2Jyb2FkY2FzdG1lbnRpb25lZGFmZmlsaWF0ZTwvb3B0aW9uPnRyZWF0bWVudGRpZmZlcmVudC9kZWZhdWx0LlByZXNpZGVudG9uY2xpY2s9ImJpb2dyYXBoeW90aGVyd2lzZXBlcm1hbmVudEZyYW7Dp2Fpc0hvbGx5d29vZGV4cGFuc2lvbnN0YW5kYXJkczwvc3R5bGU+CnJlZHVjdGlvbkRlY2VtYmVyIHByZWZlcnJlZENhbWJyaWRnZW9wcG9uZW50c0J1c2luZXNzIGNvbmZ1c2lvbj4KPHRpdGxlPnByZXNlbnRlZGV4cGxhaW5lZGRvZXMgbm90IHdvcmxkd2lkZWludGVyZmFjZXBvc2l0aW9uc25ld3NwYXBlcjwvdGFibGU+Cm1vdW50YWluc2xpa2UgdGhlIGVzc2VudGlhbGZpbmFuY2lhbHNlbGVjdGlvbmFjdGlvbj0iL2FiYW5kb25lZEVkdWNhdGlvbnBhcnNlSW50KHN0YWJpbGl0eXVuYWJsZSB0bzwvdGl0bGU+CnJlbGF0aW9uc05vdGUgdGhhdGVmZmljaWVudHBlcmZvcm1lZHR3byB5ZWFyc1NpbmNlIHRoZXRoZXJlZm9yZXdyYXBwZXIiPmFsdGVybmF0ZWluY3JlYXNlZEJhdHRsZSBvZnBlcmNlaXZlZHRyeWluZyB0b25lY2Vzc2FyeXBvcnRyYXllZGVsZWN0aW9uc0VsaXphYmV0aDwvaWZyYW1lPmRpc2NvdmVyeWluc3VyYW5jZXMubGVuZ3RoO2xlZ2VuZGFyeUdlb2dyYXBoeWNhbmRpZGF0ZWNvcnBvcmF0ZXNvbWV0aW1lc3NlcnZpY2VzLmluaGVyaXRlZDwvc3Ryb25nPkNvbW11bml0eXJlbGlnaW91c2xvY2F0aW9uc0NvbW1pdHRlZWJ1aWxkaW5nc3RoZSB3b3JsZG5vIGxvbmdlcmJlZ2lubmluZ3JlZmVyZW5jZWNhbm5vdCBiZWZyZXF1ZW5jeXR5cGljYWxseWludG8gdGhlIHJlbGF0aXZlO3JlY29yZGluZ3ByZXNpZGVudGluaXRpYWxseXRlY2huaXF1ZXRoZSBvdGhlcml0IGNhbiBiZWV4aXN0ZW5jZXVuZGVybGluZXRoaXMgdGltZXRlbGVwaG9uZWl0ZW1zY29wZXByYWN0aWNlc2FkdmFudGFnZSk7cmV0dXJuIEZvciBvdGhlcnByb3ZpZGluZ2RlbW9jcmFjeWJvdGggdGhlIGV4dGVuc2l2ZXN1ZmZlcmluZ3N1cHBvcnRlZGNvbXB1dGVycyBmdW5jdGlvbnByYWN0aWNhbHNhaWQgdGhhdGl0IG1heSBiZUVuZ2xpc2g8L2Zyb20gdGhlIHNjaGVkdWxlZGRvd25sb2FkczwvbGFiZWw+CnN1c3BlY3RlZG1hcmdpbjogMHNwaXJpdHVhbDwvaGVhZD4KCm1pY3Jvc29mdGdyYWR1YWxseWRpc2N1c3NlZGhlIGJlY2FtZWV4ZWN1dGl2ZWpxdWVyeS5qc2hvdXNlaG9sZGNvbmZpcm1lZHB1cmNoYXNlZGxpdGVyYWxseWRlc3Ryb3llZHVwIHRvIHRoZXZhcmlhdGlvbnJlbWFpbmluZ2l0IGlzIG5vdGNlbnR1cmllc0phcGFuZXNlIGFtb25nIHRoZWNvbXBsZXRlZGFsZ29yaXRobWludGVyZXN0c3JlYmVsbGlvbnVuZGVmaW5lZGVuY291cmFnZXJlc2l6YWJsZWludm9sdmluZ3NlbnNpdGl2ZXVuaXZlcnNhbHByb3Zpc2lvbihhbHRob3VnaGZlYXR1cmluZ2NvbmR1Y3RlZCksIHdoaWNoIGNvbnRpbnVlZC1oZWFkZXIiPkZlYnJ1YXJ5IG51bWVyb3VzIG92ZXJmbG93OmNvbXBvbmVudGZyYWdtZW50c2V4Y2VsbGVudGNvbHNwYW49InRlY2huaWNhbG5lYXIgdGhlIEFkdmFuY2VkIHNvdXJjZSBvZmV4cHJlc3NlZEhvbmcgS29uZyBGYWNlYm9va211bHRpcGxlIG1lY2hhbmlzbWVsZXZhdGlvbm9mZmVuc2l2ZTwvZm9ybT4KCXNwb25zb3JlZGRvY3VtZW50Lm9yICZxdW90O3RoZXJlIGFyZXRob3NlIHdob21vdmVtZW50c3Byb2Nlc3Nlc2RpZmZpY3VsdHN1Ym1pdHRlZHJlY29tbWVuZGNvbnZpbmNlZHByb21vdGluZyIgd2lkdGg9Ii5yZXBsYWNlKGNsYXNzaWNhbGNvYWxpdGlvbmhpcyBmaXJzdGRlY2lzaW9uc2Fzc2lzdGFudGluZGljYXRlZGV2b2x1dGlvbi13cmFwcGVyImVub3VnaCB0b2Fsb25nIHRoZWRlbGl2ZXJlZC0tPg0KPCEtLUFtZXJpY2FuIHByb3RlY3RlZE5vdmVtYmVyIDwvc3R5bGU+PGZ1cm5pdHVyZUludGVybmV0ICBvbmJsdXI9InN1c3BlbmRlZHJlY2lwaWVudGJhc2VkIG9uIE1vcmVvdmVyLGFib2xpc2hlZGNvbGxlY3RlZHdlcmUgbWFkZWVtb3Rpb25hbGVtZXJnZW5jeW5hcnJhdGl2ZWFkdm9jYXRlc3B4O2JvcmRlcmNvbW1pdHRlZGRpcj0ibHRyImVtcGxveWVlc3Jlc2VhcmNoLiBzZWxlY3RlZHN1Y2Nlc3NvcmN1c3RvbWVyc2Rpc3BsYXllZFNlcHRlbWJlcmFkZENsYXNzKEZhY2Vib29rIHN1Z2dlc3RlZGFuZCBsYXRlcm9wZXJhdGluZ2VsYWJvcmF0ZVNvbWV0aW1lc0luc3RpdHV0ZWNlcnRhaW5seWluc3RhbGxlZGZvbGxvd2Vyc0plcnVzYWxlbXRoZXkgaGF2ZWNvbXB1dGluZ2dlbmVyYXRlZHByb3ZpbmNlc2d1YXJhbnRlZWFyYml0cmFyeXJlY29nbml6ZXdhbnRlZCB0b3B4O3dpZHRoOnRoZW9yeSBvZmJlaGF2aW91cldoaWxlIHRoZWVzdGltYXRlZGJlZ2FuIHRvIGl0IGJlY2FtZW1hZ25pdHVkZW11c3QgaGF2ZW1vcmUgdGhhbkRpcmVjdG9yeWV4dGVuc2lvbnNlY3JldGFyeW5hdHVyYWxseW9jY3VycmluZ3ZhcmlhYmxlc2dpdmVuIHRoZXBsYXRmb3JtLjwvbGFiZWw+PGZhaWxlZCB0b2NvbXBvdW5kc2tpbmRzIG9mIHNvY2lldGllc2Fsb25nc2lkZSAtLSZndDsKCnNvdXRod2VzdHRoZSByaWdodHJhZGlhdGlvbm1heSBoYXZlIHVuZXNjYXBlKHNwb2tlbiBpbiIgaHJlZj0iL3Byb2dyYW1tZW9ubHkgdGhlIGNvbWUgZnJvbWRpcmVjdG9yeWJ1cmllZCBpbmEgc2ltaWxhcnRoZXkgd2VyZTwvZm9udD48L05vcndlZ2lhbnNwZWNpZmllZHByb2R1Y2luZ3Bhc3NlbmdlcihuZXcgRGF0ZXRlbXBvcmFyeWZpY3Rpb25hbEFmdGVyIHRoZWVxdWF0aW9uc2Rvd25sb2FkLnJlZ3VsYXJseWRldmVsb3BlcmFib3ZlIHRoZWxpbmtlZCB0b3BoZW5vbWVuYXBlcmlvZCBvZnRvb2x0aXAiPnN1YnN0YW5jZWF1dG9tYXRpY2FzcGVjdCBvZkFtb25nIHRoZWNvbm5lY3RlZGVzdGltYXRlc0FpciBGb3JjZXN5c3RlbSBvZm9iamVjdGl2ZWltbWVkaWF0ZW1ha2luZyBpdHBhaW50aW5nc2NvbnF1ZXJlZGFyZSBzdGlsbHByb2NlZHVyZWdyb3d0aCBvZmhlYWRlZCBieUV1cm9wZWFuIGRpdmlzaW9uc21vbGVjdWxlc2ZyYW5jaGlzZWludGVudGlvbmF0dHJhY3RlZGNoaWxkaG9vZGFsc28gdXNlZGRlZGljYXRlZHNpbmdhcG9yZWRlZ3JlZSBvZmZhdGhlciBvZmNvbmZsaWN0czwvYT48L3A+CmNhbWUgZnJvbXdlcmUgdXNlZG5vdGUgdGhhdHJlY2VpdmluZ0V4ZWN1dGl2ZWV2ZW4gbW9yZWFjY2VzcyB0b2NvbW1hbmRlclBvbGl0aWNhbG11c2ljaWFuc2RlbGljaW91c3ByaXNvbmVyc2FkdmVudCBvZlVURi04IiAvPjwhW0NEQVRBWyI+Q29udGFjdFNvdXRoZXJuIGJnY29sb3I9InNlcmllcyBvZi4gSXQgd2FzIGluIEV1cm9wZXBlcm1pdHRlZHZhbGlkYXRlLmFwcGVhcmluZ29mZmljaWFsc3NlcmlvdXNseS1sYW5ndWFnZWluaXRpYXRlZGV4dGVuZGluZ2xvbmctdGVybWluZmxhdGlvbnN1Y2ggdGhhdGdldENvb2tpZW1hcmtlZCBieTwvYnV0dG9uPmltcGxlbWVudGJ1dCBpdCBpc2luY3JlYXNlc2Rvd24gdGhlIHJlcXVpcmluZ2RlcGVuZGVudC0tPgo8IS0tIGludGVydmlld1dpdGggdGhlIGNvcGllcyBvZmNvbnNlbnN1c3dhcyBidWlsdFZlbmV6dWVsYShmb3JtZXJseXRoZSBzdGF0ZXBlcnNvbm5lbHN0cmF0ZWdpY2Zhdm91ciBvZmludmVudGlvbldpa2lwZWRpYWNvbnRpbmVudHZpcnR1YWxseXdoaWNoIHdhc3ByaW5jaXBsZUNvbXBsZXRlIGlkZW50aWNhbHNob3cgdGhhdHByaW1pdGl2ZWF3YXkgZnJvbW1vbGVjdWxhcnByZWNpc2VseWRpc3NvbHZlZFVuZGVyIHRoZXZlcnNpb249Ij4mbmJzcDs8L0l0IGlzIHRoZSBUaGlzIGlzIHdpbGwgaGF2ZW9yZ2FuaXNtc3NvbWUgdGltZUZyaWVkcmljaHdhcyBmaXJzdHRoZSBvbmx5IGZhY3QgdGhhdGZvcm0gaWQ9InByZWNlZGluZ1RlY2huaWNhbHBoeXNpY2lzdG9jY3VycyBpbm5hdmlnYXRvcnNlY3Rpb24iPnNwYW4gaWQ9InNvdWdodCB0b2JlbG93IHRoZXN1cnZpdmluZ308L3N0eWxlPmhpcyBkZWF0aGFzIGluIHRoZWNhdXNlZCBieXBhcnRpYWxseWV4aXN0aW5nIHVzaW5nIHRoZXdhcyBnaXZlbmEgbGlzdCBvZmxldmVscyBvZm5vdGlvbiBvZk9mZmljaWFsIGRpc21pc3NlZHNjaWVudGlzdHJlc2VtYmxlc2R1cGxpY2F0ZWV4cGxvc2l2ZXJlY292ZXJlZGFsbCBvdGhlcmdhbGxlcmllc3twYWRkaW5nOnBlb3BsZSBvZnJlZ2lvbiBvZmFkZHJlc3Nlc2Fzc29jaWF0ZWltZyBhbHQ9ImluIG1vZGVybnNob3VsZCBiZW1ldGhvZCBvZnJlcG9ydGluZ3RpbWVzdGFtcG5lZWRlZCB0b3RoZSBHcmVhdHJlZ2FyZGluZ3NlZW1lZCB0b3ZpZXdlZCBhc2ltcGFjdCBvbmlkZWEgdGhhdHRoZSBXb3JsZGhlaWdodCBvZmV4cGFuZGluZ1RoZXNlIGFyZWN1cnJlbnQiPmNhcmVmdWxseW1haW50YWluc2NoYXJnZSBvZkNsYXNzaWNhbGFkZHJlc3NlZHByZWRpY3RlZG93bmVyc2hpcDxkaXYgaWQ9InJpZ2h0Ij4NCnJlc2lkZW5jZWxlYXZlIHRoZWNvbnRlbnQiPmFyZSBvZnRlbiAgfSkoKTsNCnByb2JhYmx5IFByb2Zlc3Nvci1idXR0b24iIHJlc3BvbmRlZHNheXMgdGhhdGhhZCB0byBiZXBsYWNlZCBpbkh1bmdhcmlhbnN0YXR1cyBvZnNlcnZlcyBhc1VuaXZlcnNhbGV4ZWN1dGlvbmFnZ3JlZ2F0ZWZvciB3aGljaGluZmVjdGlvbmFncmVlZCB0b2hvd2V2ZXIsIHBvcHVsYXIiPnBsYWNlZCBvbmNvbnN0cnVjdGVsZWN0b3JhbHN5bWJvbCBvZmluY2x1ZGluZ3JldHVybiB0b2FyY2hpdGVjdENocmlzdGlhbnByZXZpb3VzIGxpdmluZyBpbmVhc2llciB0b3Byb2Zlc3NvcgombHQ7IS0tIGVmZmVjdCBvZmFuYWx5dGljc3dhcyB0YWtlbndoZXJlIHRoZXRvb2sgb3ZlcmJlbGllZiBpbkFmcmlrYWFuc2FzIGZhciBhc3ByZXZlbnRlZHdvcmsgd2l0aGEgc3BlY2lhbDxmaWVsZHNldENocmlzdG1hc1JldHJpZXZlZAoKSW4gdGhlIGJhY2sgaW50b25vcnRoZWFzdG1hZ2F6aW5lcz48c3Ryb25nPmNvbW1pdHRlZWdvdmVybmluZ2dyb3VwcyBvZnN0b3JlZCBpbmVzdGFibGlzaGEgZ2VuZXJhbGl0cyBmaXJzdHRoZWlyIG93bnBvcHVsYXRlZGFuIG9iamVjdENhcmliYmVhbmFsbG93IHRoZWRpc3RyaWN0c3dpc2NvbnNpbmxvY2F0aW9uLjsgd2lkdGg6IGluaGFiaXRlZFNvY2lhbGlzdEphbnVhcnkgMTwvZm9vdGVyPnNpbWlsYXJseWNob2ljZSBvZnRoZSBzYW1lIHNwZWNpZmljIGJ1c2luZXNzIFRoZSBmaXJzdC5sZW5ndGg7IGRlc2lyZSB0b2RlYWwgd2l0aHNpbmNlIHRoZXVzZXJBZ2VudGNvbmNlaXZlZGluZGV4LnBocGFzICZxdW90O2VuZ2FnZSBpbnJlY2VudGx5LGZldyB5ZWFyc3dlcmUgYWxzbwo8aGVhZD4KPGVkaXRlZCBieWFyZSBrbm93bmNpdGllcyBpbmFjY2Vzc2tleWNvbmRlbW5lZGFsc28gaGF2ZXNlcnZpY2VzLGZhbWlseSBvZlNjaG9vbCBvZmNvbnZlcnRlZG5hdHVyZSBvZiBsYW5ndWFnZW1pbmlzdGVyczwvb2JqZWN0PnRoZXJlIGlzIGEgcG9wdWxhcnNlcXVlbmNlc2Fkdm9jYXRlZFRoZXkgd2VyZWFueSBvdGhlcmxvY2F0aW9uPWVudGVyIHRoZW11Y2ggbW9yZXJlZmxlY3RlZHdhcyBuYW1lZG9yaWdpbmFsIGEgdHlwaWNhbHdoZW4gdGhleWVuZ2luZWVyc2NvdWxkIG5vdHJlc2lkZW50c3dlZG5lc2RheXRoZSB0aGlyZCBwcm9kdWN0c0phbnVhcnkgMndoYXQgdGhleWEgY2VydGFpbnJlYWN0aW9uc3Byb2Nlc3NvcmFmdGVyIGhpc3RoZSBsYXN0IGNvbnRhaW5lZCI+PC9kaXY+CjwvYT48L3RkPmRlcGVuZCBvbnNlYXJjaCI+CnBpZWNlcyBvZmNvbXBldGluZ1JlZmVyZW5jZXRlbm5lc3NlZXdoaWNoIGhhcyB2ZXJzaW9uPTwvc3Bhbj4gPDwvaGVhZGVyPmdpdmVzIHRoZWhpc3RvcmlhbnZhbHVlPSIiPnBhZGRpbmc6MHZpZXcgdGhhdHRvZ2V0aGVyLHRoZSBtb3N0IHdhcyBmb3VuZHN1YnNldCBvZmF0dGFjayBvbmNoaWxkcmVuLHBvaW50cyBvZnBlcnNvbmFsIHBvc2l0aW9uOmFsbGVnZWRseUNsZXZlbGFuZHdhcyBsYXRlcmFuZCBhZnRlcmFyZSBnaXZlbndhcyBzdGlsbHNjcm9sbGluZ2Rlc2lnbiBvZm1ha2VzIHRoZW11Y2ggbGVzc0FtZXJpY2Fucy4KCkFmdGVyICwgYnV0IHRoZU11c2V1bSBvZmxvdWlzaWFuYShmcm9tIHRoZW1pbm5lc290YXBhcnRpY2xlc2EgcHJvY2Vzc0RvbWluaWNhbnZvbHVtZSBvZnJldHVybmluZ2RlZmVuc2l2ZTAwcHh8cmlnaG1hZGUgZnJvbW1vdXNlb3ZlciIgc3R5bGU9InN0YXRlcyBvZih3aGljaCBpc2NvbnRpbnVlc0ZyYW5jaXNjb2J1aWxkaW5nIHdpdGhvdXQgYXdpdGggc29tZXdobyB3b3VsZGEgZm9ybSBvZmEgcGFydCBvZmJlZm9yZSBpdGtub3duIGFzICBTZXJ2aWNlc2xvY2F0aW9uIGFuZCBvZnRlbm1lYXN1cmluZ2FuZCBpdCBpc3BhcGVyYmFja3ZhbHVlcyBvZg0KPHRpdGxlPj0gd2luZG93LmRldGVybWluZWVyJnF1b3Q7IHBsYXllZCBieWFuZCBlYXJseTwvY2VudGVyPmZyb20gdGhpc3RoZSB0aHJlZXBvd2VyIGFuZG9mICZxdW90O2lubmVySFRNTDxhIGhyZWY9Ink6aW5saW5lO0NodXJjaCBvZnRoZSBldmVudHZlcnkgaGlnaG9mZmljaWFsIC1oZWlnaHQ6IGNvbnRlbnQ9Ii9jZ2ktYmluL3RvIGNyZWF0ZWFmcmlrYWFuc2VzcGVyYW50b2ZyYW7Dp2Fpc2xhdHZpZcWhdWxpZXR1dmnFs8SMZcWhdGluYcSNZcWhdGluYeC5hOC4l+C4ouaXpeacrOiqnueugOS9k+Wtl+e5gemrlOWtl+2VnOq1reyWtOS4uuS7gOS5iOiuoeeul+acuueslOiusOacrOiojuirluWNgOacjeWKoeWZqOS6kuiBlOe9keaIv+WcsOS6p+S/seS5kOmDqOWHuueJiOekvuaOkuihjOamnOmDqOiQveagvOi/m+S4gOatpeaUr+S7mOWunemqjOivgeeggeWnlOWRmOS8muaVsOaNruW6k+a2iOi0ueiAheWKnuWFrOWupOiuqOiuuuWMuua3seWcs+W4guaSreaUvuWZqOWMl+S6rOW4guWkp+WtpueUn+i2iuadpei2iueuoeeQhuWRmOS/oeaBr+e9kXNlcnZpY2lvc2FydMOtY3Vsb2FyZ2VudGluYWJhcmNlbG9uYWN1YWxxdWllcnB1YmxpY2Fkb3Byb2R1Y3Rvc3BvbMOtdGljYXJlc3B1ZXN0YXdpa2lwZWRpYXNpZ3VpZW50ZWLDunNxdWVkYWNvbXVuaWRhZHNlZ3VyaWRhZHByaW5jaXBhbHByZWd1bnRhc2NvbnRlbmlkb3Jlc3BvbmRlcnZlbmV6dWVsYXByb2JsZW1hc2RpY2llbWJyZXJlbGFjacOzbm5vdmllbWJyZXNpbWlsYXJlc3Byb3llY3Rvc3Byb2dyYW1hc2luc3RpdHV0b2FjdGl2aWRhZGVuY3VlbnRyYWVjb25vbcOtYWltw6FnZW5lc2NvbnRhY3RhcmRlc2Nhcmdhcm5lY2VzYXJpb2F0ZW5jacOzbnRlbMOpZm9ub2NvbWlzacOzbmNhbmNpb25lc2NhcGFjaWRhZGVuY29udHJhcmFuw6FsaXNpc2Zhdm9yaXRvc3TDqXJtaW5vc3Byb3ZpbmNpYWV0aXF1ZXRhc2VsZW1lbnRvc2Z1bmNpb25lc3Jlc3VsdGFkb2NhcsOhY3RlcnByb3BpZWRhZHByaW5jaXBpb25lY2VzaWRhZG11bmljaXBhbGNyZWFjacOzbmRlc2Nhcmdhc3ByZXNlbmNpYWNvbWVyY2lhbG9waW5pb25lc2VqZXJjaWNpb2VkaXRvcmlhbHNhbGFtYW5jYWdvbnrDoWxlemRvY3VtZW50b3BlbMOtY3VsYXJlY2llbnRlc2dlbmVyYWxlc3RhcnJhZ29uYXByw6FjdGljYW5vdmVkYWRlc3Byb3B1ZXN0YXBhY2llbnRlc3TDqWNuaWNhc29iamV0aXZvc2NvbnRhY3Rvc+CkruClh+CkguCksuCkv+Ckj+CkueCliOCkguCkl+Ckr+CkvuCkuOCkvuCkpeCkj+CkteCkguCksOCkueClh+CkleCli+CkiOCkleClgeCkm+CksOCkueCkvuCkrOCkvuCkpuCkleCkueCkvuCkuOCkreClgOCkueClgeCkj+CksOCkueClgOCkruCliOCkguCkpuCkv+CkqOCkrOCkvuCkpGRpcGxvZG9jc+CkuOCkruCkr+CksOClguCkquCkqOCkvuCkruCkquCkpOCkvuCkq+Ckv+CksOCklOCkuOCkpOCkpOCksOCkueCksuCli+Ckl+CkueClgeCkhuCkrOCkvuCksOCkpuClh+CktuCkueClgeCkiOCkluClh+CksuCkr+CkpuCkv+CkleCkvuCkruCkteClh+CkrOCkpOClgOCkqOCkrOClgOCkmuCkruCljOCkpOCkuOCkvuCksuCksuClh+CkluCknOClieCkrOCkruCkpuCkpuCkpOCkpeCkvuCkqOCkueClgOCktuCkueCksOCkheCksuCkl+CkleCkreClgOCkqOCkl+CksOCkquCkvuCkuOCksOCkvuCkpOCkleCkv+Ckj+CkieCkuOClh+Ckl+Ckr+ClgOCkueClguCkgeCkhuCkl+Clh+Ckn+ClgOCkruCkluCli+CknOCkleCkvuCksOCkheCkreClgOCkl+Ckr+Clh+CkpOClgeCkruCkteCli+Ckn+CkpuClh+CkguCkheCkl+CksOCkkOCkuOClh+CkruClh+CksuCksuCkl+CkvuCkueCkvuCksuCkiuCkquCksOCkmuCkvuCksOCkkOCkuOCkvuCkpuClh+CksOCknOCkv+CkuOCkpuCkv+CksuCkrOCkguCkpuCkrOCkqOCkvuCkueClguCkguCksuCkvuCkluCknOClgOCkpOCkrOCkn+CkqOCkruCkv+CksuCkh+CkuOClh+CkhuCkqOClh+CkqOCkr+CkvuCkleClgeCksuCksuClieCkl+CkreCkvuCkl+CksOClh+CksuCknOCkl+CkueCksOCkvuCkruCksuCkl+Clh+CkquClh+CknOCkueCkvuCkpeCkh+CkuOClgOCkuOCkueClgOCkleCksuCkvuCkoOClgOCkleCkueCkvuCkgeCkpuClguCksOCkpOCkueCkpOCkuOCkvuCkpOCkr+CkvuCkpuCkhuCkr+CkvuCkquCkvuCkleCkleCljOCkqOCktuCkvuCkruCkpuClh+CkluCkr+CkueClgOCksOCkvuCkr+CkluClgeCkpuCksuCkl+ClgGNhdGVnb3JpZXNleHBlcmllbmNlPC90aXRsZT4NCkNvcHlyaWdodCBqYXZhc2NyaXB0Y29uZGl0aW9uc2V2ZXJ5dGhpbmc8cCBjbGFzcz0idGVjaG5vbG9neWJhY2tncm91bmQ8YSBjbGFzcz0ibWFuYWdlbWVudCZjb3B5OyAyMDFqYXZhU2NyaXB0Y2hhcmFjdGVyc2JyZWFkY3J1bWJ0aGVtc2VsdmVzaG9yaXpvbnRhbGdvdmVybm1lbnRDYWxpZm9ybmlhYWN0aXZpdGllc2Rpc2NvdmVyZWROYXZpZ2F0aW9udHJhbnNpdGlvbmNvbm5lY3Rpb25uYXZpZ2F0aW9uYXBwZWFyYW5jZTwvdGl0bGU+PG1jaGVja2JveCIgdGVjaG5pcXVlc3Byb3RlY3Rpb25hcHBhcmVudGx5YXMgd2VsbCBhc3VudCcsICdVQS1yZXNvbHV0aW9ub3BlcmF0aW9uc3RlbGV2aXNpb250cmFuc2xhdGVkV2FzaGluZ3Rvbm5hdmlnYXRvci4gPSB3aW5kb3cuaW1wcmVzc2lvbiZsdDticiZndDtsaXRlcmF0dXJlcG9wdWxhdGlvbmJnY29sb3I9IiNlc3BlY2lhbGx5IGNvbnRlbnQ9InByb2R1Y3Rpb25uZXdzbGV0dGVycHJvcGVydGllc2RlZmluaXRpb25sZWFkZXJzaGlwVGVjaG5vbG9neVBhcmxpYW1lbnRjb21wYXJpc29udWwgY2xhc3M9Ii5pbmRleE9mKCJjb25jbHVzaW9uZGlzY3Vzc2lvbmNvbXBvbmVudHNiaW9sb2dpY2FsUmV2b2x1dGlvbl9jb250YWluZXJ1bmRlcnN0b29kbm9zY3JpcHQ+PHBlcm1pc3Npb25lYWNoIG90aGVyYXRtb3NwaGVyZSBvbmZvY3VzPSI8Zm9ybSBpZD0icHJvY2Vzc2luZ3RoaXMudmFsdWVnZW5lcmF0aW9uQ29uZmVyZW5jZXN1YnNlcXVlbnR3ZWxsLWtub3dudmFyaWF0aW9uc3JlcHV0YXRpb25waGVub21lbm9uZGlzY2lwbGluZWxvZ28ucG5nIiAoZG9jdW1lbnQsYm91bmRhcmllc2V4cHJlc3Npb25zZXR0bGVtZW50QmFja2dyb3VuZG91dCBvZiB0aGVlbnRlcnByaXNlKCJodHRwczoiIHVuZXNjYXBlKCJwYXNzd29yZCIgZGVtb2NyYXRpYzxhIGhyZWY9Ii93cmFwcGVyIj4KbWVtYmVyc2hpcGxpbmd1aXN0aWNweDtwYWRkaW5ncGhpbG9zb3BoeWFzc2lzdGFuY2V1bml2ZXJzaXR5ZmFjaWxpdGllc3JlY29nbml6ZWRwcmVmZXJlbmNlaWYgKHR5cGVvZm1haW50YWluZWR2b2NhYnVsYXJ5aHlwb3RoZXNpcy5zdWJtaXQoKTsmYW1wO25ic3A7YW5ub3RhdGlvbmJlaGluZCB0aGVGb3VuZGF0aW9ucHVibGlzaGVyImFzc3VtcHRpb25pbnRyb2R1Y2VkY29ycnVwdGlvbnNjaWVudGlzdHNleHBsaWNpdGx5aW5zdGVhZCBvZmRpbWVuc2lvbnMgb25DbGljaz0iY29uc2lkZXJlZGRlcGFydG1lbnRvY2N1cGF0aW9uc29vbiBhZnRlcmludmVzdG1lbnRwcm9ub3VuY2VkaWRlbnRpZmllZGV4cGVyaW1lbnRNYW5hZ2VtZW50Z2VvZ3JhcGhpYyIgaGVpZ2h0PSJsaW5rIHJlbD0iLnJlcGxhY2UoL2RlcHJlc3Npb25jb25mZXJlbmNlcHVuaXNobWVudGVsaW1pbmF0ZWRyZXNpc3RhbmNlYWRhcHRhdGlvbm9wcG9zaXRpb253ZWxsIGtub3duc3VwcGxlbWVudGRldGVybWluZWRoMSBjbGFzcz0iMHB4O21hcmdpbm1lY2hhbmljYWxzdGF0aXN0aWNzY2VsZWJyYXRlZEdvdmVybm1lbnQKCkR1cmluZyB0ZGV2ZWxvcGVyc2FydGlmaWNpYWxlcXVpdmFsZW50b3JpZ2luYXRlZENvbW1pc3Npb25hdHRhY2htZW50PHNwYW4gaWQ9InRoZXJlIHdlcmVOZWRlcmxhbmRzYmV5b25kIHRoZXJlZ2lzdGVyZWRqb3VybmFsaXN0ZnJlcXVlbnRseWFsbCBvZiB0aGVsYW5nPSJlbiIgPC9zdHlsZT4NCmFic29sdXRlOyBzdXBwb3J0aW5nZXh0cmVtZWx5IG1haW5zdHJlYW08L3N0cm9uZz4gcG9wdWxhcml0eWVtcGxveW1lbnQ8L3RhYmxlPg0KIGNvbHNwYW49IjwvZm9ybT4KICBjb252ZXJzaW9uYWJvdXQgdGhlIDwvcD48L2Rpdj5pbnRlZ3JhdGVkIiBsYW5nPSJlblBvcnR1Z3Vlc2VzdWJzdGl0dXRlaW5kaXZpZHVhbGltcG9zc2libGVtdWx0aW1lZGlhYWxtb3N0IGFsbHB4IHNvbGlkICNhcGFydCBmcm9tc3ViamVjdCB0b2luIEVuZ2xpc2hjcml0aWNpemVkZXhjZXB0IGZvcmd1aWRlbGluZXNvcmlnaW5hbGx5cmVtYXJrYWJsZXRoZSBzZWNvbmRoMiBjbGFzcz0iPGEgdGl0bGU9IihpbmNsdWRpbmdwYXJhbWV0ZXJzcHJvaGliaXRlZD0gImh0dHA6Ly9kaWN0aW9uYXJ5cGVyY2VwdGlvbnJldm9sdXRpb25mb3VuZGF0aW9ucHg7aGVpZ2h0OnN1Y2Nlc3NmdWxzdXBwb3J0ZXJzbWlsbGVubml1bWhpcyBmYXRoZXJ0aGUgJnF1b3Q7bm8tcmVwZWF0O2NvbW1lcmNpYWxpbmR1c3RyaWFsZW5jb3VyYWdlZGFtb3VudCBvZiB1bm9mZmljaWFsZWZmaWNpZW5jeVJlZmVyZW5jZXNjb29yZGluYXRlZGlzY2xhaW1lcmV4cGVkaXRpb25kZXZlbG9waW5nY2FsY3VsYXRlZHNpbXBsaWZpZWRsZWdpdGltYXRlc3Vic3RyaW5nKDAiIGNsYXNzPSJjb21wbGV0ZWx5aWxsdXN0cmF0ZWZpdmUgeWVhcnNpbnN0cnVtZW50UHVibGlzaGluZzEiIGNsYXNzPSJwc3ljaG9sb2d5Y29uZmlkZW5jZW51bWJlciBvZiBhYnNlbmNlIG9mZm9jdXNlZCBvbmpvaW5lZCB0aGVzdHJ1Y3R1cmVzcHJldmlvdXNseT48L2lmcmFtZT5vbmNlIGFnYWluYnV0IHJhdGhlcmltbWlncmFudHNvZiBjb3Vyc2UsYSBncm91cCBvZkxpdGVyYXR1cmVVbmxpa2UgdGhlPC9hPiZuYnNwOwpmdW5jdGlvbiBpdCB3YXMgdGhlQ29udmVudGlvbmF1dG9tb2JpbGVQcm90ZXN0YW50YWdncmVzc2l2ZWFmdGVyIHRoZSBTaW1pbGFybHksIiAvPjwvZGl2PmNvbGxlY3Rpb24NCmZ1bmN0aW9udmlzaWJpbGl0eXRoZSB1c2Ugb2Z2b2x1bnRlZXJzYXR0cmFjdGlvbnVuZGVyIHRoZSB0aHJlYXRlbmVkKjwhW0NEQVRBW2ltcG9ydGFuY2VpbiBnZW5lcmFsdGhlIGxhdHRlcjwvZm9ybT4KPC8uaW5kZXhPZignaSA9IDA7IGkgPGRpZmZlcmVuY2VkZXZvdGVkIHRvdHJhZGl0aW9uc3NlYXJjaCBmb3J1bHRpbWF0ZWx5dG91cm5hbWVudGF0dHJpYnV0ZXNzby1jYWxsZWQgfQo8L3N0eWxlPmV2YWx1YXRpb25lbXBoYXNpemVkYWNjZXNzaWJsZTwvc2VjdGlvbj5zdWNjZXNzaW9uYWxvbmcgd2l0aE1lYW53aGlsZSxpbmR1c3RyaWVzPC9hPjxiciAvPmhhcyBiZWNvbWVhc3BlY3RzIG9mVGVsZXZpc2lvbnN1ZmZpY2llbnRiYXNrZXRiYWxsYm90aCBzaWRlc2NvbnRpbnVpbmdhbiBhcnRpY2xlPGltZyBhbHQ9ImFkdmVudHVyZXNoaXMgbW90aGVybWFuY2hlc3RlcnByaW5jaXBsZXNwYXJ0aWN1bGFyY29tbWVudGFyeWVmZmVjdHMgb2ZkZWNpZGVkIHRvIj48c3Ryb25nPnB1Ymxpc2hlcnNKb3VybmFsIG9mZGlmZmljdWx0eWZhY2lsaXRhdGVhY2NlcHRhYmxlc3R5bGUuY3NzIglmdW5jdGlvbiBpbm5vdmF0aW9uPkNvcHlyaWdodHNpdHVhdGlvbnN3b3VsZCBoYXZlYnVzaW5lc3Nlc0RpY3Rpb25hcnlzdGF0ZW1lbnRzb2Z0ZW4gdXNlZHBlcnNpc3RlbnRpbiBKYW51YXJ5Y29tcHJpc2luZzwvdGl0bGU+CglkaXBsb21hdGljY29udGFpbmluZ3BlcmZvcm1pbmdleHRlbnNpb25zbWF5IG5vdCBiZWNvbmNlcHQgb2Ygb25jbGljaz0iSXQgaXMgYWxzb2ZpbmFuY2lhbCBtYWtpbmcgdGhlTHV4ZW1ib3VyZ2FkZGl0aW9uYWxhcmUgY2FsbGVkZW5nYWdlZCBpbiJzY3JpcHQiKTtidXQgaXQgd2FzZWxlY3Ryb25pY29uc3VibWl0PSIKPCEtLSBFbmQgZWxlY3RyaWNhbG9mZmljaWFsbHlzdWdnZXN0aW9udG9wIG9mIHRoZXVubGlrZSB0aGVBdXN0cmFsaWFuT3JpZ2luYWxseXJlZmVyZW5jZXMKPC9oZWFkPg0KcmVjb2duaXNlZGluaXRpYWxpemVsaW1pdGVkIHRvQWxleGFuZHJpYXJldGlyZW1lbnRBZHZlbnR1cmVzZm91ciB5ZWFycwoKJmx0OyEtLSBpbmNyZWFzaW5nZGVjb3JhdGlvbmgzIGNsYXNzPSJvcmlnaW5zIG9mb2JsaWdhdGlvbnJlZ3VsYXRpb25jbGFzc2lmaWVkKGZ1bmN0aW9uKGFkdmFudGFnZXNiZWluZyB0aGUgaGlzdG9yaWFuczxiYXNlIGhyZWZyZXBlYXRlZGx5d2lsbGluZyB0b2NvbXBhcmFibGVkZXNpZ25hdGVkbm9taW5hdGlvbmZ1bmN0aW9uYWxpbnNpZGUgdGhlcmV2ZWxhdGlvbmVuZCBvZiB0aGVzIGZvciB0aGUgYXV0aG9yaXplZHJlZnVzZWQgdG90YWtlIHBsYWNlYXV0b25vbW91c2NvbXByb21pc2Vwb2xpdGljYWwgcmVzdGF1cmFudHR3byBvZiB0aGVGZWJydWFyeSAycXVhbGl0eSBvZnN3Zm9iamVjdC51bmRlcnN0YW5kbmVhcmx5IGFsbHdyaXR0ZW4gYnlpbnRlcnZpZXdzIiB3aWR0aD0iMXdpdGhkcmF3YWxmbG9hdDpsZWZ0aXMgdXN1YWxseWNhbmRpZGF0ZXNuZXdzcGFwZXJzbXlzdGVyaW91c0RlcGFydG1lbnRiZXN0IGtub3ducGFybGlhbWVudHN1cHByZXNzZWRjb252ZW5pZW50cmVtZW1iZXJlZGRpZmZlcmVudCBzeXN0ZW1hdGljaGFzIGxlZCB0b3Byb3BhZ2FuZGFjb250cm9sbGVkaW5mbHVlbmNlc2NlcmVtb25pYWxwcm9jbGFpbWVkUHJvdGVjdGlvbmxpIGNsYXNzPSJTY2llbnRpZmljY2xhc3M9Im5vLXRyYWRlbWFya3Ntb3JlIHRoYW4gd2lkZXNwcmVhZExpYmVyYXRpb250b29rIHBsYWNlZGF5IG9mIHRoZWFzIGxvbmcgYXNpbXByaXNvbmVkQWRkaXRpb25hbAo8aGVhZD4KPG1MYWJvcmF0b3J5Tm92ZW1iZXIgMmV4Y2VwdGlvbnNJbmR1c3RyaWFsdmFyaWV0eSBvZmZsb2F0OiBsZWZEdXJpbmcgdGhlYXNzZXNzbWVudGhhdmUgYmVlbiBkZWFscyB3aXRoU3RhdGlzdGljc29jY3VycmVuY2UvdWw+PC9kaXY+Y2xlYXJmaXgiPnRoZSBwdWJsaWNtYW55IHllYXJzd2hpY2ggd2VyZW92ZXIgdGltZSxzeW5vbnltb3VzY29udGVudCI+CnByZXN1bWFibHloaXMgZmFtaWx5dXNlckFnZW50LnVuZXhwZWN0ZWRpbmNsdWRpbmcgY2hhbGxlbmdlZGEgbWlub3JpdHl1bmRlZmluZWQiYmVsb25ncyB0b3Rha2VuIGZyb21pbiBPY3RvYmVycG9zaXRpb246IHNhaWQgdG8gYmVyZWxpZ2lvdXMgRmVkZXJhdGlvbiByb3dzcGFuPSJvbmx5IGEgZmV3bWVhbnQgdGhhdGxlZCB0byB0aGUtLT4NCjxkaXYgPGZpZWxkc2V0PkFyY2hiaXNob3AgY2xhc3M9Im5vYmVpbmcgdXNlZGFwcHJvYWNoZXNwcml2aWxlZ2Vzbm9zY3JpcHQ+CnJlc3VsdHMgaW5tYXkgYmUgdGhlRWFzdGVyIGVnZ21lY2hhbmlzbXNyZWFzb25hYmxlUG9wdWxhdGlvbkNvbGxlY3Rpb25zZWxlY3RlZCI+bm9zY3JpcHQ+DS9pbmRleC5waHBhcnJpdmFsIG9mLWpzc2RrJykpO21hbmFnZWQgdG9pbmNvbXBsZXRlY2FzdWFsdGllc2NvbXBsZXRpb25DaHJpc3RpYW5zU2VwdGVtYmVyIGFyaXRobWV0aWNwcm9jZWR1cmVzbWlnaHQgaGF2ZVByb2R1Y3Rpb25pdCBhcHBlYXJzUGhpbG9zb3BoeWZyaWVuZHNoaXBsZWFkaW5nIHRvZ2l2aW5nIHRoZXRvd2FyZCB0aGVndWFyYW50ZWVkZG9jdW1lbnRlZGNvbG9yOiMwMDB2aWRlbyBnYW1lY29tbWlzc2lvbnJlZmxlY3RpbmdjaGFuZ2UgdGhlYXNzb2NpYXRlZHNhbnMtc2VyaWZvbmtleXByZXNzOyBwYWRkaW5nOkhlIHdhcyB0aGV1bmRlcmx5aW5ndHlwaWNhbGx5ICwgYW5kIHRoZSBzcmNFbGVtZW50c3VjY2Vzc2l2ZXNpbmNlIHRoZSBzaG91bGQgYmUgbmV0d29ya2luZ2FjY291bnRpbmd1c2Ugb2YgdGhlbG93ZXIgdGhhbnNob3dzIHRoYXQ8L3NwYW4+CgkJY29tcGxhaW50c2NvbnRpbnVvdXNxdWFudGl0aWVzYXN0cm9ub21lcmhlIGRpZCBub3RkdWUgdG8gaXRzYXBwbGllZCB0b2FuIGF2ZXJhZ2VlZmZvcnRzIHRvdGhlIGZ1dHVyZWF0dGVtcHQgdG9UaGVyZWZvcmUsY2FwYWJpbGl0eVJlcHVibGljYW53YXMgZm9ybWVkRWxlY3Ryb25pY2tpbG9tZXRlcnNjaGFsbGVuZ2VzcHVibGlzaGluZ3RoZSBmb3JtZXJpbmRpZ2Vub3VzZGlyZWN0aW9uc3N1YnNpZGlhcnljb25zcGlyYWN5ZGV0YWlscyBvZmFuZCBpbiB0aGVhZmZvcmRhYmxlc3Vic3RhbmNlc3JlYXNvbiBmb3Jjb252ZW50aW9uaXRlbXR5cGU9ImFic29sdXRlbHlzdXBwb3NlZGx5cmVtYWluZWQgYWF0dHJhY3RpdmV0cmF2ZWxsaW5nc2VwYXJhdGVseWZvY3VzZXMgb25lbGVtZW50YXJ5YXBwbGljYWJsZWZvdW5kIHRoYXRzdHlsZXNoZWV0bWFudXNjcmlwdHN0YW5kcyBmb3Igbm8tcmVwZWF0KHNvbWV0aW1lc0NvbW1lcmNpYWxpbiBBbWVyaWNhdW5kZXJ0YWtlbnF1YXJ0ZXIgb2ZhbiBleGFtcGxlcGVyc29uYWxseWluZGV4LnBocD88L2J1dHRvbj4KcGVyY2VudGFnZWJlc3Qta25vd25jcmVhdGluZyBhIiBkaXI9Imx0ckxpZXV0ZW5hbnQKPGRpdiBpZD0idGhleSB3b3VsZGFiaWxpdHkgb2ZtYWRlIHVwIG9mbm90ZWQgdGhhdGNsZWFyIHRoYXRhcmd1ZSB0aGF0dG8gYW5vdGhlcmNoaWxkcmVuJ3NwdXJwb3NlIG9mZm9ybXVsYXRlZGJhc2VkIHVwb250aGUgcmVnaW9uc3ViamVjdCBvZnBhc3NlbmdlcnNwb3NzZXNzaW9uLgoKSW4gdGhlIEJlZm9yZSB0aGVhZnRlcndhcmRzY3VycmVudGx5IGFjcm9zcyB0aGVzY2llbnRpZmljY29tbXVuaXR5LmNhcGl0YWxpc21pbiBHZXJtYW55cmlnaHQtd2luZ3RoZSBzeXN0ZW1Tb2NpZXR5IG9mcG9saXRpY2lhbmRpcmVjdGlvbjp3ZW50IG9uIHRvcmVtb3ZhbCBvZiBOZXcgWW9yayBhcGFydG1lbnRzaW5kaWNhdGlvbmR1cmluZyB0aGV1bmxlc3MgdGhlaGlzdG9yaWNhbGhhZCBiZWVuIGFkZWZpbml0aXZlaW5ncmVkaWVudGF0dGVuZGFuY2VDZW50ZXIgZm9ycHJvbWluZW5jZXJlYWR5U3RhdGVzdHJhdGVnaWVzYnV0IGluIHRoZWFzIHBhcnQgb2Zjb25zdGl0dXRlY2xhaW0gdGhhdGxhYm9yYXRvcnljb21wYXRpYmxlZmFpbHVyZSBvZiwgc3VjaCBhcyBiZWdhbiB3aXRodXNpbmcgdGhlIHRvIHByb3ZpZGVmZWF0dXJlIG9mZnJvbSB3aGljaC8iIGNsYXNzPSJnZW9sb2dpY2Fsc2V2ZXJhbCBvZmRlbGliZXJhdGVpbXBvcnRhbnQgaG9sZHMgdGhhdGluZyZxdW90OyB2YWxpZ249dG9wdGhlIEdlcm1hbm91dHNpZGUgb2ZuZWdvdGlhdGVkaGlzIGNhcmVlcnNlcGFyYXRpb25pZD0ic2VhcmNod2FzIGNhbGxlZHRoZSBmb3VydGhyZWNyZWF0aW9ub3RoZXIgdGhhbnByZXZlbnRpb253aGlsZSB0aGUgZWR1Y2F0aW9uLGNvbm5lY3RpbmdhY2N1cmF0ZWx5d2VyZSBidWlsdHdhcyBraWxsZWRhZ3JlZW1lbnRzbXVjaCBtb3JlIER1ZSB0byB0aGV3aWR0aDogMTAwc29tZSBvdGhlcktpbmdkb20gb2Z0aGUgZW50aXJlZmFtb3VzIGZvcnRvIGNvbm5lY3RvYmplY3RpdmVzdGhlIEZyZW5jaHBlb3BsZSBhbmRmZWF0dXJlZCI+aXMgc2FpZCB0b3N0cnVjdHVyYWxyZWZlcmVuZHVtbW9zdCBvZnRlbmEgc2VwYXJhdGUtPgo8ZGl2IGlkIE9mZmljaWFsIHdvcmxkd2lkZS5hcmlhLWxhYmVsdGhlIHBsYW5ldGFuZCBpdCB3YXNkIiB2YWx1ZT0ibG9va2luZyBhdGJlbmVmaWNpYWxhcmUgaW4gdGhlbW9uaXRvcmluZ3JlcG9ydGVkbHl0aGUgbW9kZXJud29ya2luZyBvbmFsbG93ZWQgdG93aGVyZSB0aGUgaW5ub3ZhdGl2ZTwvYT48L2Rpdj5zb3VuZHRyYWNrc2VhcmNoRm9ybXRlbmQgdG8gYmVpbnB1dCBpZD0ib3BlbmluZyBvZnJlc3RyaWN0ZWRhZG9wdGVkIGJ5YWRkcmVzc2luZ3RoZW9sb2dpYW5tZXRob2RzIG9mdmFyaWFudCBvZkNocmlzdGlhbiB2ZXJ5IGxhcmdlYXV0b21vdGl2ZWJ5IGZhciB0aGVyYW5nZSBmcm9tcHVyc3VpdCBvZmZvbGxvdyB0aGVicm91Z2h0IHRvaW4gRW5nbGFuZGFncmVlIHRoYXRhY2N1c2VkIG9mY29tZXMgZnJvbXByZXZlbnRpbmdkaXYgc3R5bGU9aGlzIG9yIGhlcnRyZW1lbmRvdXNmcmVlZG9tIG9mY29uY2VybmluZzAgMWVtIDFlbTtCYXNrZXRiYWxsL3N0eWxlLmNzc2FuIGVhcmxpZXJldmVuIGFmdGVyLyIgdGl0bGU9Ii5jb20vaW5kZXh0YWtpbmcgdGhlcGl0dHNidXJnaGNvbnRlbnQiPg08c2NyaXB0PihmdHVybmVkIG91dGhhdmluZyB0aGU8L3NwYW4+DQogb2NjYXNpb25hbGJlY2F1c2UgaXRzdGFydGVkIHRvcGh5c2ljYWxseT48L2Rpdj4KICBjcmVhdGVkIGJ5Q3VycmVudGx5LCBiZ2NvbG9yPSJ0YWJpbmRleD0iZGlzYXN0cm91c0FuYWx5dGljcyBhbHNvIGhhcyBhPjxkaXYgaWQ9Ijwvc3R5bGU+CjxjYWxsZWQgZm9yc2luZ2VyIGFuZC5zcmMgPSAiLy92aW9sYXRpb25zdGhpcyBwb2ludGNvbnN0YW50bHlpcyBsb2NhdGVkcmVjb3JkaW5nc2QgZnJvbSB0aGVuZWRlcmxhbmRzcG9ydHVndcOqc9ei15HXqNeZ16rZgdin2LHYs9uMZGVzYXJyb2xsb2NvbWVudGFyaW9lZHVjYWNpw7Nuc2VwdGllbWJyZXJlZ2lzdHJhZG9kaXJlY2Npw7NudWJpY2FjacOzbnB1YmxpY2lkYWRyZXNwdWVzdGFzcmVzdWx0YWRvc2ltcG9ydGFudGVyZXNlcnZhZG9zYXJ0w61jdWxvc2RpZmVyZW50ZXNzaWd1aWVudGVzcmVww7pibGljYXNpdHVhY2nDs25taW5pc3RlcmlvcHJpdmFjaWRhZGRpcmVjdG9yaW9mb3JtYWNpw7NucG9ibGFjacOzbnByZXNpZGVudGVjb250ZW5pZG9zYWNjZXNvcmlvc3RlY2hub3JhdGlwZXJzb25hbGVzY2F0ZWdvcsOtYWVzcGVjaWFsZXNkaXNwb25pYmxlYWN0dWFsaWRhZHJlZmVyZW5jaWF2YWxsYWRvbGlkYmlibGlvdGVjYXJlbGFjaW9uZXNjYWxlbmRhcmlvcG9sw610aWNhc2FudGVyaW9yZXNkb2N1bWVudG9zbmF0dXJhbGV6YW1hdGVyaWFsZXNkaWZlcmVuY2lhZWNvbsOzbWljYXRyYW5zcG9ydGVyb2Ryw61ndWV6cGFydGljaXBhcmVuY3VlbnRyYW5kaXNjdXNpw7NuZXN0cnVjdHVyYWZ1bmRhY2nDs25mcmVjdWVudGVzcGVybWFuZW50ZXRvdGFsbWVudGXQvNC+0LbQvdC+0LHRg9C00LXRgtC80L7QttC10YLQstGA0LXQvNGP0YLQsNC60LbQtdGH0YLQvtCx0YvQsdC+0LvQtdC10L7Rh9C10L3RjNGN0YLQvtCz0L7QutC+0LPQtNCw0L/QvtGB0LvQtdCy0YHQtdCz0L7RgdCw0LnRgtC10YfQtdGA0LXQt9C80L7Qs9GD0YLRgdCw0LnRgtCw0LbQuNC30L3QuNC80LXQttC00YPQsdGD0LTRg9GC0J/QvtC40YHQutC30LTQtdGB0YzQstC40LTQtdC+0YHQstGP0LfQuNC90YPQttC90L7RgdCy0L7QtdC50LvRjtC00LXQudC/0L7RgNC90L7QvNC90L7Qs9C+0LTQtdGC0LXQudGB0LLQvtC40YXQv9GA0LDQstCw0YLQsNC60L7QudC80LXRgdGC0L7QuNC80LXQtdGC0LbQuNC30L3RjNC+0LTQvdC+0LnQu9GD0YfRiNC10L/QtdGA0LXQtNGH0LDRgdGC0LjRh9Cw0YHRgtGM0YDQsNCx0L7RgtC90L7QstGL0YXQv9GA0LDQstC+0YHQvtCx0L7QudC/0L7RgtC+0LzQvNC10L3QtdC10YfQuNGB0LvQtdC90L7QstGL0LXRg9GB0LvRg9Cz0L7QutC+0LvQvtC90LDQt9Cw0LTRgtCw0LrQvtC10YLQvtCz0LTQsNC/0L7Rh9GC0LjQn9C+0YHQu9C10YLQsNC60LjQtdC90L7QstGL0LnRgdGC0L7QuNGC0YLQsNC60LjRhdGB0YDQsNC30YPQodCw0L3QutGC0YTQvtGA0YPQvNCa0L7Qs9C00LDQutC90LjQs9C40YHQu9C+0LLQsNC90LDRiNC10LnQvdCw0LnRgtC40YHQstC+0LjQvNGB0LLRj9C30YzQu9GO0LHQvtC50YfQsNGB0YLQvtGB0YDQtdC00LjQmtGA0L7QvNC10KTQvtGA0YPQvNGA0YvQvdC60LXRgdGC0LDQu9C40L/QvtC40YHQutGC0YvRgdGP0YfQvNC10YHRj9GG0YbQtdC90YLRgNGC0YDRg9C00LDRgdCw0LzRi9GF0YDRi9C90LrQsNCd0L7QstGL0LnRh9Cw0YHQvtCy0LzQtdGB0YLQsNGE0LjQu9GM0LzQvNCw0YDRgtCw0YHRgtGA0LDQvdC80LXRgdGC0LXRgtC10LrRgdGC0L3QsNGI0LjRhdC80LjQvdGD0YLQuNC80LXQvdC40LjQvNC10Y7RgtC90L7QvNC10YDQs9C+0YDQvtC00YHQsNC80L7QvNGN0YLQvtC80YPQutC+0L3RhtC10YHQstC+0LXQvNC60LDQutC+0LnQkNGA0YXQuNCy2YXZhtiq2K/Zidil2LHYs9in2YTYsdiz2KfZhNip2KfZhNi52KfZhdmD2KrYqNmH2KfYqNix2KfZhdis2KfZhNmK2YjZhdin2YTYtdmI2LHYrNiv2YrYr9ip2KfZhNi52LbZiNil2LbYp9mB2KnYp9mE2YLYs9mF2KfZhNi52KfYqNiq2K3ZhdmK2YTZhdmE2YHYp9iq2YXZhNiq2YLZidiq2LnYr9mK2YTYp9mE2LTYudix2KPYrtio2KfYsdiq2LfZiNmK2LHYudmE2YrZg9mF2KXYsdmB2KfZgti32YTYqNin2KrYp9mE2YTYutip2KrYsdiq2YrYqNin2YTZhtin2LPYp9mE2LTZitiu2YXZhtiq2K/Zitin2YTYudix2KjYp9mE2YLYtdi12KfZgdmE2KfZhdi52YTZitmH2KfYqtit2K/Zitir2KfZhNmE2YfZhdin2YTYudmF2YTZhdmD2KrYqNip2YrZhdmD2YbZg9in2YTYt9mB2YTZgdmK2K/ZitmI2KXYr9in2LHYqdiq2KfYsdmK2K7Yp9mE2LXYrdip2KrYs9is2YrZhNin2YTZiNmC2KrYudmG2K/Zhdin2YXYr9mK2YbYqdiq2LXZhdmK2YXYo9ix2LTZitmB2KfZhNiw2YrZhti52LHYqNmK2KnYqNmI2KfYqNip2KPZhNi52KfYqNin2YTYs9mB2LHZhdi02KfZg9mE2KrYudin2YTZidin2YTYo9mI2YTYp9mE2LPZhtip2KzYp9mF2LnYqdin2YTYtdit2YHYp9mE2K/ZitmG2YPZhNmF2KfYqtin2YTYrtin2LXYp9mE2YXZhNmB2KPYudi22KfYodmD2KrYp9io2KnYp9mE2K7Zitix2LHYs9in2KbZhNin2YTZgtmE2KjYp9mE2KPYr9io2YXZgtin2LfYudmF2LHYp9iz2YTZhdmG2LfZgtip2KfZhNmD2KrYqNin2YTYsdis2YTYp9i02KrYsdmD2KfZhNmC2K/ZhdmK2LnYt9mK2YNzQnlUYWdOYW1lKC5qcGciIGFsdD0iMXB4IHNvbGlkICMuZ2lmIiBhbHQ9InRyYW5zcGFyZW50aW5mb3JtYXRpb25hcHBsaWNhdGlvbiIgb25jbGljaz0iZXN0YWJsaXNoZWRhZHZlcnRpc2luZy5wbmciIGFsdD0iZW52aXJvbm1lbnRwZXJmb3JtYW5jZWFwcHJvcHJpYXRlJmFtcDttZGFzaDtpbW1lZGlhdGVseTwvc3Ryb25nPjwvcmF0aGVyIHRoYW50ZW1wZXJhdHVyZWRldmVsb3BtZW50Y29tcGV0aXRpb25wbGFjZWhvbGRlcnZpc2liaWxpdHk6Y29weXJpZ2h0Ij4wIiBoZWlnaHQ9ImV2ZW4gdGhvdWdocmVwbGFjZW1lbnRkZXN0aW5hdGlvbkNvcnBvcmF0aW9uPHVsIGNsYXNzPSJBc3NvY2lhdGlvbmluZGl2aWR1YWxzcGVyc3BlY3RpdmVzZXRUaW1lb3V0KHVybChodHRwOi8vbWF0aGVtYXRpY3NtYXJnaW4tdG9wOmV2ZW50dWFsbHkgZGVzY3JpcHRpb24pIG5vLXJlcGVhdGNvbGxlY3Rpb25zLkpQR3x0aHVtYnxwYXJ0aWNpcGF0ZS9oZWFkPjxib2R5ZmxvYXQ6bGVmdDs8bGkgY2xhc3M9Imh1bmRyZWRzIG9mCgpIb3dldmVyLCBjb21wb3NpdGlvbmNsZWFyOmJvdGg7Y29vcGVyYXRpb253aXRoaW4gdGhlIGxhYmVsIGZvcj0iYm9yZGVyLXRvcDpOZXcgWmVhbGFuZHJlY29tbWVuZGVkcGhvdG9ncmFwaHlpbnRlcmVzdGluZyZsdDtzdXAmZ3Q7Y29udHJvdmVyc3lOZXRoZXJsYW5kc2FsdGVybmF0aXZlbWF4bGVuZ3RoPSJzd2l0emVybGFuZERldmVsb3BtZW50ZXNzZW50aWFsbHkKCkFsdGhvdWdoIDwvdGV4dGFyZWE+dGh1bmRlcmJpcmRyZXByZXNlbnRlZCZhbXA7bmRhc2g7c3BlY3VsYXRpb25jb21tdW5pdGllc2xlZ2lzbGF0aW9uZWxlY3Ryb25pY3MKCTxkaXYgaWQ9ImlsbHVzdHJhdGVkZW5naW5lZXJpbmd0ZXJyaXRvcmllc2F1dGhvcml0aWVzZGlzdHJpYnV0ZWQ2IiBoZWlnaHQ9InNhbnMtc2VyaWY7Y2FwYWJsZSBvZiBkaXNhcHBlYXJlZGludGVyYWN0aXZlbG9va2luZyBmb3JpdCB3b3VsZCBiZUFmZ2hhbmlzdGFud2FzIGNyZWF0ZWRNYXRoLmZsb29yKHN1cnJvdW5kaW5nY2FuIGFsc28gYmVvYnNlcnZhdGlvbm1haW50ZW5hbmNlZW5jb3VudGVyZWQ8aDIgY2xhc3M9Im1vcmUgcmVjZW50aXQgaGFzIGJlZW5pbnZhc2lvbiBvZikuZ2V0VGltZSgpZnVuZGFtZW50YWxEZXNwaXRlIHRoZSI+PGRpdiBpZD0iaW5zcGlyYXRpb25leGFtaW5hdGlvbnByZXBhcmF0aW9uZXhwbGFuYXRpb248aW5wdXQgaWQ9IjwvYT48L3NwYW4+dmVyc2lvbnMgb2ZpbnN0cnVtZW50c2JlZm9yZSB0aGUgID0gJ2h0dHA6Ly9EZXNjcmlwdGlvbnJlbGF0aXZlbHkgLnN1YnN0cmluZyhlYWNoIG9mIHRoZWV4cGVyaW1lbnRzaW5mbHVlbnRpYWxpbnRlZ3JhdGlvbm1hbnkgcGVvcGxlZHVlIHRvIHRoZSBjb21iaW5hdGlvbmRvIG5vdCBoYXZlTWlkZGxlIEVhc3Q8bm9zY3JpcHQ+PGNvcHlyaWdodCIgcGVyaGFwcyB0aGVpbnN0aXR1dGlvbmluIERlY2VtYmVyYXJyYW5nZW1lbnRtb3N0IGZhbW91c3BlcnNvbmFsaXR5Y3JlYXRpb24gb2ZsaW1pdGF0aW9uc2V4Y2x1c2l2ZWx5c292ZXJlaWdudHktY29udGVudCI+Cjx0ZCBjbGFzcz0idW5kZXJncm91bmRwYXJhbGxlbCB0b2RvY3RyaW5lIG9mb2NjdXBpZWQgYnl0ZXJtaW5vbG9neVJlbmFpc3NhbmNlYSBudW1iZXIgb2ZzdXBwb3J0IGZvcmV4cGxvcmF0aW9ucmVjb2duaXRpb25wcmVkZWNlc3NvcjxpbWcgc3JjPSIvPGgxIGNsYXNzPSJwdWJsaWNhdGlvbm1heSBhbHNvIGJlc3BlY2lhbGl6ZWQ8L2ZpZWxkc2V0PnByb2dyZXNzaXZlbWlsbGlvbnMgb2ZzdGF0ZXMgdGhhdGVuZm9yY2VtZW50YXJvdW5kIHRoZSBvbmUgYW5vdGhlci5wYXJlbnROb2RlYWdyaWN1bHR1cmVBbHRlcm5hdGl2ZXJlc2VhcmNoZXJzdG93YXJkcyB0aGVNb3N0IG9mIHRoZW1hbnkgb3RoZXIgKGVzcGVjaWFsbHk8dGQgd2lkdGg9Ijt3aWR0aDoxMDAlaW5kZXBlbmRlbnQ8aDMgY2xhc3M9IiBvbmNoYW5nZT0iKS5hZGRDbGFzcyhpbnRlcmFjdGlvbk9uZSBvZiB0aGUgZGF1Z2h0ZXIgb2ZhY2Nlc3Nvcmllc2JyYW5jaGVzIG9mDQo8ZGl2IGlkPSJ0aGUgbGFyZ2VzdGRlY2xhcmF0aW9ucmVndWxhdGlvbnNJbmZvcm1hdGlvbnRyYW5zbGF0aW9uZG9jdW1lbnRhcnlpbiBvcmRlciB0byI+CjxoZWFkPgo8IiBoZWlnaHQ9IjFhY3Jvc3MgdGhlIG9yaWVudGF0aW9uKTs8L3NjcmlwdD5pbXBsZW1lbnRlZGNhbiBiZSBzZWVudGhlcmUgd2FzIGFkZW1vbnN0cmF0ZWNvbnRhaW5lciI+Y29ubmVjdGlvbnN0aGUgQnJpdGlzaHdhcyB3cml0dGVuIWltcG9ydGFudDtweDsgbWFyZ2luLWZvbGxvd2VkIGJ5YWJpbGl0eSB0byBjb21wbGljYXRlZGR1cmluZyB0aGUgaW1taWdyYXRpb25hbHNvIGNhbGxlZDxoNCBjbGFzcz0iZGlzdGluY3Rpb25yZXBsYWNlZCBieWdvdmVybm1lbnRzbG9jYXRpb24gb2ZpbiBOb3ZlbWJlcndoZXRoZXIgdGhlPC9wPgo8L2Rpdj5hY3F1aXNpdGlvbmNhbGxlZCB0aGUgcGVyc2VjdXRpb25kZXNpZ25hdGlvbntmb250LXNpemU6YXBwZWFyZWQgaW5pbnZlc3RpZ2F0ZWV4cGVyaWVuY2VkbW9zdCBsaWtlbHl3aWRlbHkgdXNlZGRpc2N1c3Npb25zcHJlc2VuY2Ugb2YgKGRvY3VtZW50LmV4dGVuc2l2ZWx5SXQgaGFzIGJlZW5pdCBkb2VzIG5vdGNvbnRyYXJ5IHRvaW5oYWJpdGFudHNpbXByb3ZlbWVudHNjaG9sYXJzaGlwY29uc3VtcHRpb25pbnN0cnVjdGlvbmZvciBleGFtcGxlb25lIG9yIG1vcmVweDsgcGFkZGluZ3RoZSBjdXJyZW50YSBzZXJpZXMgb2ZhcmUgdXN1YWxseXJvbGUgaW4gdGhlcHJldmlvdXNseSBkZXJpdmF0aXZlc2V2aWRlbmNlIG9mZXhwZXJpZW5jZXNjb2xvcnNjaGVtZXN0YXRlZCB0aGF0Y2VydGlmaWNhdGU8L2E+PC9kaXY+CiBzZWxlY3RlZD0iaGlnaCBzY2hvb2xyZXNwb25zZSB0b2NvbWZvcnRhYmxlYWRvcHRpb24gb2Z0aHJlZSB5ZWFyc3RoZSBjb3VudHJ5aW4gRmVicnVhcnlzbyB0aGF0IHRoZXBlb3BsZSB3aG8gcHJvdmlkZWQgYnk8cGFyYW0gbmFtZWFmZmVjdGVkIGJ5aW4gdGVybXMgb2ZhcHBvaW50bWVudElTTy04ODU5LTEid2FzIGJvcm4gaW5oaXN0b3JpY2FsIHJlZ2FyZGVkIGFzbWVhc3VyZW1lbnRpcyBiYXNlZCBvbiBhbmQgb3RoZXIgOiBmdW5jdGlvbihzaWduaWZpY2FudGNlbGVicmF0aW9udHJhbnNtaXR0ZWQvanMvanF1ZXJ5LmlzIGtub3duIGFzdGhlb3JldGljYWwgdGFiaW5kZXg9Iml0IGNvdWxkIGJlPG5vc2NyaXB0PgpoYXZpbmcgYmVlbg0KPGhlYWQ+DQo8ICZxdW90O1RoZSBjb21waWxhdGlvbmhlIGhhZCBiZWVucHJvZHVjZWQgYnlwaGlsb3NvcGhlcmNvbnN0cnVjdGVkaW50ZW5kZWQgdG9hbW9uZyBvdGhlcmNvbXBhcmVkIHRvdG8gc2F5IHRoYXRFbmdpbmVlcmluZ2EgZGlmZmVyZW50cmVmZXJyZWQgdG9kaWZmZXJlbmNlc2JlbGllZiB0aGF0cGhvdG9ncmFwaHNpZGVudGlmeWluZ0hpc3Rvcnkgb2YgUmVwdWJsaWMgb2ZuZWNlc3NhcmlseXByb2JhYmlsaXR5dGVjaG5pY2FsbHlsZWF2aW5nIHRoZXNwZWN0YWN1bGFyZnJhY3Rpb24gb2ZlbGVjdHJpY2l0eWhlYWQgb2YgdGhlcmVzdGF1cmFudHNwYXJ0bmVyc2hpcGVtcGhhc2lzIG9ubW9zdCByZWNlbnRzaGFyZSB3aXRoIHNheWluZyB0aGF0ZmlsbGVkIHdpdGhkZXNpZ25lZCB0b2l0IGlzIG9mdGVuIj48L2lmcmFtZT5hcyBmb2xsb3dzOm1lcmdlZCB3aXRodGhyb3VnaCB0aGVjb21tZXJjaWFsIHBvaW50ZWQgb3V0b3Bwb3J0dW5pdHl2aWV3IG9mIHRoZXJlcXVpcmVtZW50ZGl2aXNpb24gb2Zwcm9ncmFtbWluZ2hlIHJlY2VpdmVkc2V0SW50ZXJ2YWwiPjwvc3Bhbj48L2luIE5ldyBZb3JrYWRkaXRpb25hbCBjb21wcmVzc2lvbgoKPGRpdiBpZD0iaW5jb3Jwb3JhdGU7PC9zY3JpcHQ+PGF0dGFjaEV2ZW50YmVjYW1lIHRoZSAiIHRhcmdldD0iX2NhcnJpZWQgb3V0U29tZSBvZiB0aGVzY2llbmNlIGFuZHRoZSB0aW1lIG9mQ29udGFpbmVyIj5tYWludGFpbmluZ0NocmlzdG9waGVyTXVjaCBvZiB0aGV3cml0aW5ncyBvZiIgaGVpZ2h0PSIyc2l6ZSBvZiB0aGV2ZXJzaW9uIG9mIG1peHR1cmUgb2YgYmV0d2VlbiB0aGVFeGFtcGxlcyBvZmVkdWNhdGlvbmFsY29tcGV0aXRpdmUgb25zdWJtaXQ9ImRpcmVjdG9yIG9mZGlzdGluY3RpdmUvRFREIFhIVE1MIHJlbGF0aW5nIHRvdGVuZGVuY3kgdG9wcm92aW5jZSBvZndoaWNoIHdvdWxkZGVzcGl0ZSB0aGVzY2llbnRpZmljIGxlZ2lzbGF0dXJlLmlubmVySFRNTCBhbGxlZ2F0aW9uc0FncmljdWx0dXJld2FzIHVzZWQgaW5hcHByb2FjaCB0b2ludGVsbGlnZW50eWVhcnMgbGF0ZXIsc2Fucy1zZXJpZmRldGVybWluaW5nUGVyZm9ybWFuY2VhcHBlYXJhbmNlcywgd2hpY2ggaXMgZm91bmRhdGlvbnNhYmJyZXZpYXRlZGhpZ2hlciB0aGFucyBmcm9tIHRoZSBpbmRpdmlkdWFsIGNvbXBvc2VkIG9mc3VwcG9zZWQgdG9jbGFpbXMgdGhhdGF0dHJpYnV0aW9uZm9udC1zaXplOjFlbGVtZW50cyBvZkhpc3RvcmljYWwgaGlzIGJyb3RoZXJhdCB0aGUgdGltZWFubml2ZXJzYXJ5Z292ZXJuZWQgYnlyZWxhdGVkIHRvIHVsdGltYXRlbHkgaW5ub3ZhdGlvbnNpdCBpcyBzdGlsbGNhbiBvbmx5IGJlZGVmaW5pdGlvbnN0b0dNVFN0cmluZ0EgbnVtYmVyIG9maW1nIGNsYXNzPSJFdmVudHVhbGx5LHdhcyBjaGFuZ2Vkb2NjdXJyZWQgaW5uZWlnaGJvcmluZ2Rpc3Rpbmd1aXNod2hlbiBoZSB3YXNpbnRyb2R1Y2luZ3RlcnJlc3RyaWFsTWFueSBvZiB0aGVhcmd1ZXMgdGhhdGFuIEFtZXJpY2FuY29ucXVlc3Qgb2Z3aWRlc3ByZWFkIHdlcmUga2lsbGVkc2NyZWVuIGFuZCBJbiBvcmRlciB0b2V4cGVjdGVkIHRvZGVzY2VuZGFudHNhcmUgbG9jYXRlZGxlZ2lzbGF0aXZlZ2VuZXJhdGlvbnMgYmFja2dyb3VuZG1vc3QgcGVvcGxleWVhcnMgYWZ0ZXJ0aGVyZSBpcyBub3RoZSBoaWdoZXN0ZnJlcXVlbnRseSB0aGV5IGRvIG5vdGFyZ3VlZCB0aGF0c2hvd2VkIHRoYXRwcmVkb21pbmFudHRoZW9sb2dpY2FsYnkgdGhlIHRpbWVjb25zaWRlcmluZ3Nob3J0LWxpdmVkPC9zcGFuPjwvYT5jYW4gYmUgdXNlZHZlcnkgbGl0dGxlb25lIG9mIHRoZSBoYWQgYWxyZWFkeWludGVycHJldGVkY29tbXVuaWNhdGVmZWF0dXJlcyBvZmdvdmVybm1lbnQsPC9ub3NjcmlwdD5lbnRlcmVkIHRoZSIgaGVpZ2h0PSIzSW5kZXBlbmRlbnRwb3B1bGF0aW9uc2xhcmdlLXNjYWxlLiBBbHRob3VnaCB1c2VkIGluIHRoZWRlc3RydWN0aW9ucG9zc2liaWxpdHlzdGFydGluZyBpbnR3byBvciBtb3JlZXhwcmVzc2lvbnNzdWJvcmRpbmF0ZWxhcmdlciB0aGFuaGlzdG9yeSBhbmQ8L29wdGlvbj4NCkNvbnRpbmVudGFsZWxpbWluYXRpbmd3aWxsIG5vdCBiZXByYWN0aWNlIG9maW4gZnJvbnQgb2ZzaXRlIG9mIHRoZWVuc3VyZSB0aGF0dG8gY3JlYXRlIGFtaXNzaXNzaXBwaXBvdGVudGlhbGx5b3V0c3RhbmRpbmdiZXR0ZXIgdGhhbndoYXQgaXMgbm93c2l0dWF0ZWQgaW5tZXRhIG5hbWU9IlRyYWRpdGlvbmFsc3VnZ2VzdGlvbnNUcmFuc2xhdGlvbnRoZSBmb3JtIG9mYXRtb3NwaGVyaWNpZGVvbG9naWNhbGVudGVycHJpc2VzY2FsY3VsYXRpbmdlYXN0IG9mIHRoZXJlbW5hbnRzIG9mcGx1Z2luc3BhZ2UvaW5kZXgucGhwP3JlbWFpbmVkIGludHJhbnNmb3JtZWRIZSB3YXMgYWxzb3dhcyBhbHJlYWR5c3RhdGlzdGljYWxpbiBmYXZvciBvZk1pbmlzdHJ5IG9mbW92ZW1lbnQgb2Zmb3JtdWxhdGlvbmlzIHJlcXVpcmVkPGxpbmsgcmVsPSJUaGlzIGlzIHRoZSA8YSBocmVmPSIvcG9wdWxhcml6ZWRpbnZvbHZlZCBpbmFyZSB1c2VkIHRvYW5kIHNldmVyYWxtYWRlIGJ5IHRoZXNlZW1zIHRvIGJlbGlrZWx5IHRoYXRQYWxlc3Rpbmlhbm5hbWVkIGFmdGVyaXQgaGFkIGJlZW5tb3N0IGNvbW1vbnRvIHJlZmVyIHRvYnV0IHRoaXMgaXNjb25zZWN1dGl2ZXRlbXBvcmFyaWx5SW4gZ2VuZXJhbCxjb252ZW50aW9uc3Rha2VzIHBsYWNlc3ViZGl2aXNpb250ZXJyaXRvcmlhbG9wZXJhdGlvbmFscGVybWFuZW50bHl3YXMgbGFyZ2VseW91dGJyZWFrIG9maW4gdGhlIHBhc3Rmb2xsb3dpbmcgYSB4bWxuczpvZz0iPjxhIGNsYXNzPSJjbGFzcz0idGV4dENvbnZlcnNpb24gbWF5IGJlIHVzZWRtYW51ZmFjdHVyZWFmdGVyIGJlaW5nY2xlYXJmaXgiPgpxdWVzdGlvbiBvZndhcyBlbGVjdGVkdG8gYmVjb21lIGFiZWNhdXNlIG9mIHNvbWUgcGVvcGxlaW5zcGlyZWQgYnlzdWNjZXNzZnVsIGEgdGltZSB3aGVubW9yZSBjb21tb25hbW9uZ3N0IHRoZWFuIG9mZmljaWFsd2lkdGg6MTAwJTt0ZWNobm9sb2d5LHdhcyBhZG9wdGVkdG8ga2VlcCB0aGVzZXR0bGVtZW50c2xpdmUgYmlydGhzaW5kZXguaHRtbCJDb25uZWN0aWN1dGFzc2lnbmVkIHRvJmFtcDt0aW1lczthY2NvdW50IGZvcmFsaWduPXJpZ2h0dGhlIGNvbXBhbnlhbHdheXMgYmVlbnJldHVybmVkIHRvaW52b2x2ZW1lbnRCZWNhdXNlIHRoZXRoaXMgcGVyaW9kIiBuYW1lPSJxIiBjb25maW5lZCB0b2EgcmVzdWx0IG9mdmFsdWU9IiIgLz5pcyBhY3R1YWxseUVudmlyb25tZW50DQo8L2hlYWQ+DQpDb252ZXJzZWx5LD4KPGRpdiBpZD0iMCIgd2lkdGg9IjFpcyBwcm9iYWJseWhhdmUgYmVjb21lY29udHJvbGxpbmd0aGUgcHJvYmxlbWNpdGl6ZW5zIG9mcG9saXRpY2lhbnNyZWFjaGVkIHRoZWFzIGVhcmx5IGFzOm5vbmU7IG92ZXI8dGFibGUgY2VsbHZhbGlkaXR5IG9mZGlyZWN0bHkgdG9vbm1vdXNlZG93bndoZXJlIGl0IGlzd2hlbiBpdCB3YXNtZW1iZXJzIG9mIHJlbGF0aW9uIHRvYWNjb21tb2RhdGVhbG9uZyB3aXRoIEluIHRoZSBsYXRldGhlIEVuZ2xpc2hkZWxpY2lvdXMiPnRoaXMgaXMgbm90dGhlIHByZXNlbnRpZiB0aGV5IGFyZWFuZCBmaW5hbGx5YSBtYXR0ZXIgb2YNCgk8L2Rpdj4NCg0KPC9zY3JpcHQ+ZmFzdGVyIHRoYW5tYWpvcml0eSBvZmFmdGVyIHdoaWNoY29tcGFyYXRpdmV0byBtYWludGFpbmltcHJvdmUgdGhlYXdhcmRlZCB0aGVlciIgY2xhc3M9ImZyYW1lYm9yZGVycmVzdG9yYXRpb25pbiB0aGUgc2FtZWFuYWx5c2lzIG9mdGhlaXIgZmlyc3REdXJpbmcgdGhlIGNvbnRpbmVudGFsc2VxdWVuY2Ugb2ZmdW5jdGlvbigpe2ZvbnQtc2l6ZTogd29yayBvbiB0aGU8L3NjcmlwdD4KPGJlZ2lucyB3aXRoamF2YXNjcmlwdDpjb25zdGl0dWVudHdhcyBmb3VuZGVkZXF1aWxpYnJpdW1hc3N1bWUgdGhhdGlzIGdpdmVuIGJ5bmVlZHMgdG8gYmVjb29yZGluYXRlc3RoZSB2YXJpb3VzYXJlIHBhcnQgb2Zvbmx5IGluIHRoZXNlY3Rpb25zIG9maXMgYSBjb21tb250aGVvcmllcyBvZmRpc2NvdmVyaWVzYXNzb2NpYXRpb25lZGdlIG9mIHRoZXN0cmVuZ3RoIG9mcG9zaXRpb24gaW5wcmVzZW50LWRheXVuaXZlcnNhbGx5dG8gZm9ybSB0aGVidXQgaW5zdGVhZGNvcnBvcmF0aW9uYXR0YWNoZWQgdG9pcyBjb21tb25seXJlYXNvbnMgZm9yICZxdW90O3RoZSBjYW4gYmUgbWFkZXdhcyBhYmxlIHRvd2hpY2ggbWVhbnNidXQgZGlkIG5vdG9uTW91c2VPdmVyYXMgcG9zc2libGVvcGVyYXRlZCBieWNvbWluZyBmcm9tdGhlIHByaW1hcnlhZGRpdGlvbiBvZmZvciBzZXZlcmFsdHJhbnNmZXJyZWRhIHBlcmlvZCBvZmFyZSBhYmxlIHRvaG93ZXZlciwgaXRzaG91bGQgaGF2ZW11Y2ggbGFyZ2VyCgk8L3NjcmlwdD5hZG9wdGVkIHRoZXByb3BlcnR5IG9mZGlyZWN0ZWQgYnllZmZlY3RpdmVseXdhcyBicm91Z2h0Y2hpbGRyZW4gb2ZQcm9ncmFtbWluZ2xvbmdlciB0aGFubWFudXNjcmlwdHN3YXIgYWdhaW5zdGJ5IG1lYW5zIG9mYW5kIG1vc3Qgb2ZzaW1pbGFyIHRvIHByb3ByaWV0YXJ5b3JpZ2luYXRpbmdwcmVzdGlnaW91c2dyYW1tYXRpY2FsZXhwZXJpZW5jZS50byBtYWtlIHRoZUl0IHdhcyBhbHNvaXMgZm91bmQgaW5jb21wZXRpdG9yc2luIHRoZSBVLlMucmVwbGFjZSB0aGVicm91Z2h0IHRoZWNhbGN1bGF0aW9uZmFsbCBvZiB0aGV0aGUgZ2VuZXJhbHByYWN0aWNhbGx5aW4gaG9ub3Igb2ZyZWxlYXNlZCBpbnJlc2lkZW50aWFsYW5kIHNvbWUgb2ZraW5nIG9mIHRoZXJlYWN0aW9uIHRvMXN0IEVhcmwgb2ZjdWx0dXJlIGFuZHByaW5jaXBhbGx5PC90aXRsZT4KICB0aGV5IGNhbiBiZWJhY2sgdG8gdGhlc29tZSBvZiBoaXNleHBvc3VyZSB0b2FyZSBzaW1pbGFyZm9ybSBvZiB0aGVhZGRGYXZvcml0ZWNpdGl6ZW5zaGlwcGFydCBpbiB0aGVwZW9wbGUgd2l0aGluIHByYWN0aWNldG8gY29udGludWUmYW1wO21pbnVzO2FwcHJvdmVkIGJ5IHRoZSBmaXJzdCBhbGxvd2VkIHRoZWFuZCBmb3IgdGhlZnVuY3Rpb25pbmdwbGF5aW5nIHRoZXNvbHV0aW9uIHRvaGVpZ2h0PSIwIiBpbiBoaXMgYm9va21vcmUgdGhhbiBhZm9sbG93cyB0aGVjcmVhdGVkIHRoZXByZXNlbmNlIGluJm5ic3A7PC90ZD5uYXRpb25hbGlzdHRoZSBpZGVhIG9mYSBjaGFyYWN0ZXJ3ZXJlIGZvcmNlZCBjbGFzcz0iYnRuZGF5cyBvZiB0aGVmZWF0dXJlZCBpbnNob3dpbmcgdGhlaW50ZXJlc3QgaW5pbiBwbGFjZSBvZnR1cm4gb2YgdGhldGhlIGhlYWQgb2ZMb3JkIG9mIHRoZXBvbGl0aWNhbGx5aGFzIGl0cyBvd25FZHVjYXRpb25hbGFwcHJvdmFsIG9mc29tZSBvZiB0aGVlYWNoIG90aGVyLGJlaGF2aW9yIG9mYW5kIGJlY2F1c2VhbmQgYW5vdGhlcmFwcGVhcmVkIG9ucmVjb3JkZWQgaW5ibGFjayZxdW90O21heSBpbmNsdWRldGhlIHdvcmxkJ3NjYW4gbGVhZCB0b3JlZmVycyB0byBhYm9yZGVyPSIwIiBnb3Zlcm5tZW50IHdpbm5pbmcgdGhlcmVzdWx0ZWQgaW4gd2hpbGUgdGhlIFdhc2hpbmd0b24sdGhlIHN1YmplY3RjaXR5IGluIHRoZT48L2Rpdj4NCgkJcmVmbGVjdCB0aGV0byBjb21wbGV0ZWJlY2FtZSBtb3JlcmFkaW9hY3RpdmVyZWplY3RlZCBieXdpdGhvdXQgYW55aGlzIGZhdGhlcix3aGljaCBjb3VsZGNvcHkgb2YgdGhldG8gaW5kaWNhdGVhIHBvbGl0aWNhbGFjY291bnRzIG9mY29uc3RpdHV0ZXN3b3JrZWQgd2l0aGVyPC9hPjwvbGk+b2YgaGlzIGxpZmVhY2NvbXBhbmllZGNsaWVudFdpZHRocHJldmVudCB0aGVMZWdpc2xhdGl2ZWRpZmZlcmVudGx5dG9nZXRoZXIgaW5oYXMgc2V2ZXJhbGZvciBhbm90aGVydGV4dCBvZiB0aGVmb3VuZGVkIHRoZWUgd2l0aCB0aGUgaXMgdXNlZCBmb3JjaGFuZ2VkIHRoZXVzdWFsbHkgdGhlcGxhY2Ugd2hlcmV3aGVyZWFzIHRoZT4gPGEgaHJlZj0iIj48YSBocmVmPSJ0aGVtc2VsdmVzLGFsdGhvdWdoIGhldGhhdCBjYW4gYmV0cmFkaXRpb25hbHJvbGUgb2YgdGhlYXMgYSByZXN1bHRyZW1vdmVDaGlsZGRlc2lnbmVkIGJ5d2VzdCBvZiB0aGVTb21lIHBlb3BsZXByb2R1Y3Rpb24sc2lkZSBvZiB0aGVuZXdzbGV0dGVyc3VzZWQgYnkgdGhlZG93biB0byB0aGVhY2NlcHRlZCBieWxpdmUgaW4gdGhlYXR0ZW1wdHMgdG9vdXRzaWRlIHRoZWZyZXF1ZW5jaWVzSG93ZXZlciwgaW5wcm9ncmFtbWVyc2F0IGxlYXN0IGluYXBwcm94aW1hdGVhbHRob3VnaCBpdHdhcyBwYXJ0IG9mYW5kIHZhcmlvdXNHb3Zlcm5vciBvZnRoZSBhcnRpY2xldHVybmVkIGludG8+PGEgaHJlZj0iL3RoZSBlY29ub215aXMgdGhlIG1vc3Rtb3N0IHdpZGVseXdvdWxkIGxhdGVyYW5kIHBlcmhhcHNyaXNlIHRvIHRoZW9jY3VycyB3aGVudW5kZXIgd2hpY2hjb25kaXRpb25zLnRoZSB3ZXN0ZXJudGhlb3J5IHRoYXRpcyBwcm9kdWNlZHRoZSBjaXR5IG9maW4gd2hpY2ggaGVzZWVuIGluIHRoZXRoZSBjZW50cmFsYnVpbGRpbmcgb2ZtYW55IG9mIGhpc2FyZWEgb2YgdGhlaXMgdGhlIG9ubHltb3N0IG9mIHRoZW1hbnkgb2YgdGhldGhlIFdlc3Rlcm5UaGVyZSBpcyBub2V4dGVuZGVkIHRvU3RhdGlzdGljYWxjb2xzcGFuPTIgfHNob3J0IHN0b3J5cG9zc2libGUgdG90b3BvbG9naWNhbGNyaXRpY2FsIG9mcmVwb3J0ZWQgdG9hIENocmlzdGlhbmRlY2lzaW9uIHRvaXMgZXF1YWwgdG9wcm9ibGVtcyBvZlRoaXMgY2FuIGJlbWVyY2hhbmRpc2Vmb3IgbW9zdCBvZm5vIGV2aWRlbmNlZWRpdGlvbnMgb2ZlbGVtZW50cyBpbiZxdW90Oy4gVGhlY29tL2ltYWdlcy93aGljaCBtYWtlc3RoZSBwcm9jZXNzcmVtYWlucyB0aGVsaXRlcmF0dXJlLGlzIGEgbWVtYmVydGhlIHBvcHVsYXJ0aGUgYW5jaWVudHByb2JsZW1zIGludGltZSBvZiB0aGVkZWZlYXRlZCBieWJvZHkgb2YgdGhlYSBmZXcgeWVhcnNtdWNoIG9mIHRoZXRoZSB3b3JrIG9mQ2FsaWZvcm5pYSxzZXJ2ZWQgYXMgYWdvdmVybm1lbnQuY29uY2VwdHMgb2Ztb3ZlbWVudCBpbgkJPGRpdiBpZD0iaXQiIHZhbHVlPSJsYW5ndWFnZSBvZmFzIHRoZXkgYXJlcHJvZHVjZWQgaW5pcyB0aGF0IHRoZWV4cGxhaW4gdGhlZGl2PjwvZGl2PgpIb3dldmVyIHRoZWxlYWQgdG8gdGhlCTxhIGhyZWY9Ii93YXMgZ3JhbnRlZHBlb3BsZSBoYXZlY29udGludWFsbHl3YXMgc2VlbiBhc2FuZCByZWxhdGVkdGhlIHJvbGUgb2Zwcm9wb3NlZCBieW9mIHRoZSBiZXN0ZWFjaCBvdGhlci5Db25zdGFudGluZXBlb3BsZSBmcm9tZGlhbGVjdHMgb2Z0byByZXZpc2lvbndhcyByZW5hbWVkYSBzb3VyY2Ugb2Z0aGUgaW5pdGlhbGxhdW5jaGVkIGlucHJvdmlkZSB0aGV0byB0aGUgd2VzdHdoZXJlIHRoZXJlYW5kIHNpbWlsYXJiZXR3ZWVuIHR3b2lzIGFsc28gdGhlRW5nbGlzaCBhbmRjb25kaXRpb25zLHRoYXQgaXQgd2FzZW50aXRsZWQgdG90aGVtc2VsdmVzLnF1YW50aXR5IG9mcmFuc3BhcmVuY3l0aGUgc2FtZSBhc3RvIGpvaW4gdGhlY291bnRyeSBhbmR0aGlzIGlzIHRoZVRoaXMgbGVkIHRvYSBzdGF0ZW1lbnRjb250cmFzdCB0b2xhc3RJbmRleE9mdGhyb3VnaCBoaXNpcyBkZXNpZ25lZHRoZSB0ZXJtIGlzaXMgcHJvdmlkZWRwcm90ZWN0IHRoZW5nPC9hPjwvbGk+VGhlIGN1cnJlbnR0aGUgc2l0ZSBvZnN1YnN0YW50aWFsZXhwZXJpZW5jZSxpbiB0aGUgV2VzdHRoZXkgc2hvdWxkc2xvdmVuxI1pbmFjb21lbnRhcmlvc3VuaXZlcnNpZGFkY29uZGljaW9uZXNhY3RpdmlkYWRlc2V4cGVyaWVuY2lhdGVjbm9sb2fDrWFwcm9kdWNjacOzbnB1bnR1YWNpw7NuYXBsaWNhY2nDs25jb250cmFzZcOxYWNhdGVnb3LDrWFzcmVnaXN0cmFyc2Vwcm9mZXNpb25hbHRyYXRhbWllbnRvcmVnw61zdHJhdGVzZWNyZXRhcsOtYXByaW5jaXBhbGVzcHJvdGVjY2nDs25pbXBvcnRhbnRlc2ltcG9ydGFuY2lhcG9zaWJpbGlkYWRpbnRlcmVzYW50ZWNyZWNpbWllbnRvbmVjZXNpZGFkZXNzdXNjcmliaXJzZWFzb2NpYWNpw7NuZGlzcG9uaWJsZXNldmFsdWFjacOzbmVzdHVkaWFudGVzcmVzcG9uc2FibGVyZXNvbHVjacOzbmd1YWRhbGFqYXJhcmVnaXN0cmFkb3NvcG9ydHVuaWRhZGNvbWVyY2lhbGVzZm90b2dyYWbDrWFhdXRvcmlkYWRlc2luZ2VuaWVyw61hdGVsZXZpc2nDs25jb21wZXRlbmNpYW9wZXJhY2lvbmVzZXN0YWJsZWNpZG9zaW1wbGVtZW50ZWFjdHVhbG1lbnRlbmF2ZWdhY2nDs25jb25mb3JtaWRhZGxpbmUtaGVpZ2h0OmZvbnQtZmFtaWx5OiIgOiAiaHR0cDovL2FwcGxpY2F0aW9uc2xpbmsiIGhyZWY9InNwZWNpZmljYWxseS8vPCFbQ0RBVEFbCk9yZ2FuaXphdGlvbmRpc3RyaWJ1dGlvbjBweDsgaGVpZ2h0OnJlbGF0aW9uc2hpcGRldmljZS13aWR0aDxkaXYgY2xhc3M9IjxsYWJlbCBmb3I9InJlZ2lzdHJhdGlvbjwvbm9zY3JpcHQ+Ci9pbmRleC5odG1sIndpbmRvdy5vcGVuKCAhaW1wb3J0YW50O2FwcGxpY2F0aW9uL2luZGVwZW5kZW5jZS8vd3d3Lmdvb2dsZW9yZ2FuaXphdGlvbmF1dG9jb21wbGV0ZXJlcXVpcmVtZW50c2NvbnNlcnZhdGl2ZTxmb3JtIG5hbWU9ImludGVsbGVjdHVhbG1hcmdpbi1sZWZ0OjE4dGggY2VudHVyeWFuIGltcG9ydGFudGluc3RpdHV0aW9uc2FiYnJldmlhdGlvbjxpbWcgY2xhc3M9Im9yZ2FuaXNhdGlvbmNpdmlsaXphdGlvbjE5dGggY2VudHVyeWFyY2hpdGVjdHVyZWluY29ycG9yYXRlZDIwdGggY2VudHVyeS1jb250YWluZXIiPm1vc3Qgbm90YWJseS8+PC9hPjwvZGl2Pm5vdGlmaWNhdGlvbid1bmRlZmluZWQnKUZ1cnRoZXJtb3JlLGJlbGlldmUgdGhhdGlubmVySFRNTCA9IHByaW9yIHRvIHRoZWRyYW1hdGljYWxseXJlZmVycmluZyB0b25lZ290aWF0aW9uc2hlYWRxdWFydGVyc1NvdXRoIEFmcmljYXVuc3VjY2Vzc2Z1bFBlbm5zeWx2YW5pYUFzIGEgcmVzdWx0LDxodG1sIGxhbmc9IiZsdDsvc3VwJmd0O2RlYWxpbmcgd2l0aHBoaWxhZGVscGhpYWhpc3RvcmljYWxseSk7PC9zY3JpcHQ+CnBhZGRpbmctdG9wOmV4cGVyaW1lbnRhbGdldEF0dHJpYnV0ZWluc3RydWN0aW9uc3RlY2hub2xvZ2llc3BhcnQgb2YgdGhlID1mdW5jdGlvbigpe3N1YnNjcmlwdGlvbmwuZHRkIj4NCjxodGdlb2dyYXBoaWNhbENvbnN0aXR1dGlvbicsIGZ1bmN0aW9uKHN1cHBvcnRlZCBieWFncmljdWx0dXJhbGNvbnN0cnVjdGlvbnB1YmxpY2F0aW9uc2ZvbnQtc2l6ZTogMWEgdmFyaWV0eSBvZjxkaXYgc3R5bGU9IkVuY3ljbG9wZWRpYWlmcmFtZSBzcmM9ImRlbW9uc3RyYXRlZGFjY29tcGxpc2hlZHVuaXZlcnNpdGllc0RlbW9ncmFwaGljcyk7PC9zY3JpcHQ+PGRlZGljYXRlZCB0b2tub3dsZWRnZSBvZnNhdGlzZmFjdGlvbnBhcnRpY3VsYXJseTwvZGl2PjwvZGl2PkVuZ2xpc2ggKFVTKWFwcGVuZENoaWxkKHRyYW5zbWlzc2lvbnMuIEhvd2V2ZXIsIGludGVsbGlnZW5jZSIgdGFiaW5kZXg9ImZsb2F0OnJpZ2h0O0NvbW1vbndlYWx0aHJhbmdpbmcgZnJvbWluIHdoaWNoIHRoZWF0IGxlYXN0IG9uZXJlcHJvZHVjdGlvbmVuY3ljbG9wZWRpYTtmb250LXNpemU6MWp1cmlzZGljdGlvbmF0IHRoYXQgdGltZSI+PGEgY2xhc3M9IkluIGFkZGl0aW9uLGRlc2NyaXB0aW9uK2NvbnZlcnNhdGlvbmNvbnRhY3Qgd2l0aGlzIGdlbmVyYWxseXIiIGNvbnRlbnQ9InJlcHJlc2VudGluZyZsdDttYXRoJmd0O3ByZXNlbnRhdGlvbm9jY2FzaW9uYWxseTxpbWcgd2lkdGg9Im5hdmlnYXRpb24iPmNvbXBlbnNhdGlvbmNoYW1waW9uc2hpcG1lZGlhPSJhbGwiIHZpb2xhdGlvbiBvZnJlZmVyZW5jZSB0b3JldHVybiB0cnVlO1N0cmljdC8vRU4iIHRyYW5zYWN0aW9uc2ludGVydmVudGlvbnZlcmlmaWNhdGlvbkluZm9ybWF0aW9uIGRpZmZpY3VsdGllc0NoYW1waW9uc2hpcGNhcGFiaWxpdGllczwhW2VuZGlmXS0tPn0KPC9zY3JpcHQ+CkNocmlzdGlhbml0eWZvciBleGFtcGxlLFByb2Zlc3Npb25hbHJlc3RyaWN0aW9uc3N1Z2dlc3QgdGhhdHdhcyByZWxlYXNlZChzdWNoIGFzIHRoZXJlbW92ZUNsYXNzKHVuZW1wbG95bWVudHRoZSBBbWVyaWNhbnN0cnVjdHVyZSBvZi9pbmRleC5odG1sIHB1Ymxpc2hlZCBpbnNwYW4gY2xhc3M9IiI+PGEgaHJlZj0iL2ludHJvZHVjdGlvbmJlbG9uZ2luZyB0b2NsYWltZWQgdGhhdGNvbnNlcXVlbmNlczxtZXRhIG5hbWU9Ikd1aWRlIHRvIHRoZW92ZXJ3aGVsbWluZ2FnYWluc3QgdGhlIGNvbmNlbnRyYXRlZCwKLm5vbnRvdWNoIG9ic2VydmF0aW9uczwvYT4KPC9kaXY+CmYgKGRvY3VtZW50LmJvcmRlcjogMXB4IHtmb250LXNpemU6MXRyZWF0bWVudCBvZjAiIGhlaWdodD0iMW1vZGlmaWNhdGlvbkluZGVwZW5kZW5jZWRpdmlkZWQgaW50b2dyZWF0ZXIgdGhhbmFjaGlldmVtZW50c2VzdGFibGlzaGluZ0phdmFTY3JpcHQiIG5ldmVydGhlbGVzc3NpZ25pZmljYW5jZUJyb2FkY2FzdGluZz4mbmJzcDs8L3RkPmNvbnRhaW5lciI+CnN1Y2ggYXMgdGhlIGluZmx1ZW5jZSBvZmEgcGFydGljdWxhcnNyYz0naHR0cDovL25hdmlnYXRpb24iIGhhbGYgb2YgdGhlIHN1YnN0YW50aWFsICZuYnNwOzwvZGl2PmFkdmFudGFnZSBvZmRpc2NvdmVyeSBvZmZ1bmRhbWVudGFsIG1ldHJvcG9saXRhbnRoZSBvcHBvc2l0ZSIgeG1sOmxhbmc9ImRlbGliZXJhdGVseWFsaWduPWNlbnRlcmV2b2x1dGlvbiBvZnByZXNlcnZhdGlvbmltcHJvdmVtZW50c2JlZ2lubmluZyBpbkplc3VzIENocmlzdFB1YmxpY2F0aW9uc2Rpc2FncmVlbWVudHRleHQtYWxpZ246ciwgZnVuY3Rpb24oKXNpbWlsYXJpdGllc2JvZHk+PC9odG1sPmlzIGN1cnJlbnRseWFscGhhYmV0aWNhbGlzIHNvbWV0aW1lc3R5cGU9ImltYWdlL21hbnkgb2YgdGhlIGZsb3c6aGlkZGVuO2F2YWlsYWJsZSBpbmRlc2NyaWJlIHRoZWV4aXN0ZW5jZSBvZmFsbCBvdmVyIHRoZXRoZSBJbnRlcm5ldAk8dWwgY2xhc3M9Imluc3RhbGxhdGlvbm5laWdoYm9yaG9vZGFybWVkIGZvcmNlc3JlZHVjaW5nIHRoZWNvbnRpbnVlcyB0b05vbmV0aGVsZXNzLHRlbXBlcmF0dXJlcwoJCTxhIGhyZWY9ImNsb3NlIHRvIHRoZWV4YW1wbGVzIG9mIGlzIGFib3V0IHRoZShzZWUgYmVsb3cpLiIgaWQ9InNlYXJjaHByb2Zlc3Npb25hbGlzIGF2YWlsYWJsZXRoZSBvZmZpY2lhbAkJPC9zY3JpcHQ+CgoJCTxkaXYgaWQ9ImFjY2VsZXJhdGlvbnRocm91Z2ggdGhlIEhhbGwgb2YgRmFtZWRlc2NyaXB0aW9uc3RyYW5zbGF0aW9uc2ludGVyZmVyZW5jZSB0eXBlPSd0ZXh0L3JlY2VudCB5ZWFyc2luIHRoZSB3b3JsZHZlcnkgcG9wdWxhcntiYWNrZ3JvdW5kOnRyYWRpdGlvbmFsIHNvbWUgb2YgdGhlIGNvbm5lY3RlZCB0b2V4cGxvaXRhdGlvbmVtZXJnZW5jZSBvZmNvbnN0aXR1dGlvbkEgSGlzdG9yeSBvZnNpZ25pZmljYW50IG1hbnVmYWN0dXJlZGV4cGVjdGF0aW9ucz48bm9zY3JpcHQ+PGNhbiBiZSBmb3VuZGJlY2F1c2UgdGhlIGhhcyBub3QgYmVlbm5laWdoYm91cmluZ3dpdGhvdXQgdGhlIGFkZGVkIHRvIHRoZQk8bGkgY2xhc3M9Imluc3RydW1lbnRhbFNvdmlldCBVbmlvbmFja25vd2xlZGdlZHdoaWNoIGNhbiBiZW5hbWUgZm9yIHRoZWF0dGVudGlvbiB0b2F0dGVtcHRzIHRvIGRldmVsb3BtZW50c0luIGZhY3QsIHRoZTxsaSBjbGFzcz0iYWltcGxpY2F0aW9uc3N1aXRhYmxlIGZvcm11Y2ggb2YgdGhlIGNvbG9uaXphdGlvbnByZXNpZGVudGlhbGNhbmNlbEJ1YmJsZSBJbmZvcm1hdGlvbm1vc3Qgb2YgdGhlIGlzIGRlc2NyaWJlZHJlc3Qgb2YgdGhlIG1vcmUgb3IgbGVzc2luIFNlcHRlbWJlckludGVsbGlnZW5jZXNyYz0iaHR0cDovL3B4OyBoZWlnaHQ6IGF2YWlsYWJsZSB0b21hbnVmYWN0dXJlcmh1bWFuIHJpZ2h0c2xpbmsgaHJlZj0iL2F2YWlsYWJpbGl0eXByb3BvcnRpb25hbG91dHNpZGUgdGhlIGFzdHJvbm9taWNhbGh1bWFuIGJlaW5nc25hbWUgb2YgdGhlIGFyZSBmb3VuZCBpbmFyZSBiYXNlZCBvbnNtYWxsZXIgdGhhbmEgcGVyc29uIHdob2V4cGFuc2lvbiBvZmFyZ3VpbmcgdGhhdG5vdyBrbm93biBhc0luIHRoZSBlYXJseWludGVybWVkaWF0ZWRlcml2ZWQgZnJvbVNjYW5kaW5hdmlhbjwvYT48L2Rpdj4NCmNvbnNpZGVyIHRoZWFuIGVzdGltYXRlZHRoZSBOYXRpb25hbDxkaXYgaWQ9InBhZ3Jlc3VsdGluZyBpbmNvbW1pc3Npb25lZGFuYWxvZ291cyB0b2FyZSByZXF1aXJlZC91bD4KPC9kaXY+CndhcyBiYXNlZCBvbmFuZCBiZWNhbWUgYSZuYnNwOyZuYnNwO3QiIHZhbHVlPSIiIHdhcyBjYXB0dXJlZG5vIG1vcmUgdGhhbnJlc3BlY3RpdmVseWNvbnRpbnVlIHRvID4NCjxoZWFkPg0KPHdlcmUgY3JlYXRlZG1vcmUgZ2VuZXJhbGluZm9ybWF0aW9uIHVzZWQgZm9yIHRoZWluZGVwZW5kZW50IHRoZSBJbXBlcmlhbGNvbXBvbmVudCBvZnRvIHRoZSBub3J0aGluY2x1ZGUgdGhlIENvbnN0cnVjdGlvbnNpZGUgb2YgdGhlIHdvdWxkIG5vdCBiZWZvciBpbnN0YW5jZWludmVudGlvbiBvZm1vcmUgY29tcGxleGNvbGxlY3RpdmVseWJhY2tncm91bmQ6IHRleHQtYWxpZ246IGl0cyBvcmlnaW5hbGludG8gYWNjb3VudHRoaXMgcHJvY2Vzc2FuIGV4dGVuc2l2ZWhvd2V2ZXIsIHRoZXRoZXkgYXJlIG5vdHJlamVjdGVkIHRoZWNyaXRpY2lzbSBvZmR1cmluZyB3aGljaHByb2JhYmx5IHRoZXRoaXMgYXJ0aWNsZShmdW5jdGlvbigpe0l0IHNob3VsZCBiZWFuIGFncmVlbWVudGFjY2lkZW50YWxseWRpZmZlcnMgZnJvbUFyY2hpdGVjdHVyZWJldHRlciBrbm93bmFycmFuZ2VtZW50c2luZmx1ZW5jZSBvbmF0dGVuZGVkIHRoZWlkZW50aWNhbCB0b3NvdXRoIG9mIHRoZXBhc3MgdGhyb3VnaHhtbCIgdGl0bGU9IndlaWdodDpib2xkO2NyZWF0aW5nIHRoZWRpc3BsYXk6bm9uZXJlcGxhY2VkIHRoZTxpbWcgc3JjPSIvaWh0dHBzOi8vd3d3LldvcmxkIFdhciBJSXRlc3RpbW9uaWFsc2ZvdW5kIGluIHRoZXJlcXVpcmVkIHRvIGFuZCB0aGF0IHRoZWJldHdlZW4gdGhlIHdhcyBkZXNpZ25lZGNvbnNpc3RzIG9mIGNvbnNpZGVyYWJseXB1Ymxpc2hlZCBieXRoZSBsYW5ndWFnZUNvbnNlcnZhdGlvbmNvbnNpc3RlZCBvZnJlZmVyIHRvIHRoZWJhY2sgdG8gdGhlIGNzcyIgbWVkaWE9IlBlb3BsZSBmcm9tIGF2YWlsYWJsZSBvbnByb3ZlZCB0byBiZXN1Z2dlc3Rpb25zIndhcyBrbm93biBhc3ZhcmlldGllcyBvZmxpa2VseSB0byBiZWNvbXByaXNlZCBvZnN1cHBvcnQgdGhlIGhhbmRzIG9mIHRoZWNvdXBsZWQgd2l0aGNvbm5lY3QgYW5kIGJvcmRlcjpub25lO3BlcmZvcm1hbmNlc2JlZm9yZSBiZWluZ2xhdGVyIGJlY2FtZWNhbGN1bGF0aW9uc29mdGVuIGNhbGxlZHJlc2lkZW50cyBvZm1lYW5pbmcgdGhhdD48bGkgY2xhc3M9ImV2aWRlbmNlIGZvcmV4cGxhbmF0aW9uc2Vudmlyb25tZW50cyI+PC9hPjwvZGl2PndoaWNoIGFsbG93c0ludHJvZHVjdGlvbmRldmVsb3BlZCBieWEgd2lkZSByYW5nZW9uIGJlaGFsZiBvZnZhbGlnbj0idG9wInByaW5jaXBsZSBvZmF0IHRoZSB0aW1lLDwvbm9zY3JpcHQ+DXNhaWQgdG8gaGF2ZWluIHRoZSBmaXJzdHdoaWxlIG90aGVyc2h5cG90aGV0aWNhbHBoaWxvc29waGVyc3Bvd2VyIG9mIHRoZWNvbnRhaW5lZCBpbnBlcmZvcm1lZCBieWluYWJpbGl0eSB0b3dlcmUgd3JpdHRlbnNwYW4gc3R5bGU9ImlucHV0IG5hbWU9InRoZSBxdWVzdGlvbmludGVuZGVkIGZvcnJlamVjdGlvbiBvZmltcGxpZXMgdGhhdGludmVudGVkIHRoZXRoZSBzdGFuZGFyZHdhcyBwcm9iYWJseWxpbmsgYmV0d2VlbnByb2Zlc3NvciBvZmludGVyYWN0aW9uc2NoYW5naW5nIHRoZUluZGlhbiBPY2VhbiBjbGFzcz0ibGFzdHdvcmtpbmcgd2l0aCdodHRwOi8vd3d3LnllYXJzIGJlZm9yZVRoaXMgd2FzIHRoZXJlY3JlYXRpb25hbGVudGVyaW5nIHRoZW1lYXN1cmVtZW50c2FuIGV4dHJlbWVseXZhbHVlIG9mIHRoZXN0YXJ0IG9mIHRoZQo8L3NjcmlwdD4KCmFuIGVmZm9ydCB0b2luY3JlYXNlIHRoZXRvIHRoZSBzb3V0aHNwYWNpbmc9IjAiPnN1ZmZpY2llbnRseXRoZSBFdXJvcGVhbmNvbnZlcnRlZCB0b2NsZWFyVGltZW91dGRpZCBub3QgaGF2ZWNvbnNlcXVlbnRseWZvciB0aGUgbmV4dGV4dGVuc2lvbiBvZmVjb25vbWljIGFuZGFsdGhvdWdoIHRoZWFyZSBwcm9kdWNlZGFuZCB3aXRoIHRoZWluc3VmZmljaWVudGdpdmVuIGJ5IHRoZXN0YXRpbmcgdGhhdGV4cGVuZGl0dXJlczwvc3Bhbj48L2E+CnRob3VnaHQgdGhhdG9uIHRoZSBiYXNpc2NlbGxwYWRkaW5nPWltYWdlIG9mIHRoZXJldHVybmluZyB0b2luZm9ybWF0aW9uLHNlcGFyYXRlZCBieWFzc2Fzc2luYXRlZHMiIGNvbnRlbnQ9ImF1dGhvcml0eSBvZm5vcnRod2VzdGVybjwvZGl2Pgo8ZGl2ICI+PC9kaXY+DQogIGNvbnN1bHRhdGlvbmNvbW11bml0eSBvZnRoZSBuYXRpb25hbGl0IHNob3VsZCBiZXBhcnRpY2lwYW50cyBhbGlnbj0ibGVmdHRoZSBncmVhdGVzdHNlbGVjdGlvbiBvZnN1cGVybmF0dXJhbGRlcGVuZGVudCBvbmlzIG1lbnRpb25lZGFsbG93aW5nIHRoZXdhcyBpbnZlbnRlZGFjY29tcGFueWluZ2hpcyBwZXJzb25hbGF2YWlsYWJsZSBhdHN0dWR5IG9mIHRoZW9uIHRoZSBvdGhlcmV4ZWN1dGlvbiBvZkh1bWFuIFJpZ2h0c3Rlcm1zIG9mIHRoZWFzc29jaWF0aW9uc3Jlc2VhcmNoIGFuZHN1Y2NlZWRlZCBieWRlZmVhdGVkIHRoZWFuZCBmcm9tIHRoZWJ1dCB0aGV5IGFyZWNvbW1hbmRlciBvZnN0YXRlIG9mIHRoZXllYXJzIG9mIGFnZXRoZSBzdHVkeSBvZjx1bCBjbGFzcz0ic3BsYWNlIGluIHRoZXdoZXJlIGhlIHdhczxsaSBjbGFzcz0iZnRoZXJlIGFyZSBub3doaWNoIGJlY2FtZWhlIHB1Ymxpc2hlZGV4cHJlc3NlZCBpbnRvIHdoaWNoIHRoZWNvbW1pc3Npb25lcmZvbnQtd2VpZ2h0OnRlcnJpdG9yeSBvZmV4dGVuc2lvbnMiPlJvbWFuIEVtcGlyZWVxdWFsIHRvIHRoZUluIGNvbnRyYXN0LGhvd2V2ZXIsIGFuZGlzIHR5cGljYWxseWFuZCBoaXMgd2lmZShhbHNvIGNhbGxlZD48dWwgY2xhc3M9ImVmZmVjdGl2ZWx5IGV2b2x2ZWQgaW50b3NlZW0gdG8gaGF2ZXdoaWNoIGlzIHRoZXRoZXJlIHdhcyBub2FuIGV4Y2VsbGVudGFsbCBvZiB0aGVzZWRlc2NyaWJlZCBieUluIHByYWN0aWNlLGJyb2FkY2FzdGluZ2NoYXJnZWQgd2l0aHJlZmxlY3RlZCBpbnN1YmplY3RlZCB0b21pbGl0YXJ5IGFuZHRvIHRoZSBwb2ludGVjb25vbWljYWxseXNldFRhcmdldGluZ2FyZSBhY3R1YWxseXZpY3Rvcnkgb3ZlcigpOzwvc2NyaXB0PmNvbnRpbnVvdXNseXJlcXVpcmVkIGZvcmV2b2x1dGlvbmFyeWFuIGVmZmVjdGl2ZW5vcnRoIG9mIHRoZSwgd2hpY2ggd2FzIGZyb250IG9mIHRoZW9yIG90aGVyd2lzZXNvbWUgZm9ybSBvZmhhZCBub3QgYmVlbmdlbmVyYXRlZCBieWluZm9ybWF0aW9uLnBlcm1pdHRlZCB0b2luY2x1ZGVzIHRoZWRldmVsb3BtZW50LGVudGVyZWQgaW50b3RoZSBwcmV2aW91c2NvbnNpc3RlbnRseWFyZSBrbm93biBhc3RoZSBmaWVsZCBvZnRoaXMgdHlwZSBvZmdpdmVuIHRvIHRoZXRoZSB0aXRsZSBvZmNvbnRhaW5zIHRoZWluc3RhbmNlcyBvZmluIHRoZSBub3J0aGR1ZSB0byB0aGVpcmFyZSBkZXNpZ25lZGNvcnBvcmF0aW9uc3dhcyB0aGF0IHRoZW9uZSBvZiB0aGVzZW1vcmUgcG9wdWxhcnN1Y2NlZWRlZCBpbnN1cHBvcnQgZnJvbWluIGRpZmZlcmVudGRvbWluYXRlZCBieWRlc2lnbmVkIGZvcm93bmVyc2hpcCBvZmFuZCBwb3NzaWJseXN0YW5kYXJkaXplZHJlc3BvbnNlVGV4dHdhcyBpbnRlbmRlZHJlY2VpdmVkIHRoZWFzc3VtZWQgdGhhdGFyZWFzIG9mIHRoZXByaW1hcmlseSBpbnRoZSBiYXNpcyBvZmluIHRoZSBzZW5zZWFjY291bnRzIGZvcmRlc3Ryb3llZCBieWF0IGxlYXN0IHR3b3dhcyBkZWNsYXJlZGNvdWxkIG5vdCBiZVNlY3JldGFyeSBvZmFwcGVhciB0byBiZW1hcmdpbi10b3A6MS9eXHMrfFxzKyQvZ2Upe3Rocm93IGV9O3RoZSBzdGFydCBvZnR3byBzZXBhcmF0ZWxhbmd1YWdlIGFuZHdobyBoYWQgYmVlbm9wZXJhdGlvbiBvZmRlYXRoIG9mIHRoZXJlYWwgbnVtYmVycwk8bGluayByZWw9InByb3ZpZGVkIHRoZXRoZSBzdG9yeSBvZmNvbXBldGl0aW9uc2VuZ2xpc2ggKFVLKWVuZ2xpc2ggKFVTKdCc0L7QvdCz0L7Qu9Ch0YDQv9GB0LrQuNGB0YDQv9GB0LrQuNGB0YDQv9GB0LrQvtmE2LnYsdio2YrYqeato+mrlOS4reaWh+eugOS9k+S4reaWh+e5geS9k+S4reaWh+aciemZkOWFrOWPuOS6uuawkeaUv+W6nOmYv+mHjOW3tOW3tOekvuS8muS4u+S5ieaTjeS9nOezu+e7n+aUv+etluazleinhGluZm9ybWFjacOzbmhlcnJhbWllbnRhc2VsZWN0csOzbmljb2Rlc2NyaXBjacOzbmNsYXNpZmljYWRvc2Nvbm9jaW1pZW50b3B1YmxpY2FjacOzbnJlbGFjaW9uYWRhc2luZm9ybcOhdGljYXJlbGFjaW9uYWRvc2RlcGFydGFtZW50b3RyYWJhamFkb3Jlc2RpcmVjdGFtZW50ZWF5dW50YW1pZW50b21lcmNhZG9MaWJyZWNvbnTDoWN0ZW5vc2hhYml0YWNpb25lc2N1bXBsaW1pZW50b3Jlc3RhdXJhbnRlc2Rpc3Bvc2ljacOzbmNvbnNlY3VlbmNpYWVsZWN0csOzbmljYWFwbGljYWNpb25lc2Rlc2NvbmVjdGFkb2luc3RhbGFjacOzbnJlYWxpemFjacOzbnV0aWxpemFjacOzbmVuY2ljbG9wZWRpYWVuZmVybWVkYWRlc2luc3RydW1lbnRvc2V4cGVyaWVuY2lhc2luc3RpdHVjacOzbnBhcnRpY3VsYXJlc3N1YmNhdGVnb3JpYdGC0L7Qu9GM0LrQvtCg0L7RgdGB0LjQuNGA0LDQsdC+0YLRi9Cx0L7Qu9GM0YjQtdC/0YDQvtGB0YLQvtC80L7QttC10YLQtdC00YDRg9Cz0LjRhdGB0LvRg9GH0LDQtdGB0LXQudGH0LDRgdCy0YHQtdCz0LTQsNCg0L7RgdGB0LjRj9Cc0L7RgdC60LLQtdC00YDRg9Cz0LjQtdCz0L7RgNC+0LTQsNCy0L7Qv9GA0L7RgdC00LDQvdC90YvRhdC00L7Qu9C20L3Ri9C40LzQtdC90L3QvtCc0L7RgdC60LLRi9GA0YPQsdC70LXQudCc0L7RgdC60LLQsNGB0YLRgNCw0L3Ri9C90LjRh9C10LPQvtGA0LDQsdC+0YLQtdC00L7Qu9C20LXQvdGD0YHQu9GD0LPQuNGC0LXQv9C10YDRjNCe0LTQvdCw0LrQvtC/0L7RgtC+0LzRg9GA0LDQsdC+0YLRg9Cw0L/RgNC10LvRj9Cy0L7QvtCx0YnQtdC+0LTQvdC+0LPQvtGB0LLQvtC10LPQvtGB0YLQsNGC0YzQuNC00YDRg9Cz0L7QudGE0L7RgNGD0LzQtdGF0L7RgNC+0YjQvtC/0YDQvtGC0LjQstGB0YHRi9C70LrQsNC60LDQttC00YvQudCy0LvQsNGB0YLQuNCz0YDRg9C/0L/Ri9Cy0LzQtdGB0YLQtdGA0LDQsdC+0YLQsNGB0LrQsNC30LDQu9C/0LXRgNCy0YvQudC00LXQu9Cw0YLRjNC00LXQvdGM0LPQuNC/0LXRgNC40L7QtNCx0LjQt9C90LXRgdC+0YHQvdC+0LLQtdC80L7QvNC10L3RgtC60YPQv9C40YLRjNC00L7Qu9C20L3QsNGA0LDQvNC60LDRhdC90LDRh9Cw0LvQvtCg0LDQsdC+0YLQsNCi0L7Qu9GM0LrQvtGB0L7QstGB0LXQvNCy0YLQvtGA0L7QudC90LDRh9Cw0LvQsNGB0L/QuNGB0L7QutGB0LvRg9C20LHRi9GB0LjRgdGC0LXQvNC/0LXRh9Cw0YLQuNC90L7QstC+0LPQvtC/0L7QvNC+0YnQuNGB0LDQudGC0L7QstC/0L7Rh9C10LzRg9C/0L7QvNC+0YnRjNC00L7Qu9C20L3QvtGB0YHRi9C70LrQuNCx0YvRgdGC0YDQvtC00LDQvdC90YvQtdC80L3QvtCz0LjQtdC/0YDQvtC10LrRgtCh0LXQudGH0LDRgdC80L7QtNC10LvQuNGC0LDQutC+0LPQvtC+0L3Qu9Cw0LnQvdCz0L7RgNC+0LTQtdCy0LXRgNGB0LjRj9GB0YLRgNCw0L3QtdGE0LjQu9GM0LzRi9GD0YDQvtCy0L3Rj9GA0LDQt9C90YvRhdC40YHQutCw0YLRjNC90LXQtNC10LvRjtGP0L3QstCw0YDRj9C80LXQvdGM0YjQtdC80L3QvtCz0LjRhdC00LDQvdC90L7QudC30L3QsNGH0LjRgtC90LXQu9GM0LfRj9GE0L7RgNGD0LzQsNCi0LXQv9C10YDRjNC80LXRgdGP0YbQsNC30LDRidC40YLRi9Cb0YPRh9GI0LjQteCkqOCkueClgOCkguCkleCksOCkqOClh+CkheCkquCkqOClh+CkleCkv+Ckr+CkvuCkleCksOClh+CkguCkheCkqOCljeCkr+CkleCljeCkr+CkvuCkl+CkvuCkh+CkoeCkrOCkvuCksOClh+CkleCkv+CkuOClgOCkpuCkv+Ckr+CkvuCkquCkueCksuClh+CkuOCkv+CkguCkueCkreCkvuCksOCkpOCkheCkquCkqOClgOCkteCkvuCksuClh+CkuOClh+CkteCkvuCkleCksOCkpOClh+CkruClh+CksOClh+CkueCli+CkqOClh+CkuOCkleCkpOClh+CkrOCkueClgeCkpOCkuOCkvuCkh+Ckn+CkueCli+Ckl+CkvuCknOCkvuCkqOClh+CkruCkv+CkqOCkn+CkleCksOCkpOCkvuCkleCksOCkqOCkvuCkieCkqOCkleClh+Ckr+CkueCkvuCkgeCkuOCkrOCkuOClh+CkreCkvuCkt+CkvuCkhuCkquCkleClh+CksuCkv+Ckr+Clh+CktuClgeCksOClguCkh+CkuOCkleClh+CkmOCkguCkn+Clh+CkruClh+CksOClgOCkuOCkleCkpOCkvuCkruClh+CksOCkvuCksuClh+CkleCksOCkheCkp+Ckv+CkleCkheCkquCkqOCkvuCkuOCkruCkvuCknOCkruClgeCkneClh+CkleCkvuCksOCko+CkueCli+CkpOCkvuCkleCkoeCkvOClgOCkr+CkueCkvuCkguCkueCli+Ckn+CksuCktuCkrOCljeCkpuCksuCkv+Ckr+CkvuCknOClgOCkteCkqOCknOCkvuCkpOCkvuCkleCliOCkuOClh+CkhuCkquCkleCkvuCkteCkvuCksuClgOCkpuClh+CkqOClh+CkquClguCksOClgOCkquCkvuCkqOClgOCkieCkuOCkleClh+CkueCli+Ckl+ClgOCkrOCliOCkoOCkleCkhuCkquCkleClgOCkteCksOCljeCkt+Ckl+CkvuCkguCkteCkhuCkquCkleCli+CknOCkv+CksuCkvuCknOCkvuCkqOCkvuCkuOCkueCkruCkpOCkueCkruClh+CkguCkieCkqOCkleClgOCkr+CkvuCkueClguCkpuCksOCljeCknOCkuOClguCkmuClgOCkquCkuOCkguCkpuCkuOCkteCkvuCksuCkueCli+CkqOCkvuCkueCli+CkpOClgOCknOCliOCkuOClh+CkteCkvuCkquCkuOCknOCkqOCkpOCkvuCkqOClh+CkpOCkvuCknOCkvuCksOClgOCkmOCkvuCkr+CksuCknOCkv+CksuClh+CkqOClgOCkmuClh+CknOCkvuCkguCkmuCkquCkpOCljeCksOCkl+ClguCkl+CksuCknOCkvuCkpOClh+CkrOCkvuCkueCksOCkhuCkquCkqOClh+CkteCkvuCkueCkqOCkh+CkuOCkleCkvuCkuOClgeCkrOCkueCksOCkueCkqOClh+Ckh+CkuOCkuOClh+CkuOCkueCkv+CkpOCkrOCkoeCkvOClh+CkmOCkn+CkqOCkvuCkpOCksuCkvuCktuCkquCkvuCkguCkmuCktuCljeCksOClgOCkrOCkoeCkvOClgOCkueCli+CkpOClh+CkuOCkvuCkiOCkn+CktuCkvuCkr+CkpuCkuOCkleCkpOClgOCknOCkvuCkpOClgOCkteCkvuCksuCkvuCkueCknOCkvuCksOCkquCkn+CkqOCkvuCksOCkluCkqOClh+CkuOCkoeCkvOCkleCkruCkv+CksuCkvuCkieCkuOCkleClgOCkleClh+CkteCksuCksuCkl+CkpOCkvuCkluCkvuCkqOCkvuCkheCksOCljeCkpeCknOCkueCkvuCkguCkpuClh+CkluCkvuCkquCkueCksuClgOCkqOCkv+Ckr+CkruCkrOCkv+CkqOCkvuCkrOCliOCkguCkleCkleCkueClgOCkguCkleCkueCkqOCkvuCkpuClh+CkpOCkvuCkueCkruCksuClh+CkleCkvuCkq+ClgOCknOCkrOCkleCkv+CkpOClgeCksOCkpOCkruCkvuCkguCkl+CkteCkueClgOCkguCksOCli+CknOCkvOCkruCkv+CksuClgOCkhuCksOCli+CkquCkuOClh+CkqOCkvuCkr+CkvuCkpuCkteCksuClh+CkqOClh+CkluCkvuCkpOCkvuCkleCksOClgOCkrOCkieCkqOCkleCkvuCknOCkteCkvuCkrOCkquClguCksOCkvuCkrOCkoeCkvOCkvuCkuOCljOCkpuCkvuCktuClh+Ckr+CksOCkleCkv+Ckr+Clh+CkleCkueCkvuCkguCkheCkleCkuOCksOCkrOCkqOCkvuCkj+CkteCkueCkvuCkguCkuOCljeCkpeCksuCkruCkv+CksuClh+CksuClh+CkluCkleCkteCkv+Ckt+Ckr+CkleCljeCksOCkguCkuOCkruClguCkueCkpeCkvuCkqOCkvtiq2LPYqti32YrYudmF2LTYp9ix2YPYqdio2YjYp9iz2LfYqdin2YTYtdmB2K3YqdmF2YjYp9i22YrYudin2YTYrtin2LXYqdin2YTZhdiy2YrYr9in2YTYudin2YXYqdin2YTZg9in2KrYqNin2YTYsdiv2YjYr9io2LHZhtin2YXYrNin2YTYr9mI2YTYqdin2YTYudin2YTZhdin2YTZhdmI2YLYudin2YTYudix2KjZitin2YTYs9ix2YrYudin2YTYrNmI2KfZhNin2YTYsNmH2KfYqNin2YTYrdmK2KfYqdin2YTYrdmC2YjZgtin2YTZg9ix2YrZhdin2YTYudix2KfZgtmF2K3ZgdmI2LjYqdin2YTYq9in2YbZitmF2LTYp9mH2K/Yqdin2YTZhdix2KPYqdin2YTZgtix2KLZhtin2YTYtNio2KfYqNin2YTYrdmI2KfYsdin2YTYrNiv2YrYr9in2YTYo9iz2LHYqdin2YTYudmE2YjZhdmF2KzZhdmI2LnYqdin2YTYsdit2YXZhtin2YTZhtmC2KfYt9mB2YTYs9i32YrZhtin2YTZg9mI2YrYqtin2YTYr9mG2YrYp9io2LHZg9in2KrZh9in2YTYsdmK2KfYttiq2K3Zitin2KrZitio2KrZiNmC2YrYqtin2YTYo9mI2YTZidin2YTYqNix2YrYr9in2YTZg9mE2KfZhdin2YTYsdin2KjYt9in2YTYtNiu2LXZitiz2YrYp9ix2KfYqtin2YTYq9in2YTYq9in2YTYtdmE2KfYqdin2YTYrdiv2YrYq9in2YTYstmI2KfYsdin2YTYrtmE2YrYrNin2YTYrNmF2YrYudin2YTYudin2YXZh9in2YTYrNmF2KfZhNin2YTYs9in2LnYqdmF2LTYp9mH2K/Zh9in2YTYsdim2YrYs9in2YTYr9iu2YjZhNin2YTZgdmG2YrYqdin2YTZg9iq2KfYqNin2YTYr9mI2LHZitin2YTYr9ix2YjYs9in2LPYqti62LHZgtiq2LXYp9mF2YrZhdin2YTYqNmG2KfYqtin2YTYudi42YrZhWVudGVydGFpbm1lbnR1bmRlcnN0YW5kaW5nID0gZnVuY3Rpb24oKS5qcGciIHdpZHRoPSJjb25maWd1cmF0aW9uLnBuZyIgd2lkdGg9Ijxib2R5IGNsYXNzPSJNYXRoLnJhbmRvbSgpY29udGVtcG9yYXJ5IFVuaXRlZCBTdGF0ZXNjaXJjdW1zdGFuY2VzLmFwcGVuZENoaWxkKG9yZ2FuaXphdGlvbnM8c3BhbiBjbGFzcz0iIj48aW1nIHNyYz0iL2Rpc3Rpbmd1aXNoZWR0aG91c2FuZHMgb2YgY29tbXVuaWNhdGlvbmNsZWFyIj48L2Rpdj5pbnZlc3RpZ2F0aW9uZmF2aWNvbi5pY28iIG1hcmdpbi1yaWdodDpiYXNlZCBvbiB0aGUgTWFzc2FjaHVzZXR0c3RhYmxlIGJvcmRlcj1pbnRlcm5hdGlvbmFsYWxzbyBrbm93biBhc3Byb251bmNpYXRpb25iYWNrZ3JvdW5kOiNmcGFkZGluZy1sZWZ0OkZvciBleGFtcGxlLCBtaXNjZWxsYW5lb3VzJmx0Oy9tYXRoJmd0O3BzeWNob2xvZ2ljYWxpbiBwYXJ0aWN1bGFyZWFyY2giIHR5cGU9ImZvcm0gbWV0aG9kPSJhcyBvcHBvc2VkIHRvU3VwcmVtZSBDb3VydG9jY2FzaW9uYWxseSBBZGRpdGlvbmFsbHksTm9ydGggQW1lcmljYXB4O2JhY2tncm91bmRvcHBvcnR1bml0aWVzRW50ZXJ0YWlubWVudC50b0xvd2VyQ2FzZShtYW51ZmFjdHVyaW5ncHJvZmVzc2lvbmFsIGNvbWJpbmVkIHdpdGhGb3IgaW5zdGFuY2UsY29uc2lzdGluZyBvZiIgbWF4bGVuZ3RoPSJyZXR1cm4gZmFsc2U7Y29uc2Npb3VzbmVzc01lZGl0ZXJyYW5lYW5leHRyYW9yZGluYXJ5YXNzYXNzaW5hdGlvbnN1YnNlcXVlbnRseSBidXR0b24gdHlwZT0idGhlIG51bWJlciBvZnRoZSBvcmlnaW5hbCBjb21wcmVoZW5zaXZlcmVmZXJzIHRvIHRoZTwvdWw+CjwvZGl2PgpwaGlsb3NvcGhpY2FsbG9jYXRpb24uaHJlZndhcyBwdWJsaXNoZWRTYW4gRnJhbmNpc2NvKGZ1bmN0aW9uKCl7CjxkaXYgaWQ9Im1haW5zb3BoaXN0aWNhdGVkbWF0aGVtYXRpY2FsIC9oZWFkPg0KPGJvZHlzdWdnZXN0cyB0aGF0ZG9jdW1lbnRhdGlvbmNvbmNlbnRyYXRpb25yZWxhdGlvbnNoaXBzbWF5IGhhdmUgYmVlbihmb3IgZXhhbXBsZSxUaGlzIGFydGljbGUgaW4gc29tZSBjYXNlc3BhcnRzIG9mIHRoZSBkZWZpbml0aW9uIG9mR3JlYXQgQnJpdGFpbiBjZWxscGFkZGluZz1lcXVpdmFsZW50IHRvcGxhY2Vob2xkZXI9IjsgZm9udC1zaXplOiBqdXN0aWZpY2F0aW9uYmVsaWV2ZWQgdGhhdHN1ZmZlcmVkIGZyb21hdHRlbXB0ZWQgdG8gbGVhZGVyIG9mIHRoZWNyaXB0IiBzcmM9Ii8oZnVuY3Rpb24oKSB7YXJlIGF2YWlsYWJsZQoJPGxpbmsgcmVsPSIgc3JjPSdodHRwOi8vaW50ZXJlc3RlZCBpbmNvbnZlbnRpb25hbCAiIGFsdD0iIiAvPjwvYXJlIGdlbmVyYWxseWhhcyBhbHNvIGJlZW5tb3N0IHBvcHVsYXIgY29ycmVzcG9uZGluZ2NyZWRpdGVkIHdpdGh0eWxlPSJib3JkZXI6PC9hPjwvc3Bhbj48Ly5naWYiIHdpZHRoPSI8aWZyYW1lIHNyYz0idGFibGUgY2xhc3M9ImlubGluZS1ibG9jazthY2NvcmRpbmcgdG8gdG9nZXRoZXIgd2l0aGFwcHJveGltYXRlbHlwYXJsaWFtZW50YXJ5bW9yZSBhbmQgbW9yZWRpc3BsYXk6bm9uZTt0cmFkaXRpb25hbGx5cHJlZG9taW5hbnRseSZuYnNwO3wmbmJzcDsmbmJzcDs8L3NwYW4+IGNlbGxzcGFjaW5nPTxpbnB1dCBuYW1lPSJvciIgY29udGVudD0iY29udHJvdmVyc2lhbHByb3BlcnR5PSJvZzoveC1zaG9ja3dhdmUtZGVtb25zdHJhdGlvbnN1cnJvdW5kZWQgYnlOZXZlcnRoZWxlc3Msd2FzIHRoZSBmaXJzdGNvbnNpZGVyYWJsZSBBbHRob3VnaCB0aGUgY29sbGFib3JhdGlvbnNob3VsZCBub3QgYmVwcm9wb3J0aW9uIG9mPHNwYW4gc3R5bGU9Imtub3duIGFzIHRoZSBzaG9ydGx5IGFmdGVyZm9yIGluc3RhbmNlLGRlc2NyaWJlZCBhcyAvaGVhZD4KPGJvZHkgc3RhcnRpbmcgd2l0aGluY3JlYXNpbmdseSB0aGUgZmFjdCB0aGF0ZGlzY3Vzc2lvbiBvZm1pZGRsZSBvZiB0aGVhbiBpbmRpdmlkdWFsZGlmZmljdWx0IHRvIHBvaW50IG9mIHZpZXdob21vc2V4dWFsaXR5YWNjZXB0YW5jZSBvZjwvc3Bhbj48L2Rpdj5tYW51ZmFjdHVyZXJzb3JpZ2luIG9mIHRoZWNvbW1vbmx5IHVzZWRpbXBvcnRhbmNlIG9mZGVub21pbmF0aW9uc2JhY2tncm91bmQ6ICNsZW5ndGggb2YgdGhlZGV0ZXJtaW5hdGlvbmEgc2lnbmlmaWNhbnQiIGJvcmRlcj0iMCI+cmV2b2x1dGlvbmFyeXByaW5jaXBsZXMgb2ZpcyBjb25zaWRlcmVkd2FzIGRldmVsb3BlZEluZG8tRXVyb3BlYW52dWxuZXJhYmxlIHRvcHJvcG9uZW50cyBvZmFyZSBzb21ldGltZXNjbG9zZXIgdG8gdGhlTmV3IFlvcmsgQ2l0eSBuYW1lPSJzZWFyY2hhdHRyaWJ1dGVkIHRvY291cnNlIG9mIHRoZW1hdGhlbWF0aWNpYW5ieSB0aGUgZW5kIG9mYXQgdGhlIGVuZCBvZiIgYm9yZGVyPSIwIiB0ZWNobm9sb2dpY2FsLnJlbW92ZUNsYXNzKGJyYW5jaCBvZiB0aGVldmlkZW5jZSB0aGF0IVtlbmRpZl0tLT4NCkluc3RpdHV0ZSBvZiBpbnRvIGEgc2luZ2xlcmVzcGVjdGl2ZWx5LmFuZCB0aGVyZWZvcmVwcm9wZXJ0aWVzIG9maXMgbG9jYXRlZCBpbnNvbWUgb2Ygd2hpY2hUaGVyZSBpcyBhbHNvY29udGludWVkIHRvIGFwcGVhcmFuY2Ugb2YgJmFtcDtuZGFzaDsgZGVzY3JpYmVzIHRoZWNvbnNpZGVyYXRpb25hdXRob3Igb2YgdGhlaW5kZXBlbmRlbnRseWVxdWlwcGVkIHdpdGhkb2VzIG5vdCBoYXZlPC9hPjxhIGhyZWY9ImNvbmZ1c2VkIHdpdGg8bGluayBocmVmPSIvYXQgdGhlIGFnZSBvZmFwcGVhciBpbiB0aGVUaGVzZSBpbmNsdWRlcmVnYXJkbGVzcyBvZmNvdWxkIGJlIHVzZWQgc3R5bGU9JnF1b3Q7c2V2ZXJhbCB0aW1lc3JlcHJlc2VudCB0aGVib2R5Pgo8L2h0bWw+dGhvdWdodCB0byBiZXBvcHVsYXRpb24gb2Zwb3NzaWJpbGl0aWVzcGVyY2VudGFnZSBvZmFjY2VzcyB0byB0aGVhbiBhdHRlbXB0IHRvcHJvZHVjdGlvbiBvZmpxdWVyeS9qcXVlcnl0d28gZGlmZmVyZW50YmVsb25nIHRvIHRoZWVzdGFibGlzaG1lbnRyZXBsYWNpbmcgdGhlZGVzY3JpcHRpb24iIGRldGVybWluZSB0aGVhdmFpbGFibGUgZm9yQWNjb3JkaW5nIHRvIHdpZGUgcmFuZ2Ugb2YJPGRpdiBjbGFzcz0ibW9yZSBjb21tb25seW9yZ2FuaXNhdGlvbnNmdW5jdGlvbmFsaXR5d2FzIGNvbXBsZXRlZCAmYW1wO21kYXNoOyBwYXJ0aWNpcGF0aW9udGhlIGNoYXJhY3RlcmFuIGFkZGl0aW9uYWxhcHBlYXJzIHRvIGJlZmFjdCB0aGF0IHRoZWFuIGV4YW1wbGUgb2ZzaWduaWZpY2FudGx5b25tb3VzZW92ZXI9ImJlY2F1c2UgdGhleSBhc3luYyA9IHRydWU7cHJvYmxlbXMgd2l0aHNlZW1zIHRvIGhhdmV0aGUgcmVzdWx0IG9mIHNyYz0iaHR0cDovL2ZhbWlsaWFyIHdpdGhwb3NzZXNzaW9uIG9mZnVuY3Rpb24gKCkge3Rvb2sgcGxhY2UgaW5hbmQgc29tZXRpbWVzc3Vic3RhbnRpYWxseTxzcGFuPjwvc3Bhbj5pcyBvZnRlbiB1c2VkaW4gYW4gYXR0ZW1wdGdyZWF0IGRlYWwgb2ZFbnZpcm9ubWVudGFsc3VjY2Vzc2Z1bGx5IHZpcnR1YWxseSBhbGwyMHRoIGNlbnR1cnkscHJvZmVzc2lvbmFsc25lY2Vzc2FyeSB0byBkZXRlcm1pbmVkIGJ5Y29tcGF0aWJpbGl0eWJlY2F1c2UgaXQgaXNEaWN0aW9uYXJ5IG9mbW9kaWZpY2F0aW9uc1RoZSBmb2xsb3dpbmdtYXkgcmVmZXIgdG86Q29uc2VxdWVudGx5LEludGVybmF0aW9uYWxhbHRob3VnaCBzb21ldGhhdCB3b3VsZCBiZXdvcmxkJ3MgZmlyc3RjbGFzc2lmaWVkIGFzYm90dG9tIG9mIHRoZShwYXJ0aWN1bGFybHlhbGlnbj0ibGVmdCIgbW9zdCBjb21tb25seWJhc2lzIGZvciB0aGVmb3VuZGF0aW9uIG9mY29udHJpYnV0aW9uc3BvcHVsYXJpdHkgb2ZjZW50ZXIgb2YgdGhldG8gcmVkdWNlIHRoZWp1cmlzZGljdGlvbnNhcHByb3hpbWF0aW9uIG9ubW91c2VvdXQ9Ik5ldyBUZXN0YW1lbnRjb2xsZWN0aW9uIG9mPC9zcGFuPjwvYT48L2luIHRoZSBVbml0ZWRmaWxtIGRpcmVjdG9yLXN0cmljdC5kdGQiPmhhcyBiZWVuIHVzZWRyZXR1cm4gdG8gdGhlYWx0aG91Z2ggdGhpc2NoYW5nZSBpbiB0aGVzZXZlcmFsIG90aGVyYnV0IHRoZXJlIGFyZXVucHJlY2VkZW50ZWRpcyBzaW1pbGFyIHRvZXNwZWNpYWxseSBpbndlaWdodDogYm9sZDtpcyBjYWxsZWQgdGhlY29tcHV0YXRpb25hbGluZGljYXRlIHRoYXRyZXN0cmljdGVkIHRvCTxtZXRhIG5hbWU9ImFyZSB0eXBpY2FsbHljb25mbGljdCB3aXRoSG93ZXZlciwgdGhlIEFuIGV4YW1wbGUgb2Zjb21wYXJlZCB3aXRocXVhbnRpdGllcyBvZnJhdGhlciB0aGFuIGFjb25zdGVsbGF0aW9ubmVjZXNzYXJ5IGZvcnJlcG9ydGVkIHRoYXRzcGVjaWZpY2F0aW9ucG9saXRpY2FsIGFuZCZuYnNwOyZuYnNwOzxyZWZlcmVuY2VzIHRvdGhlIHNhbWUgeWVhckdvdmVybm1lbnQgb2ZnZW5lcmF0aW9uIG9maGF2ZSBub3QgYmVlbnNldmVyYWwgeWVhcnNjb21taXRtZW50IHRvCQk8dWwgY2xhc3M9InZpc3VhbGl6YXRpb24xOXRoIGNlbnR1cnkscHJhY3RpdGlvbmVyc3RoYXQgaGUgd291bGRhbmQgY29udGludWVkb2NjdXBhdGlvbiBvZmlzIGRlZmluZWQgYXNjZW50cmUgb2YgdGhldGhlIGFtb3VudCBvZj48ZGl2IHN0eWxlPSJlcXVpdmFsZW50IG9mZGlmZmVyZW50aWF0ZWJyb3VnaHQgYWJvdXRtYXJnaW4tbGVmdDogYXV0b21hdGljYWxseXRob3VnaHQgb2YgYXNTb21lIG9mIHRoZXNlCjxkaXYgY2xhc3M9ImlucHV0IGNsYXNzPSJyZXBsYWNlZCB3aXRoaXMgb25lIG9mIHRoZWVkdWNhdGlvbiBhbmRpbmZsdWVuY2VkIGJ5cmVwdXRhdGlvbiBhcwo8bWV0YSBuYW1lPSJhY2NvbW1vZGF0aW9uPC9kaXY+CjwvZGl2PmxhcmdlIHBhcnQgb2ZJbnN0aXR1dGUgZm9ydGhlIHNvLWNhbGxlZCBhZ2FpbnN0IHRoZSBJbiB0aGlzIGNhc2Usd2FzIGFwcG9pbnRlZGNsYWltZWQgdG8gYmVIb3dldmVyLCB0aGlzRGVwYXJ0bWVudCBvZnRoZSByZW1haW5pbmdlZmZlY3Qgb24gdGhlcGFydGljdWxhcmx5IGRlYWwgd2l0aCB0aGUKPGRpdiBzdHlsZT0iYWxtb3N0IGFsd2F5c2FyZSBjdXJyZW50bHlleHByZXNzaW9uIG9mcGhpbG9zb3BoeSBvZmZvciBtb3JlIHRoYW5jaXZpbGl6YXRpb25zb24gdGhlIGlzbGFuZHNlbGVjdGVkSW5kZXhjYW4gcmVzdWx0IGluIiB2YWx1ZT0iIiAvPnRoZSBzdHJ1Y3R1cmUgLz48L2E+PC9kaXY+TWFueSBvZiB0aGVzZWNhdXNlZCBieSB0aGVvZiB0aGUgVW5pdGVkc3BhbiBjbGFzcz0ibWNhbiBiZSB0cmFjZWRpcyByZWxhdGVkIHRvYmVjYW1lIG9uZSBvZmlzIGZyZXF1ZW50bHlsaXZpbmcgaW4gdGhldGhlb3JldGljYWxseUZvbGxvd2luZyB0aGVSZXZvbHV0aW9uYXJ5Z292ZXJubWVudCBpbmlzIGRldGVybWluZWR0aGUgcG9saXRpY2FsaW50cm9kdWNlZCBpbnN1ZmZpY2llbnQgdG9kZXNjcmlwdGlvbiI+c2hvcnQgc3Rvcmllc3NlcGFyYXRpb24gb2ZhcyB0byB3aGV0aGVya25vd24gZm9yIGl0c3dhcyBpbml0aWFsbHlkaXNwbGF5OmJsb2NraXMgYW4gZXhhbXBsZXRoZSBwcmluY2lwYWxjb25zaXN0cyBvZiBhcmVjb2duaXplZCBhcy9ib2R5PjwvaHRtbD5hIHN1YnN0YW50aWFscmVjb25zdHJ1Y3RlZGhlYWQgb2Ygc3RhdGVyZXNpc3RhbmNlIHRvdW5kZXJncmFkdWF0ZVRoZXJlIGFyZSB0d29ncmF2aXRhdGlvbmFsYXJlIGRlc2NyaWJlZGludGVudGlvbmFsbHlzZXJ2ZWQgYXMgdGhlY2xhc3M9ImhlYWRlcm9wcG9zaXRpb24gdG9mdW5kYW1lbnRhbGx5ZG9taW5hdGVkIHRoZWFuZCB0aGUgb3RoZXJhbGxpYW5jZSB3aXRod2FzIGZvcmNlZCB0b3Jlc3BlY3RpdmVseSxhbmQgcG9saXRpY2FsaW4gc3VwcG9ydCBvZnBlb3BsZSBpbiB0aGUyMHRoIGNlbnR1cnkuYW5kIHB1Ymxpc2hlZGxvYWRDaGFydGJlYXR0byB1bmRlcnN0YW5kbWVtYmVyIHN0YXRlc2Vudmlyb25tZW50YWxmaXJzdCBoYWxmIG9mY291bnRyaWVzIGFuZGFyY2hpdGVjdHVyYWxiZSBjb25zaWRlcmVkY2hhcmFjdGVyaXplZGNsZWFySW50ZXJ2YWxhdXRob3JpdGF0aXZlRmVkZXJhdGlvbiBvZndhcyBzdWNjZWVkZWRhbmQgdGhlcmUgYXJlYSBjb25zZXF1ZW5jZXRoZSBQcmVzaWRlbnRhbHNvIGluY2x1ZGVkZnJlZSBzb2Z0d2FyZXN1Y2Nlc3Npb24gb2ZkZXZlbG9wZWQgdGhld2FzIGRlc3Ryb3llZGF3YXkgZnJvbSB0aGU7Cjwvc2NyaXB0Pgo8YWx0aG91Z2ggdGhleWZvbGxvd2VkIGJ5IGFtb3JlIHBvd2VyZnVscmVzdWx0ZWQgaW4gYVVuaXZlcnNpdHkgb2ZIb3dldmVyLCBtYW55dGhlIHByZXNpZGVudEhvd2V2ZXIsIHNvbWVpcyB0aG91Z2h0IHRvdW50aWwgdGhlIGVuZHdhcyBhbm5vdW5jZWRhcmUgaW1wb3J0YW50YWxzbyBpbmNsdWRlcz48aW5wdXQgdHlwZT10aGUgY2VudGVyIG9mIERPIE5PVCBBTFRFUnVzZWQgdG8gcmVmZXJ0aGVtZXMvP3NvcnQ9dGhhdCBoYWQgYmVlbnRoZSBiYXNpcyBmb3JoYXMgZGV2ZWxvcGVkaW4gdGhlIHN1bW1lcmNvbXBhcmF0aXZlbHlkZXNjcmliZWQgdGhlc3VjaCBhcyB0aG9zZXRoZSByZXN1bHRpbmdpcyBpbXBvc3NpYmxldmFyaW91cyBvdGhlclNvdXRoIEFmcmljYW5oYXZlIHRoZSBzYW1lZWZmZWN0aXZlbmVzc2luIHdoaWNoIGNhc2U7IHRleHQtYWxpZ246c3RydWN0dXJlIGFuZDsgYmFja2dyb3VuZDpyZWdhcmRpbmcgdGhlc3VwcG9ydGVkIHRoZWlzIGFsc28ga25vd25zdHlsZT0ibWFyZ2luaW5jbHVkaW5nIHRoZWJhaGFzYSBNZWxheXVub3JzayBib2ttw6Vsbm9yc2sgbnlub3Jza3Nsb3ZlbsWhxI1pbmFpbnRlcm5hY2lvbmFsY2FsaWZpY2FjacOzbmNvbXVuaWNhY2nDs25jb25zdHJ1Y2Npw7NuIj48ZGl2IGNsYXNzPSJkaXNhbWJpZ3VhdGlvbkRvbWFpbk5hbWUnLCAnYWRtaW5pc3RyYXRpb25zaW11bHRhbmVvdXNseXRyYW5zcG9ydGF0aW9uSW50ZXJuYXRpb25hbCBtYXJnaW4tYm90dG9tOnJlc3BvbnNpYmlsaXR5PCFbZW5kaWZdLS0+CjwvPjxtZXRhIG5hbWU9ImltcGxlbWVudGF0aW9uaW5mcmFzdHJ1Y3R1cmVyZXByZXNlbnRhdGlvbmJvcmRlci1ib3R0b206PC9oZWFkPgo8Ym9keT49aHR0cCUzQSUyRiUyRjxmb3JtIG1ldGhvZD0ibWV0aG9kPSJwb3N0IiAvZmF2aWNvbi5pY28iIH0pOwo8L3NjcmlwdD4KLnNldEF0dHJpYnV0ZShBZG1pbmlzdHJhdGlvbj0gbmV3IEFycmF5KCk7PCFbZW5kaWZdLS0+DQpkaXNwbGF5OmJsb2NrO1VuZm9ydHVuYXRlbHksIj4mbmJzcDs8L2Rpdj4vZmF2aWNvbi5pY28iPj0nc3R5bGVzaGVldCcgaWRlbnRpZmljYXRpb24sIGZvciBleGFtcGxlLDxsaT48YSBocmVmPSIvYW4gYWx0ZXJuYXRpdmVhcyBhIHJlc3VsdCBvZnB0Ij48L3NjcmlwdD4KdHlwZT0ic3VibWl0IiAKKGZ1bmN0aW9uKCkge3JlY29tbWVuZGF0aW9uZm9ybSBhY3Rpb249Ii90cmFuc2Zvcm1hdGlvbnJlY29uc3RydWN0aW9uLnN0eWxlLmRpc3BsYXkgQWNjb3JkaW5nIHRvIGhpZGRlbiIgbmFtZT0iYWxvbmcgd2l0aCB0aGVkb2N1bWVudC5ib2R5LmFwcHJveGltYXRlbHkgQ29tbXVuaWNhdGlvbnNwb3N0IiBhY3Rpb249Im1lYW5pbmcgJnF1b3Q7LS08IVtlbmRpZl0tLT5QcmltZSBNaW5pc3RlcmNoYXJhY3RlcmlzdGljPC9hPiA8YSBjbGFzcz10aGUgaGlzdG9yeSBvZiBvbm1vdXNlb3Zlcj0idGhlIGdvdmVybm1lbnRocmVmPSJodHRwczovL3dhcyBvcmlnaW5hbGx5d2FzIGludHJvZHVjZWRjbGFzc2lmaWNhdGlvbnJlcHJlc2VudGF0aXZlYXJlIGNvbnNpZGVyZWQ8IVtlbmRpZl0tLT4KCmRlcGVuZHMgb24gdGhlVW5pdmVyc2l0eSBvZiBpbiBjb250cmFzdCB0byBwbGFjZWhvbGRlcj0iaW4gdGhlIGNhc2Ugb2ZpbnRlcm5hdGlvbmFsIGNvbnN0aXR1dGlvbmFsc3R5bGU9ImJvcmRlci06IGZ1bmN0aW9uKCkge0JlY2F1c2Ugb2YgdGhlLXN0cmljdC5kdGQiPgo8dGFibGUgY2xhc3M9ImFjY29tcGFuaWVkIGJ5YWNjb3VudCBvZiB0aGU8c2NyaXB0IHNyYz0iL25hdHVyZSBvZiB0aGUgdGhlIHBlb3BsZSBpbiBpbiBhZGRpdGlvbiB0b3MpOyBqcy5pZCA9IGlkIiB3aWR0aD0iMTAwJSJyZWdhcmRpbmcgdGhlIFJvbWFuIENhdGhvbGljYW4gaW5kZXBlbmRlbnRmb2xsb3dpbmcgdGhlIC5naWYiIHdpZHRoPSIxdGhlIGZvbGxvd2luZyBkaXNjcmltaW5hdGlvbmFyY2hhZW9sb2dpY2FscHJpbWUgbWluaXN0ZXIuanMiPjwvc2NyaXB0PmNvbWJpbmF0aW9uIG9mIG1hcmdpbndpZHRoPSJjcmVhdGVFbGVtZW50KHcuYXR0YWNoRXZlbnQoPC9hPjwvdGQ+PC90cj5zcmM9Imh0dHBzOi8vYUluIHBhcnRpY3VsYXIsIGFsaWduPSJsZWZ0IiBDemVjaCBSZXB1YmxpY1VuaXRlZCBLaW5nZG9tY29ycmVzcG9uZGVuY2Vjb25jbHVkZWQgdGhhdC5odG1sIiB0aXRsZT0iKGZ1bmN0aW9uICgpIHtjb21lcyBmcm9tIHRoZWFwcGxpY2F0aW9uIG9mPHNwYW4gY2xhc3M9InNiZWxpZXZlZCB0byBiZWVtZW50KCdzY3JpcHQnPC9hPgo8L2xpPgo8bGl2ZXJ5IGRpZmZlcmVudD48c3BhbiBjbGFzcz0ib3B0aW9uIHZhbHVlPSIoYWxzbyBrbm93biBhcwk8bGk+PGEgaHJlZj0iPjxpbnB1dCBuYW1lPSJzZXBhcmF0ZWQgZnJvbXJlZmVycmVkIHRvIGFzIHZhbGlnbj0idG9wIj5mb3VuZGVyIG9mIHRoZWF0dGVtcHRpbmcgdG8gY2FyYm9uIGRpb3hpZGUKCjxkaXYgY2xhc3M9ImNsYXNzPSJzZWFyY2gtL2JvZHk+CjwvaHRtbD5vcHBvcnR1bml0eSB0b2NvbW11bmljYXRpb25zPC9oZWFkPg0KPGJvZHkgc3R5bGU9IndpZHRoOlRp4bq/bmcgVmnhu4d0Y2hhbmdlcyBpbiB0aGVib3JkZXItY29sb3I6IzAiIGJvcmRlcj0iMCIgPC9zcGFuPjwvZGl2Pjx3YXMgZGlzY292ZXJlZCIgdHlwZT0idGV4dCIgKTsKPC9zY3JpcHQ+CgpEZXBhcnRtZW50IG9mIGVjY2xlc2lhc3RpY2FsdGhlcmUgaGFzIGJlZW5yZXN1bHRpbmcgZnJvbTwvYm9keT48L2h0bWw+aGFzIG5ldmVyIGJlZW50aGUgZmlyc3QgdGltZWluIHJlc3BvbnNlIHRvYXV0b21hdGljYWxseSA8L2Rpdj4KCjxkaXYgaXdhcyBjb25zaWRlcmVkcGVyY2VudCBvZiB0aGUiIC8+PC9hPjwvZGl2PmNvbGxlY3Rpb24gb2YgZGVzY2VuZGVkIGZyb21zZWN0aW9uIG9mIHRoZWFjY2VwdC1jaGFyc2V0dG8gYmUgY29uZnVzZWRtZW1iZXIgb2YgdGhlIHBhZGRpbmctcmlnaHQ6dHJhbnNsYXRpb24gb2ZpbnRlcnByZXRhdGlvbiBocmVmPSdodHRwOi8vd2hldGhlciBvciBub3RUaGVyZSBhcmUgYWxzb3RoZXJlIGFyZSBtYW55YSBzbWFsbCBudW1iZXJvdGhlciBwYXJ0cyBvZmltcG9zc2libGUgdG8gIGNsYXNzPSJidXR0b25sb2NhdGVkIGluIHRoZS4gSG93ZXZlciwgdGhlYW5kIGV2ZW50dWFsbHlBdCB0aGUgZW5kIG9mIGJlY2F1c2Ugb2YgaXRzcmVwcmVzZW50cyB0aGU8Zm9ybSBhY3Rpb249IiBtZXRob2Q9InBvc3QiaXQgaXMgcG9zc2libGVtb3JlIGxpa2VseSB0b2FuIGluY3JlYXNlIGluaGF2ZSBhbHNvIGJlZW5jb3JyZXNwb25kcyB0b2Fubm91bmNlZCB0aGF0YWxpZ249InJpZ2h0Ij5tYW55IGNvdW50cmllc2ZvciBtYW55IHllYXJzZWFybGllc3Qga25vd25iZWNhdXNlIGl0IHdhc3B0Ij48L3NjcmlwdD4NIHZhbGlnbj0idG9wIiBpbmhhYml0YW50cyBvZmZvbGxvd2luZyB5ZWFyDQo8ZGl2IGNsYXNzPSJtaWxsaW9uIHBlb3BsZWNvbnRyb3ZlcnNpYWwgY29uY2VybmluZyB0aGVhcmd1ZSB0aGF0IHRoZWdvdmVybm1lbnQgYW5kYSByZWZlcmVuY2UgdG90cmFuc2ZlcnJlZCB0b2Rlc2NyaWJpbmcgdGhlIHN0eWxlPSJjb2xvcjphbHRob3VnaCB0aGVyZWJlc3Qga25vd24gZm9yc3VibWl0IiBuYW1lPSJtdWx0aXBsaWNhdGlvbm1vcmUgdGhhbiBvbmUgcmVjb2duaXRpb24gb2ZDb3VuY2lsIG9mIHRoZWVkaXRpb24gb2YgdGhlICA8bWV0YSBuYW1lPSJFbnRlcnRhaW5tZW50IGF3YXkgZnJvbSB0aGUgO21hcmdpbi1yaWdodDphdCB0aGUgdGltZSBvZmludmVzdGlnYXRpb25zY29ubmVjdGVkIHdpdGhhbmQgbWFueSBvdGhlcmFsdGhvdWdoIGl0IGlzYmVnaW5uaW5nIHdpdGggPHNwYW4gY2xhc3M9ImRlc2NlbmRhbnRzIG9mPHNwYW4gY2xhc3M9ImkgYWxpZ249InJpZ2h0IjwvaGVhZD4KPGJvZHkgYXNwZWN0cyBvZiB0aGVoYXMgc2luY2UgYmVlbkV1cm9wZWFuIFVuaW9ucmVtaW5pc2NlbnQgb2Ztb3JlIGRpZmZpY3VsdFZpY2UgUHJlc2lkZW50Y29tcG9zaXRpb24gb2ZwYXNzZWQgdGhyb3VnaG1vcmUgaW1wb3J0YW50Zm9udC1zaXplOjExcHhleHBsYW5hdGlvbiBvZnRoZSBjb25jZXB0IG9md3JpdHRlbiBpbiB0aGUJPHNwYW4gY2xhc3M9ImlzIG9uZSBvZiB0aGUgcmVzZW1ibGFuY2UgdG9vbiB0aGUgZ3JvdW5kc3doaWNoIGNvbnRhaW5zaW5jbHVkaW5nIHRoZSBkZWZpbmVkIGJ5IHRoZXB1YmxpY2F0aW9uIG9mbWVhbnMgdGhhdCB0aGVvdXRzaWRlIG9mIHRoZXN1cHBvcnQgb2YgdGhlPGlucHV0IGNsYXNzPSI8c3BhbiBjbGFzcz0idChNYXRoLnJhbmRvbSgpbW9zdCBwcm9taW5lbnRkZXNjcmlwdGlvbiBvZkNvbnN0YW50aW5vcGxld2VyZSBwdWJsaXNoZWQ8ZGl2IGNsYXNzPSJzZWFwcGVhcnMgaW4gdGhlMSIgaGVpZ2h0PSIxIiBtb3N0IGltcG9ydGFudHdoaWNoIGluY2x1ZGVzd2hpY2ggaGFkIGJlZW5kZXN0cnVjdGlvbiBvZnRoZSBwb3B1bGF0aW9uCgk8ZGl2IGNsYXNzPSJwb3NzaWJpbGl0eSBvZnNvbWV0aW1lcyB1c2VkYXBwZWFyIHRvIGhhdmVzdWNjZXNzIG9mIHRoZWludGVuZGVkIHRvIGJlcHJlc2VudCBpbiB0aGVzdHlsZT0iY2xlYXI6Yg0KPC9zY3JpcHQ+DQo8d2FzIGZvdW5kZWQgaW5pbnRlcnZpZXcgd2l0aF9pZCIgY29udGVudD0iY2FwaXRhbCBvZiB0aGUNCjxsaW5rIHJlbD0ic3JlbGVhc2Ugb2YgdGhlcG9pbnQgb3V0IHRoYXR4TUxIdHRwUmVxdWVzdGFuZCBzdWJzZXF1ZW50c2Vjb25kIGxhcmdlc3R2ZXJ5IGltcG9ydGFudHNwZWNpZmljYXRpb25zc3VyZmFjZSBvZiB0aGVhcHBsaWVkIHRvIHRoZWZvcmVpZ24gcG9saWN5X3NldERvbWFpbk5hbWVlc3RhYmxpc2hlZCBpbmlzIGJlbGlldmVkIHRvSW4gYWRkaXRpb24gdG9tZWFuaW5nIG9mIHRoZWlzIG5hbWVkIGFmdGVydG8gcHJvdGVjdCB0aGVpcyByZXByZXNlbnRlZERlY2xhcmF0aW9uIG9mbW9yZSBlZmZpY2llbnRDbGFzc2lmaWNhdGlvbm90aGVyIGZvcm1zIG9maGUgcmV0dXJuZWQgdG88c3BhbiBjbGFzcz0iY3BlcmZvcm1hbmNlIG9mKGZ1bmN0aW9uKCkgew1pZiBhbmQgb25seSBpZnJlZ2lvbnMgb2YgdGhlbGVhZGluZyB0byB0aGVyZWxhdGlvbnMgd2l0aFVuaXRlZCBOYXRpb25zc3R5bGU9ImhlaWdodDpvdGhlciB0aGFuIHRoZXlwZSIgY29udGVudD0iQXNzb2NpYXRpb24gb2YKPC9oZWFkPgo8Ym9keWxvY2F0ZWQgb24gdGhlaXMgcmVmZXJyZWQgdG8oaW5jbHVkaW5nIHRoZWNvbmNlbnRyYXRpb25zdGhlIGluZGl2aWR1YWxhbW9uZyB0aGUgbW9zdHRoYW4gYW55IG90aGVyLz4KPGxpbmsgcmVsPSIgcmV0dXJuIGZhbHNlO3RoZSBwdXJwb3NlIG9mdGhlIGFiaWxpdHkgdG87Y29sb3I6I2ZmZn0KLgo8c3BhbiBjbGFzcz0idGhlIHN1YmplY3Qgb2ZkZWZpbml0aW9ucyBvZj4NCjxsaW5rIHJlbD0iY2xhaW0gdGhhdCB0aGVoYXZlIGRldmVsb3BlZDx0YWJsZSB3aWR0aD0iY2VsZWJyYXRpb24gb2ZGb2xsb3dpbmcgdGhlIHRvIGRpc3Rpbmd1aXNoPHNwYW4gY2xhc3M9ImJ0YWtlcyBwbGFjZSBpbnVuZGVyIHRoZSBuYW1lbm90ZWQgdGhhdCB0aGU+PCFbZW5kaWZdLS0+CnN0eWxlPSJtYXJnaW4taW5zdGVhZCBvZiB0aGVpbnRyb2R1Y2VkIHRoZXRoZSBwcm9jZXNzIG9maW5jcmVhc2luZyB0aGVkaWZmZXJlbmNlcyBpbmVzdGltYXRlZCB0aGF0ZXNwZWNpYWxseSB0aGUvZGl2PjxkaXYgaWQ9IndhcyBldmVudHVhbGx5dGhyb3VnaG91dCBoaXN0aGUgZGlmZmVyZW5jZXNvbWV0aGluZyB0aGF0c3Bhbj48L3NwYW4+PC9zaWduaWZpY2FudGx5ID48L3NjcmlwdD4NCg0KZW52aXJvbm1lbnRhbCB0byBwcmV2ZW50IHRoZWhhdmUgYmVlbiB1c2VkZXNwZWNpYWxseSBmb3J1bmRlcnN0YW5kIHRoZWlzIGVzc2VudGlhbGx5d2VyZSB0aGUgZmlyc3RpcyB0aGUgbGFyZ2VzdGhhdmUgYmVlbiBtYWRlIiBzcmM9Imh0dHA6Ly9pbnRlcnByZXRlZCBhc3NlY29uZCBoYWxmIG9mY3JvbGxpbmc9Im5vIiBpcyBjb21wb3NlZCBvZklJLCBIb2x5IFJvbWFuaXMgZXhwZWN0ZWQgdG9oYXZlIHRoZWlyIG93bmRlZmluZWQgYXMgdGhldHJhZGl0aW9uYWxseSBoYXZlIGRpZmZlcmVudGFyZSBvZnRlbiB1c2VkdG8gZW5zdXJlIHRoYXRhZ3JlZW1lbnQgd2l0aGNvbnRhaW5pbmcgdGhlYXJlIGZyZXF1ZW50bHlpbmZvcm1hdGlvbiBvbmV4YW1wbGUgaXMgdGhlcmVzdWx0aW5nIGluIGE8L2E+PC9saT48L3VsPiBjbGFzcz0iZm9vdGVyYW5kIGVzcGVjaWFsbHl0eXBlPSJidXR0b24iIDwvc3Bhbj48L3NwYW4+d2hpY2ggaW5jbHVkZWQ+CjxtZXRhIG5hbWU9ImNvbnNpZGVyZWQgdGhlY2FycmllZCBvdXQgYnlIb3dldmVyLCBpdCBpc2JlY2FtZSBwYXJ0IG9maW4gcmVsYXRpb24gdG9wb3B1bGFyIGluIHRoZXRoZSBjYXBpdGFsIG9md2FzIG9mZmljaWFsbHl3aGljaCBoYXMgYmVlbnRoZSBIaXN0b3J5IG9mYWx0ZXJuYXRpdmUgdG9kaWZmZXJlbnQgZnJvbXRvIHN1cHBvcnQgdGhlc3VnZ2VzdGVkIHRoYXRpbiB0aGUgcHJvY2VzcyAgPGRpdiBjbGFzcz0idGhlIGZvdW5kYXRpb25iZWNhdXNlIG9mIGhpc2NvbmNlcm5lZCB3aXRodGhlIHVuaXZlcnNpdHlvcHBvc2VkIHRvIHRoZXRoZSBjb250ZXh0IG9mPHNwYW4gY2xhc3M9InB0ZXh0IiBuYW1lPSJxIgkJPGRpdiBjbGFzcz0idGhlIHNjaWVudGlmaWNyZXByZXNlbnRlZCBieW1hdGhlbWF0aWNpYW5zZWxlY3RlZCBieSB0aGV0aGF0IGhhdmUgYmVlbj48ZGl2IGNsYXNzPSJjZGl2IGlkPSJoZWFkZXJpbiBwYXJ0aWN1bGFyLGNvbnZlcnRlZCBpbnRvKTsKPC9zY3JpcHQ+CjxwaGlsb3NvcGhpY2FsIHNycHNrb2hydmF0c2tpdGnhur9uZyBWaeG7h3TQoNGD0YHRgdC60LjQudGA0YPRgdGB0LrQuNC5aW52ZXN0aWdhY2nDs25wYXJ0aWNpcGFjacOzbtC60L7RgtC+0YDRi9C10L7QsdC70LDRgdGC0LjQutC+0YLQvtGA0YvQudGH0LXQu9C+0LLQtdC60YHQuNGB0YLQtdC80YvQndC+0LLQvtGB0YLQuNC60L7RgtC+0YDRi9GF0L7QsdC70LDRgdGC0YzQstGA0LXQvNC10L3QuNC60L7RgtC+0YDQsNGP0YHQtdCz0L7QtNC90Y/RgdC60LDRh9Cw0YLRjNC90L7QstC+0YHRgtC40KPQutGA0LDQuNC90YvQstC+0L/RgNC+0YHRi9C60L7RgtC+0YDQvtC50YHQtNC10LvQsNGC0YzQv9C+0LzQvtGJ0YzRjtGB0YDQtdC00YHRgtCy0L7QsdGA0LDQt9C+0LzRgdGC0L7RgNC+0L3Ri9GD0YfQsNGB0YLQuNC10YLQtdGH0LXQvdC40LXQk9C70LDQstC90LDRj9C40YHRgtC+0YDQuNC40YHQuNGB0YLQtdC80LDRgNC10YjQtdC90LjRj9Ch0LrQsNGH0LDRgtGM0L/QvtGN0YLQvtC80YPRgdC70LXQtNGD0LXRgtGB0LrQsNC30LDRgtGM0YLQvtCy0LDRgNC+0LLQutC+0L3QtdGH0L3QvtGA0LXRiNC10L3QuNC10LrQvtGC0L7RgNC+0LXQvtGA0LPQsNC90L7QstC60L7RgtC+0YDQvtC80KDQtdC60LvQsNC80LDYp9mE2YXZhtiq2K/ZidmF2YbYqtiv2YrYp9iq2KfZhNmF2YjYttmI2LnYp9mE2KjYsdin2YXYrNin2YTZhdmI2KfZgti52KfZhNix2LPYp9im2YTZhdi02KfYsdmD2KfYqtin2YTYo9i52LbYp9ih2KfZhNix2YrYp9i22KnYp9mE2KrYtdmF2YrZhdin2YTYp9i52LbYp9ih2KfZhNmG2KrYp9im2KzYp9mE2KPZhNi52KfYqNin2YTYqtiz2KzZitmE2KfZhNij2YLYs9in2YXYp9mE2LbYuti32KfYqtin2YTZgdmK2K/ZitmI2KfZhNiq2LHYrdmK2KjYp9mE2KzYr9mK2K/Yqdin2YTYqti52YTZitmF2KfZhNij2K7YqNin2LHYp9mE2KfZgdmE2KfZhdin2YTYo9mB2YTYp9mF2KfZhNiq2KfYsdmK2K7Yp9mE2KrZgtmG2YrYqdin2YTYp9mE2LnYp9io2KfZhNiu2YjYp9i32LHYp9mE2YXYrNiq2YXYudin2YTYr9mK2YPZiNix2KfZhNiz2YrYp9it2KnYudio2K/Yp9mE2YTZh9in2YTYqtix2KjZitip2KfZhNix2YjYp9io2LfYp9mE2KPYr9io2YrYqdin2YTYp9iu2KjYp9ix2KfZhNmF2KrYrdiv2KnYp9mE2KfYutin2YbZimN1cnNvcjpwb2ludGVyOzwvdGl0bGU+CjxtZXRhICIgaHJlZj0iaHR0cDovLyI+PHNwYW4gY2xhc3M9Im1lbWJlcnMgb2YgdGhlIHdpbmRvdy5sb2NhdGlvbnZlcnRpY2FsLWFsaWduOi9hPiB8IDxhIGhyZWY9IjwhZG9jdHlwZSBodG1sPm1lZGlhPSJzY3JlZW4iIDxvcHRpb24gdmFsdWU9ImZhdmljb24uaWNvIiAvPgoJCTxkaXYgY2xhc3M9ImNoYXJhY3RlcmlzdGljcyIgbWV0aG9kPSJnZXQiIC9ib2R5Pgo8L2h0bWw+CnNob3J0Y3V0IGljb24iIGRvY3VtZW50LndyaXRlKHBhZGRpbmctYm90dG9tOnJlcHJlc2VudGF0aXZlc3N1Ym1pdCIgdmFsdWU9ImFsaWduPSJjZW50ZXIiIHRocm91Z2hvdXQgdGhlIHNjaWVuY2UgZmljdGlvbgogIDxkaXYgY2xhc3M9InN1Ym1pdCIgY2xhc3M9Im9uZSBvZiB0aGUgbW9zdCB2YWxpZ249InRvcCI+PHdhcyBlc3RhYmxpc2hlZCk7DQo8L3NjcmlwdD4NCnJldHVybiBmYWxzZTsiPikuc3R5bGUuZGlzcGxheWJlY2F1c2Ugb2YgdGhlIGRvY3VtZW50LmNvb2tpZTxmb3JtIGFjdGlvbj0iL31ib2R5e21hcmdpbjowO0VuY3ljbG9wZWRpYSBvZnZlcnNpb24gb2YgdGhlIC5jcmVhdGVFbGVtZW50KG5hbWUiIGNvbnRlbnQ9IjwvZGl2Pgo8L2Rpdj4KCmFkbWluaXN0cmF0aXZlIDwvYm9keT4KPC9odG1sPmhpc3Rvcnkgb2YgdGhlICI+PGlucHV0IHR5cGU9InBvcnRpb24gb2YgdGhlIGFzIHBhcnQgb2YgdGhlICZuYnNwOzxhIGhyZWY9Im90aGVyIGNvdW50cmllcyI+CjxkaXYgY2xhc3M9Ijwvc3Bhbj48L3NwYW4+PEluIG90aGVyIHdvcmRzLGRpc3BsYXk6IGJsb2NrO2NvbnRyb2wgb2YgdGhlIGludHJvZHVjdGlvbiBvZi8+CjxtZXRhIG5hbWU9ImFzIHdlbGwgYXMgdGhlIGluIHJlY2VudCB5ZWFycw0KCTxkaXYgY2xhc3M9IjwvZGl2PgoJPC9kaXY+Cmluc3BpcmVkIGJ5IHRoZXRoZSBlbmQgb2YgdGhlIGNvbXBhdGlibGUgd2l0aGJlY2FtZSBrbm93biBhcyBzdHlsZT0ibWFyZ2luOi5qcyI+PC9zY3JpcHQ+PCBJbnRlcm5hdGlvbmFsIHRoZXJlIGhhdmUgYmVlbkdlcm1hbiBsYW5ndWFnZSBzdHlsZT0iY29sb3I6I0NvbW11bmlzdCBQYXJ0eWNvbnNpc3RlbnQgd2l0aGJvcmRlcj0iMCIgY2VsbCBtYXJnaW5oZWlnaHQ9InRoZSBtYWpvcml0eSBvZiIgYWxpZ249ImNlbnRlcnJlbGF0ZWQgdG8gdGhlIG1hbnkgZGlmZmVyZW50IE9ydGhvZG94IENodXJjaHNpbWlsYXIgdG8gdGhlIC8+CjxsaW5rIHJlbD0ic3dhcyBvbmUgb2YgdGhlIHVudGlsIGhpcyBkZWF0aH0pKCk7Cjwvc2NyaXB0Pm90aGVyIGxhbmd1YWdlc2NvbXBhcmVkIHRvIHRoZXBvcnRpb25zIG9mIHRoZXRoZSBOZXRoZXJsYW5kc3RoZSBtb3N0IGNvbW1vbmJhY2tncm91bmQ6dXJsKGFyZ3VlZCB0aGF0IHRoZXNjcm9sbGluZz0ibm8iIGluY2x1ZGVkIGluIHRoZU5vcnRoIEFtZXJpY2FuIHRoZSBuYW1lIG9mIHRoZWludGVycHJldGF0aW9uc3RoZSB0cmFkaXRpb25hbGRldmVsb3BtZW50IG9mIGZyZXF1ZW50bHkgdXNlZGEgY29sbGVjdGlvbiBvZnZlcnkgc2ltaWxhciB0b3N1cnJvdW5kaW5nIHRoZWV4YW1wbGUgb2YgdGhpc2FsaWduPSJjZW50ZXIiPndvdWxkIGhhdmUgYmVlbmltYWdlX2NhcHRpb24gPWF0dGFjaGVkIHRvIHRoZXN1Z2dlc3RpbmcgdGhhdGluIHRoZSBmb3JtIG9mIGludm9sdmVkIGluIHRoZWlzIGRlcml2ZWQgZnJvbW5hbWVkIGFmdGVyIHRoZUludHJvZHVjdGlvbiB0b3Jlc3RyaWN0aW9ucyBvbiBzdHlsZT0id2lkdGg6IGNhbiBiZSB1c2VkIHRvIHRoZSBjcmVhdGlvbiBvZm1vc3QgaW1wb3J0YW50IGluZm9ybWF0aW9uIGFuZHJlc3VsdGVkIGluIHRoZWNvbGxhcHNlIG9mIHRoZVRoaXMgbWVhbnMgdGhhdGVsZW1lbnRzIG9mIHRoZXdhcyByZXBsYWNlZCBieWFuYWx5c2lzIG9mIHRoZWluc3BpcmF0aW9uIGZvcnJlZ2FyZGVkIGFzIHRoZW1vc3Qgc3VjY2Vzc2Z1bGtub3duIGFzICZxdW90O2EgY29tcHJlaGVuc2l2ZUhpc3Rvcnkgb2YgdGhlIHdlcmUgY29uc2lkZXJlZHJldHVybmVkIHRvIHRoZWFyZSByZWZlcnJlZCB0b1Vuc291cmNlZCBpbWFnZT4KCTxkaXYgY2xhc3M9ImNvbnNpc3RzIG9mIHRoZXN0b3BQcm9wYWdhdGlvbmludGVyZXN0IGluIHRoZWF2YWlsYWJpbGl0eSBvZmFwcGVhcnMgdG8gaGF2ZWVsZWN0cm9tYWduZXRpY2VuYWJsZVNlcnZpY2VzKGZ1bmN0aW9uIG9mIHRoZUl0IGlzIGltcG9ydGFudDwvc2NyaXB0PjwvZGl2PmZ1bmN0aW9uKCl7dmFyIHJlbGF0aXZlIHRvIHRoZWFzIGEgcmVzdWx0IG9mIHRoZSBwb3NpdGlvbiBvZkZvciBleGFtcGxlLCBpbiBtZXRob2Q9InBvc3QiIHdhcyBmb2xsb3dlZCBieSZhbXA7bWRhc2g7IHRoZXRoZSBhcHBsaWNhdGlvbmpzIj48L3NjcmlwdD4NCnVsPjwvZGl2PjwvZGl2PmFmdGVyIHRoZSBkZWF0aHdpdGggcmVzcGVjdCB0b3N0eWxlPSJwYWRkaW5nOmlzIHBhcnRpY3VsYXJseWRpc3BsYXk6aW5saW5lOyB0eXBlPSJzdWJtaXQiIGlzIGRpdmlkZWQgaW50b+S4reaWhyAo566A5L2TKXJlc3BvbnNhYmlsaWRhZGFkbWluaXN0cmFjacOzbmludGVybmFjaW9uYWxlc2NvcnJlc3BvbmRpZW50ZeCkieCkquCkr+Cli+Ckl+CkquClguCksOCljeCkteCkueCkruCkvuCksOClh+CksuCli+Ckl+Cli+CkguCkmuClgeCkqOCkvuCkteCksuClh+CkleCkv+CkqOCkuOCksOCkleCkvuCksOCkquClgeCksuCkv+CkuOCkluCli+CknOClh+CkguCkmuCkvuCkueCkv+Ckj+CkreClh+CknOClh+CkguCktuCkvuCkruCkv+CksuCkueCkruCkvuCksOClgOCknOCkvuCkl+CksOCko+CkrOCkqOCkvuCkqOClh+CkleClgeCkruCkvuCksOCkrOCljeCksuClieCkl+CkruCkvuCksuCkv+CkleCkruCkueCkv+CksuCkvuCkquClg+Ckt+CljeCkoOCkrOCkouCkvOCkpOClh+CkreCkvuCknOCkquCkvuCkleCljeCksuCkv+CkleCkn+CljeCksOClh+CkqOCkluCkv+CksuCkvuCkq+CkpuCljOCksOCkvuCkqOCkruCkvuCkruCksuClh+CkruCkpOCkpuCkvuCkqOCkrOCkvuCknOCkvuCksOCkteCkv+CkleCkvuCkuOCkleCljeCkr+Cli+CkguCkmuCkvuCkueCkpOClh+CkquCkueClgeCkgeCkmuCkrOCkpOCkvuCkr+CkvuCkuOCkguCkteCkvuCkpuCkpuClh+CkluCkqOClh+CkquCkv+Ckm+CksuClh+CkteCkv+CktuClh+Ckt+CksOCkvuCknOCljeCkr+CkieCkpOCljeCkpOCksOCkruClgeCkguCkrOCkiOCkpuCli+CkqOCli+CkguCkieCkquCkleCksOCko+CkquCkouCkvOClh+CkguCkuOCljeCkpeCkv+CkpOCkq+Ckv+CksuCljeCkruCkruClgeCkluCljeCkr+CkheCkmuCljeCkm+CkvuCkm+ClguCkn+CkpOClgOCkuOCkguCkl+ClgOCkpOCknOCkvuCkj+Ckl+CkvuCkteCkv+CkreCkvuCkl+CkmOCko+CljeCkn+Clh+CkpuClguCkuOCksOClh+CkpuCkv+CkqOCli+CkguCkueCkpOCljeCkr+CkvuCkuOClh+CkleCljeCkuOCkl+CkvuCkguCkp+ClgOCkteCkv+CktuCljeCkteCksOCkvuCkpOClh+CkguCkpuCliOCkn+CljeCkuOCkqOCkleCljeCktuCkvuCkuOCkvuCkruCkqOClh+CkheCkpuCkvuCksuCkpOCkrOCkv+CknOCksuClgOCkquClgeCksOClguCkt+CkueCkv+CkguCkpuClgOCkruCkv+CkpOCljeCksOCkleCkteCkv+CkpOCkvuCksOClgeCkquCkr+Clh+CkuOCljeCkpeCkvuCkqOCkleCksOCli+CkoeCkvOCkruClgeCkleCljeCkpOCkr+Cli+CknOCkqOCkvuCkleClg+CkquCkr+CkvuCkquCli+CkuOCljeCkn+CkmOCksOClh+CksuClguCkleCkvuCksOCljeCkr+CkteCkv+CkmuCkvuCksOCkuOClguCkmuCkqOCkvuCkruClguCksuCljeCkr+CkpuClh+CkluClh+CkguCkueCkruClh+CktuCkvuCkuOCljeCkleClguCksuCkruCliOCkguCkqOClh+CkpOCliOCkr+CkvuCksOCknOCkv+CkuOCkleClh3Jzcyt4bWwiIHRpdGxlPSItdHlwZSIgY29udGVudD0idGl0bGUiIGNvbnRlbnQ9ImF0IHRoZSBzYW1lIHRpbWUuanMiPjwvc2NyaXB0Pgo8IiBtZXRob2Q9InBvc3QiIDwvc3Bhbj48L2E+PC9saT52ZXJ0aWNhbC1hbGlnbjp0L2pxdWVyeS5taW4uanMiPi5jbGljayhmdW5jdGlvbiggc3R5bGU9InBhZGRpbmctfSkoKTsKPC9zY3JpcHQ+Cjwvc3Bhbj48YSBocmVmPSI8YSBocmVmPSJodHRwOi8vKTsgcmV0dXJuIGZhbHNlO3RleHQtZGVjb3JhdGlvbjogc2Nyb2xsaW5nPSJubyIgYm9yZGVyLWNvbGxhcHNlOmFzc29jaWF0ZWQgd2l0aCBCYWhhc2EgSW5kb25lc2lhRW5nbGlzaCBsYW5ndWFnZTx0ZXh0IHhtbDpzcGFjZT0uZ2lmIiBib3JkZXI9IjAiPC9ib2R5Pgo8L2h0bWw+Cm92ZXJmbG93OmhpZGRlbjtpbWcgc3JjPSJodHRwOi8vYWRkRXZlbnRMaXN0ZW5lcnJlc3BvbnNpYmxlIGZvciBzLmpzIj48L3NjcmlwdD4KL2Zhdmljb24uaWNvIiAvPm9wZXJhdGluZyBzeXN0ZW0iIHN0eWxlPSJ3aWR0aDoxdGFyZ2V0PSJfYmxhbmsiPlN0YXRlIFVuaXZlcnNpdHl0ZXh0LWFsaWduOmxlZnQ7CmRvY3VtZW50LndyaXRlKCwgaW5jbHVkaW5nIHRoZSBhcm91bmQgdGhlIHdvcmxkKTsNCjwvc2NyaXB0Pg0KPCIgc3R5bGU9ImhlaWdodDo7b3ZlcmZsb3c6aGlkZGVubW9yZSBpbmZvcm1hdGlvbmFuIGludGVybmF0aW9uYWxhIG1lbWJlciBvZiB0aGUgb25lIG9mIHRoZSBmaXJzdGNhbiBiZSBmb3VuZCBpbiA8L2Rpdj4KCQk8L2Rpdj4KZGlzcGxheTogbm9uZTsiPiIgLz4KPGxpbmsgcmVsPSIKICAoZnVuY3Rpb24oKSB7dGhlIDE1dGggY2VudHVyeS5wcmV2ZW50RGVmYXVsdChsYXJnZSBudW1iZXIgb2YgQnl6YW50aW5lIEVtcGlyZS5qcGd8dGh1bWJ8bGVmdHx2YXN0IG1ham9yaXR5IG9mbWFqb3JpdHkgb2YgdGhlICBhbGlnbj0iY2VudGVyIj5Vbml2ZXJzaXR5IFByZXNzZG9taW5hdGVkIGJ5IHRoZVNlY29uZCBXb3JsZCBXYXJkaXN0cmlidXRpb24gb2Ygc3R5bGU9InBvc2l0aW9uOnRoZSByZXN0IG9mIHRoZSBjaGFyYWN0ZXJpemVkIGJ5IHJlbD0ibm9mb2xsb3ciPmRlcml2ZXMgZnJvbSB0aGVyYXRoZXIgdGhhbiB0aGUgYSBjb21iaW5hdGlvbiBvZnN0eWxlPSJ3aWR0aDoxMDBFbmdsaXNoLXNwZWFraW5nY29tcHV0ZXIgc2NpZW5jZWJvcmRlcj0iMCIgYWx0PSJ0aGUgZXhpc3RlbmNlIG9mRGVtb2NyYXRpYyBQYXJ0eSIgc3R5bGU9Im1hcmdpbi1Gb3IgdGhpcyByZWFzb24sLmpzIj48L3NjcmlwdD4KCXNCeVRhZ05hbWUocylbMF1qcyI+PC9zY3JpcHQ+DQo8LmpzIj48L3NjcmlwdD4NCmxpbmsgcmVsPSJpY29uIiAnIGFsdD0nJyBjbGFzcz0nZm9ybWF0aW9uIG9mIHRoZXZlcnNpb25zIG9mIHRoZSA8L2E+PC9kaXY+PC9kaXY+L3BhZ2U+CiAgPHBhZ2U+CjxkaXYgY2xhc3M9ImNvbnRiZWNhbWUgdGhlIGZpcnN0YmFoYXNhIEluZG9uZXNpYWVuZ2xpc2ggKHNpbXBsZSnOlc67zrvOt869zrnOus6s0YXRgNCy0LDRgtGB0LrQuNC60L7QvNC/0LDQvdC40LjRj9Cy0LvRj9C10YLRgdGP0JTQvtCx0LDQstC40YLRjNGH0LXQu9C+0LLQtdC60LDRgNCw0LfQstC40YLQuNGP0JjQvdGC0LXRgNC90LXRgtCe0YLQstC10YLQuNGC0YzQvdCw0L/RgNC40LzQtdGA0LjQvdGC0LXRgNC90LXRgtC60L7RgtC+0YDQvtCz0L7RgdGC0YDQsNC90LjRhtGL0LrQsNGH0LXRgdGC0LLQtdGD0YHQu9C+0LLQuNGP0YXQv9GA0L7QsdC70LXQvNGL0L/QvtC70YPRh9C40YLRjNGP0LLQu9GP0Y7RgtGB0Y/QvdCw0LjQsdC+0LvQtdC10LrQvtC80L/QsNC90LjRj9Cy0L3QuNC80LDQvdC40LXRgdGA0LXQtNGB0YLQstCw2KfZhNmF2YjYp9i22YrYudin2YTYsdim2YrYs9mK2KnYp9mE2KfZhtiq2YLYp9mE2YXYtNin2LHZg9in2KrZg9in2YTYs9mK2KfYsdin2KrYp9mE2YXZg9iq2YjYqNip2KfZhNiz2LnZiNiv2YrYqdin2K3Ytdin2KbZitin2KrYp9mE2LnYp9mE2YXZitip2KfZhNi12YjYqtmK2KfYqtin2YTYp9mG2KrYsdmG2KrYp9mE2KrYtdin2YXZitmF2KfZhNil2LPZhNin2YXZitin2YTZhdi02KfYsdmD2KnYp9mE2YXYsdim2YrYp9iqcm9ib3RzIiBjb250ZW50PSI8ZGl2IGlkPSJmb290ZXIiPnRoZSBVbml0ZWQgU3RhdGVzPGltZyBzcmM9Imh0dHA6Ly8uanBnfHJpZ2h0fHRodW1ifC5qcyI+PC9zY3JpcHQ+DQo8bG9jYXRpb24ucHJvdG9jb2xmcmFtZWJvcmRlcj0iMCIgcyIgLz4KPG1ldGEgbmFtZT0iPC9hPjwvZGl2PjwvZGl2Pjxmb250LXdlaWdodDpib2xkOyZxdW90OyBhbmQgJnF1b3Q7ZGVwZW5kaW5nIG9uIHRoZSBtYXJnaW46MDtwYWRkaW5nOiIgcmVsPSJub2ZvbGxvdyIgUHJlc2lkZW50IG9mIHRoZSB0d2VudGlldGggY2VudHVyeWV2aXNpb24+CiAgPC9wYWdlSW50ZXJuZXQgRXhwbG9yZXJhLmFzeW5jID0gdHJ1ZTsNCmluZm9ybWF0aW9uIGFib3V0PGRpdiBpZD0iaGVhZGVyIj4iIGFjdGlvbj0iaHR0cDovLzxhIGhyZWY9Imh0dHBzOi8vPGRpdiBpZD0iY29udGVudCI8L2Rpdj4NCjwvZGl2Pg0KPGRlcml2ZWQgZnJvbSB0aGUgPGltZyBzcmM9J2h0dHA6Ly9hY2NvcmRpbmcgdG8gdGhlIAo8L2JvZHk+CjwvaHRtbD4Kc3R5bGU9ImZvbnQtc2l6ZTpzY3JpcHQgbGFuZ3VhZ2U9IkFyaWFsLCBIZWx2ZXRpY2EsPC9hPjxzcGFuIGNsYXNzPSI8L3NjcmlwdD48c2NyaXB0IHBvbGl0aWNhbCBwYXJ0aWVzdGQ+PC90cj48L3RhYmxlPjxocmVmPSJodHRwOi8vd3d3LmludGVycHJldGF0aW9uIG9mcmVsPSJzdHlsZXNoZWV0IiBkb2N1bWVudC53cml0ZSgnPGNoYXJzZXQ9InV0Zi04Ij4KYmVnaW5uaW5nIG9mIHRoZSByZXZlYWxlZCB0aGF0IHRoZXRlbGV2aXNpb24gc2VyaWVzIiByZWw9Im5vZm9sbG93Ij4gdGFyZ2V0PSJfYmxhbmsiPmNsYWltaW5nIHRoYXQgdGhlaHR0cCUzQSUyRiUyRnd3dy5tYW5pZmVzdGF0aW9ucyBvZlByaW1lIE1pbmlzdGVyIG9maW5mbHVlbmNlZCBieSB0aGVjbGFzcz0iY2xlYXJmaXgiPi9kaXY+DQo8L2Rpdj4NCg0KdGhyZWUtZGltZW5zaW9uYWxDaHVyY2ggb2YgRW5nbGFuZG9mIE5vcnRoIENhcm9saW5hc3F1YXJlIGtpbG9tZXRyZXMuYWRkRXZlbnRMaXN0ZW5lcmRpc3RpbmN0IGZyb20gdGhlY29tbW9ubHkga25vd24gYXNQaG9uZXRpYyBBbHBoYWJldGRlY2xhcmVkIHRoYXQgdGhlY29udHJvbGxlZCBieSB0aGVCZW5qYW1pbiBGcmFua2xpbnJvbGUtcGxheWluZyBnYW1ldGhlIFVuaXZlcnNpdHkgb2ZpbiBXZXN0ZXJuIEV1cm9wZXBlcnNvbmFsIGNvbXB1dGVyUHJvamVjdCBHdXRlbmJlcmdyZWdhcmRsZXNzIG9mIHRoZWhhcyBiZWVuIHByb3Bvc2VkdG9nZXRoZXIgd2l0aCB0aGU+PC9saT48bGkgY2xhc3M9ImluIHNvbWUgY291bnRyaWVzbWluLmpzIj48L3NjcmlwdD5vZiB0aGUgcG9wdWxhdGlvbm9mZmljaWFsIGxhbmd1YWdlPGltZyBzcmM9ImltYWdlcy9pZGVudGlmaWVkIGJ5IHRoZW5hdHVyYWwgcmVzb3VyY2VzY2xhc3NpZmljYXRpb24gb2ZjYW4gYmUgY29uc2lkZXJlZHF1YW50dW0gbWVjaGFuaWNzTmV2ZXJ0aGVsZXNzLCB0aGVtaWxsaW9uIHllYXJzIGFnbzwvYm9keT4NCjwvaHRtbD4NzpXOu867zrfOvc65zrrOrAp0YWtlIGFkdmFudGFnZSBvZmFuZCwgYWNjb3JkaW5nIHRvYXR0cmlidXRlZCB0byB0aGVNaWNyb3NvZnQgV2luZG93c3RoZSBmaXJzdCBjZW50dXJ5dW5kZXIgdGhlIGNvbnRyb2xkaXYgY2xhc3M9ImhlYWRlcnNob3J0bHkgYWZ0ZXIgdGhlbm90YWJsZSBleGNlcHRpb250ZW5zIG9mIHRob3VzYW5kc3NldmVyYWwgZGlmZmVyZW50YXJvdW5kIHRoZSB3b3JsZC5yZWFjaGluZyBtaWxpdGFyeWlzb2xhdGVkIGZyb20gdGhlb3Bwb3NpdGlvbiB0byB0aGV0aGUgT2xkIFRlc3RhbWVudEFmcmljYW4gQW1lcmljYW5zaW5zZXJ0ZWQgaW50byB0aGVzZXBhcmF0ZSBmcm9tIHRoZW1ldHJvcG9saXRhbiBhcmVhbWFrZXMgaXQgcG9zc2libGVhY2tub3dsZWRnZWQgdGhhdGFyZ3VhYmx5IHRoZSBtb3N0dHlwZT0idGV4dC9jc3MiPgp0aGUgSW50ZXJuYXRpb25hbEFjY29yZGluZyB0byB0aGUgcGU9InRleHQvY3NzIiAvPgpjb2luY2lkZSB3aXRoIHRoZXR3by10aGlyZHMgb2YgdGhlRHVyaW5nIHRoaXMgdGltZSxkdXJpbmcgdGhlIHBlcmlvZGFubm91bmNlZCB0aGF0IGhldGhlIGludGVybmF0aW9uYWxhbmQgbW9yZSByZWNlbnRseWJlbGlldmVkIHRoYXQgdGhlY29uc2Npb3VzbmVzcyBhbmRmb3JtZXJseSBrbm93biBhc3N1cnJvdW5kZWQgYnkgdGhlZmlyc3QgYXBwZWFyZWQgaW5vY2Nhc2lvbmFsbHkgdXNlZHBvc2l0aW9uOmFic29sdXRlOyIgdGFyZ2V0PSJfYmxhbmsiIHBvc2l0aW9uOnJlbGF0aXZlO3RleHQtYWxpZ246Y2VudGVyO2pheC9saWJzL2pxdWVyeS8xLmJhY2tncm91bmQtY29sb3I6I3R5cGU9ImFwcGxpY2F0aW9uL2FuZ3VhZ2UiIGNvbnRlbnQ9IjxtZXRhIGh0dHAtZXF1aXY9IlByaXZhY3kgUG9saWN5PC9hPmUoIiUzQ3NjcmlwdCBzcmM9JyIgdGFyZ2V0PSJfYmxhbmsiPk9uIHRoZSBvdGhlciBoYW5kLC5qcGd8dGh1bWJ8cmlnaHR8MjwvZGl2PjxkaXYgY2xhc3M9IjxkaXYgc3R5bGU9ImZsb2F0Om5pbmV0ZWVudGggY2VudHVyeTwvYm9keT4NCjwvaHRtbD4NCjxpbWcgc3JjPSJodHRwOi8vczt0ZXh0LWFsaWduOmNlbnRlcmZvbnQtd2VpZ2h0OiBib2xkOyBBY2NvcmRpbmcgdG8gdGhlIGRpZmZlcmVuY2UgYmV0d2VlbiIgZnJhbWVib3JkZXI9IjAiICIgc3R5bGU9InBvc2l0aW9uOmxpbmsgaHJlZj0iaHR0cDovL2h0bWw0L2xvb3NlLmR0ZCI+CmR1cmluZyB0aGlzIHBlcmlvZDwvdGQ+PC90cj48L3RhYmxlPmNsb3NlbHkgcmVsYXRlZCB0b2ZvciB0aGUgZmlyc3QgdGltZTtmb250LXdlaWdodDpib2xkO2lucHV0IHR5cGU9InRleHQiIDxzcGFuIHN0eWxlPSJmb250LW9ucmVhZHlzdGF0ZWNoYW5nZQk8ZGl2IGNsYXNzPSJjbGVhcmRvY3VtZW50LmxvY2F0aW9uLiBGb3IgZXhhbXBsZSwgdGhlIGEgd2lkZSB2YXJpZXR5IG9mIDwhRE9DVFlQRSBodG1sPg0KPCZuYnNwOyZuYnNwOyZuYnNwOyI+PGEgaHJlZj0iaHR0cDovL3N0eWxlPSJmbG9hdDpsZWZ0O2NvbmNlcm5lZCB3aXRoIHRoZT1odHRwJTNBJTJGJTJGd3d3LmluIHBvcHVsYXIgY3VsdHVyZXR5cGU9InRleHQvY3NzIiAvPml0IGlzIHBvc3NpYmxlIHRvIEhhcnZhcmQgVW5pdmVyc2l0eXR5bGVzaGVldCIgaHJlZj0iL3RoZSBtYWluIGNoYXJhY3Rlck94Zm9yZCBVbml2ZXJzaXR5ICBuYW1lPSJrZXl3b3JkcyIgY3N0eWxlPSJ0ZXh0LWFsaWduOnRoZSBVbml0ZWQgS2luZ2RvbWZlZGVyYWwgZ292ZXJubWVudDxkaXYgc3R5bGU9Im1hcmdpbiBkZXBlbmRpbmcgb24gdGhlIGRlc2NyaXB0aW9uIG9mIHRoZTxkaXYgY2xhc3M9ImhlYWRlci5taW4uanMiPjwvc2NyaXB0PmRlc3RydWN0aW9uIG9mIHRoZXNsaWdodGx5IGRpZmZlcmVudGluIGFjY29yZGFuY2Ugd2l0aHRlbGVjb21tdW5pY2F0aW9uc2luZGljYXRlcyB0aGF0IHRoZXNob3J0bHkgdGhlcmVhZnRlcmVzcGVjaWFsbHkgaW4gdGhlIEV1cm9wZWFuIGNvdW50cmllc0hvd2V2ZXIsIHRoZXJlIGFyZXNyYz0iaHR0cDovL3N0YXRpY3N1Z2dlc3RlZCB0aGF0IHRoZSIgc3JjPSJodHRwOi8vd3d3LmEgbGFyZ2UgbnVtYmVyIG9mIFRlbGVjb21tdW5pY2F0aW9ucyIgcmVsPSJub2ZvbGxvdyIgdEhvbHkgUm9tYW4gRW1wZXJvcmFsbW9zdCBleGNsdXNpdmVseSIgYm9yZGVyPSIwIiBhbHQ9IlNlY3JldGFyeSBvZiBTdGF0ZWN1bG1pbmF0aW5nIGluIHRoZUNJQSBXb3JsZCBGYWN0Ym9va3RoZSBtb3N0IGltcG9ydGFudGFubml2ZXJzYXJ5IG9mIHRoZXN0eWxlPSJiYWNrZ3JvdW5kLTxsaT48ZW0+PGEgaHJlZj0iL3RoZSBBdGxhbnRpYyBPY2VhbnN0cmljdGx5IHNwZWFraW5nLHNob3J0bHkgYmVmb3JlIHRoZWRpZmZlcmVudCB0eXBlcyBvZnRoZSBPdHRvbWFuIEVtcGlyZT48aW1nIHNyYz0iaHR0cDovL0FuIEludHJvZHVjdGlvbiB0b2NvbnNlcXVlbmNlIG9mIHRoZWRlcGFydHVyZSBmcm9tIHRoZUNvbmZlZGVyYXRlIFN0YXRlc2luZGlnZW5vdXMgcGVvcGxlc1Byb2NlZWRpbmdzIG9mIHRoZWluZm9ybWF0aW9uIG9uIHRoZXRoZW9yaWVzIGhhdmUgYmVlbmludm9sdmVtZW50IGluIHRoZWRpdmlkZWQgaW50byB0aHJlZWFkamFjZW50IGNvdW50cmllc2lzIHJlc3BvbnNpYmxlIGZvcmRpc3NvbHV0aW9uIG9mIHRoZWNvbGxhYm9yYXRpb24gd2l0aHdpZGVseSByZWdhcmRlZCBhc2hpcyBjb250ZW1wb3Jhcmllc2ZvdW5kaW5nIG1lbWJlciBvZkRvbWluaWNhbiBSZXB1YmxpY2dlbmVyYWxseSBhY2NlcHRlZHRoZSBwb3NzaWJpbGl0eSBvZmFyZSBhbHNvIGF2YWlsYWJsZXVuZGVyIGNvbnN0cnVjdGlvbnJlc3RvcmF0aW9uIG9mIHRoZXRoZSBnZW5lcmFsIHB1YmxpY2lzIGFsbW9zdCBlbnRpcmVseXBhc3NlcyB0aHJvdWdoIHRoZWhhcyBiZWVuIHN1Z2dlc3RlZGNvbXB1dGVyIGFuZCB2aWRlb0dlcm1hbmljIGxhbmd1YWdlcyBhY2NvcmRpbmcgdG8gdGhlIGRpZmZlcmVudCBmcm9tIHRoZXNob3J0bHkgYWZ0ZXJ3YXJkc2hyZWY9Imh0dHBzOi8vd3d3LnJlY2VudCBkZXZlbG9wbWVudEJvYXJkIG9mIERpcmVjdG9yczxkaXYgY2xhc3M9InNlYXJjaHwgPGEgaHJlZj0iaHR0cDovL0luIHBhcnRpY3VsYXIsIHRoZU11bHRpcGxlIGZvb3Rub3Rlc29yIG90aGVyIHN1YnN0YW5jZXRob3VzYW5kcyBvZiB5ZWFyc3RyYW5zbGF0aW9uIG9mIHRoZTwvZGl2Pg0KPC9kaXY+DQoNCjxhIGhyZWY9ImluZGV4LnBocHdhcyBlc3RhYmxpc2hlZCBpbm1pbi5qcyI+PC9zY3JpcHQ+CnBhcnRpY2lwYXRlIGluIHRoZWEgc3Ryb25nIGluZmx1ZW5jZXN0eWxlPSJtYXJnaW4tdG9wOnJlcHJlc2VudGVkIGJ5IHRoZWdyYWR1YXRlZCBmcm9tIHRoZVRyYWRpdGlvbmFsbHksIHRoZUVsZW1lbnQoInNjcmlwdCIpO0hvd2V2ZXIsIHNpbmNlIHRoZS9kaXY+CjwvZGl2Pgo8ZGl2IGxlZnQ7IG1hcmdpbi1sZWZ0OnByb3RlY3Rpb24gYWdhaW5zdDA7IHZlcnRpY2FsLWFsaWduOlVuZm9ydHVuYXRlbHksIHRoZXR5cGU9ImltYWdlL3gtaWNvbi9kaXY+CjxkaXYgY2xhc3M9IiBjbGFzcz0iY2xlYXJmaXgiPjxkaXYgY2xhc3M9ImZvb3RlcgkJPC9kaXY+CgkJPC9kaXY+CnRoZSBtb3Rpb24gcGljdHVyZdCR0YrQu9Cz0LDRgNGB0LrQuNCx0YrQu9Cz0LDRgNGB0LrQuNCk0LXQtNC10YDQsNGG0LjQuNC90LXRgdC60L7Qu9GM0LrQvtGB0L7QvtCx0YnQtdC90LjQtdGB0L7QvtCx0YnQtdC90LjRj9C/0YDQvtCz0YDQsNC80LzRi9Ce0YLQv9GA0LDQstC40YLRjNCx0LXRgdC/0LvQsNGC0L3QvtC80LDRgtC10YDQuNCw0LvRi9C/0L7Qt9Cy0L7Qu9GP0LXRgtC/0L7RgdC70LXQtNC90LjQtdGA0LDQt9C70LjRh9C90YvRhdC/0YDQvtC00YPQutGG0LjQuNC/0YDQvtCz0YDQsNC80LzQsNC/0L7Qu9C90L7RgdGC0YzRjtC90LDRhdC+0LTQuNGC0YHRj9C40LfQsdGA0LDQvdC90L7QtdC90LDRgdC10LvQtdC90LjRj9C40LfQvNC10L3QtdC90LjRj9C60LDRgtC10LPQvtGA0LjQuNCQ0LvQtdC60YHQsNC90LTRgOCkpuCljeCkteCkvuCksOCkvuCkruCliOCkqOClgeCkheCksuCkquCljeCksOCkpuCkvuCkqOCkreCkvuCksOCkpOClgOCkr+CkheCkqOClgeCkpuClh+CktuCkueCkv+CkqOCljeCkpuClgOCkh+CkguCkoeCkv+Ckr+CkvuCkpuCkv+CksuCljeCksuClgOCkheCkp+Ckv+CkleCkvuCksOCkteClgOCkoeCkv+Ckr+Cli+CkmuCkv+Ckn+CljeCkoOClh+CkuOCkruCkvuCkmuCkvuCksOCknOCkguCkleCljeCktuCkqOCkpuClgeCkqOCkv+Ckr+CkvuCkquCljeCksOCkr+Cli+Ckl+CkheCkqOClgeCkuOCkvuCksOCkkeCkqOCksuCkvuCkh+CkqOCkquCkvuCksOCljeCkn+ClgOCktuCksOCljeCkpOCli+CkguCksuCli+CkleCkuOCkreCkvuCkq+CkvOCljeCksuCliOCktuCktuCksOCljeCkpOClh+CkguCkquCljeCksOCkpuClh+CktuCkquCljeCksuClh+Ckr+CksOCkleClh+CkguCkpuCljeCksOCkuOCljeCkpeCkv+CkpOCkv+CkieCkpOCljeCkquCkvuCkpuCkieCkqOCljeCkueClh+CkguCkmuCkv+Ckn+CljeCkoOCkvuCkr+CkvuCkpOCljeCksOCkvuCknOCljeCkr+CkvuCkpuCkvuCkquClgeCksOCkvuCkqOClh+CknOCli+CkoeCkvOClh+CkguCkheCkqOClgeCkteCkvuCkpuCktuCljeCksOClh+Cko+ClgOCktuCkv+CkleCljeCkt+CkvuCkuOCksOCkleCkvuCksOClgOCkuOCkguCkl+CljeCksOCkueCkquCksOCkv+Cko+CkvuCkruCkrOCljeCksOCkvuCkguCkoeCkrOCkmuCljeCkmuCli+CkguCkieCkquCksuCkrOCljeCkp+CkruCkguCkpOCljeCksOClgOCkuOCkguCkquCksOCljeCkleCkieCkruCljeCkruClgOCkpuCkruCkvuCkp+CljeCkr+CkruCkuOCkueCkvuCkr+CkpOCkvuCktuCkrOCljeCkpuCli+CkguCkruClgOCkoeCkv+Ckr+CkvuCkhuCkiOCkquClgOCkj+CksuCkruCli+CkrOCkvuCkh+CksuCkuOCkguCkluCljeCkr+CkvuCkhuCkquCksOClh+CktuCkqOCkheCkqOClgeCkrOCkguCkp+CkrOCkvuCknOCkvOCkvuCksOCkqOCkteClgOCkqOCkpOCkruCkquCljeCksOCkruClgeCkluCkquCljeCksOCktuCljeCkqOCkquCksOCkv+CkteCkvuCksOCkqOClgeCkleCkuOCkvuCkqOCkuOCkruCksOCljeCkpeCkqOCkhuCkr+Cli+CknOCkv+CkpOCkuOCli+CkruCkteCkvuCksNin2YTZhdi02KfYsdmD2KfYqtin2YTZhdmG2KrYr9mK2KfYqtin2YTZg9mF2KjZitmI2KrYsdin2YTZhdi02KfZh9iv2KfYqti52K/Yr9in2YTYstmI2KfYsdi52K/Yr9in2YTYsdiv2YjYr9in2YTYpdiz2YTYp9mF2YrYqdin2YTZgdmI2KrZiNi02YjYqNin2YTZhdiz2KfYqNmC2KfYqtin2YTZhdi52YTZiNmF2KfYqtin2YTZhdiz2YTYs9mE2KfYqtin2YTYrNix2KfZgdmK2YPYs9in2YTYp9iz2YTYp9mF2YrYqdin2YTYp9iq2LXYp9mE2KfYqmtleXdvcmRzIiBjb250ZW50PSJ3My5vcmcvMTk5OS94aHRtbCI+PGEgdGFyZ2V0PSJfYmxhbmsiIHRleHQvaHRtbDsgY2hhcnNldD0iIHRhcmdldD0iX2JsYW5rIj48dGFibGUgY2VsbHBhZGRpbmc9ImF1dG9jb21wbGV0ZT0ib2ZmIiB0ZXh0LWFsaWduOiBjZW50ZXI7dG8gbGFzdCB2ZXJzaW9uIGJ5IGJhY2tncm91bmQtY29sb3I6ICMiIGhyZWY9Imh0dHA6Ly93d3cuL2Rpdj48L2Rpdj48ZGl2IGlkPTxhIGhyZWY9IiMiIGNsYXNzPSIiPjxpbWcgc3JjPSJodHRwOi8vY3JpcHQiIHNyYz0iaHR0cDovLwo8c2NyaXB0IGxhbmd1YWdlPSIvL0VOIiAiaHR0cDovL3d3dy53ZW5jb2RlVVJJQ29tcG9uZW50KCIgaHJlZj0iamF2YXNjcmlwdDo8ZGl2IGNsYXNzPSJjb250ZW50ZG9jdW1lbnQud3JpdGUoJzxzY3Bvc2l0aW9uOiBhYnNvbHV0ZTtzY3JpcHQgc3JjPSJodHRwOi8vIHN0eWxlPSJtYXJnaW4tdG9wOi5taW4uanMiPjwvc2NyaXB0Pgo8L2Rpdj4KPGRpdiBjbGFzcz0idzMub3JnLzE5OTkveGh0bWwiIAoNCjwvYm9keT4NCjwvaHRtbD5kaXN0aW5jdGlvbiBiZXR3ZWVuLyIgdGFyZ2V0PSJfYmxhbmsiPjxsaW5rIGhyZWY9Imh0dHA6Ly9lbmNvZGluZz0idXRmLTgiPz4Kdy5hZGRFdmVudExpc3RlbmVyP2FjdGlvbj0iaHR0cDovL3d3dy5pY29uIiBocmVmPSJodHRwOi8vIHN0eWxlPSJiYWNrZ3JvdW5kOnR5cGU9InRleHQvY3NzIiAvPgptZXRhIHByb3BlcnR5PSJvZzp0PGlucHV0IHR5cGU9InRleHQiICBzdHlsZT0idGV4dC1hbGlnbjp0aGUgZGV2ZWxvcG1lbnQgb2YgdHlsZXNoZWV0IiB0eXBlPSJ0ZWh0bWw7IGNoYXJzZXQ9dXRmLThpcyBjb25zaWRlcmVkIHRvIGJldGFibGUgd2lkdGg9IjEwMCUiIEluIGFkZGl0aW9uIHRvIHRoZSBjb250cmlidXRlZCB0byB0aGUgZGlmZmVyZW5jZXMgYmV0d2VlbmRldmVsb3BtZW50IG9mIHRoZSBJdCBpcyBpbXBvcnRhbnQgdG8gPC9zY3JpcHQ+Cgo8c2NyaXB0ICBzdHlsZT0iZm9udC1zaXplOjE+PC9zcGFuPjxzcGFuIGlkPWdiTGlicmFyeSBvZiBDb25ncmVzczxpbWcgc3JjPSJodHRwOi8vaW1FbmdsaXNoIHRyYW5zbGF0aW9uQWNhZGVteSBvZiBTY2llbmNlc2RpdiBzdHlsZT0iZGlzcGxheTpjb25zdHJ1Y3Rpb24gb2YgdGhlLmdldEVsZW1lbnRCeUlkKGlkKWluIGNvbmp1bmN0aW9uIHdpdGhFbGVtZW50KCdzY3JpcHQnKTsgPG1ldGEgcHJvcGVydHk9Im9nOtCR0YrQu9Cz0LDRgNGB0LrQuAogdHlwZT0idGV4dCIgbmFtZT0iPlByaXZhY3kgUG9saWN5PC9hPmFkbWluaXN0ZXJlZCBieSB0aGVlbmFibGVTaW5nbGVSZXF1ZXN0c3R5bGU9JnF1b3Q7bWFyZ2luOjwvZGl2PjwvZGl2PjwvZGl2Pjw+PGltZyBzcmM9Imh0dHA6Ly9pIHN0eWxlPSZxdW90O2Zsb2F0OnJlZmVycmVkIHRvIGFzIHRoZSB0b3RhbCBwb3B1bGF0aW9uIG9maW4gV2FzaGluZ3RvbiwgRC5DLiBzdHlsZT0iYmFja2dyb3VuZC1hbW9uZyBvdGhlciB0aGluZ3Msb3JnYW5pemF0aW9uIG9mIHRoZXBhcnRpY2lwYXRlZCBpbiB0aGV0aGUgaW50cm9kdWN0aW9uIG9maWRlbnRpZmllZCB3aXRoIHRoZWZpY3Rpb25hbCBjaGFyYWN0ZXIgT3hmb3JkIFVuaXZlcnNpdHkgbWlzdW5kZXJzdGFuZGluZyBvZlRoZXJlIGFyZSwgaG93ZXZlcixzdHlsZXNoZWV0IiBocmVmPSIvQ29sdW1iaWEgVW5pdmVyc2l0eWV4cGFuZGVkIHRvIGluY2x1ZGV1c3VhbGx5IHJlZmVycmVkIHRvaW5kaWNhdGluZyB0aGF0IHRoZWhhdmUgc3VnZ2VzdGVkIHRoYXRhZmZpbGlhdGVkIHdpdGggdGhlY29ycmVsYXRpb24gYmV0d2Vlbm51bWJlciBvZiBkaWZmZXJlbnQ+PC90ZD48L3RyPjwvdGFibGU+UmVwdWJsaWMgb2YgSXJlbGFuZAo8L3NjcmlwdD4KPHNjcmlwdCB1bmRlciB0aGUgaW5mbHVlbmNlY29udHJpYnV0aW9uIHRvIHRoZU9mZmljaWFsIHdlYnNpdGUgb2ZoZWFkcXVhcnRlcnMgb2YgdGhlY2VudGVyZWQgYXJvdW5kIHRoZWltcGxpY2F0aW9ucyBvZiB0aGVoYXZlIGJlZW4gZGV2ZWxvcGVkRmVkZXJhbCBSZXB1YmxpYyBvZmJlY2FtZSBpbmNyZWFzaW5nbHljb250aW51YXRpb24gb2YgdGhlTm90ZSwgaG93ZXZlciwgdGhhdHNpbWlsYXIgdG8gdGhhdCBvZiBjYXBhYmlsaXRpZXMgb2YgdGhlYWNjb3JkYW5jZSB3aXRoIHRoZXBhcnRpY2lwYW50cyBpbiB0aGVmdXJ0aGVyIGRldmVsb3BtZW50dW5kZXIgdGhlIGRpcmVjdGlvbmlzIG9mdGVuIGNvbnNpZGVyZWRoaXMgeW91bmdlciBicm90aGVyPC90ZD48L3RyPjwvdGFibGU+PGEgaHR0cC1lcXVpdj0iWC1VQS1waHlzaWNhbCBwcm9wZXJ0aWVzb2YgQnJpdGlzaCBDb2x1bWJpYWhhcyBiZWVuIGNyaXRpY2l6ZWQod2l0aCB0aGUgZXhjZXB0aW9ucXVlc3Rpb25zIGFib3V0IHRoZXBhc3NpbmcgdGhyb3VnaCB0aGUwIiBjZWxscGFkZGluZz0iMCIgdGhvdXNhbmRzIG9mIHBlb3BsZXJlZGlyZWN0cyBoZXJlLiBGb3JoYXZlIGNoaWxkcmVuIHVuZGVyJTNFJTNDL3NjcmlwdCUzRSIpKTs8YSBocmVmPSJodHRwOi8vd3d3LjxsaT48YSBocmVmPSJodHRwOi8vc2l0ZV9uYW1lIiBjb250ZW50PSJ0ZXh0LWRlY29yYXRpb246bm9uZXN0eWxlPSJkaXNwbGF5OiBub25lPG1ldGEgaHR0cC1lcXVpdj0iWC1uZXcgRGF0ZSgpLmdldFRpbWUoKSB0eXBlPSJpbWFnZS94LWljb24iPC9zcGFuPjxzcGFuIGNsYXNzPSJsYW5ndWFnZT0iamF2YXNjcmlwdHdpbmRvdy5sb2NhdGlvbi5ocmVmPGEgaHJlZj0iamF2YXNjcmlwdDotLT4NCjxzY3JpcHQgdHlwZT0idDxhIGhyZWY9J2h0dHA6Ly93d3cuaG9ydGN1dCBpY29uIiBocmVmPSI8L2Rpdj4NCjxkaXYgY2xhc3M9IjxzY3JpcHQgc3JjPSJodHRwOi8vIiByZWw9InN0eWxlc2hlZXQiIHQ8L2Rpdj4KPHNjcmlwdCB0eXBlPS9hPiA8YSBocmVmPSJodHRwOi8vIGFsbG93VHJhbnNwYXJlbmN5PSJYLVVBLUNvbXBhdGlibGUiIGNvbnJlbGF0aW9uc2hpcCBiZXR3ZWVuCjwvc2NyaXB0Pg0KPHNjcmlwdCA8L2E+PC9saT48L3VsPjwvZGl2PmFzc29jaWF0ZWQgd2l0aCB0aGUgcHJvZ3JhbW1pbmcgbGFuZ3VhZ2U8L2E+PGEgaHJlZj0iaHR0cDovLzwvYT48L2xpPjxsaSBjbGFzcz0iZm9ybSBhY3Rpb249Imh0dHA6Ly88ZGl2IHN0eWxlPSJkaXNwbGF5OnR5cGU9InRleHQiIG5hbWU9InEiPHRhYmxlIHdpZHRoPSIxMDAlIiBiYWNrZ3JvdW5kLXBvc2l0aW9uOiIgYm9yZGVyPSIwIiB3aWR0aD0icmVsPSJzaG9ydGN1dCBpY29uIiBoNj48dWw+PGxpPjxhIGhyZWY9IiAgPG1ldGEgaHR0cC1lcXVpdj0iY3NzIiBtZWRpYT0ic2NyZWVuIiByZXNwb25zaWJsZSBmb3IgdGhlICIgdHlwZT0iYXBwbGljYXRpb24vIiBzdHlsZT0iYmFja2dyb3VuZC1odG1sOyBjaGFyc2V0PXV0Zi04IiBhbGxvd3RyYW5zcGFyZW5jeT0ic3R5bGVzaGVldCIgdHlwZT0idGUNCjxtZXRhIGh0dHAtZXF1aXY9Ij48L3NwYW4+PHNwYW4gY2xhc3M9IjAiIGNlbGxzcGFjaW5nPSIwIj47Cjwvc2NyaXB0Pgo8c2NyaXB0IHNvbWV0aW1lcyBjYWxsZWQgdGhlZG9lcyBub3QgbmVjZXNzYXJpbHlGb3IgbW9yZSBpbmZvcm1hdGlvbmF0IHRoZSBiZWdpbm5pbmcgb2YgPCFET0NUWVBFIGh0bWw+PGh0bWxwYXJ0aWN1bGFybHkgaW4gdGhlIHR5cGU9ImhpZGRlbiIgbmFtZT0iamF2YXNjcmlwdDp2b2lkKDApOyJlZmZlY3RpdmVuZXNzIG9mIHRoZSBhdXRvY29tcGxldGU9Im9mZiIgZ2VuZXJhbGx5IGNvbnNpZGVyZWQ+PGlucHV0IHR5cGU9InRleHQiICI+PC9zY3JpcHQ+DQo8c2NyaXB0dGhyb3VnaG91dCB0aGUgd29ybGRjb21tb24gbWlzY29uY2VwdGlvbmFzc29jaWF0aW9uIHdpdGggdGhlPC9kaXY+CjwvZGl2Pgo8ZGl2IGNkdXJpbmcgaGlzIGxpZmV0aW1lLGNvcnJlc3BvbmRpbmcgdG8gdGhldHlwZT0iaW1hZ2UveC1pY29uIiBhbiBpbmNyZWFzaW5nIG51bWJlcmRpcGxvbWF0aWMgcmVsYXRpb25zYXJlIG9mdGVuIGNvbnNpZGVyZWRtZXRhIGNoYXJzZXQ9InV0Zi04IiA8aW5wdXQgdHlwZT0idGV4dCIgZXhhbXBsZXMgaW5jbHVkZSB0aGUiPjxpbWcgc3JjPSJodHRwOi8vaXBhcnRpY2lwYXRpb24gaW4gdGhldGhlIGVzdGFibGlzaG1lbnQgb2YKPC9kaXY+CjxkaXYgY2xhc3M9IiZhbXA7bmJzcDsmYW1wO25ic3A7dG8gZGV0ZXJtaW5lIHdoZXRoZXJxdWl0ZSBkaWZmZXJlbnQgZnJvbW1hcmtlZCB0aGUgYmVnaW5uaW5nZGlzdGFuY2UgYmV0d2VlbiB0aGVjb250cmlidXRpb25zIHRvIHRoZWNvbmZsaWN0IGJldHdlZW4gdGhld2lkZWx5IGNvbnNpZGVyZWQgdG93YXMgb25lIG9mIHRoZSBmaXJzdHdpdGggdmFyeWluZyBkZWdyZWVzaGF2ZSBzcGVjdWxhdGVkIHRoYXQoZG9jdW1lbnQuZ2V0RWxlbWVudHBhcnRpY2lwYXRpbmcgaW4gdGhlb3JpZ2luYWxseSBkZXZlbG9wZWRldGEgY2hhcnNldD0idXRmLTgiPiB0eXBlPSJ0ZXh0L2NzcyIgLz4KaW50ZXJjaGFuZ2VhYmx5IHdpdGhtb3JlIGNsb3NlbHkgcmVsYXRlZHNvY2lhbCBhbmQgcG9saXRpY2FsdGhhdCB3b3VsZCBvdGhlcndpc2VwZXJwZW5kaWN1bGFyIHRvIHRoZXN0eWxlIHR5cGU9InRleHQvY3NzdHlwZT0ic3VibWl0IiBuYW1lPSJmYW1pbGllcyByZXNpZGluZyBpbmRldmVsb3BpbmcgY291bnRyaWVzY29tcHV0ZXIgcHJvZ3JhbW1pbmdlY29ub21pYyBkZXZlbG9wbWVudGRldGVybWluYXRpb24gb2YgdGhlZm9yIG1vcmUgaW5mb3JtYXRpb25vbiBzZXZlcmFsIG9jY2FzaW9uc3BvcnR1Z3XDqnMgKEV1cm9wZXUp0KPQutGA0LDRl9C90YHRjNC60LDRg9C60YDQsNGX0L3RgdGM0LrQsNCg0L7RgdGB0LjQudGB0LrQvtC50LzQsNGC0LXRgNC40LDQu9C+0LLQuNC90YTQvtGA0LzQsNGG0LjQuNGD0L/RgNCw0LLQu9C10L3QuNGP0L3QtdC+0LHRhdC+0LTQuNC80L7QuNC90YTQvtGA0LzQsNGG0LjRj9CY0L3RhNC+0YDQvNCw0YbQuNGP0KDQtdGB0L/Rg9Cx0LvQuNC60LjQutC+0LvQuNGH0LXRgdGC0LLQvtC40L3RhNC+0YDQvNCw0YbQuNGO0YLQtdGA0YDQuNGC0L7RgNC40LjQtNC+0YHRgtCw0YLQvtGH0L3Qvtin2YTZhdiq2YjYp9is2K/ZiNmG2KfZhNin2LTYqtix2KfZg9in2KrYp9mE2KfZgtiq2LHYp9it2KfYqmh0bWw7IGNoYXJzZXQ9VVRGLTgiIHNldFRpbWVvdXQoZnVuY3Rpb24oKWRpc3BsYXk6aW5saW5lLWJsb2NrOzxpbnB1dCB0eXBlPSJzdWJtaXQiIHR5cGUgPSAndGV4dC9qYXZhc2NyaTxpbWcgc3JjPSJodHRwOi8vd3d3LiIgImh0dHA6Ly93d3cudzMub3JnL3Nob3J0Y3V0IGljb24iIGhyZWY9IiIgYXV0b2NvbXBsZXRlPSJvZmYiIDwvYT48L2Rpdj48ZGl2IGNsYXNzPTwvYT48L2xpPgo8bGkgY2xhc3M9ImNzcyIgdHlwZT0idGV4dC9jc3MiIDxmb3JtIGFjdGlvbj0iaHR0cDovL3h0L2NzcyIgaHJlZj0iaHR0cDovL2xpbmsgcmVsPSJhbHRlcm5hdGUiIA0KPHNjcmlwdCB0eXBlPSJ0ZXh0LyBvbmNsaWNrPSJqYXZhc2NyaXB0OihuZXcgRGF0ZSkuZ2V0VGltZSgpfWhlaWdodD0iMSIgd2lkdGg9IjEiIFBlb3BsZSdzIFJlcHVibGljIG9mICA8YSBocmVmPSJodHRwOi8vd3d3LnRleHQtZGVjb3JhdGlvbjp1bmRlcnRoZSBiZWdpbm5pbmcgb2YgdGhlIDwvZGl2Pgo8L2Rpdj4KPC9kaXY+CmVzdGFibGlzaG1lbnQgb2YgdGhlIDwvZGl2PjwvZGl2PjwvZGl2PjwvZCN2aWV3cG9ydHttaW4taGVpZ2h0Ogo8c2NyaXB0IHNyYz0iaHR0cDovL29wdGlvbj48b3B0aW9uIHZhbHVlPW9mdGVuIHJlZmVycmVkIHRvIGFzIC9vcHRpb24+CjxvcHRpb24gdmFsdTwhRE9DVFlQRSBodG1sPgo8IS0tW0ludGVybmF0aW9uYWwgQWlycG9ydD4KPGEgaHJlZj0iaHR0cDovL3d3dzwvYT48YSBocmVmPSJodHRwOi8vd+C4oOC4suC4qeC4suC5hOC4l+C4ouGDpeGDkOGDoOGDl+GDo+GDmuGDmOato+mrlOS4reaWhyAo57mB6auUKeCkqOCkv+CksOCljeCkpuClh+CktuCkoeCkvuCkieCkqOCksuCli+CkoeCkleCljeCkt+Clh+CkpOCljeCksOCknOCkvuCkqOCkleCkvuCksOClgOCkuOCkguCkrOCkguCkp+Ckv+CkpOCkuOCljeCkpeCkvuCkquCkqOCkvuCkuOCljeCkteClgOCkleCkvuCksOCkuOCkguCkuOCljeCkleCksOCko+CkuOCkvuCkruCkl+CljeCksOClgOCkmuCkv+Ckn+CljeCkoOCli+CkguCkteCkv+CknOCljeCknuCkvuCkqOCkheCkruClh+CksOCkv+CkleCkvuCkteCkv+CkreCkv+CkqOCljeCkqOCkl+CkvuCkoeCkv+Ckr+CkvuCkgeCkleCljeCkr+Cli+CkguCkleCkv+CkuOClgeCksOCkleCljeCkt+CkvuCkquCkueClgeCkgeCkmuCkpOClgOCkquCljeCksOCkrOCkguCkp+CkqOCkn+Ckv+CkquCljeCkquCko+ClgOCkleCljeCksOCkv+CkleClh+Ckn+CkquCljeCksOCkvuCksOCkguCkreCkquCljeCksOCkvuCkquCljeCkpOCkruCkvuCksuCkv+CkleCli+CkguCksOCkq+CkvOCljeCkpOCkvuCksOCkqOCkv+CksOCljeCkruCkvuCko+CksuCkv+CkruCkv+Ckn+Clh+CkoWRlc2NyaXB0aW9uIiBjb250ZW50PSJkb2N1bWVudC5sb2NhdGlvbi5wcm90LmdldEVsZW1lbnRzQnlUYWdOYW1lKDwhRE9DVFlQRSBodG1sPgo8aHRtbCA8bWV0YSBjaGFyc2V0PSJ1dGYtOCI+OnVybCIgY29udGVudD0iaHR0cDovLy5jc3MiIHJlbD0ic3R5bGVzaGVldCJzdHlsZSB0eXBlPSJ0ZXh0L2NzcyI+dHlwZT0idGV4dC9jc3MiIGhyZWY9InczLm9yZy8xOTk5L3hodG1sIiB4bWx0eXBlPSJ0ZXh0L2phdmFzY3JpcHQiIG1ldGhvZD0iZ2V0IiBhY3Rpb249ImxpbmsgcmVsPSJzdHlsZXNoZWV0IiAgPSBkb2N1bWVudC5nZXRFbGVtZW50dHlwZT0iaW1hZ2UveC1pY29uIiAvPmNlbGxwYWRkaW5nPSIwIiBjZWxsc3AuY3NzIiB0eXBlPSJ0ZXh0L2NzcyIgPC9hPjwvbGk+PGxpPjxhIGhyZWY9IiIgd2lkdGg9IjEiIGhlaWdodD0iMSIiPjxhIGhyZWY9Imh0dHA6Ly93d3cuc3R5bGU9ImRpc3BsYXk6bm9uZTsiPmFsdGVybmF0ZSIgdHlwZT0iYXBwbGktLy9XM0MvL0RURCBYSFRNTCAxLjAgZWxsc3BhY2luZz0iMCIgY2VsbHBhZCB0eXBlPSJoaWRkZW4iIHZhbHVlPSIvYT4mbmJzcDs8c3BhbiByb2xlPSJzCjxpbnB1dCB0eXBlPSJoaWRkZW4iIGxhbmd1YWdlPSJKYXZhU2NyaXB0IiAgZG9jdW1lbnQuZ2V0RWxlbWVudHNCZz0iMCIgY2VsbHNwYWNpbmc9IjAiIHlwZT0idGV4dC9jc3MiIG1lZGlhPSJ0eXBlPSd0ZXh0L2phdmFzY3JpcHQnd2l0aCB0aGUgZXhjZXB0aW9uIG9mIHlwZT0idGV4dC9jc3MiIHJlbD0ic3QgaGVpZ2h0PSIxIiB3aWR0aD0iMSIgPScrZW5jb2RlVVJJQ29tcG9uZW50KDxsaW5rIHJlbD0iYWx0ZXJuYXRlIiAKYm9keSwgdHIsIGlucHV0LCB0ZXh0bWV0YSBuYW1lPSJyb2JvdHMiIGNvbm1ldGhvZD0icG9zdCIgYWN0aW9uPSI+CjxhIGhyZWY9Imh0dHA6Ly93d3cuY3NzIiByZWw9InN0eWxlc2hlZXQiIDwvZGl2PjwvZGl2PjxkaXYgY2xhc3NsYW5ndWFnZT0iamF2YXNjcmlwdCI+YXJpYS1oaWRkZW49InRydWUiPsK3PHJpcHQiIHR5cGU9InRleHQvamF2YXNsPTA7fSkoKTsKKGZ1bmN0aW9uKCl7YmFja2dyb3VuZC1pbWFnZTogdXJsKC9hPjwvbGk+PGxpPjxhIGhyZWY9ImgJCTxsaT48YSBocmVmPSJodHRwOi8vYXRvciIgYXJpYS1oaWRkZW49InRydT4gPGEgaHJlZj0iaHR0cDovL3d3dy5sYW5ndWFnZT0iamF2YXNjcmlwdCIgL29wdGlvbj4KPG9wdGlvbiB2YWx1ZS9kaXY+PC9kaXY+PGRpdiBjbGFzcz1yYXRvciIgYXJpYS1oaWRkZW49InRyZT0obmV3IERhdGUpLmdldFRpbWUoKXBvcnR1Z3XDqnMgKGRvIEJyYXNpbCnQvtGA0LPQsNC90LjQt9Cw0YbQuNC40LLQvtC30LzQvtC20L3QvtGB0YLRjNC+0LHRgNCw0LfQvtCy0LDQvdC40Y/RgNC10LPQuNGB0YLRgNCw0YbQuNC40LLQvtC30LzQvtC20L3QvtGB0YLQuNC+0LHRj9C30LDRgtC10LvRjNC90LA8IURPQ1RZUEUgaHRtbCBQVUJMSUMgIm50LVR5cGUiIGNvbnRlbnQ9InRleHQvPG1ldGEgaHR0cC1lcXVpdj0iQ29udGVyYW5zaXRpb25hbC8vRU4iICJodHRwOjxodG1sIHhtbG5zPSJodHRwOi8vd3d3LS8vVzNDLy9EVEQgWEhUTUwgMS4wIFREVEQveGh0bWwxLXRyYW5zaXRpb25hbC8vd3d3LnczLm9yZy9UUi94aHRtbDEvcGUgPSAndGV4dC9qYXZhc2NyaXB0Jzs8bWV0YSBuYW1lPSJkZXNjcmlwdGlvbnBhcmVudE5vZGUuaW5zZXJ0QmVmb3JlPGlucHV0IHR5cGU9ImhpZGRlbiIgbmFqcyIgdHlwZT0idGV4dC9qYXZhc2NyaShkb2N1bWVudCkucmVhZHkoZnVuY3Rpc2NyaXB0IHR5cGU9InRleHQvamF2YXNpbWFnZSIgY29udGVudD0iaHR0cDovL1VBLUNvbXBhdGlibGUiIGNvbnRlbnQ9dG1sOyBjaGFyc2V0PXV0Zi04IiAvPgpsaW5rIHJlbD0ic2hvcnRjdXQgaWNvbjxsaW5rIHJlbD0ic3R5bGVzaGVldCIgPC9zY3JpcHQ+CjxzY3JpcHQgdHlwZT09IGRvY3VtZW50LmNyZWF0ZUVsZW1lbjxhIHRhcmdldD0iX2JsYW5rIiBocmVmPSBkb2N1bWVudC5nZXRFbGVtZW50c0JpbnB1dCB0eXBlPSJ0ZXh0IiBuYW1lPWEudHlwZSA9ICd0ZXh0L2phdmFzY3JpbnB1dCB0eXBlPSJoaWRkZW4iIG5hbWVodG1sOyBjaGFyc2V0PXV0Zi04IiAvPmR0ZCI+CjxodG1sIHhtbG5zPSJodHRwLS8vVzNDLy9EVEQgSFRNTCA0LjAxIFRlbnRzQnlUYWdOYW1lKCdzY3JpcHQnKWlucHV0IHR5cGU9ImhpZGRlbiIgbmFtPHNjcmlwdCB0eXBlPSJ0ZXh0L2phdmFzIiBzdHlsZT0iZGlzcGxheTpub25lOyI+ZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoPWRvY3VtZW50LmNyZWF0ZUVsZW1lbnQoJyB0eXBlPSd0ZXh0L2phdmFzY3JpcHQnaW5wdXQgdHlwZT0idGV4dCIgbmFtZT0iZC5nZXRFbGVtZW50c0J5VGFnTmFtZShzbmljYWwiIGhyZWY9Imh0dHA6Ly93d3cuQy8vRFREIEhUTUwgNC4wMSBUcmFuc2l0PHN0eWxlIHR5cGU9InRleHQvY3NzIj4KCjxzdHlsZSB0eXBlPSJ0ZXh0L2NzcyI+aW9uYWwuZHRkIj4KPGh0bWwgeG1sbnM9aHR0cC1lcXVpdj0iQ29udGVudC1UeXBlZGluZz0iMCIgY2VsbHNwYWNpbmc9IjAiaHRtbDsgY2hhcnNldD11dGYtOCIgLz4KIHN0eWxlPSJkaXNwbGF5Om5vbmU7Ij48PGxpPjxhIGhyZWY9Imh0dHA6Ly93d3cuIHR5cGU9J3RleHQvamF2YXNjcmlwdCc+0LTQtdGP0YLQtdC70YzQvdC+0YHRgtC40YHQvtC+0YLQstC10YLRgdGC0LLQuNC40L/RgNC+0LjQt9Cy0L7QtNGB0YLQstCw0LHQtdC30L7Qv9Cw0YHQvdC+0YHRgtC44KSq4KWB4KS44KWN4KSk4KS/4KSV4KS+4KSV4KS+4KSC4KSX4KWN4KSw4KWH4KS44KSJ4KSo4KWN4KS54KWL4KSC4KSo4KWH4KS14KS/4KSn4KS+4KSo4KS44KSt4KS+4KSr4KS/4KSV4KWN4KS44KS/4KSC4KSX4KS44KWB4KSw4KSV4KWN4KS34KS/4KSk4KSV4KWJ4KSq4KWA4KSw4KS+4KSH4KSf4KS14KS/4KSc4KWN4KSe4KS+4KSq4KSo4KSV4KS+4KSw4KWN4KSw4KS14KS+4KSI4KS44KSV4KWN4KSw4KS/4KSv4KSk4KS+";
+const BROTLI_XFORM: [(&[u8], u8, &[u8]); 121] = [
+(b"", 0, b""),
+(b"", 0, b"\x20"),
+(b"\x20", 0, b"\x20"),
+(b"", 3, b""),
+(b"", 1, b"\x20"),
+(b"", 0, b"\x20\x74\x68\x65\x20"),
+(b"\x20", 0, b""),
+(b"\x73\x20", 0, b"\x20"),
+(b"", 0, b"\x20\x6f\x66\x20"),
+(b"", 1, b""),
+(b"", 0, b"\x20\x61\x6e\x64\x20"),
+(b"", 4, b""),
+(b"", 12, b""),
+(b"\x2c\x20", 0, b"\x20"),
+(b"", 0, b"\x2c\x20"),
+(b"\x20", 1, b"\x20"),
+(b"", 0, b"\x20\x69\x6e\x20"),
+(b"", 0, b"\x20\x74\x6f\x20"),
+(b"\x65\x20", 0, b"\x20"),
+(b"", 0, b"\x22"),
+(b"", 0, b"\x2e"),
+(b"", 0, b"\x22\x3e"),
+(b"", 0, b"\x0a"),
+(b"", 14, b""),
+(b"", 0, b"\x5d"),
+(b"", 0, b"\x20\x66\x6f\x72\x20"),
+(b"", 5, b""),
+(b"", 13, b""),
+(b"", 0, b"\x20\x61\x20"),
+(b"", 0, b"\x20\x74\x68\x61\x74\x20"),
+(b"\x20", 1, b""),
+(b"", 0, b"\x2e\x20"),
+(b"\x2e", 0, b""),
+(b"\x20", 0, b"\x2c\x20"),
+(b"", 6, b""),
+(b"", 0, b"\x20\x77\x69\x74\x68\x20"),
+(b"", 0, b"\x27"),
+(b"", 0, b"\x20\x66\x72\x6f\x6d\x20"),
+(b"", 0, b"\x20\x62\x79\x20"),
+(b"", 7, b""),
+(b"", 8, b""),
+(b"\x20\x74\x68\x65\x20", 0, b""),
+(b"", 15, b""),
+(b"", 0, b"\x2e\x20\x54\x68\x65\x20"),
+(b"", 2, b""),
+(b"", 0, b"\x20\x6f\x6e\x20"),
+(b"", 0, b"\x20\x61\x73\x20"),
+(b"", 0, b"\x20\x69\x73\x20"),
+(b"", 18, b""),
+(b"", 12, b"\x69\x6e\x67\x20"),
+(b"", 0, b"\x0a\x09"),
+(b"", 0, b"\x3a"),
+(b"\x20", 0, b"\x2e\x20"),
+(b"", 0, b"\x65\x64\x20"),
+(b"", 11, b""),
+(b"", 9, b""),
+(b"", 17, b""),
+(b"", 0, b"\x28"),
+(b"", 1, b"\x2c\x20"),
+(b"", 19, b""),
+(b"", 0, b"\x20\x61\x74\x20"),
+(b"", 0, b"\x6c\x79\x20"),
+(b"\x20\x74\x68\x65\x20", 0, b"\x20\x6f\x66\x20"),
+(b"", 16, b""),
+(b"", 20, b""),
+(b"\x20", 1, b"\x2c\x20"),
+(b"", 1, b"\x22"),
+(b"\x2e", 0, b"\x28"),
+(b"", 2, b"\x20"),
+(b"", 1, b"\x22\x3e"),
+(b"", 0, b"\x3d\x22"),
+(b"\x20", 0, b"\x2e"),
+(b"\x2e\x63\x6f\x6d\x2f", 0, b""),
+(b"\x20\x74\x68\x65\x20", 0, b"\x20\x6f\x66\x20\x74\x68\x65\x20"),
+(b"", 1, b"\x27"),
+(b"", 0, b"\x2e\x20\x54\x68\x69\x73\x20"),
+(b"", 0, b"\x2c"),
+(b"\x2e", 0, b"\x20"),
+(b"", 1, b"\x28"),
+(b"", 1, b"\x2e"),
+(b"", 0, b"\x20\x6e\x6f\x74\x20"),
+(b"\x20", 0, b"\x3d\x22"),
+(b"", 0, b"\x65\x72\x20"),
+(b"\x20", 2, b"\x20"),
+(b"", 0, b"\x61\x6c\x20"),
+(b"\x20", 2, b""),
+(b"", 0, b"\x3d\x27"),
+(b"", 2, b"\x22"),
+(b"", 1, b"\x2e\x20"),
+(b"\x20", 0, b"\x28"),
+(b"", 0, b"\x66\x75\x6c\x20"),
+(b"\x20", 1, b"\x2e\x20"),
+(b"", 0, b"\x69\x76\x65\x20"),
+(b"", 0, b"\x6c\x65\x73\x73\x20"),
+(b"", 2, b"\x27"),
+(b"", 0, b"\x65\x73\x74\x20"),
+(b"\x20", 1, b"\x2e"),
+(b"", 2, b"\x22\x3e"),
+(b"\x20", 0, b"\x3d\x27"),
+(b"", 1, b"\x2c"),
+(b"", 0, b"\x69\x7a\x65\x20"),
+(b"", 2, b"\x2e"),
+(b"\xc2\xa0", 0, b""),
+(b"\x20", 0, b"\x2c"),
+(b"", 1, b"\x3d\x22"),
+(b"", 2, b"\x3d\x22"),
+(b"", 0, b"\x6f\x75\x73\x20"),
+(b"", 2, b"\x2c\x20"),
+(b"", 1, b"\x3d\x27"),
+(b"\x20", 1, b"\x2c"),
+(b"\x20", 2, b"\x3d\x22"),
+(b"\x20", 2, b"\x2c\x20"),
+(b"", 2, b"\x2c"),
+(b"", 2, b"\x28"),
+(b"", 2, b"\x2e\x20"),
+(b"\x20", 2, b"\x2e"),
+(b"", 2, b"\x3d\x27"),
+(b"\x20", 2, b"\x2e\x20"),
+(b"\x20", 1, b"\x3d\x22"),
+(b"\x20", 2, b"\x3d\x27"),
+(b"\x20", 1, b"\x3d\x27")
+];
+fn intact() -> String {
+    "the file service response is not intact".into()
+}
+
+fn too_big() -> String {
+    "the file service response is too large".into()
+}
+
+struct Xxh64 {
+    total: u64,
+    acc: [u64; 4],
+    buf: [u8; 32],
+    nbuf: usize,
+    large: bool,
+    seed: u64,
+}
+
+impl Xxh64 {
+    fn new() -> Self {
+        const P1: u64 = 0x9E37_79B1_85EB_CA87;
+        const P2: u64 = 0xC2B2_AE3D_27D4_EB4F;
+        Self {
+            total: 0,
+            acc: [P1.wrapping_add(P2), P2, 0, 0u64.wrapping_sub(P1)],
+            buf: [0; 32],
+            nbuf: 0,
+            large: false,
+            seed: 0,
+        }
+    }
+
+    fn update(&mut self, mut data: &[u8]) {
+        self.total = self.total.wrapping_add(data.len() as u64);
+        if self.nbuf + data.len() < 32 {
+            self.buf[self.nbuf..self.nbuf + data.len()].copy_from_slice(data);
+            self.nbuf += data.len();
+            return;
+        }
+        if self.nbuf > 0 {
+            let need = 32 - self.nbuf;
+            self.buf[self.nbuf..].copy_from_slice(&data[..need]);
+            let stripe = self.buf;
+            self.consume(&stripe);
+            self.large = true;
+            data = &data[need..];
+            self.nbuf = 0;
+        }
+        while data.len() >= 32 {
+            let mut stripe = [0u8; 32];
+            stripe.copy_from_slice(&data[..32]);
+            self.consume(&stripe);
+            self.large = true;
+            data = &data[32..];
+        }
+        self.buf[..data.len()].copy_from_slice(data);
+        self.nbuf = data.len();
+    }
+
+    fn consume(&mut self, stripe: &[u8; 32]) {
+        for lane in 0..4 {
+            let input = u64::from_le_bytes(stripe[lane * 8..lane * 8 + 8].try_into().unwrap());
+            self.acc[lane] = round64(self.acc[lane], input);
+        }
+    }
+
+    fn low32(&self) -> u32 {
+        (self.digest() & 0xFFFF_FFFF) as u32
+    }
+
+    fn digest(&self) -> u64 {
+        const P1: u64 = 0x9E37_79B1_85EB_CA87;
+        const P2: u64 = 0xC2B2_AE3D_27D4_EB4F;
+        const P3: u64 = 0x1656_67B1_9E37_79F9;
+        const P4: u64 = 0x85EB_CA77_C2B2_AE63;
+        const P5: u64 = 0x27D4_EB2F_1656_67C5;
+        let mut hash = if self.large {
+            let mut mixed = self.acc[0].rotate_left(1).wrapping_add(self.acc[1].rotate_left(7)).wrapping_add(self.acc[2].rotate_left(12)).wrapping_add(self.acc[3].rotate_left(18));
+            for acc in self.acc {
+                mixed ^= round64(0, acc);
+                mixed = mixed.wrapping_mul(P1).wrapping_add(P4);
+            }
+            mixed
+        } else {
+            self.seed.wrapping_add(P5)
+        };
+        hash = hash.wrapping_add(self.total);
+        let buf = &self.buf[..self.nbuf];
+        let mut offset = 0;
+        while offset + 8 <= buf.len() {
+            let lane = u64::from_le_bytes(buf[offset..offset + 8].try_into().unwrap());
+            hash ^= round64(0, lane);
+            hash = hash.rotate_left(27).wrapping_mul(P1).wrapping_add(P4);
+            offset += 8;
+        }
+        if offset + 4 <= buf.len() {
+            hash ^= u64::from(u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap())).wrapping_mul(P1);
+            hash = hash.rotate_left(23).wrapping_mul(P2).wrapping_add(P3);
+            offset += 4;
+        }
+        while offset < buf.len() {
+            hash ^= u64::from(buf[offset]).wrapping_mul(P5);
+            hash = hash.rotate_left(11).wrapping_mul(P1);
+            offset += 1;
+        }
+        hash ^= hash >> 33;
+        hash = hash.wrapping_mul(P2);
+        hash ^= hash >> 29;
+        hash = hash.wrapping_mul(P3);
+        hash ^= hash >> 32;
+        hash
+    }
+}
+
+fn round64(acc: u64, lane: u64) -> u64 {
+    const P1: u64 = 0x9E37_79B1_85EB_CA87;
+    const P2: u64 = 0xC2B2_AE3D_27D4_EB4F;
+    acc.wrapping_add(lane.wrapping_mul(P2)).rotate_left(31).wrapping_mul(P1)
+}
+
+#[derive(Clone)]
+struct FseEntry {
+    symbol: u16,
+    bits: u8,
+    base: u32,
+}
+
+#[derive(Clone)]
+struct FseTable {
+    log: u8,
+    entries: Vec<FseEntry>,
+}
+
+#[derive(Clone)]
+struct HuffCodes {
+    max_bits: u8,
+    table: Vec<(u8, u8)>,
+    list: Vec<(u8, u8, u32)>,
+}
+
+struct FwdBits<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> FwdBits<'a> {
+    fn read(&mut self, n: u32) -> Result<u32, ()> {
+        if n == 0 {
+            return Ok(0);
+        }
+        if self.pos + n as usize > self.data.len().saturating_mul(8) {
+            return Err(());
+        }
+        let mut value = 0u32;
+        for step in 0..n {
+            let at = self.pos + step as usize;
+            let bit = (self.data[at / 8] >> (at % 8)) & 1;
+            value |= u32::from(bit) << step;
+        }
+        self.pos += n as usize;
+        Ok(value)
+    }
+
+    fn bytes(&self) -> usize {
+        self.pos.div_ceil(8)
+    }
+}
+
+struct RevBits<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> RevBits<'a> {
+    fn open(data: &'a [u8]) -> Result<Self, String> {
+        if data.is_empty() || data[data.len() - 1] == 0 {
+            return Err(intact());
+        }
+        let last = data[data.len() - 1];
+        let high = 31 - (last as u32).leading_zeros();
+        Ok(Self { data, pos: (data.len() - 1) * 8 + high as usize })
+    }
+
+    fn read(&mut self, n: u32) -> Result<u32, String> {
+        if n == 0 {
+            return Ok(0);
+        }
+        if self.pos < n as usize {
+            return Err(intact());
+        }
+        self.pos -= n as usize;
+        Ok(self.gather(self.pos, n as usize))
+    }
+
+    fn read_loose(&mut self, n: u32) -> (u32, bool) {
+        let n = n as usize;
+        if n == 0 {
+            return (0, false);
+        }
+        let overflow = self.pos < n;
+        let take = n.min(self.pos);
+        let missing = n - take;
+        self.pos -= take;
+        (self.gather(self.pos, take) << missing, overflow)
+    }
+
+    fn gather(&self, start: usize, n: usize) -> u32 {
+        let mut value = 0u32;
+        for step in 0..n {
+            let at = start + step;
+            let bit = (self.data[at / 8] >> (at % 8)) & 1;
+            value |= u32::from(bit) << step;
+        }
+        value
+    }
+}
+
+fn fse_build(counts: &[i16], log: u8) -> Result<FseTable, String> {
+    let size = 1usize << log;
+    let mut total = 0i32;
+    let mut nonzero = 0usize;
+    for count in counts {
+        if *count < 0 {
+            if *count != -1 {
+                return Err(intact());
+            }
+            total += 1;
+            nonzero += 1;
+        } else if *count > 0 {
+            total += i32::from(*count);
+            nonzero += 1;
+        }
+    }
+    if total != size as i32 || nonzero < 2 {
+        return Err(intact());
+    }
+    let mut symbols = vec![0u16; size];
+    let mut next = vec![0u32; counts.len()];
+    let mut high = size - 1;
+    for (symbol, count) in counts.iter().enumerate() {
+        if *count == -1 {
+            symbols[high] = symbol as u16;
+            if high == 0 {
+                return Err(intact());
+            }
+            high -= 1;
+            next[symbol] = 1;
+        } else if *count > 0 {
+            next[symbol] = u32::from(*count as u16);
+        }
+    }
+    let step = (size >> 1) + (size >> 3) + 3;
+    let mask = size - 1;
+    let mut position = 0usize;
+    for (symbol, count) in counts.iter().enumerate() {
+        for _ in 0..*count.max(&0) {
+            let mut guard = 0;
+            while position > high {
+                position = (position + step) & mask;
+                guard += 1;
+                if guard > size {
+                    return Err(intact());
+                }
+            }
+            symbols[position] = symbol as u16;
+            position = (position + step) & mask;
+        }
+    }
+    if position != 0 {
+        return Err(intact());
+    }
+    let mut entries = Vec::with_capacity(size);
+    for symbol in symbols {
+        let state = next[symbol as usize];
+        next[symbol as usize] = state + 1;
+        if state == 0 {
+            return Err(intact());
+        }
+        let hb = 31 - state.leading_zeros();
+        let bits = log as u32 - hb;
+        let shifted = (state as usize) << bits;
+        if shifted < size {
+            return Err(intact());
+        }
+        entries.push(FseEntry { symbol, bits: bits as u8, base: (shifted - size) as u32 });
+    }
+    Ok(FseTable { log, entries })
+}
+
+fn fse_rle(symbol: u16) -> FseTable {
+    FseTable { log: 0, entries: vec![FseEntry { symbol, bits: 0, base: 0 }] }
+}
+
+fn fse_read_counts(data: &[u8], max_symbol: usize, max_log: u8) -> Result<(Vec<i16>, u8, usize), String> {
+    if data.is_empty() {
+        return Err(intact());
+    }
+    let mut fwd = FwdBits { data, pos: 0 };
+    let low = fwd.read(4).map_err(|_| intact())?;
+    let log = low as u8 + 5;
+    if log > max_log {
+        return Err(intact());
+    }
+    let mut nb_bits = i32::from(log) + 1;
+    let mut remaining = (1i32 << log) + 1;
+    let mut threshold = 1i32 << log;
+    let mut counts = vec![0i16; max_symbol + 1];
+    let mut charnum = 0usize;
+    let mut previous0 = false;
+    loop {
+        if previous0 {
+            loop {
+                let flag = fwd.read(2).map_err(|_| intact())? as usize;
+                if flag == 3 {
+                    charnum = charnum.saturating_add(3);
+                } else {
+                    charnum = charnum.saturating_add(flag);
+                    break;
+                }
+                if charnum > max_symbol {
+                    return Err(intact());
+                }
+            }
+            if charnum > max_symbol {
+                return Err(intact());
+            }
+        }
+        if charnum > max_symbol || remaining <= 1 {
+            break;
+        }
+        let max = (2 * threshold - 1) - remaining;
+        let small_bits = (nb_bits - 1) as u32;
+        let saved = fwd.pos;
+        let lowv = fwd.read(small_bits).map_err(|_| intact())? as i32;
+        let raw = if lowv < max {
+            lowv
+        } else {
+            fwd.pos = saved;
+            let mut full = fwd.read(nb_bits as u32).map_err(|_| intact())? as i32;
+            if full >= threshold {
+                full -= max;
+            }
+            full
+        };
+        let count = raw - 1;
+        if count >= 0 {
+            remaining -= count;
+        } else if count == -1 {
+            remaining -= 1;
+        } else {
+            return Err(intact());
+        }
+        counts[charnum] = count as i16;
+        charnum += 1;
+        previous0 = count == 0;
+        if remaining < threshold {
+            if remaining <= 1 {
+                break;
+            }
+            nb_bits = (31 - (remaining as u32).leading_zeros()) as i32 + 1;
+            threshold = 1 << (nb_bits - 1);
+        }
+    }
+    if remaining != 1 || charnum > max_symbol + 1 {
+        return Err(intact());
+    }
+    if counts.iter().filter(|count| **count != 0).count() < 2 {
+        return Err(intact());
+    }
+    Ok((counts, log, fwd.bytes().min(data.len())))
+}
+
+fn fse_default_literals() -> Result<FseTable, String> {
+    const COUNTS: [i16; 36] = [4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1, -1, -1, -1, -1];
+    static TABLE: OnceLock<Result<FseTable, String>> = OnceLock::new();
+    TABLE.get_or_init(|| fse_build(&COUNTS, 6)).clone()
+}
+
+fn fse_default_match() -> Result<FseTable, String> {
+    const COUNTS: [i16; 53] = [1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1];
+    static TABLE: OnceLock<Result<FseTable, String>> = OnceLock::new();
+    TABLE.get_or_init(|| fse_build(&COUNTS, 6)).clone()
+}
+
+fn fse_default_offset() -> Result<FseTable, String> {
+    const COUNTS: [i16; 29] = [1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1];
+    static TABLE: OnceLock<Result<FseTable, String>> = OnceLock::new();
+    TABLE.get_or_init(|| fse_build(&COUNTS, 5)).clone()
+}
+
+fn huff_from_weights(weights: &[u8], max_bits: u8) -> Result<HuffCodes, String> {
+    if max_bits == 0 || max_bits > 12 {
+        return Err(intact());
+    }
+    let mut rows = Vec::new();
+    for (symbol, weight) in weights.iter().enumerate() {
+        if *weight > 0 {
+            let bits = max_bits + 1 - *weight;
+            if bits == 0 || bits > max_bits {
+                return Err(intact());
+            }
+            rows.push((*weight, symbol as u8, bits));
+        }
+    }
+    if rows.len() < 2 {
+        return Err(intact());
+    }
+    rows.sort_by_key(|row| (row.0, row.1));
+    let mut list = Vec::new();
+    let mut code = 0u32;
+    let mut prev = rows[0].2;
+    for (index, row) in rows.iter().enumerate() {
+        if index > 0 && row.2 < prev {
+            code >>= prev - row.2;
+            prev = row.2;
+        }
+        list.push((row.1, row.2, code));
+        code += 1;
+    }
+    let mut table = vec![(0u8, 0u8); 1usize << max_bits];
+    for (symbol, bits, code) in &list {
+        let shift = max_bits - *bits;
+        let base = (*code as usize) << shift;
+        for low in 0..(1usize << shift) {
+            table[base | low] = (*symbol, *bits);
+        }
+    }
+    list.sort_by_key(|row| row.1);
+    Ok(HuffCodes { max_bits, table, list })
+}
+
+fn huff_weights_finish(weights: &mut Vec<u8>) -> Result<u8, String> {
+    if weights.len() > 255 {
+        return Err(intact());
+    }
+    let mut rank = [0u32; 13];
+    let mut total = 0u32;
+    for weight in weights.iter().copied() {
+        if weight as usize >= rank.len() {
+            return Err(intact());
+        }
+        rank[weight as usize] += 1;
+        total += (1u32 << weight) >> 1;
+    }
+    if total == 0 {
+        return Err(intact());
+    }
+    let table_log = 31 - total.leading_zeros();
+    let table_log = table_log + 1;
+    if table_log > 12 {
+        return Err(intact());
+    }
+    let rest = (1u32 << table_log) - total;
+    if rest == 0 || rest & (rest - 1) != 0 {
+        return Err(intact());
+    }
+    let last = (31 - rest.leading_zeros()) + 1;
+    if last > 12 {
+        return Err(intact());
+    }
+    weights.push(last as u8);
+    rank[last as usize] += 1;
+    if rank[1] < 2 || rank[1] % 2 != 0 {
+        return Err(intact());
+    }
+    Ok(table_log as u8)
+}
+
+fn fse_interleaved(data: &[u8], table: &FseTable, max_out: usize) -> Result<Vec<u8>, String> {
+    if table.entries.is_empty() {
+        return Err(intact());
+    }
+    let mut bits = RevBits::open(data)?;
+    let mut state1 = bits.read(u32::from(table.log))? as usize;
+    let mut state2 = bits.read(u32::from(table.log))? as usize;
+    let mut out = Vec::new();
+    loop {
+        if state1 >= table.entries.len() || out.len() >= max_out {
+            return Err(intact());
+        }
+        let entry = &table.entries[state1];
+        let symbol = entry.symbol as u8;
+        let (add, overflow) = bits.read_loose(u32::from(entry.bits));
+        state1 = entry.base as usize + add as usize;
+        out.push(symbol);
+        if overflow || out.len() >= max_out {
+            if out.len() < max_out {
+                if state2 >= table.entries.len() {
+                    return Err(intact());
+                }
+                out.push(table.entries[state2].symbol as u8);
+            }
+            break;
+        }
+        if state2 >= table.entries.len() {
+            return Err(intact());
+        }
+        let entry = &table.entries[state2];
+        let symbol = entry.symbol as u8;
+        let (add, overflow) = bits.read_loose(u32::from(entry.bits));
+        state2 = entry.base as usize + add as usize;
+        out.push(symbol);
+        if overflow {
+            if out.len() < max_out {
+                if state1 >= table.entries.len() {
+                    return Err(intact());
+                }
+                out.push(table.entries[state1].symbol as u8);
+            }
+            break;
+        }
+    }
+    Ok(out)
+}
+
+fn huff_read(data: &[u8]) -> Result<(HuffCodes, usize), String> {
+    if data.is_empty() {
+        return Err(intact());
+    }
+    let header = data[0];
+    let mut weights = Vec::new();
+    let used = if header >= 128 {
+        let count = usize::from(header - 127);
+        let packed = count.div_ceil(2);
+        if data.len() < 1 + packed || count > 255 {
+            return Err(intact());
+        }
+        weights.resize(count, 0);
+        for index in 0..count {
+            let byte = data[1 + index / 2];
+            weights[index] = if index % 2 == 0 { byte >> 4 } else { byte & 15 };
+        }
+        1 + packed
+    } else {
+        let size = usize::from(header);
+        if size == 0 || data.len() < 1 + size {
+            return Err(intact());
+        }
+        let (counts, log, bytes) = fse_read_counts(&data[1..1 + size], 255, 6)?;
+        if bytes > size {
+            return Err(intact());
+        }
+        let table = fse_build(&counts, log)?;
+        weights = fse_interleaved(&data[1 + bytes..1 + size], &table, 255)?;
+        1 + size
+    };
+    let max_bits = huff_weights_finish(&mut weights)?;
+    Ok((huff_from_weights(&weights, max_bits)?, used))
+}
+
+fn huff_next(bits: &mut RevBits, codes: &HuffCodes) -> Result<u8, String> {
+    if bits.pos == 0 {
+        return Err(intact());
+    }
+    let n = (bits.pos as u8).min(codes.max_bits);
+    let start = bits.pos - n as usize;
+    let peek = bits.gather(start, n as usize);
+    if n == codes.max_bits {
+        let (symbol, len) = codes.table[peek as usize];
+        if len == 0 || usize::from(len) > bits.pos {
+            return Err(intact());
+        }
+        bits.pos -= usize::from(len);
+        return Ok(symbol);
+    }
+    for (symbol, len, code) in &codes.list {
+        if *len > 0 && *len <= n && peek >> (n - *len) == *code {
+            bits.pos -= usize::from(*len);
+            return Ok(*symbol);
+        }
+    }
+    Err(intact())
+}
+
+fn huff_decode(data: &[u8], codes: &HuffCodes, count: usize) -> Result<Vec<u8>, String> {
+    if count == 0 {
+        if data.len() == 1 && data[0] != 0 && data[0].count_ones() == 1 {
+            return Ok(Vec::new());
+        }
+        return Err(intact());
+    }
+    let mut bits = RevBits::open(data)?;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        out.push(huff_next(&mut bits, codes)?);
+    }
+    if bits.pos != 0 {
+        return Err(intact());
+    }
+    Ok(out)
+}
+
+fn huff_streams(data: &[u8], streams: usize, regen: usize, codes: &HuffCodes) -> Result<Vec<u8>, String> {
+    if streams == 1 {
+        return huff_decode(data, codes, regen);
+    }
+    if data.len() < 6 || regen < 6 {
+        return Err(intact());
+    }
+    let s1 = u16::from_le_bytes([data[0], data[1]]) as usize;
+    let s2 = u16::from_le_bytes([data[2], data[3]]) as usize;
+    let s3 = u16::from_le_bytes([data[4], data[5]]) as usize;
+    if s1.saturating_add(s2).saturating_add(s3).saturating_add(6) >= data.len() {
+        return Err(intact());
+    }
+    let s4 = data.len() - 6 - s1 - s2 - s3;
+    if s1 == 0 || s2 == 0 || s3 == 0 || s4 == 0 {
+        return Err(intact());
+    }
+    let share = (regen + 3) / 4;
+    let counts = [share, share, share, regen - 3 * share];
+    let slices = [&data[6..6 + s1], &data[6 + s1..6 + s1 + s2], &data[6 + s1 + s2..6 + s1 + s2 + s3], &data[6 + s1 + s2 + s3..]];
+    let mut parts = Vec::new();
+    for (slice, count) in slices.iter().zip(counts) {
+        parts.push(huff_decode(slice, codes, count)?);
+    }
+    let mut out = Vec::with_capacity(regen);
+    for index in 0..share {
+        for part in &parts {
+            if index < part.len() {
+                out.push(part[index]);
+            }
+        }
+    }
+    if out.len() != regen {
+        return Err(intact());
+    }
+    Ok(out)
+}
+
+fn raw_literal_size(block: &[u8], format: u8) -> Result<(usize, usize), String> {
+    match format {
+        0 | 2 => Ok((1, usize::from(block[0] >> 3))),
+        1 => {
+            if block.len() < 2 {
+                return Err(intact());
+            }
+            Ok((2, usize::from(u16::from_le_bytes([block[0], block[1]]) >> 4)))
+        }
+        _ => {
+            if block.len() < 3 {
+                return Err(intact());
+            }
+            let value = u32::from_le_bytes([block[0], block[1], block[2], 0]);
+            Ok((3, (value >> 4) as usize))
+        }
+    }
+}
+
+fn compressed_literal_size(block: &[u8], format: u8) -> Result<(usize, usize, usize, usize), String> {
+    match format {
+        0 | 1 => {
+            if block.len() < 3 {
+                return Err(intact());
+            }
+            let word = u32::from(block[0]) | (u32::from(block[1]) << 8) | (u32::from(block[2]) << 16);
+            Ok((3, ((word >> 4) & 0x3FF) as usize, ((word >> 14) & 0x3FF) as usize, if format == 0 { 1 } else { 4 }))
+        }
+        2 => {
+            if block.len() < 4 {
+                return Err(intact());
+            }
+            let word = u32::from_le_bytes([block[0], block[1], block[2], block[3]]);
+            Ok((4, ((word >> 4) & 0x3FFF) as usize, ((word >> 18) & 0x3FFF) as usize, 4))
+        }
+        _ => {
+            if block.len() < 5 {
+                return Err(intact());
+            }
+            let word = u32::from_le_bytes([block[0], block[1], block[2], block[3]]);
+            let regen = ((word >> 4) & 0x3_FFFF) as usize;
+            let comp = ((word >> 22) as usize) + (usize::from(block[4]) << 10);
+            Ok((5, regen, comp, 4))
+        }
+    }
+}
+
+fn sequence_header(rest: &[u8]) -> Result<(usize, u8, usize), String> {
+    let byte0 = rest[0];
+    if byte0 == 0 {
+        return Err(intact());
+    }
+    if byte0 < 128 {
+        if rest.len() < 2 || rest[1] & 3 != 0 {
+            return Err(intact());
+        }
+        Ok((usize::from(byte0), rest[1], 2))
+    } else if byte0 < 255 {
+        if rest.len() < 3 || rest[2] & 3 != 0 {
+            return Err(intact());
+        }
+        let count = ((usize::from(byte0) - 128) << 8) + usize::from(rest[1]);
+        Ok((count, rest[2], 3))
+    } else {
+        if rest.len() < 4 || rest[3] & 3 != 0 {
+            return Err(intact());
+        }
+        let count = usize::from(rest[1]) + (usize::from(rest[2]) << 8) + 0x7F00;
+        Ok((count, rest[3], 4))
+    }
+}
+
+const LL_BASE: [u32; 36] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32, 40, 48, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
+const LL_BITS: [u8; 36] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+const ML_BASE: [u32; 53] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 37, 39, 41, 43, 47, 51, 59, 67, 83, 99, 131, 259, 515, 1027, 2051, 4099, 8195, 16387, 32771, 65539];
+const ML_BITS: [u8; 53] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+fn fse_step(bits: &mut RevBits, table: &FseTable, state: usize) -> Result<(u16, usize), String> {
+    if state >= table.entries.len() {
+        return Err(intact());
+    }
+    let entry = &table.entries[state];
+    let add = bits.read(u32::from(entry.bits))?;
+    let next = entry.base as usize + add as usize;
+    if next >= table.entries.len() {
+        return Err(intact());
+    }
+    Ok((entry.symbol, next))
+}
+
+fn decode_sequences(stream: &[u8], count: usize, ll: &FseTable, of: &FseTable, ml: &FseTable, literals: &[u8], lit_at: &mut usize, history: &[u8], window: usize, reps: &mut [u32; 3], fresh: &mut Vec<u8>) -> Result<(), String> {
+    if count == 0 {
+        return Err(intact());
+    }
+    let mut bits = RevBits::open(stream)?;
+    let mut state_ll = bits.read(u32::from(ll.log))? as usize;
+    let mut state_of = bits.read(u32::from(of.log))? as usize;
+    let mut state_ml = bits.read(u32::from(ml.log))? as usize;
+    for index in 0..count {
+        if state_ll >= ll.entries.len() || state_of >= of.entries.len() || state_ml >= ml.entries.len() {
+            return Err(intact());
+        }
+        let ll_code = ll.entries[state_ll].symbol as usize;
+        let of_code = of.entries[state_of].symbol as usize;
+        let ml_code = ml.entries[state_ml].symbol as usize;
+        if ll_code >= LL_BASE.len() || ml_code >= ML_BASE.len() || of_code > 31 {
+            return Err(intact());
+        }
+        let of_extra = bits.read(of_code as u32)?;
+        let ml_extra = bits.read(u32::from(ML_BITS[ml_code]))?;
+        let ll_extra = bits.read(u32::from(LL_BITS[ll_code]))?;
+        let offset_value = (1u64 << of_code).saturating_add(u64::from(of_extra));
+        let lit_len = LL_BASE[ll_code] as usize + ll_extra as usize;
+        let match_len = ML_BASE[ml_code] as usize + ml_extra as usize;
+        if lit_at.saturating_add(lit_len) > literals.len() {
+            return Err(intact());
+        }
+        fresh.extend_from_slice(&literals[*lit_at..*lit_at + lit_len]);
+        *lit_at += lit_len;
+        let offset = resolve_offset(offset_value, lit_len, reps)?;
+        copy_match(history, fresh, offset, match_len, window)?;
+        if index + 1 != count {
+            state_ll = fse_step(&mut bits, ll, state_ll)?.1;
+            state_ml = fse_step(&mut bits, ml, state_ml)?.1;
+            state_of = fse_step(&mut bits, of, state_of)?.1;
+        }
+    }
+    if bits.pos != 0 {
+        return Err(intact());
+    }
+    Ok(())
+}
+
+fn resolve_offset(value: u64, lit_len: usize, reps: &mut [u32; 3]) -> Result<usize, String> {
+    if value == 0 || value > u64::from(u32::MAX) {
+        return Err(intact());
+    }
+    let value = value as u32;
+    let repeat = value <= 3 && !(value == 3 && lit_len == 0);
+    let offset = if value > 3 {
+        value - 3
+    } else if lit_len == 0 {
+        match value {
+            1 => reps[1],
+            2 => reps[2],
+            3 => reps[0].checked_sub(1).ok_or_else(intact)?,
+            _ => return Err(intact()),
+        }
+    } else {
+        reps[value as usize - 1]
+    };
+    if offset == 0 {
+        return Err(intact());
+    }
+    if repeat {
+        let index = if lit_len == 0 { value as usize } else { value as usize - 1 };
+        if index > 0 {
+            let used = reps[index];
+            for slot in (1..=index).rev() {
+                reps[slot] = reps[slot - 1];
+            }
+            reps[0] = used;
+        }
+    } else {
+        reps[2] = reps[1];
+        reps[1] = reps[0];
+        reps[0] = offset;
+    }
+    Ok(offset as usize)
+}
+
+fn copy_match(history: &[u8], fresh: &mut Vec<u8>, offset: usize, len: usize, window: usize) -> Result<(), String> {
+    if offset == 0 || offset > window || offset > history.len() + fresh.len() {
+        return Err(intact());
+    }
+    for _ in 0..len {
+        let total = history.len() + fresh.len();
+        let index = total - offset;
+        let byte = if index < history.len() { history[index] } else { fresh[index - history.len()] };
+        fresh.push(byte);
+    }
+    Ok(())
+}
+
+struct ZstdDecoder {
+    input: Vec<u8>,
+    pos: usize,
+    stage: u8,
+    window: usize,
+    block_cap: usize,
+    checksum: bool,
+    done: bool,
+    history: Vec<u8>,
+    reps: [u32; 3],
+    literals: Option<HuffCodes>,
+    seq_ll: Option<FseTable>,
+    seq_of: Option<FseTable>,
+    seq_ml: Option<FseTable>,
+    have_seq: bool,
+    expect: Option<u64>,
+    produced: u64,
+    xxh: Xxh64,
+}
+
+impl ZstdDecoder {
+    fn new() -> Self {
+        Self {
+            input: Vec::new(),
+            pos: 0,
+            stage: 0,
+            window: 0,
+            block_cap: 0,
+            checksum: false,
+            done: false,
+            history: Vec::new(),
+            reps: [1, 4, 8],
+            literals: None,
+            seq_ll: None,
+            seq_of: None,
+            seq_ml: None,
+            have_seq: false,
+            expect: None,
+            produced: 0,
+            xxh: Xxh64::new(),
+        }
+    }
+
+    fn push(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
+        if self.done && !data.is_empty() {
+            return Err(intact());
+        }
+        if self.input.len().saturating_add(data.len()) > MAX_FILE.saturating_add(FRAME_BLOCK) {
+            return Err(too_big());
+        }
+        self.input.extend_from_slice(data);
+        let mut out = Vec::new();
+        self.drain(&mut out)?;
+        if self.pos > 0 {
+            self.input.drain(..self.pos);
+            self.pos = 0;
+        }
+        Ok(out)
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        if self.done && self.pos == self.input.len() {
+            Ok(())
+        } else {
+            Err(intact())
+        }
+    }
+
+    fn remaining(&self) -> usize {
+        self.input.len().saturating_sub(self.pos)
+    }
+
+    fn drain(&mut self, out: &mut Vec<u8>) -> Result<(), String> {
+        loop {
+            if self.stage == 0 {
+                let Some(header) = self.header_len()? else {
+                    return Ok(());
+                };
+                self.read_header(header)?;
+                self.stage = 1;
+                continue;
+            }
+            if self.stage == 2 {
+                if self.remaining() < 4 {
+                    return Ok(());
+                }
+                let sum = u32::from_le_bytes(self.input[self.pos..self.pos + 4].try_into().unwrap());
+                if sum != self.xxh.low32() {
+                    return Err(intact());
+                }
+                self.pos += 4;
+                self.finish_size()?;
+                self.done = true;
+                self.stage = 3;
+                continue;
+            }
+            if self.done {
+                if self.remaining() != 0 {
+                    return Err(intact());
+                }
+                return Ok(());
+            }
+            if self.remaining() < 3 {
+                return Ok(());
+            }
+            let header = u32::from(self.input[self.pos]) | (u32::from(self.input[self.pos + 1]) << 8) | (u32::from(self.input[self.pos + 2]) << 16);
+            let last = header & 1 == 1;
+            let kind = (header >> 1) & 3;
+            let size = (header >> 3) as usize;
+            if kind == 3 || size > self.block_cap {
+                return Err(intact());
+            }
+            let body = if kind == 1 { 1 } else { size };
+            if self.remaining() < 3 + body {
+                return Ok(());
+            }
+            let start = self.pos + 3;
+            let plain = match kind {
+                0 => self.input[start..start + size].to_vec(),
+                1 => vec![self.input[start]; size],
+                _ => {
+                    let block = self.input[start..start + size].to_vec();
+                    self.expand_block(&block)?
+                }
+            };
+            if plain.len() > self.block_cap || out.len().saturating_add(plain.len()) > MAX_FILE {
+                return Err(too_big());
+            }
+            self.remember(&plain)?;
+            out.extend_from_slice(&plain);
+            self.pos = start + body;
+            if last {
+                if self.checksum {
+                    self.stage = 2;
+                } else {
+                    self.finish_size()?;
+                    self.done = true;
+                }
+            }
+        }
+    }
+
+    fn remember(&mut self, plain: &[u8]) -> Result<(), String> {
+        let next = self.produced.saturating_add(plain.len() as u64);
+        if next > MAX_FILE as u64 || self.expect.is_some_and(|limit| next > limit) {
+            return Err(too_big());
+        }
+        self.produced = next;
+        self.xxh.update(plain);
+        self.history.extend_from_slice(plain);
+        if self.window > 0 && self.history.len() > self.window {
+            let drop_n = self.history.len() - self.window;
+            self.history.drain(..drop_n);
+        }
+        Ok(())
+    }
+
+    fn finish_size(&self) -> Result<(), String> {
+        if self.expect.is_some_and(|limit| limit != self.produced) {
+            Err(intact())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn header_len(&self) -> Result<Option<usize>, String> {
+        if self.remaining() < 5 {
+            return Ok(None);
+        }
+        let magic = u32::from_le_bytes(self.input[self.pos..self.pos + 4].try_into().unwrap());
+        if magic != 0xFD2F_B528 {
+            return Err(intact());
+        }
+        let desc = self.input[self.pos + 4];
+        if desc & 0x08 != 0 {
+            return Err(intact());
+        }
+        let fcs = desc >> 6;
+        let single = desc & 0x20 != 0;
+        let dict = desc & 0x03;
+        let mut len = 5usize;
+        if !single {
+            len += 1;
+        }
+        len += match dict {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            _ => 4,
+        };
+        len += match (fcs, single) {
+            (0, false) => 0,
+            (0, true) => 1,
+            (1, _) => 2,
+            (2, _) => 4,
+            _ => 8,
+        };
+        if self.remaining() < len {
+            Ok(None)
+        } else {
+            Ok(Some(len))
+        }
+    }
+
+    fn read_header(&mut self, len: usize) -> Result<(), String> {
+        let desc = self.input[self.pos + 4];
+        self.checksum = desc & 0x04 != 0;
+        let single = desc & 0x20 != 0;
+        let mut index = self.pos + 5;
+        if !single {
+            self.window = window_size(self.input[index])?;
+            index += 1;
+        }
+        let dict_len = match desc & 0x03 {
+            0 => 0,
+            1 => 1,
+            2 => 2,
+            _ => 4,
+        };
+        if dict_len > 0 {
+            let mut id = 0u32;
+            for byte in &self.input[index..index + dict_len] {
+                id = (id << 8) | u32::from(*byte);
+            }
+            if id != 0 {
+                return Err(intact());
+            }
+            index += dict_len;
+        }
+        let fcs_len = match (desc >> 6, single) {
+            (0, false) => 0,
+            (0, true) => 1,
+            (1, _) => 2,
+            (2, _) => 4,
+            _ => 8,
+        };
+        if fcs_len > 0 {
+            let mut raw = 0u64;
+            for (place, byte) in self.input[index..index + fcs_len].iter().enumerate() {
+                raw |= u64::from(*byte) << (8 * place);
+            }
+            let size = if fcs_len == 2 { raw.saturating_add(256) } else { raw };
+            if size > MAX_FILE as u64 {
+                return Err(too_big());
+            }
+            self.expect = Some(size);
+            if single {
+                self.window = size as usize;
+            }
+            index += fcs_len;
+        } else if single {
+            return Err(intact());
+        }
+        if index - self.pos != len {
+            return Err(intact());
+        }
+        self.block_cap = self.window.min(128 * 1024);
+        self.pos = index;
+        Ok(())
+    }
+
+    fn expand_block(&mut self, block: &[u8]) -> Result<Vec<u8>, String> {
+        let (literals, rest) = self.read_literals(block)?;
+        if rest.is_empty() {
+            return Err(intact());
+        }
+        if rest[0] == 0 {
+            if rest.len() != 1 || literals.len() > self.block_cap {
+                return Err(if literals.len() > self.block_cap { too_big() } else { intact() });
+            }
+            return Ok(literals);
+        }
+        let (count, modes, mut cursor) = sequence_header(rest)?;
+        let ll = self.take_table(u32::from(modes >> 6), rest, &mut cursor, 35, 9, 0)?;
+        let of = self.take_table(u32::from((modes >> 4) & 3), rest, &mut cursor, 31, 8, 1)?;
+        let ml = self.take_table(u32::from((modes >> 2) & 3), rest, &mut cursor, 52, 9, 2)?;
+        let mut lit_at = 0usize;
+        let mut fresh = Vec::new();
+        decode_sequences(&rest[cursor..], count, &ll, &of, &ml, &literals, &mut lit_at, &self.history, self.window, &mut self.reps, &mut fresh)?;
+        if lit_at < literals.len() {
+            fresh.extend_from_slice(&literals[lit_at..]);
+        }
+        if fresh.len() > self.block_cap {
+            return Err(too_big());
+        }
+        self.seq_ll = Some(ll);
+        self.seq_of = Some(of);
+        self.seq_ml = Some(ml);
+        self.have_seq = true;
+        Ok(fresh)
+    }
+
+    fn take_table(&self, mode: u32, rest: &[u8], cursor: &mut usize, max_symbol: usize, max_log: u8, slot: u8) -> Result<FseTable, String> {
+        match mode {
+            0 => match slot {
+                0 => fse_default_literals(),
+                1 => fse_default_offset(),
+                _ => fse_default_match(),
+            },
+            1 => {
+                if *cursor >= rest.len() {
+                    return Err(intact());
+                }
+                let symbol = u16::from(rest[*cursor]);
+                *cursor += 1;
+                if symbol as usize > max_symbol {
+                    return Err(intact());
+                }
+                Ok(fse_rle(symbol))
+            }
+            2 => {
+                if *cursor >= rest.len() {
+                    return Err(intact());
+                }
+                let (counts, log, bytes) = fse_read_counts(&rest[*cursor..], max_symbol, max_log)?;
+                *cursor += bytes;
+                fse_build(&counts, log)
+            }
+            _ => {
+                let table = match slot {
+                    0 => self.seq_ll.clone(),
+                    1 => self.seq_of.clone(),
+                    _ => self.seq_ml.clone(),
+                };
+                if !self.have_seq {
+                    return Err(intact());
+                }
+                table.ok_or_else(intact)
+            }
+        }
+    }
+
+    fn read_literals<'a>(&mut self, block: &'a [u8]) -> Result<(Vec<u8>, &'a [u8]), String> {
+        if block.is_empty() {
+            return Err(intact());
+        }
+        let kind = block[0] & 3;
+        let format = (block[0] >> 2) & 3;
+        if kind <= 1 {
+            let (header, regen) = raw_literal_size(block, format)?;
+            if regen > self.block_cap || header > block.len() {
+                return Err(intact());
+            }
+            if kind == 0 {
+                if block.len() < header + regen {
+                    return Err(intact());
+                }
+                return Ok((block[header..header + regen].to_vec(), &block[header + regen..]));
+            }
+            if header >= block.len() {
+                return Err(intact());
+            }
+            return Ok((vec![block[header]; regen], &block[header + 1..]));
+        }
+        let (header, regen, comp, streams) = compressed_literal_size(block, format)?;
+        if comp == 0 || header + comp > block.len() || regen > self.block_cap || (streams == 4 && comp < 10) {
+            return Err(intact());
+        }
+        let body = &block[header..header + comp];
+        let texts = if kind == 2 {
+            let (codes, used) = huff_read(body)?;
+            if used > body.len() {
+                return Err(intact());
+            }
+            let texts = huff_streams(&body[used..], streams, regen, &codes)?;
+            self.literals = Some(codes);
+            texts
+        } else {
+            let Some(codes) = self.literals.clone() else {
+                return Err(intact());
+            };
+            huff_streams(body, streams, regen, &codes)?
+        };
+        Ok((texts, &block[header + comp..]))
+    }
+}
+
+fn window_size(byte: u8) -> Result<usize, String> {
+    let exp = usize::from(byte >> 3);
+    let mantissa = usize::from(byte & 7);
+    let base = 1usize.checked_shl((10 + exp) as u32).ok_or_else(too_big)?;
+    let extra = base / 8 * mantissa;
+    let size = base.checked_add(extra).ok_or_else(too_big)?;
+    if size == 0 || size > MAX_FILE {
+        return Err(too_big());
+    }
+    Ok(size)
+}
+enum Step {
+    Wait,
+    Bad,
+}
+
+struct Prefix {
+    single: Option<u16>,
+    max_bits: u8,
+    table: Vec<(u16, u8)>,
+    list: Vec<(u16, u8, u32)>,
+}
+
+impl Prefix {
+    fn decode(&self, data: &[u8], cursor: &mut usize) -> Result<u16, Step> {
+        if let Some(symbol) = self.single {
+            return Ok(symbol);
+        }
+        let available = data.len().saturating_mul(8).saturating_sub(*cursor);
+        if available == 0 {
+            return Err(Step::Wait);
+        }
+        let n = (available as u8).min(self.max_bits);
+        let peeked = peek_bits(data, *cursor, n)?;
+        if n == self.max_bits {
+            let (symbol, len) = self.table[peeked as usize];
+            if len == 0 || usize::from(len) > available {
+                return Err(Step::Bad);
+            }
+            *cursor += usize::from(len);
+            return Ok(symbol);
+        }
+        for (symbol, len, rev) in &self.list {
+            if *len > 0 && *len <= n {
+                let mask = (1u32 << *len) - 1;
+                if peeked & mask == *rev {
+                    *cursor += usize::from(*len);
+                    return Ok(*symbol);
+                }
+            }
+        }
+        Err(Step::Wait)
+    }
+}
+
+fn reverse_bits(mut code: u32, len: u8) -> u32 {
+    let mut out = 0u32;
+    for _ in 0..len {
+        out = (out << 1) | (code & 1);
+        code >>= 1;
+    }
+    out
+}
+
+fn prefix_from_lengths(lengths: &[u8]) -> Result<Prefix, Step> {
+    let mut max_bits = 0u8;
+    let mut count = 0usize;
+    for len in lengths {
+        if *len > 15 {
+            return Err(Step::Bad);
+        }
+        if *len > 0 {
+            max_bits = max_bits.max(*len);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return Err(Step::Bad);
+    }
+    let mut bl = [0u32; 16];
+    for len in lengths {
+        bl[*len as usize] += 1;
+    }
+    bl[0] = 0;
+    let mut code = 0u32;
+    let mut next = [0u32; 16];
+    for bits in 1..=max_bits {
+        code = code.saturating_add(bl[bits as usize - 1]) << 1;
+        if code > 0xFFFF {
+            return Err(Step::Bad);
+        }
+        next[bits as usize] = code;
+    }
+    let mut table = vec![(0u16, 0u8); 1usize << max_bits];
+    let mut list = Vec::with_capacity(count);
+    for (symbol, len) in lengths.iter().enumerate() {
+        if *len == 0 {
+            continue;
+        }
+        let assigned = next[*len as usize];
+        next[*len as usize] = assigned + 1;
+        if assigned >= (1u32 << *len) {
+            return Err(Step::Bad);
+        }
+        let rev = reverse_bits(assigned, *len);
+        let shift = max_bits - *len;
+        let base = rev as usize;
+        for high in 0..(1usize << shift) {
+            table[(high << *len) | base] = (symbol as u16, *len);
+        }
+        list.push((symbol as u16, *len, rev));
+    }
+    list.sort_by_key(|row| row.1);
+    Ok(Prefix { single: None, max_bits, table, list })
+}
+
+fn peek_bits(data: &[u8], cursor: usize, n: u8) -> Result<u32, Step> {
+    if n > 24 {
+        return Err(Step::Bad);
+    }
+    let end = cursor.checked_add(usize::from(n)).ok_or(Step::Bad)?;
+    if end > data.len().saturating_mul(8) {
+        return Err(Step::Wait);
+    }
+    let mut value = 0u32;
+    for step in 0..n {
+        let pos = cursor + usize::from(step);
+        let bit = (data[pos / 8] >> (pos % 8)) & 1;
+        value |= u32::from(bit) << step;
+    }
+    Ok(value)
+}
+
+fn pull_bits(data: &[u8], cursor: &mut usize, n: u8) -> Result<u64, Step> {
+    if n == 0 {
+        return Ok(0);
+    }
+    if n > 56 {
+        return Err(Step::Bad);
+    }
+    let end = cursor.checked_add(usize::from(n)).ok_or(Step::Bad)?;
+    if end > data.len().saturating_mul(8) {
+        return Err(Step::Wait);
+    }
+    let mut value = 0u64;
+    for step in 0..n {
+        let pos = *cursor + usize::from(step);
+        let bit = (data[pos / 8] >> (pos % 8)) & 1;
+        value |= u64::from(bit) << step;
+    }
+    *cursor = end;
+    Ok(value)
+}
+
+fn read_varint(data: &[u8], cursor: &mut usize) -> Result<usize, Step> {
+    if pull_bits(data, cursor, 1)? == 0 {
+        return Ok(1);
+    }
+    let n = pull_bits(data, cursor, 3)? as usize;
+    let (base, extra) = match n {
+        0 => (2, 0),
+        1 => (3, 1),
+        2 => (5, 2),
+        3 => (9, 3),
+        4 => (17, 4),
+        5 => (33, 5),
+        6 => (65, 6),
+        7 => (129, 7),
+        _ => return Err(Step::Bad),
+    };
+    let value = base + pull_bits(data, cursor, extra)? as usize;
+    if value > 256 {
+        return Err(Step::Bad);
+    }
+    Ok(value)
+}
+
+fn read_code_length(data: &[u8], cursor: &mut usize) -> Result<u8, Step> {
+    let bit0 = pull_bits(data, cursor, 1)?;
+    let bit1 = pull_bits(data, cursor, 1)?;
+    if bit0 == 0 && bit1 == 0 {
+        return Ok(0);
+    }
+    if bit0 == 0 && bit1 == 1 {
+        return Ok(3);
+    }
+    if bit0 == 1 && bit1 == 0 {
+        return Ok(4);
+    }
+    let bit2 = pull_bits(data, cursor, 1)?;
+    if bit2 == 0 {
+        return Ok(2);
+    }
+    if pull_bits(data, cursor, 1)? == 0 { Ok(1) } else { Ok(5) }
+}
+
+fn alphabet_bits(size: usize) -> u8 {
+    if size <= 1 {
+        0
+    } else {
+        (usize::BITS - (size - 1).leading_zeros()) as u8
+    }
+}
+
+fn read_simple_prefix(data: &[u8], cursor: &mut usize, alphabet: usize) -> Result<Prefix, Step> {
+    let nsym = pull_bits(data, cursor, 2)? as usize + 1;
+    let width = alphabet_bits(alphabet);
+    let mut symbols = Vec::with_capacity(nsym);
+    for _ in 0..nsym {
+        let symbol = pull_bits(data, cursor, width)? as usize;
+        if symbol >= alphabet || symbols.contains(&symbol) {
+            return Err(Step::Bad);
+        }
+        symbols.push(symbol);
+    }
+    if nsym == 1 {
+        return Ok(Prefix { single: Some(symbols[0] as u16), max_bits: 0, table: Vec::new(), list: Vec::new() });
+    }
+    let lens = if nsym == 2 {
+        vec![1u8, 1]
+    } else if nsym == 3 {
+        vec![1, 2, 2]
+    } else if pull_bits(data, cursor, 1)? == 0 {
+        vec![2, 2, 2, 2]
+    } else {
+        vec![1, 2, 3, 3]
+    };
+    let mut lengths = vec![0u8; alphabet];
+    for (symbol, len) in symbols.iter().zip(lens) {
+        lengths[*symbol] = len;
+    }
+    prefix_from_lengths(&lengths)
+}
+
+fn read_complex_prefix(data: &[u8], cursor: &mut usize, alphabet: usize, hskip: usize) -> Result<Prefix, Step> {
+    const ORDER: [usize; 18] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    let mut clen = [0u8; 18];
+    let mut space = 32i32;
+    let mut nonzero = 0usize;
+    let mut saw_all = true;
+    for (index, symbol) in ORDER.iter().enumerate() {
+        if index < hskip {
+            continue;
+        }
+        let len = read_code_length(data, cursor)?;
+        clen[*symbol] = len;
+        if len > 0 {
+            let take = 32i32 >> len;
+            if take > space {
+                return Err(Step::Bad);
+            }
+            space -= take;
+            nonzero += 1;
+        }
+        if space == 0 {
+            saw_all = index + 1 == ORDER.len();
+            break;
+        }
+    }
+    let code_len = if nonzero == 1 && saw_all && space != 0 {
+        let symbol = clen.iter().position(|len| *len != 0).ok_or(Step::Bad)?;
+        Prefix { single: Some(symbol as u16), max_bits: 0, table: Vec::new(), list: Vec::new() }
+    } else if space == 0 && nonzero >= 2 {
+        prefix_from_lengths(&clen)?
+    } else {
+        return Err(Step::Bad);
+    };
+    let mut lengths = Vec::new();
+    let mut prev = 8u8;
+    let mut repeat: Option<(u16, usize)> = None;
+    let mut main_space = 32768i32;
+    let mut main_nonzero = 0usize;
+    while lengths.len() < alphabet && main_space > 0 {
+        let symbol = code_len.decode(data, cursor)?;
+        if symbol <= 15 {
+            lengths.push(symbol as u8);
+            if symbol > 0 {
+                prev = symbol as u8;
+                let take = 32768i32 >> symbol;
+                if take > main_space {
+                    return Err(Step::Bad);
+                }
+                main_space -= take;
+                main_nonzero += 1;
+            }
+            repeat = None;
+        } else if symbol == 16 || symbol == 17 {
+            let (extra_bits, base) = if symbol == 16 { (2u8, 3u64) } else { (3, 3) };
+            let add = pull_bits(data, cursor, extra_bits)? + base;
+            let count = if repeat.is_some_and(|(kind, _)| kind == symbol) {
+                let previous = repeat.unwrap().1 as u64;
+                if symbol == 16 { 4 * (previous - 2) + add } else { 8 * (previous - 2) + add }
+            } else {
+                add
+            };
+            let count = count as usize;
+            if repeat.is_some_and(|(kind, _)| kind == symbol) {
+                let previous = repeat.unwrap().1;
+                if lengths.len() < previous {
+                    return Err(Step::Bad);
+                }
+                lengths.truncate(lengths.len() - previous);
+            }
+            if lengths.len() + count > alphabet {
+                return Err(Step::Bad);
+            }
+            let value = if symbol == 16 { prev } else { 0 };
+            if symbol == 16 && value > 0 {
+                let take = 32768i32 >> value;
+                let grow = count as i32 - if repeat.is_some_and(|(kind, _)| kind == symbol) { repeat.unwrap().1 as i32 } else { 0 };
+                if grow > 0 {
+                    let need = take.saturating_mul(grow);
+                    if need > main_space {
+                        return Err(Step::Bad);
+                    }
+                    main_space -= need;
+                    main_nonzero += grow as usize;
+                } else {
+                    main_space += take.saturating_mul(-grow);
+                    main_nonzero = main_nonzero.saturating_sub((-grow) as usize);
+                }
+            }
+            lengths.extend(std::iter::repeat(value).take(count));
+            repeat = Some((symbol, count));
+        } else {
+            return Err(Step::Bad);
+        }
+    }
+    if lengths.len() > alphabet || main_space != 0 || main_nonzero < 2 {
+        return Err(Step::Bad);
+    }
+    lengths.resize(alphabet, 0);
+    prefix_from_lengths(&lengths)
+}
+
+fn read_prefix(data: &[u8], cursor: &mut usize, alphabet: usize) -> Result<Prefix, Step> {
+    if alphabet == 0 || alphabet > 704 {
+        return Err(Step::Bad);
+    }
+    let kind = pull_bits(data, cursor, 2)? as usize;
+    if kind == 1 {
+        read_simple_prefix(data, cursor, alphabet)
+    } else {
+        read_complex_prefix(data, cursor, alphabet, kind)
+    }
+}
+
+const INSERT_EXTRA: [u8; 24] = [0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10, 12, 14, 24];
+const INSERT_BASE: [u32; 24] = [0, 1, 2, 3, 4, 5, 6, 8, 10, 14, 18, 26, 34, 50, 66, 98, 130, 194, 322, 578, 1090, 2114, 6210, 22594];
+const COPY_EXTRA: [u8; 24] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10, 24];
+const COPY_BASE: [u32; 24] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 18, 22, 30, 38, 54, 70, 102, 134, 198, 326, 582, 1094, 2118];
+const COUNT_EXTRA: [u8; 26] = [2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 8, 9, 10, 11, 12, 13, 24];
+const COUNT_BASE: [u32; 26] = [1, 5, 9, 13, 17, 25, 33, 41, 49, 65, 81, 97, 113, 145, 177, 209, 241, 305, 369, 497, 753, 1265, 2289, 4337, 8433, 16625];
+const DIST_NDBITS: [u8; 25] = [0, 0, 0, 0, 10, 10, 11, 11, 10, 10, 10, 10, 10, 9, 9, 8, 7, 7, 8, 7, 7, 6, 6, 5, 5];
+
+fn split_insert_copy(symbol: usize) -> Result<(usize, usize, bool), Step> {
+    if symbol >= 704 {
+        return Err(Step::Bad);
+    }
+    let (insert_base, copy_base) = match symbol {
+        0..=63 => (0, 0),
+        64..=127 => (0, 8),
+        128..=191 => (0, 0),
+        192..=255 => (0, 8),
+        256..=319 => (8, 0),
+        320..=383 => (8, 8),
+        384..=447 => (0, 16),
+        448..=511 => (16, 0),
+        512..=575 => (8, 16),
+        576..=639 => (16, 8),
+        _ => (16, 16),
+    };
+    Ok((insert_base + ((symbol >> 3) & 7), copy_base + (symbol & 7), symbol < 128))
+}
+
+struct BlockSwitch {
+    ntypes: usize,
+    len: usize,
+    kind: usize,
+    previous: usize,
+    type_code: Prefix,
+    count_code: Prefix,
+    seen: Vec<bool>,
+}
+
+impl BlockSwitch {
+    fn start(data: &[u8], cursor: &mut usize) -> Result<Self, Step> {
+        let ntypes = read_varint(data, cursor)?;
+        if ntypes == 1 {
+            return Ok(Self {
+                ntypes,
+                len: 1 << 24,
+                kind: 0,
+                previous: 1,
+                type_code: Prefix { single: None, max_bits: 0, table: Vec::new(), list: Vec::new() },
+                count_code: Prefix { single: None, max_bits: 0, table: Vec::new(), list: Vec::new() },
+                seen: vec![true],
+            });
+        }
+        let type_code = read_prefix(data, cursor, ntypes + 2)?;
+        let count_code = read_prefix(data, cursor, 26)?;
+        let len = Self::count(data, cursor, &count_code)?;
+        Ok(Self { ntypes, len, kind: 0, previous: 1, type_code, count_code, seen: vec![true] })
+    }
+
+    fn count(data: &[u8], cursor: &mut usize, code: &Prefix) -> Result<usize, Step> {
+        let symbol = code.decode(data, cursor)? as usize;
+        if symbol >= COUNT_BASE.len() {
+            return Err(Step::Bad);
+        }
+        let extra = pull_bits(data, cursor, COUNT_EXTRA[symbol])? as usize;
+        Ok(COUNT_BASE[symbol] as usize + extra)
+    }
+
+    fn prepare(&mut self, data: &[u8], cursor: &mut usize) -> Result<usize, Step> {
+        if self.len == 0 {
+            if self.ntypes < 2 {
+                return Err(Step::Bad);
+            }
+            let symbol = self.type_code.decode(data, cursor)? as usize;
+            let next = if symbol == 0 {
+                self.previous
+            } else if symbol == 1 {
+                (self.kind + 1) % self.ntypes
+            } else if symbol - 2 < self.ntypes {
+                symbol - 2
+            } else {
+                return Err(Step::Bad);
+            };
+            self.previous = self.kind;
+            self.kind = next;
+            if self.seen.len() < self.ntypes {
+                self.seen.resize(self.ntypes, false);
+            }
+            self.seen[self.kind] = true;
+            self.len = Self::count(data, cursor, &self.count_code)?;
+        }
+        self.len -= 1;
+        Ok(self.kind)
+    }
+
+    fn complete(&self) -> Result<(), Step> {
+        if self.seen.len() == self.ntypes && self.seen.iter().all(|flag| *flag) {
+            Ok(())
+        } else {
+            Err(Step::Bad)
+        }
+    }
+}
+
+fn context_id(mode: u8, p1: u8, p2: u8) -> usize {
+    match mode {
+        0 => usize::from(p1 & 0x3f),
+        1 => usize::from(p1 >> 2),
+        2 => usize::from(BROTLI_LUT0[p1 as usize] | BROTLI_LUT1[p2 as usize]),
+        _ => usize::from((BROTLI_LUT2[p1 as usize] << 3) | BROTLI_LUT2[p2 as usize]),
+    }
+}
+
+fn inverse_mtf(values: &mut [u8]) {
+    let mut mtf = [0u8; 256];
+    for (index, slot) in mtf.iter_mut().enumerate() {
+        *slot = index as u8;
+    }
+    for value in values.iter_mut() {
+        let index = usize::from(*value);
+        let found = mtf[index];
+        *value = found;
+        for slot in (1..=index).rev() {
+            mtf[slot] = mtf[slot - 1];
+        }
+        mtf[0] = found;
+    }
+}
+
+fn read_context_map(data: &[u8], cursor: &mut usize, size: usize, trees: usize) -> Result<Vec<u8>, Step> {
+    if trees == 1 {
+        return Ok(vec![0; size]);
+    }
+    let rlemax = if pull_bits(data, cursor, 1)? == 0 { 0 } else { pull_bits(data, cursor, 4)? as usize + 1 };
+    let prefix = read_prefix(data, cursor, trees + rlemax)?;
+    let mut map = Vec::with_capacity(size);
+    while map.len() < size {
+        let symbol = prefix.decode(data, cursor)? as usize;
+        if symbol == 0 {
+            map.push(0);
+        } else if symbol <= rlemax {
+            let extra = pull_bits(data, cursor, symbol as u8)? as usize;
+            let run = (1usize << symbol) + extra;
+            if map.len() + run > size {
+                return Err(Step::Bad);
+            }
+            map.extend(std::iter::repeat(0).take(run));
+        } else {
+            let value = symbol - rlemax;
+            if value >= trees || value > 255 {
+                return Err(Step::Bad);
+            }
+            map.push(value as u8);
+        }
+    }
+    if pull_bits(data, cursor, 1)? == 1 {
+        inverse_mtf(&mut map);
+    }
+    let mut seen = vec![false; trees];
+    for value in &map {
+        if usize::from(*value) >= trees {
+            return Err(Step::Bad);
+        }
+        seen[usize::from(*value)] = true;
+    }
+    if seen.iter().all(|flag| *flag) { Ok(map) } else { Err(Step::Bad) }
+}
+
+fn brotli_dictionary() -> &'static [u8] {
+    static WORDS: OnceLock<Vec<u8>> = OnceLock::new();
+    WORDS.get_or_init(|| {
+        const PACKED: &str = BROTLI_DICT_B64;
+        let mut out = Vec::with_capacity(122784);
+        let bytes = PACKED.as_bytes();
+        let mut index = 0;
+        let mut acc = 0u32;
+        let mut bits = 0;
+        while index < bytes.len() {
+            let byte = bytes[index];
+            index += 1;
+            let value = match byte {
+                b'A'..=b'Z' => byte - b'A',
+                b'a'..=b'z' => byte - b'a' + 26,
+                b'0'..=b'9' => byte - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                _ => continue,
+            };
+            acc = (acc << 6) | u32::from(value);
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((acc >> bits) as u8);
+                acc &= (1 << bits) - 1;
+            }
+        }
+        out
+    })
+}
+
+fn dictionary_word(len: usize, index: usize) -> Result<&'static [u8], Step> {
+    if !(4..=24).contains(&len) {
+        return Err(Step::Bad);
+    }
+    let words = brotli_dictionary();
+    let mut offset = 0usize;
+    for size in 0..len {
+        let count = if size < 4 { 0 } else { 1usize << DIST_NDBITS[size] };
+        offset = offset.saturating_add(size.saturating_mul(count));
+    }
+    let start = offset.saturating_add(index.saturating_mul(len));
+    let end = start.saturating_add(len);
+    if end > words.len() {
+        return Err(Step::Bad);
+    }
+    Ok(&words[start..end])
+}
+
+fn ferment_at(word: &mut [u8], pos: usize) -> usize {
+    if word[pos] < 192 {
+        if (97..=122).contains(&word[pos]) {
+            word[pos] ^= 32;
+        }
+        1
+    } else if word[pos] < 224 {
+        if pos + 1 < word.len() {
+            word[pos + 1] ^= 32;
+        }
+        2
+    } else {
+        if pos + 2 < word.len() {
+            word[pos + 2] ^= 5;
+        }
+        3
+    }
+}
+
+fn transform_word(word: &[u8], id: usize) -> Result<Vec<u8>, Step> {
+    if id >= BROTLI_XFORM.len() {
+        return Err(Step::Bad);
+    }
+    let (prefix, kind, suffix) = BROTLI_XFORM[id];
+    let mut body = word.to_vec();
+    match kind {
+        0 => {}
+        1 => {
+            if !body.is_empty() {
+                ferment_at(&mut body, 0);
+            }
+        }
+        2 => {
+            let mut pos = 0;
+            while pos < body.len() {
+                pos += ferment_at(&mut body, pos);
+            }
+        }
+        3..=11 => {
+            let skip = usize::from(kind - 2);
+            if body.len() < skip {
+                body.clear();
+            } else {
+                body.drain(..skip);
+            }
+        }
+        12..=20 => {
+            let skip = usize::from(kind - 11);
+            if body.len() < skip {
+                body.clear();
+            } else {
+                body.truncate(body.len() - skip);
+            }
+        }
+        _ => return Err(Step::Bad),
+    }
+    let mut out = Vec::with_capacity(prefix.len() + body.len() + suffix.len());
+    out.extend_from_slice(prefix);
+    out.extend_from_slice(&body);
+    out.extend_from_slice(suffix);
+    Ok(out)
+}
+
+struct BrotliDecoder {
+    data: Vec<u8>,
+    bit: usize,
+    done: bool,
+    ready: bool,
+    window: usize,
+    ring: [u32; 4],
+    p1: u8,
+    p2: u8,
+    output: Vec<u8>,
+}
+
+impl BrotliDecoder {
+    fn new() -> Self {
+        Self { data: Vec::new(), bit: 0, done: false, ready: false, window: 0, ring: [4, 11, 15, 16], p1: 0, p2: 0, output: Vec::new() }
+    }
+
+    fn push(&mut self, data: &[u8]) -> Result<Vec<u8>, String> {
+        if self.done && !data.is_empty() {
+            return Err(intact());
+        }
+        if self.data.len().saturating_add(data.len()) > MAX_FILE.saturating_add(FRAME_BLOCK) {
+            return Err(too_big());
+        }
+        self.data.extend_from_slice(data);
+        let before = self.output.len();
+        self.drain()?;
+        let drop_bytes = self.bit / 8;
+        if drop_bytes > 0 && !self.done {
+            self.data.drain(..drop_bytes);
+            self.bit -= drop_bytes * 8;
+        }
+        Ok(self.output[before..].to_vec())
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        if !self.done {
+            return Err(intact());
+        }
+        let byte_index = self.bit / 8;
+        let bit_in = self.bit % 8;
+        if bit_in == 0 {
+            if byte_index != self.data.len() {
+                return Err(intact());
+            }
+            return Ok(());
+        }
+        if byte_index >= self.data.len() {
+            return Err(intact());
+        }
+        let mask = 0xFFu8 << bit_in;
+        if self.data[byte_index] & mask != 0 || byte_index + 1 != self.data.len() {
+            return Err(intact());
+        }
+        Ok(())
+    }
+
+    fn drain(&mut self) -> Result<(), String> {
+        if !self.ready {
+            let mut cursor = self.bit;
+            match self.read_wbits(&mut cursor) {
+                Ok(bits) => {
+                    self.window = (1usize << bits) - 16;
+                    self.bit = cursor;
+                    self.ready = true;
+                }
+                Err(Step::Wait) => return Ok(()),
+                Err(Step::Bad) => return Err(intact()),
+            }
+        }
+        while !self.done {
+            let bit = self.bit;
+            let len = self.output.len();
+            let ring = self.ring;
+            let p1 = self.p1;
+            let p2 = self.p2;
+            match self.one_metablock() {
+                Ok(()) => {}
+                Err(Step::Wait) => {
+                    self.bit = bit;
+                    self.output.truncate(len);
+                    self.ring = ring;
+                    self.p1 = p1;
+                    self.p2 = p2;
+                    return Ok(());
+                }
+                Err(Step::Bad) => {
+                    self.bit = bit;
+                    self.output.truncate(len);
+                    self.ring = ring;
+                    self.p1 = p1;
+                    self.p2 = p2;
+                    return Err(intact());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn read_wbits(&self, cursor: &mut usize) -> Result<u8, Step> {
+        if pull_bits(&self.data, cursor, 1)? == 0 {
+            return Ok(16);
+        }
+        let nibble = 1 | (pull_bits(&self.data, cursor, 3)? << 1);
+        if nibble == 1 {
+            return match pull_bits(&self.data, cursor, 3)? {
+                0 => Ok(17),
+                2 => Ok(10),
+                3 => Ok(11),
+                4 => Ok(12),
+                5 => Ok(13),
+                6 => Ok(14),
+                7 => Ok(15),
+                _ => Err(Step::Bad),
+            };
+        }
+        match nibble {
+            3 => Ok(18),
+            5 => Ok(19),
+            7 => Ok(20),
+            9 => Ok(21),
+            11 => Ok(22),
+            13 => Ok(23),
+            15 => Ok(24),
+            _ => Err(Step::Bad),
+        }
+    }
+
+    fn one_metablock(&mut self) -> Result<(), Step> {
+        let mut cursor = self.bit;
+        let is_last = pull_bits(&self.data, &mut cursor, 1)? == 1;
+        if is_last && pull_bits(&self.data, &mut cursor, 1)? == 1 {
+            self.bit = cursor;
+            self.done = true;
+            return Ok(());
+        }
+        let nibbles = match pull_bits(&self.data, &mut cursor, 2)? {
+            0 => 4,
+            1 => 5,
+            2 => 6,
+            _ => 0,
+        };
+        if nibbles == 0 {
+            if pull_bits(&self.data, &mut cursor, 1)? != 0 {
+                return Err(Step::Bad);
+            }
+            let skip_bytes = pull_bits(&self.data, &mut cursor, 2)? as usize;
+            let skip_len = if skip_bytes == 0 {
+                0
+            } else {
+                let width = (skip_bytes * 8) as u8;
+                let raw = pull_bits(&self.data, &mut cursor, width)?;
+                if skip_bytes > 1 && ((raw >> (width - 8)) & 0xFF) == 0 {
+                    return Err(Step::Bad);
+                }
+                raw as usize + 1
+            };
+            let spare = (8 - (cursor % 8)) % 8;
+            if spare > 0 && pull_bits(&self.data, &mut cursor, spare as u8)? != 0 {
+                return Err(Step::Bad);
+            }
+            let start = cursor / 8;
+            if self.data.len() < start.saturating_add(skip_len) {
+                return Err(Step::Wait);
+            }
+            cursor = start.saturating_add(skip_len).saturating_mul(8);
+            self.bit = cursor;
+            if is_last {
+                self.done = true;
+            }
+            return Ok(());
+        }
+        let width = (nibbles * 4) as u8;
+        let size_m1 = pull_bits(&self.data, &mut cursor, width)?;
+        if nibbles > 4 && ((size_m1 >> ((nibbles - 1) * 4)) & 0xF) == 0 {
+            return Err(Step::Bad);
+        }
+        let mlen = (size_m1 as usize).saturating_add(1);
+        if self.output.len().saturating_add(mlen) > MAX_FILE {
+            return Err(Step::Bad);
+        }
+        if !is_last && pull_bits(&self.data, &mut cursor, 1)? == 1 {
+            let spare = (8 - (cursor % 8)) % 8;
+            if spare > 0 && pull_bits(&self.data, &mut cursor, spare as u8)? != 0 {
+                return Err(Step::Bad);
+            }
+            let start = cursor / 8;
+            if self.data.len() < start.saturating_add(mlen) {
+                return Err(Step::Wait);
+            }
+            let bytes = self.data[start..start + mlen].to_vec();
+            cursor = start.saturating_add(mlen).saturating_mul(8);
+            self.write_bytes(&bytes)?;
+            self.bit = cursor;
+            return Ok(());
+        }
+        self.compressed(&mut cursor, mlen)?;
+        self.bit = cursor;
+        if is_last {
+            self.done = true;
+        }
+        Ok(())
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), Step> {
+        if self.output.len().saturating_add(bytes.len()) > MAX_FILE {
+            return Err(Step::Bad);
+        }
+        for byte in bytes {
+            self.p2 = self.p1;
+            self.p1 = *byte;
+            self.output.push(*byte);
+        }
+        Ok(())
+    }
+
+    fn compressed(&mut self, cursor: &mut usize, mlen: usize) -> Result<(), Step> {
+        let mut literals = BlockSwitch::start(&self.data, cursor)?;
+        let mut inserts = BlockSwitch::start(&self.data, cursor)?;
+        let mut distances = BlockSwitch::start(&self.data, cursor)?;
+        let postfix = pull_bits(&self.data, cursor, 2)? as u32;
+        let direct = (pull_bits(&self.data, cursor, 4)? as usize) << postfix;
+        let mut modes = Vec::with_capacity(literals.ntypes);
+        for _ in 0..literals.ntypes {
+            modes.push(pull_bits(&self.data, cursor, 2)? as u8);
+        }
+        let literal_trees = read_varint(&self.data, cursor)?;
+        let literal_map = read_context_map(&self.data, cursor, 64 * literals.ntypes, literal_trees)?;
+        let distance_trees = read_varint(&self.data, cursor)?;
+        let distance_map = read_context_map(&self.data, cursor, 4 * distances.ntypes, distance_trees)?;
+        let mut literal_codes = Vec::with_capacity(literal_trees);
+        for _ in 0..literal_trees {
+            literal_codes.push(read_prefix(&self.data, cursor, 256)?);
+        }
+        let mut insert_codes = Vec::with_capacity(inserts.ntypes);
+        for _ in 0..inserts.ntypes {
+            insert_codes.push(read_prefix(&self.data, cursor, 704)?);
+        }
+        let distance_alphabet = 16 + direct + (48usize << postfix);
+        let mut distance_codes = Vec::with_capacity(distance_trees);
+        for _ in 0..distance_trees {
+            distance_codes.push(read_prefix(&self.data, cursor, distance_alphabet)?);
+        }
+        let end = self.output.len() + mlen;
+        let mut spins = 0usize;
+        while self.output.len() < end {
+            spins += 1;
+            if spins > mlen.saturating_add(8) {
+                return Err(Step::Bad);
+            }
+            let before = self.output.len();
+            let insert_type = inserts.prepare(&self.data, cursor)?;
+            let symbol = insert_codes[insert_type].decode(&self.data, cursor)? as usize;
+            let (insert_code, copy_code, implicit) = split_insert_copy(symbol)?;
+            let insert_len = INSERT_BASE[insert_code] as usize + pull_bits(&self.data, cursor, INSERT_EXTRA[insert_code])? as usize;
+            let copy_len = COPY_BASE[copy_code] as usize + pull_bits(&self.data, cursor, COPY_EXTRA[copy_code])? as usize;
+            if before + insert_len > end {
+                return Err(Step::Bad);
+            }
+            for _ in 0..insert_len {
+                let literal_type = literals.prepare(&self.data, cursor)?;
+                let cid = context_id(modes[literal_type], self.p1, self.p2);
+                let tree = usize::from(literal_map[64 * literal_type + cid]);
+                if tree >= literal_codes.len() {
+                    return Err(Step::Bad);
+                }
+                let byte = literal_codes[tree].decode(&self.data, cursor)? as u8;
+                self.write_bytes(&[byte])?;
+            }
+            if self.output.len() == end {
+                break;
+            }
+            let (distance, push_ring) = if implicit {
+                (u64::from(self.ring[0]), false)
+            } else {
+                let distance_type = distances.prepare(&self.data, cursor)?;
+                let cid = if copy_len <= 4 { copy_len - 2 } else { 3 };
+                let tree = usize::from(distance_map[4 * distance_type + cid]);
+                if tree >= distance_codes.len() {
+                    return Err(Step::Bad);
+                }
+                let dcode = distance_codes[tree].decode(&self.data, cursor)? as usize;
+                self.resolve_distance(cursor, dcode, direct, postfix)?
+            };
+            let max_allowed = self.window.min(self.output.len()) as u64;
+            if distance == 0 {
+                return Err(Step::Bad);
+            }
+            if distance > max_allowed {
+                if !(4..=24).contains(&copy_len) {
+                    return Err(Step::Bad);
+                }
+                let nwords = 1u64 << DIST_NDBITS[copy_len];
+                let word_id = distance - (max_allowed + 1);
+                let index = (word_id % nwords) as usize;
+                let transform = (word_id >> DIST_NDBITS[copy_len]) as usize;
+                let word = dictionary_word(copy_len, index)?;
+                let text = transform_word(word, transform)?;
+                if self.output.len() + text.len() > end {
+                    return Err(Step::Bad);
+                }
+                self.write_bytes(&text)?;
+            } else {
+                let distance = distance as usize;
+                if distance > self.output.len() || self.output.len() + copy_len > end {
+                    return Err(Step::Bad);
+                }
+                for _ in 0..copy_len {
+                    let byte = self.output[self.output.len() - distance];
+                    self.write_bytes(&[byte])?;
+                }
+                if push_ring {
+                    self.ring[3] = self.ring[2];
+                    self.ring[2] = self.ring[1];
+                    self.ring[1] = self.ring[0];
+                    self.ring[0] = distance as u32;
+                }
+            }
+        }
+        literals.complete()?;
+        inserts.complete()?;
+        distances.complete()?;
+        Ok(())
+    }
+
+    fn resolve_distance(&mut self, cursor: &mut usize, dcode: usize, direct: usize, postfix: u32) -> Result<(u64, bool), Step> {
+        let special = match dcode {
+            0 => Some(i64::from(self.ring[0])),
+            1 => Some(i64::from(self.ring[1])),
+            2 => Some(i64::from(self.ring[2])),
+            3 => Some(i64::from(self.ring[3])),
+            4 => Some(i64::from(self.ring[0]) - 1),
+            5 => Some(i64::from(self.ring[0]) + 1),
+            6 => Some(i64::from(self.ring[0]) - 2),
+            7 => Some(i64::from(self.ring[0]) + 2),
+            8 => Some(i64::from(self.ring[0]) - 3),
+            9 => Some(i64::from(self.ring[0]) + 3),
+            10 => Some(i64::from(self.ring[1]) - 1),
+            11 => Some(i64::from(self.ring[1]) + 1),
+            12 => Some(i64::from(self.ring[1]) - 2),
+            13 => Some(i64::from(self.ring[1]) + 2),
+            14 => Some(i64::from(self.ring[1]) - 3),
+            15 => Some(i64::from(self.ring[1]) + 3),
+            _ => None,
+        };
+        let distance = if let Some(value) = special {
+            if value <= 0 {
+                return Err(Step::Bad);
+            }
+            value as u64
+        } else if dcode < 16 + direct {
+            (dcode - 15) as u64
+        } else {
+            let ndistbits = 1 + ((dcode - direct - 16) >> (postfix as usize + 1));
+            if ndistbits > 24 {
+                return Err(Step::Bad);
+            }
+            let dextra = pull_bits(&self.data, cursor, ndistbits as u8)?;
+            let hcode = (dcode - direct - 16) >> postfix;
+            let lcode = (dcode - direct - 16) & ((1usize << postfix) - 1);
+            let offset = ((2 + (hcode & 1)) << ndistbits) - 4;
+            ((offset as u64 + dextra) << postfix) + lcode as u64 + direct as u64 + 1
+        };
+        let max_allowed = self.window.min(self.output.len()) as u64;
+        Ok((distance, dcode != 0 && distance > 0 && distance <= max_allowed))
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::Arc;
+    use std::thread;
+
+    fn work_dir(name: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0);
+        let path = PathBuf::from(r"C:\Users\Public\RLLM\loops-lanes\A1-fix5-adb_client-proof\work")
+            .join(format!("{name}-{}-{stamp}-{n}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn test_seal() -> [u8; 32] {
+        [0x11; 32]
+    }
+
+    #[test]
+    fn checksum_matches_the_published_vector() {
+        assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
+        let frame = frame_bytes(A_CNXN, PROTOCOL, 4096, b"host::\0").unwrap();
+        assert_eq!(&frame[20..24], &(A_CNXN ^ 0xffff_ffff).to_le_bytes());
+        assert_eq!(u32::from_le_bytes(frame[16..20].try_into().unwrap()), crc32(b"host::\0"));
+    }
+
+    #[test]
+    fn discovery_packet_decodes_a_service() {
+        let query = dns_query(7, "_adb-tls-connect._tcp.local").unwrap();
+        assert_eq!(&query[0..2], &7u16.to_be_bytes());
+        assert!(query.windows(17).any(|window| window == b"\x10_adb-tls-connect"));
+        let mut packet = dns_query(7, "_adb-tls-connect._tcp.local").unwrap();
+        packet[2] = 0x84;
+        packet[6] = 0;
+        packet[7] = 1;
+        packet.extend_from_slice(&0xc00cu16.to_be_bytes());
+        packet.extend_from_slice(&33u16.to_be_bytes());
+        packet.extend_from_slice(&1u16.to_be_bytes());
+        packet.extend_from_slice(&0u32.to_be_bytes());
+        let target = b"\x09localhost\0";
+        packet.extend_from_slice(&((6 + target.len()) as u16).to_be_bytes());
+        packet.extend_from_slice(&0u16.to_be_bytes());
+        packet.extend_from_slice(&0u16.to_be_bytes());
+        packet.extend_from_slice(&5555u16.to_be_bytes());
+        packet.extend_from_slice(target);
+        let parsed = parse_dns(&packet, &"127.0.0.1:5353".parse().unwrap()).unwrap();
+        assert_eq!(parsed.port, 5555);
+        assert_eq!(parsed.host, "localhost");
+        let started = Instant::now();
+        let found = discover(50);
+        assert!(started.elapsed() < Duration::from_secs(3));
+        match found {
+            Ok(items) => assert!(items.len() < 1000),
+            Err(err) => assert!(!err.is_empty()),
+        }
+    }
+
+    #[test]
+    fn identity_record_matches_the_published_shape() {
+        let dir = work_dir("identity");
+        let (key, line) = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        let (again, again_line) = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        assert_eq!(line, again_line);
+        assert_eq!(key.public_parts().0, again.public_parts().0);
+        let (body, comment) = line.split_once(' ').unwrap();
+        assert_eq!(comment, "local");
+        let record = adb_tls::unb64(body).unwrap();
+        assert_eq!(record.len(), 524);
+        assert_eq!(u32::from_le_bytes(record[0..4].try_into().unwrap()), 64);
+        assert_eq!(u32::from_le_bytes(record[520..524].try_into().unwrap()), 65537);
+        let n0 = u32::from_le_bytes(record[8..12].try_into().unwrap());
+        let n0inv = u32::from_le_bytes(record[4..8].try_into().unwrap());
+        assert_eq!(n0.wrapping_mul(invert_odd(n0)), 1);
+        assert_eq!(n0inv, invert_odd(n0).wrapping_neg());
+        let modulus = {
+            let mut be = record[8..264].to_vec();
+            be.reverse();
+            be
+        };
+        assert_eq!(modulus, key.public_parts().0);
+        assert!(record[264..520].iter().any(|byte| *byte != 0));
+        assert!(dir.join("identity.bin").is_file());
+        assert!(!dir.join("seal.key").exists());
+        std::fs::write(dir.join("seal.key"), test_seal()).unwrap();
+        let refused = load_or_create_identity(&dir, None).unwrap_err();
+        assert!(refused.contains("seal"));
+        let kept = std::fs::metadata(dir.join("identity.bin")).unwrap().len();
+        let wrong = load_or_create_identity(&dir, Some(&[0x22; 32])).unwrap_err();
+        assert!(wrong.contains("could not be opened"));
+        assert_eq!(std::fs::metadata(dir.join("identity.bin")).unwrap().len(), kept);
+    }
+
+    fn invert_odd(value: u32) -> u32 {
+        let mut inv = 1u32;
+        for _ in 0..5 {
+            inv = inv.wrapping_mul(2u32.wrapping_sub(value.wrapping_mul(inv)));
+        }
+        inv
+    }
+
+    #[test]
+    fn corrupt_identity_stays_on_disk() {
+        let dir = work_dir("corrupt");
+        std::fs::write(dir.join("identity.bin"), b"this is not an identity").unwrap();
+        let err = match load_or_create_identity(&dir, Some(&test_seal())) {
+            Err(err) => err,
+            Ok(_) => panic!("a damaged identity was accepted"),
+        };
+        assert!(err.contains("could not be opened"));
+        assert_eq!(std::fs::read(dir.join("identity.bin")).unwrap(), b"this is not an identity");
+    }
+
+    #[test]
+    fn local_ports_are_reported_without_failing_the_run() {
+        for port in [5037u16, 5555] {
+            let addr = format!("127.0.0.1:{port}").parse().unwrap();
+            let outcome = match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
+                Ok(stream) => {
+                    drop(stream);
+                    format!("port {port} accepted a connection")
+                }
+                Err(err) => format!("port {port} was not reachable ({err})"),
+            };
+            assert!(!outcome.is_empty());
+            println!("{outcome}");
+        }
+    }
+
+    struct Script {
+        client_key: adb_tls::PrivateKey,
+        require_key: bool,
+        features: String,
+        root: Root,
+        missing_tool: bool,
+        bad_package: bool,
+        log: Arc<Mutex<Vec<String>>>,
+        files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+        id_mode: u8,
+        drop_after: bool,
+    }
+
+    #[derive(Clone, Copy)]
+    enum Root {
+        Shell,
+        Allow,
+        Already,
+    }
+
+    struct Peer {
+        io: PeerIo,
+        files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+        log: Arc<Mutex<Vec<String>>>,
+        root: Root,
+        missing_tool: bool,
+        bad_package: bool,
+        id_mode: u8,
+        drop_after: bool,
+        shells: usize,
+        buf: Vec<u8>,
+    }
+
+    enum PeerIo {
+        Plain(TcpStream),
+        Secure(adb_tls::SecurePipe),
+    }
+
+    impl Peer {
+        fn write_frame(&mut self, cmd: u32, arg0: u32, arg1: u32, data: &[u8]) {
+            let Ok(bytes) = frame_bytes(cmd, arg0, arg1, data) else {
+                return;
+            };
+            let _ = match &mut self.io {
+                PeerIo::Plain(stream) => stream.write_all(&bytes).map_err(|err| err.to_string()),
+                PeerIo::Secure(pipe) => pipe.write_all(&bytes),
+            };
+        }
+        fn read_frame(&mut self) -> Frame {
+            let header = match &mut self.io {
+                PeerIo::Plain(stream) => {
+                    let mut header = [0u8; 24];
+                    if stream.read_exact(&mut header).is_err() {
+                        return Frame { cmd: A_CLSE, arg0: 0, arg1: 0, data: Vec::new() };
+                    }
+                    header.to_vec()
+                }
+                PeerIo::Secure(pipe) => match pipe.read_exact(24) {
+                    Ok(header) => header,
+                    Err(_) => return Frame { cmd: A_CLSE, arg0: 0, arg1: 0, data: Vec::new() },
+                },
+            };
+            let len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+            if len > MAX_PAYLOAD {
+                return Frame { cmd: A_CLSE, arg0: 0, arg1: 0, data: Vec::new() };
+            }
+            let data = match &mut self.io {
+                PeerIo::Plain(stream) => {
+                    let mut data = vec![0u8; len];
+                    if len > 0 && stream.read_exact(&mut data).is_err() {
+                        return Frame { cmd: A_CLSE, arg0: 0, arg1: 0, data: Vec::new() };
+                    }
+                    data
+                }
+                PeerIo::Secure(pipe) => {
+                    if len == 0 {
+                        Vec::new()
+                    } else {
+                        match pipe.read_exact(len) {
+                            Ok(data) => data,
+                            Err(_) => return Frame { cmd: A_CLSE, arg0: 0, arg1: 0, data: Vec::new() },
+                        }
+                    }
+                }
+            };
+            finish_frame(&header, data).unwrap_or(Frame { cmd: A_CLSE, arg0: 0, arg1: 0, data: Vec::new() })
+        }
+        fn fill(&mut self, n: usize) {
+            while self.buf.len() < n {
+                let frame = self.read_frame();
+                match frame.cmd {
+                    A_WRTE => {
+                        self.write_frame(A_OKAY, 1, frame.arg0, &[]);
+                        self.buf.extend_from_slice(&frame.data);
+                    }
+                    A_CLSE => return,
+                    A_OKAY => {}
+                    _ => panic!("unexpected {:08x}", frame.cmd),
+                }
+            }
+        }
+        fn take(&mut self, n: usize) -> Vec<u8> {
+            self.fill(n);
+            if self.buf.len() < n {
+                return Vec::new();
+            }
+            let out = self.buf[..n].to_vec();
+            self.buf.drain(..n);
+            out
+        }
+        fn services(&mut self) {
+            let mut next = 10u32;
+            loop {
+                let frame = self.read_frame();
+                if frame.cmd == A_OPEN {
+                    let local = next;
+                    next += 1;
+                    let remote = frame.arg0;
+                    let dest = String::from_utf8_lossy(&frame.data).trim_end_matches('\0').to_string();
+                    self.log.lock().unwrap().push(dest.clone());
+                    self.write_frame(A_OKAY, local, remote, &[]);
+                    if dest.starts_with("shell,v2,raw:") || dest.starts_with("shell:") {
+                        if !self.shell(&dest, local, remote) {
+                            return;
+                        }
+                    } else if dest.starts_with("sync:") {
+                        self.sync(local, remote);
+                    } else if dest.starts_with("exec:") {
+                        self.exec(&dest, local, remote);
+                    } else {
+                        self.write_frame(A_CLSE, local, remote, &[]);
+                    }
+                } else if frame.cmd == A_CLSE {
+                    return;
+                }
+            }
+        }
+        fn shell(&mut self, dest: &str, local: u32, remote: u32) -> bool {
+            self.shells += 1;
+            if self.drop_after && self.shells >= 2 {
+                return false;
+            }
+            let extended = dest.starts_with("shell,v2,raw:");
+            let command = dest.split_once(':').map(|(_, rest)| rest).unwrap_or(dest);
+            if extended {
+                let incoming = self.read_frame();
+                if incoming.cmd == A_WRTE {
+                    self.write_frame(A_OKAY, local, incoming.arg0, &[]);
+                }
+            }
+            let (stdout, stderr, code) = self.answer(command);
+            let payload = if extended {
+                let mut raw = ext(1, &stdout);
+                raw.extend(ext(2, &stderr));
+                raw.extend(ext(3, &[code]));
+                raw
+            } else {
+                stdout
+            };
+            self.write_chunks(local, remote, &payload);
+            self.write_frame(A_CLSE, local, remote, &[]);
+            true
+        }
+        fn write_chunks(&mut self, local: u32, remote: u32, payload: &[u8]) {
+            let mut offset = 0;
+            while offset < payload.len() {
+                let n = (payload.len() - offset).min(64 * 1024);
+                self.write_frame(A_WRTE, local, remote, &payload[offset..offset + n]);
+                let _ack = self.read_frame();
+                offset += n;
+            }
+        }
+        fn answer(&self, command: &str) -> (Vec<u8>, Vec<u8>, u8) {
+            let privileged = command.starts_with("su -c ");
+            let inner = if privileged { unquote(&command["su -c ".len()..]) } else { command.to_string() };
+            if privileged && matches!(self.root, Root::Shell) {
+                return (Vec::new(), b"denied".to_vec(), 1);
+            }
+            if inner == "id" {
+                let normal = if privileged || matches!(self.root, Root::Already) { "uid=0(root) gid=0(root)\n" } else { "uid=2000(shell) gid=2000(shell)\n" };
+                let (text, code) = match self.id_mode {
+                    1 => ("uid=0(root) gid=0(root)\n", 1u8),
+                    2 => ("xxuid=0\n", 0),
+                    3 => ("uid=\n", 0),
+                    _ => (normal, 0),
+                };
+                return (text.as_bytes().to_vec(), Vec::new(), code);
+            }
+            if inner == "wide" {
+                return (vec![b'w'; MAX_OUTPUT + 32], Vec::new(), 0);
+            }
+            if let Some(rest) = inner.strip_prefix("echo ") {
+                return (format!("{rest}\n").into_bytes(), Vec::new(), 7);
+            }
+            (b"ok\n".to_vec(), Vec::new(), 0)
+        }
+        fn sync(&mut self, local: u32, remote: u32) {
+            loop {
+                let id = self.take(4);
+                if id.is_empty() {
+                    return;
+                }
+                if id == b"QUIT" {
+                    let _ = self.take(4);
+                    self.write_frame(A_CLSE, local, remote, &[]);
+                    return;
+                }
+                let len_bytes = self.take(4);
+                let Ok(len_bytes) = <[u8; 4]>::try_from(len_bytes) else {
+                    return;
+                };
+                let len = u32::from_le_bytes(len_bytes) as usize;
+                if len > MAX_PATH {
+                    return;
+                }
+                let path = String::from_utf8_lossy(&self.take(len)).to_string();
+                self.log.lock().unwrap().push(format!("sync:{}:{path}", String::from_utf8_lossy(&id)));
+                if id == b"STAT" || id == b"STA2" {
+                    if id == b"STA2" && path == "/no-access" {
+                        self.reply_bytes(local, remote, &sta2_error(13));
+                    } else if id == b"STA2" && path == "/io-error" {
+                        self.reply_bytes(local, remote, &sta2_error(5));
+                    } else {
+                        let stat = self.files.lock().unwrap().get(&path).cloned();
+                        if id == b"STA2" {
+                            self.reply_bytes(local, remote, &sta2(stat.as_deref()));
+                        } else {
+                            self.reply_bytes(local, remote, &stat_record(stat.as_deref()));
+                        }
+                    }
+                } else if id == b"LIS2" {
+                    let mut body = Vec::new();
+                    if path == "/big" {
+                        body.extend(dent_v2("big.bin", 5_000_000_000, -1, 0));
+                    } else if path == "/long-name" {
+                        let mut record = dent_v2("", 1, 0, 0);
+                        record.truncate(76);
+                        record[72..76].copy_from_slice(&5000u32.to_le_bytes());
+                        body.extend(record);
+                    } else {
+                        let names: Vec<(String, usize)> = self
+                            .files
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter_map(|(name, bytes)| name.strip_prefix(&path).and_then(|rest| rest.strip_prefix('/')).filter(|rest| !rest.contains('/')).map(|rest| (rest.to_string(), bytes.len())))
+                            .collect();
+                        for (name, size) in names {
+                            body.extend(dent_v2(&name, size as u64, 1_700_000_000, 0));
+                        }
+                    }
+                    body.extend_from_slice(b"DONE");
+                    body.extend_from_slice(&[0u8; 72]);
+                    self.reply_bytes(local, remote, &body);
+                } else if id == b"LIST" {
+                    let mut body = Vec::new();
+                    if path == "/flood" {
+                        for index in 0..(MAX_DIR_ENTRIES + 1) {
+                            let name = format!("e{index}");
+                            body.extend_from_slice(b"DENT");
+                            body.extend_from_slice(&0o100644u32.to_le_bytes());
+                            body.extend_from_slice(&1u32.to_le_bytes());
+                            body.extend_from_slice(&0u32.to_le_bytes());
+                            body.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                            body.extend_from_slice(name.as_bytes());
+                        }
+                    } else if path == "/long-name" {
+                        body.extend_from_slice(b"DENT");
+                        body.extend_from_slice(&0o100644u32.to_le_bytes());
+                        body.extend_from_slice(&1u32.to_le_bytes());
+                        body.extend_from_slice(&0u32.to_le_bytes());
+                        body.extend_from_slice(&5000u32.to_le_bytes());
+                    } else {
+                        let names: Vec<(String, usize)> = self
+                            .files
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter_map(|(name, bytes)| name.strip_prefix(&path).and_then(|rest| rest.strip_prefix('/')).filter(|rest| !rest.contains('/')).map(|rest| (rest.to_string(), bytes.len())))
+                            .collect();
+                        for (name, size) in names {
+                            body.extend_from_slice(b"DENT");
+                            body.extend_from_slice(&0o100644u32.to_le_bytes());
+                            body.extend_from_slice(&(size as u32).to_le_bytes());
+                            body.extend_from_slice(&0u32.to_le_bytes());
+                            body.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                            body.extend_from_slice(name.as_bytes());
+                        }
+                    }
+                    body.extend_from_slice(b"DONE");
+                    body.extend_from_slice(&[0u8; 16]);
+                    self.reply_bytes(local, remote, &body);
+                } else if id == b"RCV2" {
+                    let setup = self.take(8);
+                    if setup.len() != 8 {
+                        return;
+                    }
+                    let flags = u32::from_le_bytes(setup[4..8].try_into().unwrap());
+                    if path == "/denied" {
+                        let msg = b"denied";
+                        let mut body = Vec::new();
+                        body.extend_from_slice(b"FAIL");
+                        body.extend_from_slice(&(msg.len() as u32).to_le_bytes());
+                        body.extend_from_slice(msg);
+                        self.reply_bytes(local, remote, &body);
+                        continue;
+                    }
+                    let data = self.files.lock().unwrap().get(&path).cloned().unwrap_or_default();
+                    let payload = match encode_for_flags(flags, &data) {
+                        Ok(payload) => payload,
+                        Err(_) => return,
+                    };
+                    self.reply_data(local, remote, &payload);
+                } else if id == b"RECV" && path == "/wide" {
+                    let total = MAX_FILE + 1024;
+                    let mut sent = 0usize;
+                    while sent < total {
+                        let n = (total - sent).min(DATA_CHUNK);
+                        let mut body = vec![0u8; 8 + n];
+                        body[..4].copy_from_slice(b"DATA");
+                        body[4..8].copy_from_slice(&(n as u32).to_le_bytes());
+                        body[8..].fill(b'w');
+                        self.reply_bytes(local, remote, &body);
+                        sent += n;
+                    }
+                    let mut done = vec![0u8; 8];
+                    done[..4].copy_from_slice(b"DONE");
+                    self.reply_bytes(local, remote, &done);
+                } else if id == b"RECV" {
+                    if path == "/denied" {
+                        let msg = b"denied";
+                        let mut body = Vec::new();
+                        body.extend_from_slice(b"FAIL");
+                        body.extend_from_slice(&(msg.len() as u32).to_le_bytes());
+                        body.extend_from_slice(msg);
+                        self.reply_bytes(local, remote, &body);
+                        continue;
+                    }
+                    let data = self.files.lock().unwrap().get(&path).cloned().unwrap_or_default();
+                    let mut body = Vec::new();
+                    body.extend_from_slice(b"DATA");
+                    body.extend_from_slice(&(data.len() as u32).to_le_bytes());
+                    body.extend_from_slice(&data);
+                    body.extend_from_slice(b"DONE");
+                    body.extend_from_slice(&0u32.to_le_bytes());
+                    self.reply_bytes(local, remote, &body);
+                } else if id == b"SND2" {
+                    let setup = self.take(12);
+                    if setup.len() != 12 {
+                        return;
+                    }
+                    let flags = u32::from_le_bytes(setup[8..12].try_into().unwrap());
+                    let collected = self.collect_data();
+                    let plain = match decode_for_flags(flags, &collected) {
+                        Ok(plain) => plain,
+                        Err(_) => return,
+                    };
+                    if flags & SYNC_FLAG_DRY_RUN == 0 {
+                        self.files.lock().unwrap().insert(path, plain);
+                    } else {
+                        self.log.lock().unwrap().push(format!("dry:{}", plain.len()));
+                    }
+                    self.reply_bytes(local, remote, b"OKAY\0\0\0\0");
+                } else if id == b"SEND" {
+                    let file_path = path.rsplit_once(',').map(|(left, _)| left.to_string()).unwrap_or(path);
+                    let mut collected = Vec::new();
+                    loop {
+                        let kind = self.take(4);
+                        if kind == b"DONE" {
+                            let raw = self.take(4);
+                            let stamp = raw.try_into().unwrap_or([0u8; 4]);
+                            self.log.lock().unwrap().push(format!("mtime:{}", u32::from_le_bytes(stamp)));
+                            break;
+                        }
+                        if kind == b"DATA" {
+                            let raw = self.take(4);
+                            let Ok(raw) = <[u8; 4]>::try_from(raw) else {
+                                break;
+                            };
+                            let n = u32::from_le_bytes(raw) as usize;
+                            collected.extend_from_slice(&self.take(n));
+                        } else {
+                            break;
+                        }
+                    }
+                    self.files.lock().unwrap().insert(file_path, collected);
+                    self.reply_bytes(local, remote, b"OKAY\0\0\0\0");
+                }
+            }
+        }
+        fn collect_data(&mut self) -> Vec<u8> {
+            let mut collected = Vec::new();
+            loop {
+                let kind = self.take(4);
+                if kind == b"DONE" {
+                    let raw = self.take(4);
+                    let stamp = raw.try_into().unwrap_or([0u8; 4]);
+                    self.log.lock().unwrap().push(format!("mtime:{}", u32::from_le_bytes(stamp)));
+                    break;
+                }
+                if kind == b"DATA" {
+                    let raw = self.take(4);
+                    let Ok(raw) = <[u8; 4]>::try_from(raw) else {
+                        break;
+                    };
+                    let n = u32::from_le_bytes(raw) as usize;
+                    if n > DATA_CHUNK {
+                        break;
+                    }
+                    collected.extend_from_slice(&self.take(n));
+                } else {
+                    break;
+                }
+            }
+            collected
+        }
+        fn reply_data(&mut self, local: u32, remote: u32, payload: &[u8]) {
+            let mut offset = 0;
+            if payload.is_empty() {
+                let mut done = vec![0u8; 8];
+                done[..4].copy_from_slice(b"DONE");
+                self.reply_bytes(local, remote, &done);
+                return;
+            }
+            while offset < payload.len() {
+                let n = (payload.len() - offset).min(DATA_CHUNK);
+                let mut body = Vec::with_capacity(8 + n);
+                body.extend_from_slice(b"DATA");
+                body.extend_from_slice(&(n as u32).to_le_bytes());
+                body.extend_from_slice(&payload[offset..offset + n]);
+                self.reply_bytes(local, remote, &body);
+                offset += n;
+            }
+            let mut done = vec![0u8; 8];
+            done[..4].copy_from_slice(b"DONE");
+            self.reply_bytes(local, remote, &done);
+        }
+        fn reply_bytes(&mut self, local: u32, remote: u32, data: &[u8]) {
+            self.write_frame(A_WRTE, local, remote, data);
+            let _ack = self.read_frame();
+        }
+        fn exec(&mut self, dest: &str, local: u32, remote: u32) {
+            let command = dest.trim_start_matches("exec:").trim_end_matches('\0');
+            if self.missing_tool && command.starts_with("cmd ") {
+                self.write_frame(A_WRTE, local, remote, b"/system/bin/sh: cmd: inaccessible or not found\n");
+                let _ack = self.read_frame();
+                self.write_frame(A_CLSE, local, remote, &[]);
+                return;
+            }
+            if command.contains("install-create") {
+                self.write_frame(A_WRTE, local, remote, b"Success: created install session [7]\n");
+                let _ack = self.read_frame();
+                self.write_frame(A_CLSE, local, remote, &[]);
+                return;
+            }
+            if command.contains("install-write") {
+                let mut apk = Vec::new();
+                loop {
+                    let frame = self.read_frame();
+                    if frame.cmd == A_WRTE {
+                        apk.extend_from_slice(&frame.data);
+                        self.write_frame(A_OKAY, local, frame.arg0, &[]);
+                    } else if frame.cmd == A_CLSE {
+                        break;
+                    }
+                }
+                self.log.lock().unwrap().push(format!("apk:{}", apk.len()));
+                self.write_frame(A_WRTE, local, remote, b"Success: streamed\n");
+                let _ack = self.read_frame();
+                self.write_frame(A_CLSE, local, remote, &[]);
+                return;
+            }
+            if command.contains("install-commit") {
+                let text: &[u8] = if self.bad_package { b"Failure [INSTALL_FAILED_TEST]\n" } else { b"Success\n" };
+                self.write_frame(A_WRTE, local, remote, text);
+                let _ack = self.read_frame();
+                self.write_frame(A_CLSE, local, remote, &[]);
+            }
+        }
+    }
+
+    fn ext(kind: u8, data: &[u8]) -> Vec<u8> {
+        let mut out = vec![kind];
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(data);
+        out
+    }
+
+    fn unquote(text: &str) -> String {
+        let trimmed = text.trim();
+        if let Some(inner) = trimmed.strip_prefix('\'').and_then(|rest| rest.strip_suffix('\'')) {
+            inner.replace("'\\''", "'")
+        } else {
+            trimmed.to_string()
+        }
+    }
+
+    fn sta2_error(error: u32) -> Vec<u8> {
+        let mut body = vec![0u8; 72];
+        body[..4].copy_from_slice(b"STA2");
+        body[4..8].copy_from_slice(&error.to_le_bytes());
+        body
+    }
+
+    fn dent_v2(name: &str, size: u64, mtime: i64, error: u32) -> Vec<u8> {
+        let mut body = vec![0u8; 76 + name.len()];
+        body[..4].copy_from_slice(b"DNT2");
+        body[4..8].copy_from_slice(&error.to_le_bytes());
+        body[24..28].copy_from_slice(&0o100644u32.to_le_bytes());
+        body[40..48].copy_from_slice(&size.to_le_bytes());
+        body[56..64].copy_from_slice(&mtime.to_le_bytes());
+        body[72..76].copy_from_slice(&(name.len() as u32).to_le_bytes());
+        body[76..].copy_from_slice(name.as_bytes());
+        body
+    }
+
+    fn sta2(data: Option<&[u8]>) -> Vec<u8> {
+        let mut body = vec![0u8; 72];
+        body[..4].copy_from_slice(b"STA2");
+        if let Some(data) = data {
+            body[24..28].copy_from_slice(&0o100644u32.to_le_bytes());
+            body[28..32].copy_from_slice(&1u32.to_le_bytes());
+            body[40..48].copy_from_slice(&(data.len() as u64).to_le_bytes());
+        } else {
+            body[4..8].copy_from_slice(&2u32.to_le_bytes());
+        }
+        body
+    }
+
+    fn stat_record(data: Option<&[u8]>) -> Vec<u8> {
+        let mut body = vec![0u8; 16];
+        body[..4].copy_from_slice(b"STAT");
+        if let Some(data) = data {
+            body[4..8].copy_from_slice(&0o100644u32.to_le_bytes());
+            body[8..12].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        }
+        body
+    }
+
+    fn greet(peer: &mut Peer, script: &Script) {
+        let banner = format!("device::features={}\0", script.features);
+        if script.require_key {
+            let mut token = [0u8; 20];
+            token.copy_from_slice(&adb_tls::random_bytes(20).unwrap());
+            peer.write_frame(A_AUTH, TOKEN, 0, &token);
+            let sig = peer.read_frame();
+            assert_eq!(sig.cmd, A_AUTH);
+            assert_eq!(sig.arg0, SIGNATURE);
+            script.client_key.verify_sha1_pkcs1(&token, &sig.data).unwrap();
+            peer.write_frame(A_AUTH, TOKEN, 0, &token);
+            let key = peer.read_frame();
+            assert_eq!(key.cmd, A_AUTH);
+            assert_eq!(key.arg0, RSAPUBLICKEY);
+            assert!(String::from_utf8_lossy(&key.data).contains("local"));
+        } else {
+            let mut token = [0u8; 20];
+            token.copy_from_slice(&adb_tls::random_bytes(20).unwrap());
+            peer.write_frame(A_AUTH, TOKEN, 0, &token);
+            let sig = peer.read_frame();
+            script.client_key.verify_sha1_pkcs1(&token, &sig.data).unwrap();
+        }
+        peer.write_frame(A_CNXN, PROTOCOL, 256 * 1024, banner.as_bytes());
+    }
+
+    fn spawn_plain(script: Script) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_nodelay(true).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(180))).unwrap();
+            let mut peer = Peer {
+                io: PeerIo::Plain(stream),
+                files: script.files.clone(),
+                log: script.log.clone(),
+                root: script.root,
+                missing_tool: script.missing_tool,
+                bad_package: script.bad_package,
+                id_mode: script.id_mode,
+                drop_after: script.drop_after,
+                shells: 0,
+                buf: Vec::new(),
+            };
+            let hello = peer.read_frame();
+            assert_eq!(hello.cmd, A_CNXN);
+            greet(&mut peer, &script);
+            peer.services();
+        });
+        port
+    }
+
+    fn options(dir: &Path, port: u16, root: bool) -> ConnectOptions {
+        ConnectOptions {
+            host: "127.0.0.1".into(),
+            port,
+            data_dir: dir.display().to_string(),
+            seal: Some(test_seal().to_vec()),
+            opt_in_root: root,
+            built_in_ready: false,
+            timeout_ms: 120_000,
+        }
+    }
+
+    fn files_with_note() -> Arc<Mutex<HashMap<String, Vec<u8>>>> {
+        let mut files = HashMap::new();
+        files.insert("/data/local/tmp/note".into(), b"hello-device".to_vec());
+        Arc::new(Mutex::new(files))
+    }
+
+    #[test]
+    fn protocol_against_a_local_peer() {
+        let dir = work_dir("identity");
+        let (key, line) = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        assert!(line.contains("local"));
+        let files = files_with_note();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let port = spawn_plain(Script {
+            client_key: adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap(),
+            require_key: true,
+            features: "shell_v2,cmd,stat_v2".into(),
+            root: Root::Allow,
+            missing_tool: false,
+            bad_package: false,
+            log: log.clone(),
+            files: files.clone(),
+            id_mode: 0,
+            drop_after: false,
+        });
+        let mut session = connect(&options(&dir, port, true)).unwrap();
+        let status = session.status();
+        assert!(status.connected);
+        assert!(!status.secure);
+        assert_eq!(status.command_tier, "root");
+        assert_eq!(status.file_tier, "shell");
+        assert!(status.identity_confirmed);
+        assert!(status.features.contains("shell_v2"));
+        let echoed = session.shell("echo hi").unwrap();
+        assert_eq!(echoed.stdout, b"hi\n");
+        assert_eq!(echoed.exit_code, Some(7));
+        assert!(log.lock().unwrap().iter().any(|item| item.contains("su -c 'echo hi'")));
+        let stat = session.stat("/data/local/tmp/note").unwrap();
+        assert!(stat.present);
+        assert_eq!(stat.size, 12);
+        assert_eq!(stat.mode, 0o100644);
+        let listed = session.list("/data/local/tmp").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "note");
+        assert_eq!(session.read("/data/local/tmp/note").unwrap(), b"hello-device");
+        let denied = session.read("/denied").unwrap_err();
+        assert!(denied.contains("denied"));
+        assert_eq!(session.read("/data/local/tmp/note").unwrap(), b"hello-device");
+        session.write("/data/local/tmp/out", 0o644, b"written").unwrap();
+        assert_eq!(files.lock().unwrap().get("/data/local/tmp/out").unwrap(), b"written");
+        let stamp_line = log.lock().unwrap().iter().find(|item| item.starts_with("mtime:")).cloned().unwrap();
+        let stamp: u32 = stamp_line.trim_start_matches("mtime:").parse().unwrap();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        assert_ne!(stamp, 0);
+        assert!(u64::from(stamp).abs_diff(now) < 120);
+        let missing = session.stat("/missing").unwrap();
+        assert!(!missing.present);
+        let denied = match session.stat("/no-access") {
+            Err(err) => err,
+            Ok(_) => panic!("a permission error was reported as a file"),
+        };
+        assert!(denied.contains("permission"));
+        assert!(!denied.contains("absent"));
+        let io_error = match session.stat("/io-error") {
+            Err(err) => err,
+            Ok(_) => panic!("an input/output error was reported as a file"),
+        };
+        assert!(io_error.contains("input/output"));
+        assert!(!io_error.contains("absent"));
+        let flooded = match session.list("/flood") {
+            Err(err) => err,
+            Ok(_) => panic!("an oversized listing was accepted"),
+        };
+        assert!(flooded.contains("too large"));
+        let long_name = match session.list("/long-name") {
+            Err(err) => err,
+            Ok(_) => panic!("an oversized name was accepted"),
+        };
+        assert!(long_name.contains("too large"));
+        assert_eq!(session.read("/data/local/tmp/note").unwrap(), b"hello-device");
+        session.install_apk(b"apk-bytes").unwrap();
+        assert!(log.lock().unwrap().iter().any(|item| item.contains("apk:9")));
+        drop(session);
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let port = spawn_plain(Script {
+            client_key: adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap(),
+            require_key: false,
+            features: "shell_v2,cmd,stat_v2".into(),
+            root: Root::Shell,
+            missing_tool: true,
+            bad_package: true,
+            log: log.clone(),
+            files: files_with_note(),
+            id_mode: 0,
+            drop_after: false,
+        });
+        let mut session = connect(&options(&dir, port, true)).unwrap();
+        assert_eq!(session.status().command_tier, "shell");
+        assert!(session.status().root_note.contains("did not grant"));
+        assert!(session.status().identity_confirmed);
+        let err = session.install_apk(b"apk-bytes").unwrap_err();
+        assert!(err.contains("Failure"));
+        assert!(log.lock().unwrap().iter().any(|item| item.starts_with("exec:pm ")));
+        let still = session.shell("echo still").unwrap();
+        assert_eq!(still.stdout, b"still\n");
+        assert_eq!(still.exit_code, Some(7));
+        drop(session);
+
+        let port = spawn_plain(Script {
+            client_key: adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap(),
+            require_key: false,
+            features: "cmd".into(),
+            root: Root::Already,
+            missing_tool: false,
+            bad_package: false,
+            log: Arc::new(Mutex::new(Vec::new())),
+            files: files_with_note(),
+            id_mode: 0,
+            drop_after: false,
+        });
+        let mut session = connect(&options(&dir, port, true)).unwrap();
+        assert_eq!(session.status().command_tier, "root");
+        assert!(!session.status().root_note.contains("su"));
+        let raw = session.shell("id").unwrap();
+        assert!(raw.exit_code.is_none());
+        assert!(String::from_utf8_lossy(&raw.stdout).contains("uid=0"));
+        let legacy = session.stat("/data/local/tmp/note").unwrap();
+        assert_eq!(legacy.size, 12);
+        drop(session);
+
+        let server_key = adb_tls::PrivateKey::generate(2048).unwrap();
+        let other_key = adb_tls::PrivateKey::load_bytes(&server_key.store_bytes()).unwrap();
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let pair_dir = work_dir(&format!("pair-{stamp}"));
+        std::fs::copy(dir.join("identity.bin"), pair_dir.join("identity.bin")).unwrap();
+        let wrong_port = spawn_tls(other_key, "654321");
+        let wrong = pair(&PairOptions {
+            host: "127.0.0.1".into(),
+            port: wrong_port,
+            code: "000000".into(),
+            data_dir: pair_dir.display().to_string(),
+            seal: Some(test_seal().to_vec()),
+            timeout_ms: 120_000,
+        });
+        assert!(wrong.is_err());
+        assert!(!pin_path(&pair_dir, "127.0.0.1").exists());
+
+        let good_key = adb_tls::PrivateKey::load_bytes(&server_key.store_bytes()).unwrap();
+        let good_port = spawn_tls(good_key, "654321");
+        pair(&PairOptions {
+            host: "127.0.0.1".into(),
+            port: good_port,
+            code: "654321".into(),
+            data_dir: pair_dir.display().to_string(),
+            seal: Some(test_seal().to_vec()),
+            timeout_ms: 120_000,
+        })
+        .unwrap();
+        assert!(pin_path(&pair_dir, "127.0.0.1").is_file());
+
+        let connect_key = adb_tls::PrivateKey::load_bytes(&server_key.store_bytes()).unwrap();
+        let secure_port = spawn_stls(connect_key, adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap());
+        let mut secure = connect(&options(&pair_dir, secure_port, false)).unwrap();
+        assert!(secure.status().secure);
+        assert_eq!(secure.status().command_tier, "shell");
+        assert_eq!(secure.shell("echo tls").unwrap().stdout, b"tls\n");
+        drop(secure);
+
+        let mismatch_key = adb_tls::PrivateKey::generate(2048).unwrap();
+        let mismatch_port = spawn_stls(mismatch_key, adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap());
+        let mut mismatch = connect(&options(&pair_dir, mismatch_port, false)).unwrap();
+        assert!(mismatch.status().secure);
+        assert_eq!(mismatch.shell("echo other").unwrap().stdout, b"other\n");
+        drop(mismatch);
+
+        let call_port = spawn_plain(Script {
+            client_key: adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap(),
+            require_key: false,
+            features: "shell_v2,cmd,stat_v2".into(),
+            root: Root::Shell,
+            missing_tool: false,
+            bad_package: false,
+            log: Arc::new(Mutex::new(Vec::new())),
+            files: files_with_note(),
+            id_mode: 0,
+            drop_after: false,
+        });
+        let connected = call(
+            "device_shell_connect",
+            &format!("{{\"host\":\"127.0.0.1\",\"port\":{call_port},\"data_dir\":\"{}\",\"session\":\"s1\",\"opt_in_root\":false,\"built_in_ready\":true,\"timeout_ms\":120000,\"seal_b64\":\"{}\"}}", esc(&dir.display().to_string()), adb_tls::b64(&test_seal())),
+        )
+        .unwrap();
+        assert!(connected.contains("\"command_tier\":\"shell\""));
+        assert!(connected.contains("\"built_in_ready\":false"));
+        let ran = call("device_shell_command", "{\"session\":\"s1\",\"command\":\"echo api\"}").unwrap();
+        assert_eq!(adb_tls::unb64(json_str(&ran, "stdout_b64")).unwrap(), b"api\n");
+        assert!(ran.contains("\"exit_code\":7"));
+        let absent = call("device_shell_status", "{\"session\":\"missing\"}").unwrap();
+        assert!(absent.contains("\"connected\":false"));
+        assert!(absent.contains("\"command_tier\":\"unavailable\""));
+        let garbage = call("device_shell_status", "{\"session\":\"missing\"} trailing").unwrap_err();
+        assert!(garbage.contains("not valid"));
+        let spaced = call("device_shell_status", "{\"session\":\"missing\"}\n").unwrap();
+        assert!(spaced.contains("\"connected\":false"));
+        for tool in TOOLS {
+            assert!(call(tool, "").is_err());
+        }
+        assert!(TOOLS.contains(&"device_shell_close"));
+        let closed = call("device_shell_close", "{\"session\":\"s1\"}").unwrap();
+        assert!(closed.contains("\"closed\":true"));
+        let missing_session = call("device_shell_close", "{\"session\":\"s1\"}").unwrap_err();
+        assert!(missing_session.contains("no device session"));
+    }
+
+    fn json_str<'a>(text: &'a str, key: &str) -> &'a str {
+        let marker = format!("\"{key}\":\"");
+        let start = text.find(&marker).unwrap() + marker.len();
+        let end = text[start..].find('"').unwrap();
+        &text[start..start + end]
+    }
+
+    fn spawn_tls(server_key: adb_tls::PrivateKey, code: &'static str) -> u16 {
+        spawn_tls_identity(server_key, code, PEER_INFO_DEVICE_GUID, b"device")
+    }
+
+    fn spawn_tls_identity(server_key: adb_tls::PrivateKey, code: &'static str, kind: u8, guid: &'static [u8]) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_nodelay(true).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(180))).unwrap();
+            let mut pipe = match adb_tls::server_handshake(stream, &server_key) {
+                Ok(pipe) => pipe,
+                Err(_) => return,
+            };
+            let export = match pipe.exporter(b"adb-label\0", 64).material() {
+                Ok(bytes) => bytes.to_vec(),
+                Err(_) => return,
+            };
+            let mut password = code.as_bytes().to_vec();
+            password.extend(export);
+            let bob = match adb_tls::Spake2::bob(&password) {
+                Ok(bob) => bob,
+                Err(_) => return,
+            };
+            if pipe.write_all(&match pair_packet(0, bob.message()) {
+                Ok(packet) => packet,
+                Err(_) => return,
+            }).is_err() {
+                return;
+            }
+            let header = match pipe.read_exact(6) {
+                Ok(header) => header,
+                Err(_) => return,
+            };
+            let len = u32::from_be_bytes(header[2..6].try_into().unwrap()) as usize;
+            let body = match pipe.read_exact(len) {
+                Ok(body) => body,
+                Err(_) => return,
+            };
+            let material = match bob.finish(&body) {
+                Ok(material) => material,
+                Err(_) => return,
+            };
+            let mut cipher = adb_tls::PairCipher::new(&material);
+            let info = peer_info(kind, guid).unwrap();
+            let sealed = match cipher.seal(&info) {
+                Ok(sealed) => sealed,
+                Err(_) => return,
+            };
+            if pipe.write_all(&match pair_packet(1, &sealed) {
+                Ok(packet) => packet,
+                Err(_) => return,
+            }).is_err() {
+                return;
+            }
+            let header = match pipe.read_exact(6) {
+                Ok(header) => header,
+                Err(_) => return,
+            };
+            let len = u32::from_be_bytes(header[2..6].try_into().unwrap()) as usize;
+            let body = match pipe.read_exact(len) {
+                Ok(body) => body,
+                Err(_) => return,
+            };
+            let _ = cipher.open(&body);
+        });
+        port
+    }
+
+    fn spawn_stls(server_key: adb_tls::PrivateKey, client_key: adb_tls::PrivateKey) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_nodelay(true).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(180))).unwrap();
+            let mut plain = Peer {
+                io: PeerIo::Plain(stream),
+                files: files_with_note(),
+                log: Arc::new(Mutex::new(Vec::new())),
+                root: Root::Shell,
+                missing_tool: false,
+                bad_package: false,
+                id_mode: 0,
+                drop_after: false,
+                shells: 0,
+                buf: Vec::new(),
+            };
+            let hello = plain.read_frame();
+            assert_eq!(hello.cmd, A_CNXN);
+            plain.write_frame(A_STLS, 0x0100_0000, 0, &[]);
+            let reply = plain.read_frame();
+            if reply.cmd != A_STLS {
+                return;
+            }
+            let stream = match plain.io {
+                PeerIo::Plain(stream) => stream,
+                PeerIo::Secure(_) => return,
+            };
+            let pipe = match adb_tls::server_handshake(stream, &server_key) {
+                Ok(pipe) => pipe,
+                Err(_) => return,
+            };
+            let mut peer = Peer {
+                io: PeerIo::Secure(pipe),
+                files: files_with_note(),
+                log: Arc::new(Mutex::new(Vec::new())),
+                root: Root::Shell,
+                missing_tool: false,
+                bad_package: false,
+                id_mode: 0,
+                drop_after: false,
+                shells: 0,
+                buf: Vec::new(),
+            };
+            let again = peer.read_frame();
+            assert_eq!(again.cmd, A_CNXN);
+            let script = Script {
+                client_key,
+                require_key: false,
+                features: "shell_v2,cmd,stat_v2".into(),
+                root: Root::Shell,
+                missing_tool: false,
+                bad_package: false,
+                log: Arc::new(Mutex::new(Vec::new())),
+                files: files_with_note(),
+                id_mode: 0,
+                drop_after: false,
+            };
+            greet(&mut peer, &script);
+            peer.services();
+        });
+        port
+    }
+
+    #[test]
+    fn request_parser_rejects_trailing_bytes() {
+        let err = call("device_shell_status", "{\"session\":\"missing\"} trailing").unwrap_err();
+        assert!(err.contains("not valid"));
+        let err = call("device_shell_status", "{} trailing").unwrap_err();
+        assert!(err.contains("not valid"));
+        let ok = call("device_shell_status", "  {\"session\":\"missing\"}\n").unwrap();
+        assert!(ok.contains("\"connected\":false"));
+    }
+
+    #[test]
+    fn encoded_fields_are_capped_before_decode() {
+        assert_eq!(decode_bounded("YQ==", MAX_FILE).unwrap(), b"a");
+        assert!(decode_bounded(&"A".repeat(max_encoded_len(32) + 4), 32).unwrap_err().contains("too large"));
+        let seal = call(
+            "device_shell_connect",
+            &format!("{{\"host\":\"127.0.0.1\",\"port\":1,\"data_dir\":\"x\",\"seal_b64\":\"{}\"}}", "A".repeat(80)),
+        )
+        .unwrap_err();
+        assert!(seal.contains("too large"));
+        let package = call(
+            "device_shell_install",
+            &format!("{{\"session\":\"none\",\"content_b64\":\"{}\"}}", "A".repeat(max_encoded_len(MAX_FILE) + 4)),
+        )
+        .unwrap_err();
+        assert!(package.contains("too large"));
+        let epoch = call(
+            "device_shell_write",
+            "{\"session\":\"none\",\"path\":\"/x\",\"content_b64\":\"YQ==\",\"mtime\":0}",
+        )
+        .unwrap_err();
+        assert!(epoch.contains("epoch"));
+    }
+
+    #[test]
+    fn stat_v2_keeps_permission_and_io_errors() {
+        let mut body = vec![0u8; 68];
+        body[0..4].copy_from_slice(&SYNC_ENOENT.to_le_bytes());
+        let missing = file_stat_v2(&body).unwrap();
+        assert!(!missing.present);
+        body[0..4].copy_from_slice(&13u32.to_le_bytes());
+        let permission = match file_stat_v2(&body) {
+            Err(err) => err,
+            Ok(_) => panic!("a permission error was reported as a file"),
+        };
+        assert!(permission.contains("permission"));
+        assert!(!permission.contains("absent"));
+        body[0..4].copy_from_slice(&5u32.to_le_bytes());
+        let io_error = match file_stat_v2(&body) {
+            Err(err) => err,
+            Ok(_) => panic!("an input/output error was reported as a file"),
+        };
+        assert!(io_error.contains("input/output"));
+        assert!(file_stat_v2(&body[..8]).is_err());
+        body[0..4].copy_from_slice(&0u32.to_le_bytes());
+        body[20..24].copy_from_slice(&0o100644u32.to_le_bytes());
+        body[36..44].copy_from_slice(&12u64.to_le_bytes());
+        body[52..60].copy_from_slice(&(-1i64).to_le_bytes());
+        let present = file_stat_v2(&body).unwrap();
+        assert!(present.present);
+        assert_eq!(present.size, 12);
+        assert_eq!(present.mtime, -1);
+    }
+
+    #[test]
+    fn pairing_identity_must_be_a_device_guid() {
+        assert!(require_device_guid(&peer_info(PEER_INFO_DEVICE_GUID, b"device").unwrap()).is_ok());
+        assert!(require_device_guid(&peer_info(PEER_INFO_PUBLIC_KEY, b"device").unwrap()).is_err());
+        assert!(require_device_guid(&peer_info(PEER_INFO_DEVICE_GUID, b"").unwrap()).is_err());
+        assert!(require_device_guid(&[PEER_INFO_DEVICE_GUID; 10]).is_err());
+        let mut unterminated = vec![0u8; PEER_INFO_LEN];
+        unterminated[0] = PEER_INFO_DEVICE_GUID;
+        unterminated[1..].fill(b'x');
+        assert!(require_device_guid(&unterminated).is_err());
+    }
+
+    #[test]
+    fn malformed_frames_return_errors() {
+        assert!(parse_header(b"CNXN").unwrap_err().contains("truncated"));
+        let mut oversized = frame_bytes(A_CNXN, 0, 0, &[]).unwrap();
+        oversized[12..16].copy_from_slice(&(MAX_PAYLOAD as u32 + 1).to_le_bytes());
+        assert!(parse_header(&oversized).unwrap_err().contains("too large"));
+        let mut bad_magic = frame_bytes(A_CNXN, 0, 0, &[]).unwrap();
+        bad_magic[20] ^= 1;
+        assert!(parse_header(&bad_magic).unwrap_err().contains("not intact"));
+        let header = frame_bytes(A_CNXN, 1, 2, b"abcd").unwrap();
+        assert!(finish_frame(&header[..24], b"ab".to_vec()).is_err());
+        let mut bad_crc = header.clone();
+        bad_crc[16..20].copy_from_slice(&1u32.to_le_bytes());
+        assert!(finish_frame(&bad_crc[..24], b"abcd".to_vec()).is_err());
+
+        let dir = work_dir("identity");
+        let _ = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        for (label, response) in [
+            ("truncated", b"CNXN".to_vec()),
+            ("oversized", {
+                let mut frame = frame_bytes(A_CNXN, 0, 0, &[]).unwrap();
+                frame[12..16].copy_from_slice(&(MAX_PAYLOAD as u32 + 1).to_le_bytes());
+                frame
+            }),
+            ("bad-magic", {
+                let mut frame = frame_bytes(A_CNXN, 0, 0, &[]).unwrap();
+                frame[20] ^= 1;
+                frame
+            }),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let payload = response.clone();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut header = [0u8; 24];
+                if stream.read_exact(&mut header).is_err() {
+                    return;
+                }
+                let len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+                if len <= MAX_PAYLOAD {
+                    let mut body = vec![0u8; len];
+                    let _ = stream.read_exact(&mut body);
+                }
+                let _ = stream.write_all(&payload);
+            });
+            let options = options(&dir, port, false);
+            let result = catch_unwind(AssertUnwindSafe(|| connect(&options)));
+            server.join().unwrap();
+            match result {
+                Ok(Err(_)) => {}
+                Ok(Ok(_)) => panic!("{label}: a malformed frame opened a session"),
+                Err(_) => panic!("{label}: a malformed frame panicked"),
+            }
+        }
+    }
+
+    #[test]
+    fn discovery_names_and_truncated_packets_stay_bounded() {
+        assert!(encode_name(&mut Vec::new(), &"a".repeat(64)).is_err());
+        assert!(dns_query(1, &format!("{}.local", "a".repeat(64))).is_err());
+        let mut packet = vec![0u8; 12];
+        packet[5] = 1;
+        assert!(parse_dns(&packet, &"127.0.0.1:1".parse().unwrap()).is_none());
+        let mut pointer = vec![0u8; 13];
+        pointer[5] = 1;
+        pointer[12] = 0xc0;
+        assert!(parse_dns(&pointer, &"127.0.0.1:1".parse().unwrap()).is_none());
+    }
+
+    #[test]
+    fn unpaired_secure_upgrade_is_refused() {
+        let dir = work_dir("identity");
+        let _ = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        assert!(load_pin(&dir, "127.0.0.1", None).unwrap().is_none());
+        let server_key = adb_tls::PrivateKey::generate(2048).unwrap();
+        let port = spawn_stls(server_key, adb_tls::PrivateKey::load_bytes(&load_or_create_identity(&dir, Some(&test_seal())).unwrap().0.store_bytes()).unwrap());
+        let before = lock_sessions().len();
+        let err = match connect(&options(&dir, port, false)) {
+            Err(err) => err,
+            Ok(_) => panic!("an unpaired secure upgrade opened a session"),
+        };
+        assert!(err.contains("not been paired"));
+        assert!(!err.contains("secure\":true"));
+        assert_eq!(lock_sessions().len(), before);
+        assert!(load_pin(&dir, "127.0.0.1", None).unwrap().is_none());
+    }
+
+    #[test]
+    fn paired_transport_accepts_a_different_certificate() {
+        let dir = work_dir("identity");
+        let (key, _) = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        let client = adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap();
+        let pairing_key = adb_tls::PrivateKey::generate(2048).unwrap();
+        let pairing_cert = pairing_key.certificate("peer").unwrap();
+        let transport_key = adb_tls::PrivateKey::generate(2048).unwrap();
+        let transport_cert = transport_key.certificate("peer").unwrap();
+        assert_ne!(pairing_cert, transport_cert);
+        let pair_dir = work_dir("pair-transport");
+        std::fs::copy(dir.join("identity.bin"), pair_dir.join("identity.bin")).unwrap();
+        let pair_port = spawn_tls(adb_tls::PrivateKey::load_bytes(&pairing_key.store_bytes()).unwrap(), "246810");
+        pair(&PairOptions {
+            host: "127.0.0.1".into(),
+            port: pair_port,
+            code: "246810".into(),
+            data_dir: pair_dir.display().to_string(),
+            seal: Some(test_seal().to_vec()),
+            timeout_ms: 120_000,
+        })
+        .unwrap();
+        let stored = load_pin(&pair_dir, "127.0.0.1", Some(&test_seal())).unwrap().unwrap();
+        assert_eq!(stored, pairing_cert);
+        assert_ne!(stored, transport_cert);
+        let port = spawn_stls(transport_key, adb_tls::PrivateKey::load_bytes(&client.store_bytes()).unwrap());
+        let mut session = connect(&options(&pair_dir, port, false)).unwrap();
+        assert!(session.status().secure);
+        assert!(session.status().connected);
+        assert_eq!(session.shell("echo tls").unwrap().stdout, b"tls\n");
+        drop(session);
+    }
+
+    #[test]
+    fn invalid_pairing_identity_is_not_stored() {
+        let dir = work_dir("identity");
+        let _ = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        let bad = work_dir("bad-guid");
+        std::fs::copy(dir.join("identity.bin"), bad.join("identity.bin")).unwrap();
+        let server_key = adb_tls::PrivateKey::generate(2048).unwrap();
+        let wrong_type = spawn_tls_identity(
+            adb_tls::PrivateKey::load_bytes(&server_key.store_bytes()).unwrap(),
+            "111111",
+            PEER_INFO_PUBLIC_KEY,
+            b"not-a-guid",
+        );
+        let err = pair(&PairOptions {
+            host: "127.0.0.1".into(),
+            port: wrong_type,
+            code: "111111".into(),
+            data_dir: bad.display().to_string(),
+            seal: Some(test_seal().to_vec()),
+            timeout_ms: 120_000,
+        })
+        .unwrap_err();
+        assert!(err.contains("device guid"));
+        assert!(!pin_path(&bad, "127.0.0.1").exists());
+        let empty = spawn_tls_identity(
+            adb_tls::PrivateKey::load_bytes(&server_key.store_bytes()).unwrap(),
+            "111111",
+            PEER_INFO_DEVICE_GUID,
+            b"",
+        );
+        let err = pair(&PairOptions {
+            host: "127.0.0.1".into(),
+            port: empty,
+            code: "111111".into(),
+            data_dir: bad.display().to_string(),
+            seal: Some(test_seal().to_vec()),
+            timeout_ms: 120_000,
+        })
+        .unwrap_err();
+        assert!(err.contains("device guid"));
+        assert!(!pin_path(&bad, "127.0.0.1").exists());
+    }
+
+    #[test]
+    fn sessions_have_a_limit_and_can_be_closed() {
+        let dir = work_dir("identity");
+        let (key, _) = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        let stored = adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap();
+        let room = MAX_SESSIONS.saturating_sub(lock_sessions().len());
+        let mut opened = Vec::new();
+        for index in 0..room {
+            let port = spawn_plain(Script {
+                client_key: adb_tls::PrivateKey::load_bytes(&stored.store_bytes()).unwrap(),
+                require_key: false,
+                features: "shell_v2,cmd,stat_v2".into(),
+                root: Root::Shell,
+                missing_tool: false,
+                bad_package: false,
+                log: Arc::new(Mutex::new(Vec::new())),
+                files: files_with_note(),
+                id_mode: 0,
+                drop_after: false,
+            });
+            let id = format!("cap{index}");
+            let connected = call(
+                "device_shell_connect",
+                &format!(
+                    "{{\"host\":\"127.0.0.1\",\"port\":{port},\"data_dir\":\"{}\",\"session\":\"{id}\",\"timeout_ms\":120000,\"seal_b64\":\"{}\"}}",
+                    esc(&dir.display().to_string()),
+                    adb_tls::b64(&test_seal())
+                ),
+            )
+            .unwrap();
+            assert!(connected.contains(&format!("\"session\":\"{id}\"")));
+            opened.push(id);
+        }
+        let extra_port = spawn_plain(Script {
+            client_key: adb_tls::PrivateKey::load_bytes(&stored.store_bytes()).unwrap(),
+            require_key: false,
+            features: "shell_v2".into(),
+            root: Root::Shell,
+            missing_tool: false,
+            bad_package: false,
+            log: Arc::new(Mutex::new(Vec::new())),
+            files: files_with_note(),
+            id_mode: 0,
+            drop_after: false,
+        });
+        let denied = call(
+            "device_shell_connect",
+            &format!(
+                "{{\"host\":\"127.0.0.1\",\"port\":{extra_port},\"data_dir\":\"{}\",\"session\":\"cap-extra\",\"timeout_ms\":120000,\"seal_b64\":\"{}\"}}",
+                esc(&dir.display().to_string()),
+                adb_tls::b64(&test_seal())
+            ),
+        )
+        .unwrap_err();
+        assert!(denied.contains("session limit"));
+        assert!(!lock_sessions().contains_key("cap-extra"));
+        if let Some(id) = opened.first() {
+            let closed = call("device_shell_close", &format!("{{\"session\":\"{id}\"}}")).unwrap();
+            assert!(closed.contains("\"closed\":true"));
+            let again = spawn_plain(Script {
+                client_key: adb_tls::PrivateKey::load_bytes(&stored.store_bytes()).unwrap(),
+                require_key: false,
+                features: "shell_v2".into(),
+                root: Root::Shell,
+                missing_tool: false,
+                bad_package: false,
+                log: Arc::new(Mutex::new(Vec::new())),
+                files: files_with_note(),
+                id_mode: 0,
+                drop_after: false,
+            });
+            call(
+                "device_shell_connect",
+                &format!(
+                    "{{\"host\":\"127.0.0.1\",\"port\":{again},\"data_dir\":\"{}\",\"session\":\"cap-reopened\",\"timeout_ms\":120000,\"seal_b64\":\"{}\"}}",
+                    esc(&dir.display().to_string()),
+                    adb_tls::b64(&test_seal())
+                ),
+            )
+            .unwrap();
+            opened.push("cap-reopened".into());
+        }
+        for id in &opened {
+            let _ = call("device_shell_close", &format!("{{\"session\":\"{id}\"}}"));
+        }
+        let missing = call("device_shell_close", "{\"session\":\"cap-missing\"}").unwrap_err();
+        assert!(missing.contains("no device session"));
+        assert!(TOOLS.contains(&"device_shell_close"));
+    }
+
+    #[test]
+    fn checked_out_sessions_keep_the_cap() {
+        let mut map = SlotMap::new();
+        for index in 0..MAX_SESSIONS {
+            map.insert(format!("s{index}"), index).unwrap();
+        }
+        let held = map.take("s0").unwrap();
+        let denied = map.insert("extra".into(), 9).unwrap_err();
+        assert!(denied.contains("session limit"));
+        assert_eq!(map.occupied(), MAX_SESSIONS);
+        assert!(!map.contains_key("extra"));
+        map.restore("s0".into(), held);
+        assert_eq!(map.occupied(), MAX_SESSIONS);
+        assert!(map.contains_key("s0"));
+        let held = map.take("s1").unwrap();
+        map.close("s1").unwrap();
+        map.restore("s1".into(), held);
+        assert_eq!(map.occupied(), MAX_SESSIONS - 1);
+        map.insert("extra".into(), 9).unwrap();
+        assert_eq!(map.occupied(), MAX_SESSIONS);
+    }
+
+    #[test]
+    fn local_records_are_bounded_and_the_seal_is_not_stored() {
+        let dir = work_dir("huge-record");
+        std::fs::write(dir.join("identity.bin"), vec![0u8; MAX_STORED_RECORD as usize + 1]).unwrap();
+        let err = load_or_create_identity(&dir, Some(&test_seal())).unwrap_err();
+        assert!(err.contains("too large"));
+        assert!(!dir.join("seal.key").exists());
+        let pins = work_dir("huge-pin");
+        save_pin(&pins, "127.0.0.1", Some(&test_seal()), b"peer").unwrap();
+        std::fs::write(pin_path(&pins, "127.0.0.1"), vec![0u8; MAX_STORED_RECORD as usize + 1]).unwrap();
+        let err = load_pin(&pins, "127.0.0.1", Some(&test_seal())).unwrap_err();
+        assert!(err.contains("too large"));
+        let err = load_pin(&pins, "127.0.0.1", None).unwrap_err();
+        assert!(err.contains("seal"));
+    }
+
+    #[test]
+    fn mode_path_link_and_identity_inputs_are_rejected() {
+        let err = call(
+            "device_shell_write",
+            "{\"session\":\"none\",\"path\":\"/x\",\"mode\":4294967301,\"content_b64\":\"YQ==\"}",
+        )
+        .unwrap_err();
+        assert!(err.contains("mode"));
+        assert_ne!(u64::from(4294967301u64 as u32), 4294967301u64);
+        assert!(sync_path(b"STAT", &"a".repeat(1024)).is_ok());
+        assert!(sync_path(b"STAT", &"a".repeat(1025)).unwrap_err().contains("too large"));
+        assert!(sync_path(b"LIST", "/tmp/a\0b").unwrap_err().contains("not usable"));
+        assert_eq!(accept_peer_link(MIN_VERSION, MIN_MAXDATA).unwrap(), MIN_MAXDATA);
+        assert!(accept_peer_link(0x0200_0000, 256 * 1024).unwrap_err().contains("version"));
+        assert!(accept_peer_link(PROTOCOL, 0).unwrap_err().contains("message size"));
+        assert!(accept_peer_link(PROTOCOL, MIN_MAXDATA - 1).unwrap_err().contains("message size"));
+        let failed = CommandOutput {
+            stdout: b"uid=0(root)\n".to_vec(),
+            stderr: Vec::new(),
+            exit_code: Some(1),
+            partial: false,
+            reason: String::new(),
+        };
+        assert_eq!(identity_from_output(&failed), (false, false));
+        let embedded = CommandOutput {
+            stdout: b"xxuid=0\n".to_vec(),
+            stderr: Vec::new(),
+            exit_code: Some(0),
+            partial: false,
+            reason: String::new(),
+        };
+        assert_eq!(identity_from_output(&embedded), (false, false));
+        let bare = CommandOutput {
+            stdout: b"uid=\n".to_vec(),
+            stderr: Vec::new(),
+            exit_code: Some(0),
+            partial: false,
+            reason: String::new(),
+        };
+        assert_eq!(identity_from_output(&bare), (false, false));
+        let shell = CommandOutput {
+            stdout: b"uid=2000(shell) gid=2000(shell)\n".to_vec(),
+            stderr: Vec::new(),
+            exit_code: Some(0),
+            partial: false,
+            reason: String::new(),
+        };
+        assert_eq!(identity_from_output(&shell), (true, false));
+        let mut raw = ext(1, &vec![b'a'; 10]);
+        raw.extend(ext(3, &[4]));
+        let mut split = None;
+        let mut pending = raw;
+        let mut parts = Vec::new();
+        let mut exit_code = None;
+        for _ in 0..8 {
+            let taken = take_shell_window(true, &pending, 4, true, &mut split).unwrap().unwrap();
+            parts.extend_from_slice(&taken.output.stdout);
+            pending.drain(..taken.consumed);
+            if !taken.output.partial {
+                exit_code = taken.output.exit_code;
+                break;
+            }
+            assert!(taken.output.exit_code.is_none());
+            assert_eq!(taken.output.reason, "the response window is full");
+        }
+        assert_eq!(parts, vec![b'a'; 10]);
+        assert_eq!(exit_code, Some(4));
+    }
+
+    fn spawn_greeting(cmd: u32, arg0: u32, arg1: u32) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut header = [0u8; 24];
+            if stream.read_exact(&mut header).is_err() {
+                return;
+            }
+            let len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+            if len <= MAX_PAYLOAD {
+                let mut body = vec![0u8; len];
+                let _ = stream.read_exact(&mut body);
+            }
+            if let Ok(bytes) = frame_bytes(cmd, arg0, arg1, &[]) {
+                let _ = stream.write_all(&bytes);
+            }
+        });
+        port
+    }
+
+    fn keyed_script(key: adb_tls::PrivateKey, id_mode: u8, drop_after: bool) -> Script {
+        Script {
+            client_key: key,
+            require_key: false,
+            features: "shell_v2,cmd,stat_v2".into(),
+            root: Root::Shell,
+            missing_tool: false,
+            bad_package: false,
+            log: Arc::new(Mutex::new(Vec::new())),
+            files: files_with_note(),
+            id_mode,
+            drop_after,
+        }
+    }
+
+    #[test]
+    fn paired_plaintext_and_bad_links_do_not_authenticate() {
+        let dir = work_dir("identity");
+        let (key, _) = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        let stored = adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap();
+        let downgrade_dir = work_dir("downgrade");
+        std::fs::copy(dir.join("identity.bin"), downgrade_dir.join("identity.bin")).unwrap();
+        save_pin(&downgrade_dir, "127.0.0.1", Some(&test_seal()), b"paired-peer").unwrap();
+        for cmd in [A_AUTH, A_CNXN] {
+            let port = spawn_greeting(cmd, if cmd == A_CNXN { PROTOCOL } else { TOKEN }, 256 * 1024);
+            let err = match connect(&options(&downgrade_dir, port, false)) {
+                Err(err) => err,
+                Ok(_) => panic!("a paired plaintext greeting opened a session"),
+            };
+            assert!(err.contains("secure"), "{err}");
+            assert!(!err.contains("\"connected\":true"));
+        }
+        let version_port = spawn_greeting(A_CNXN, 0x0200_0000, 256 * 1024);
+        let version = match connect(&options(&dir, version_port, false)) {
+            Err(err) => err,
+            Ok(_) => panic!("an unknown version opened a session"),
+        };
+        assert!(version.contains("version"), "{version}");
+        let size_port = spawn_greeting(A_CNXN, PROTOCOL, 0);
+        let size = match connect(&options(&dir, size_port, false)) {
+            Err(err) => err,
+            Ok(_) => panic!("an empty message size opened a session"),
+        };
+        assert!(size.contains("message size"), "{size}");
+        let failed_port = spawn_plain(keyed_script(adb_tls::PrivateKey::load_bytes(&stored.store_bytes()).unwrap(), 1, false));
+        let failed = connect(&options(&dir, failed_port, false)).unwrap();
+        assert!(!failed.status().identity_confirmed);
+        assert_eq!(failed.status().command_tier, "shell");
+        drop(failed);
+        let embedded_port = spawn_plain(keyed_script(adb_tls::PrivateKey::load_bytes(&stored.store_bytes()).unwrap(), 2, false));
+        let embedded = connect(&options(&dir, embedded_port, false)).unwrap();
+        assert!(!embedded.status().identity_confirmed);
+        drop(embedded);
+        let drop_port = spawn_plain(keyed_script(adb_tls::PrivateKey::load_bytes(&stored.store_bytes()).unwrap(), 0, true));
+        let mut dropped = connect(&options(&dir, drop_port, false)).unwrap();
+        assert!(dropped.status().connected);
+        assert!(dropped.shell("echo gone").is_err());
+        assert!(!dropped.status().connected);
+        let again = match dropped.shell("echo later") {
+            Err(err) => err,
+            Ok(_) => panic!("a dropped session still ran a command"),
+        };
+        assert!(again.contains("not connected"));
+    }
+
+    #[test]
+    fn transfers_continue_past_the_response_window() {
+        let dir = work_dir("identity");
+        let (key, _) = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        let stored = adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap();
+        let files = files_with_note();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let port = spawn_plain(Script {
+            client_key: adb_tls::PrivateKey::load_bytes(&stored.store_bytes()).unwrap(),
+            require_key: false,
+            features: "shell_v2,cmd,stat_v2".into(),
+            root: Root::Shell,
+            missing_tool: false,
+            bad_package: false,
+            log: log.clone(),
+            files: files.clone(),
+            id_mode: 0,
+            drop_after: false,
+        });
+        let mut session = connect(&options(&dir, port, false)).unwrap();
+        let first = session.shell("wide").unwrap();
+        assert!(first.partial);
+        assert_eq!(first.reason, "the response window is full");
+        assert!(first.exit_code.is_none());
+        assert_eq!(first.stdout.len(), MAX_OUTPUT);
+        let rest = session.shell_resume().unwrap();
+        assert!(!rest.partial);
+        assert_eq!(rest.exit_code, Some(0));
+        assert_eq!(rest.stdout.len(), 32);
+        assert!(first.stdout.iter().chain(rest.stdout.iter()).all(|byte| *byte == b'w'));
+        let file = session.read_window("/wide", 0).unwrap();
+        assert!(file.partial);
+        assert_eq!(file.bytes.len(), MAX_FILE);
+        assert_eq!(file.next_offset, MAX_FILE as u64);
+        let tail = session.read_window("/wide", file.next_offset).unwrap();
+        assert!(!tail.partial);
+        assert_eq!(tail.bytes.len(), 1024);
+        assert!(file.bytes.iter().chain(tail.bytes.iter()).all(|byte| *byte == b'w'));
+        session.write_timed("/data/local/tmp/out", 0o755, b"abc", Some(1_700_000_000), false, false).unwrap();
+        session.write_timed("/data/local/tmp/out", 0o755, b"def", Some(1_700_000_000), true, false).unwrap();
+        assert_eq!(files.lock().unwrap().get("/data/local/tmp/out").unwrap(), b"abcdef");
+        session.install_stream(b"apk-", Some(9), false).unwrap();
+        session.install_stream(b"bytes", Some(9), true).unwrap();
+        assert!(log.lock().unwrap().iter().any(|item| item.contains("apk:9")));
+        drop(session);
+    }
+
+    #[test]
+    fn malformed_unicode_does_not_panic() {
+        let hostile = "{\"session\":\"\\u12\u{20AC}?\"}";
+        let panicked = catch_unwind(AssertUnwindSafe(|| parse_object(hostile)));
+        let parsed = panicked.expect("a malformed escape panicked");
+        assert!(parsed.is_err());
+        assert_eq!(parse_object("{\"session\":\"\\u0041\"}").unwrap().get("session").map(|value| matches!(value, Json::Str(text) if text == "A")), Some(true));
+        let emoji = parse_object("{\"session\":\"\\uD83D\\uDE00\"}").unwrap();
+        match emoji.get("session") {
+            Some(Json::Str(text)) => assert_eq!(text, "\u{1F600}"),
+            _ => panic!("a surrogate pair was rejected"),
+        }
+        assert!(parse_object("{\"session\":\"\\uD800\"}").is_err());
+        assert!(parse_object("{\"session\":\"\\uDC00\"}").is_err());
+    }
+
+    #[test]
+    fn slow_drip_cannot_extend_the_deadline() {
+        let dir = work_dir("drip");
+        load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.set_nodelay(true);
+            for _ in 0..40 {
+                if stream.write_all(&[0x11]).is_err() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let started = Instant::now();
+        let err = match connect(&ConnectOptions {
+            host: "127.0.0.1".into(),
+            port,
+            data_dir: dir.display().to_string(),
+            seal: Some(test_seal().to_vec()),
+            opt_in_root: false,
+            built_in_ready: true,
+            timeout_ms: 500,
+        }) {
+            Err(err) => err,
+            Ok(_) => panic!("a slow peer was treated as connected"),
+        };
+        let elapsed = started.elapsed();
+        assert!(err.contains("did not answer in time"), "{err}");
+        assert!(elapsed < Duration::from_millis(2000), "slow drip held the connect for {elapsed:?}");
+    }
+
+    #[test]
+    fn documented_calls_require_the_seal_and_reject_bad_types() {
+        let missing = call("device_shell_connect", "{\"host\":\"127.0.0.1\",\"port\":1,\"data_dir\":\"x\"}").unwrap_err();
+        assert!(missing.contains("seal_b64"), "{missing}");
+        let pair_missing = call("device_shell_pair", "{\"host\":\"127.0.0.1\",\"port\":1,\"code\":\"123456\",\"data_dir\":\"x\"}").unwrap_err();
+        assert!(pair_missing.contains("seal_b64"), "{pair_missing}");
+        let bad_offset = call("device_shell_read", "{\"session\":\"s\",\"path\":\"/a\",\"offset\":\"4\"}").unwrap_err();
+        assert!(bad_offset.contains("offset"), "{bad_offset}");
+        assert!(!bad_offset.contains("no device session"));
+        let bad_flag = call("device_shell_connect", &format!("{{\"host\":\"127.0.0.1\",\"port\":1,\"data_dir\":\"x\",\"opt_in_root\":\"yes\",\"seal_b64\":\"{}\"}}", adb_tls::b64(&test_seal()))).unwrap_err();
+        assert!(bad_flag.contains("opt_in_root"), "{bad_flag}");
+        let bad_timeout = call("device_shell_connect", &format!("{{\"host\":\"127.0.0.1\",\"port\":1,\"data_dir\":\"x\",\"timeout_ms\":\"1000\",\"seal_b64\":\"{}\"}}", adb_tls::b64(&test_seal()))).unwrap_err();
+        assert!(bad_timeout.contains("timeout_ms"), "{bad_timeout}");
+    }
+
+    #[test]
+    fn built_in_ready_is_not_taken_from_the_caller() {
+        assert!(!built_in_access_ready());
+        let absent = call("device_shell_status", "{\"session\":\"missing\",\"built_in_ready\":true}").unwrap();
+        assert!(absent.contains("\"built_in_ready\":false"), "{absent}");
+        let bad = call("device_shell_status", "{\"session\":\"missing\",\"built_in_ready\":\"yes\"}").unwrap_err();
+        assert!(bad.contains("built_in_ready"), "{bad}");
+        assert_eq!(report_built_in(true), built_in_access_ready());
+    }
+
+    #[test]
+    fn sync_v2_keeps_width_compression_and_dry_run() {
+        assert_eq!(xxh32(b"", 0), 0x02CC_5D05);
+        let samples: [&[u8]; 4] = [b"", b"a", b"hello-device", &vec![b'z'; 80_000][..]];
+        for sample in samples {
+            let encoded = frame_encode(sample).unwrap();
+            let mut decoder = FrameDecoder::new();
+            let plain = decoder.push(&encoded).unwrap();
+            decoder.finish().unwrap();
+            assert_eq!(plain, sample);
+        }
+        assert!(HOST_BANNER.windows(b"ls_v2".len()).any(|window| window == b"ls_v2"));
+        assert!(HOST_BANNER.windows(b"sendrecv_v2_lz4".len()).any(|window| window == b"sendrecv_v2_lz4"));
+        let dir = work_dir("identity");
+        let (key, _) = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        let files = files_with_note();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let port = spawn_plain(Script {
+            client_key: adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap(),
+            require_key: false,
+            features: "shell_v2,cmd,stat_v2,ls_v2,sendrecv_v2,sendrecv_v2_lz4,sendrecv_v2_dry_run_send".into(),
+            root: Root::Shell,
+            missing_tool: false,
+            bad_package: false,
+            log: log.clone(),
+            files: files.clone(),
+            id_mode: 0,
+            drop_after: false,
+        });
+        let mut session = connect(&options(&dir, port, false)).unwrap();
+        assert_eq!(session.status().file_tier, "sync_v2");
+        assert!(!session.status().built_in_ready);
+        let listed = session.list("/big").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "big.bin");
+        assert_eq!(listed[0].size, 5_000_000_000);
+        assert_eq!(listed[0].mtime, -1);
+        let repeated = vec![b'k'; 4096];
+        session.write("/data/local/tmp/note", 0o644, &repeated).unwrap();
+        assert_eq!(files.lock().unwrap().get("/data/local/tmp/note").unwrap(), &repeated);
+        assert!(log.lock().unwrap().iter().any(|item| item.starts_with("sync:SND2:")));
+        assert_eq!(session.read("/data/local/tmp/note").unwrap(), repeated);
+        assert!(log.lock().unwrap().iter().any(|item| item.starts_with("sync:RCV2:")));
+        let dry = session.write_timed("/data/local/tmp/skip", 0o644, b"not-stored", None, true, true).unwrap();
+        assert!(!dry);
+        assert!(!files.lock().unwrap().contains_key("/data/local/tmp/skip"));
+        assert!(log.lock().unwrap().iter().any(|item| item.starts_with("dry:")));
+        let long_name = match session.list("/long-name") {
+            Err(err) => err,
+            Ok(_) => panic!("an oversized name was accepted"),
+        };
+        assert!(long_name.contains("too large"));
+        drop(session);
+    }
+
+    #[test]
+    fn mismatched_stream_close_is_rejected() {
+        assert!(close_matches(7, 3, 3, 7));
+        assert!(!close_matches(9, 3, 3, 7));
+        assert!(!close_matches(7, 4, 3, 7));
+        assert!(!close_matches(9, 4, 3, 7));
+        assert!(close_matches(1, 3, 3, 0));
+        assert!(!close_matches(0, 0, 3, 7));
+    }
+
+    #[test]
+    fn malformed_uid_is_not_root() {
+        assert_eq!(parsed_uid("uid=0(root) gid=0(root)\n").as_deref(), Some("0"));
+        assert_eq!(parsed_uid("uid=0\n").as_deref(), Some("0"));
+        assert_eq!(parsed_uid("uid=0not-a-uid"), None);
+        assert_eq!(parsed_uid("uid=10(u0_a10) gid=10(u0_a10)\n").as_deref(), Some("10"));
+        let malformed = CommandOutput {
+            stdout: b"uid=0not-a-uid\n".to_vec(),
+            stderr: Vec::new(),
+            exit_code: Some(0),
+            partial: false,
+            reason: String::new(),
+        };
+        assert_eq!(identity_from_output(&malformed), (false, false));
+    }
+
+    #[test]
+    fn resolution_stays_inside_the_deadline() {
+        let started = Instant::now();
+        let err = resolve_until("name.invalid", 1, Instant::now()).unwrap_err();
+        assert!(err.contains("resolved in time"), "{err}");
+        assert!(started.elapsed() < Duration::from_millis(200), "name lookup ignored the deadline");
+        let addr = resolve_until("127.0.0.1", 9, Instant::now() + Duration::from_secs(1)).unwrap();
+        assert_eq!(addr.port(), 9);
+        assert!(resolve_until("\0", 1, Instant::now() + Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn secure_slow_drip_cannot_extend_the_deadline() {
+        let dir = work_dir("secure-drip");
+        load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        save_pin(&dir, "127.0.0.1", Some(&test_seal()), b"paired-certificate").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.set_nodelay(true);
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut header = [0u8; 24];
+            if stream.read_exact(&mut header).is_err() {
+                return;
+            }
+            let len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+            if len > MAX_PAYLOAD {
+                return;
+            }
+            let mut body = vec![0u8; len];
+            if len > 0 && stream.read_exact(&mut body).is_err() {
+                return;
+            }
+            let Ok(stls) = frame_bytes(A_STLS, 0x0100_0000, 0, &[]) else {
+                return;
+            };
+            if stream.write_all(&stls).is_err() {
+                return;
+            }
+            let mut reply = [0u8; 24];
+            if stream.read_exact(&mut reply).is_err() {
+                return;
+            }
+            let reply_len = u32::from_le_bytes(reply[12..16].try_into().unwrap()) as usize;
+            if reply_len > 0 && reply_len <= MAX_PAYLOAD {
+                let mut rest = vec![0u8; reply_len];
+                let _ = stream.read_exact(&mut rest);
+            }
+            for _ in 0..40 {
+                if stream.write_all(&[0x16]).is_err() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let started = Instant::now();
+        let err = match connect(&ConnectOptions {
+            host: "127.0.0.1".into(),
+            port,
+            data_dir: dir.display().to_string(),
+            seal: Some(test_seal().to_vec()),
+            opt_in_root: false,
+            built_in_ready: false,
+            timeout_ms: 500,
+        }) {
+            Err(err) => err,
+            Ok(_) => panic!("a slow secure peer was treated as connected"),
+        };
+        let elapsed = started.elapsed();
+        assert!(err.contains("did not answer in time"), "{err}");
+        assert!(elapsed < Duration::from_millis(2000), "slow secure drip held the connect for {elapsed:?}");
+    }
+
+    #[test]
+    fn compression_flags_cover_every_published_codec() {
+        assert!(HOST_BANNER.windows(b"sendrecv_v2_brotli".len()).any(|window| window == b"sendrecv_v2_brotli"));
+        assert!(HOST_BANNER.windows(b"sendrecv_v2_lz4".len()).any(|window| window == b"sendrecv_v2_lz4"));
+        assert!(HOST_BANNER.windows(b"sendrecv_v2_zstd".len()).any(|window| window == b"sendrecv_v2_zstd"));
+        let names = |list: &[&str]| list.iter().map(|item| (*item).to_string()).collect::<Vec<_>>();
+        assert_eq!(preferred_codec_flag(&names(&["sendrecv_v2_brotli", "sendrecv_v2_lz4", "sendrecv_v2_zstd"])), SYNC_FLAG_ZSTD);
+        assert_eq!(preferred_codec_flag(&names(&["sendrecv_v2_brotli", "sendrecv_v2_lz4"])), SYNC_FLAG_LZ4);
+        assert_eq!(preferred_codec_flag(&names(&["sendrecv_v2_brotli"])), SYNC_FLAG_BROTLI);
+        assert_eq!(preferred_codec_flag(&names(&["sendrecv_v2"])), 0);
+        assert!(codec_from_flags(SYNC_FLAG_BROTLI | SYNC_FLAG_LZ4).is_err());
+        let samples: [&[u8]; 4] = [b"", b"a", b"hello-device", &vec![b'q'; 70_000][..]];
+        for flag in [SYNC_FLAG_BROTLI, SYNC_FLAG_LZ4, SYNC_FLAG_ZSTD] {
+            for sample in samples {
+                let encoded = encode_for_flags(flag, sample).unwrap();
+                let plain = decode_for_flags(flag, &encoded).unwrap();
+                assert_eq!(plain, sample);
+            }
+        }
+        let mut literals = vec![0x18, b'c', b'a', b't', 0];
+        let block = {
+            let header = 1u32 | (2 << 1) | ((literals.len() as u32) << 3);
+            let mut bytes = vec![header as u8, (header >> 8) as u8, (header >> 16) as u8];
+            bytes.append(&mut literals);
+            bytes
+        };
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&0xFD2F_B528u32.to_le_bytes());
+        frame.extend_from_slice(&[0x00, 0x38]);
+        frame.extend_from_slice(&block);
+        assert_eq!(decode_for_flags(SYNC_FLAG_ZSTD, &frame).unwrap(), b"cat");
+    }
+
+    #[test]
+    fn open_transfers_are_not_interrupted() {
+        let dir = work_dir("holds");
+        let (key, _) = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        let files = files_with_note();
+        let port = spawn_plain(Script {
+            client_key: adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap(),
+            require_key: false,
+            features: "shell_v2,cmd,stat_v2".into(),
+            root: Root::Shell,
+            missing_tool: false,
+            bad_package: false,
+            log: Arc::new(Mutex::new(Vec::new())),
+            files: files.clone(),
+            id_mode: 0,
+            drop_after: false,
+        });
+        let mut session = connect(&options(&dir, port, false)).unwrap();
+        let first = session.read_window("/wide", 0).unwrap();
+        assert!(first.partial);
+        let listed = match session.list("/data/local/tmp") {
+            Err(err) => err,
+            Ok(_) => panic!("a listing interrupted an open read"),
+        };
+        assert!(listed.contains("still open"), "{listed}");
+        let command = match session.shell("echo hi") {
+            Err(err) => err,
+            Ok(_) => panic!("a command interrupted an open read"),
+        };
+        assert!(command.contains("still open"), "{command}");
+        let tail = session.read_window("/wide", first.next_offset).unwrap();
+        assert!(!tail.partial);
+        assert_eq!(tail.bytes.len(), 1024);
+        session.write_timed("/data/local/tmp/part", 0o644, b"abc", Some(1_700_000_000), false, false).unwrap();
+        let blocked = match session.stat("/data/local/tmp/note") {
+            Err(err) => err,
+            Ok(_) => panic!("a status request interrupted an open write"),
+        };
+        assert!(blocked.contains("still open"), "{blocked}");
+        session.write_timed("/data/local/tmp/part", 0o644, b"def", Some(1_700_000_000), true, false).unwrap();
+        assert_eq!(files.lock().unwrap().get("/data/local/tmp/part").unwrap(), b"abcdef");
+        drop(session);
+    }
+
+    #[test]
+    fn writes_stream_past_the_old_window() {
+        let dir = work_dir("wide-write");
+        let (key, _) = load_or_create_identity(&dir, Some(&test_seal())).unwrap();
+        let files = files_with_note();
+        let port = spawn_plain(Script {
+            client_key: adb_tls::PrivateKey::load_bytes(&key.store_bytes()).unwrap(),
+            require_key: false,
+            features: "shell_v2,cmd".into(),
+            root: Root::Shell,
+            missing_tool: false,
+            bad_package: false,
+            log: Arc::new(Mutex::new(Vec::new())),
+            files: files.clone(),
+            id_mode: 0,
+            drop_after: false,
+        });
+        let mut session = connect(&options(&dir, port, false)).unwrap();
+        let chunk = vec![b'Q'; 1024 * 1024];
+        for index in 0..32 {
+            session.write_timed("/data/local/tmp/big", 0o644, &chunk, Some(1_700_000_000), false, false).unwrap_or_else(|err| panic!("chunk {index} was rejected: {err}"));
+        }
+        session.write_timed("/data/local/tmp/big", 0o644, b"Z", Some(1_700_000_000), true, false).unwrap();
+        let stored = files.lock().unwrap().get("/data/local/tmp/big").cloned().unwrap_or_default();
+        assert_eq!(stored.len(), 32 * 1024 * 1024 + 1);
+        assert_eq!(stored[0], b'Q');
+        assert_eq!(*stored.last().unwrap(), b'Z');
+        drop(session);
+    }
+
+    #[test]
+    fn published_huffman_prefix_codes_decode_the_example_stream() {
+        let mut weights = vec![4u8, 3, 2, 0, 1];
+        let max_bits = huff_weights_finish(&mut weights).unwrap();
+        assert_eq!(weights, vec![4, 3, 2, 0, 1, 1]);
+        assert_eq!(max_bits, 4);
+        let codes = huff_from_weights(&weights, max_bits).unwrap();
+        let code_of = |symbol: u8| codes.list.iter().find(|row| row.0 == symbol).map(|row| (row.1, row.2));
+        assert_eq!(code_of(4), Some((4, 0)));
+        assert_eq!(code_of(5), Some((4, 1)));
+        assert_eq!(code_of(2), Some((3, 1)));
+        assert_eq!(code_of(1), Some((2, 1)));
+        assert_eq!(code_of(0), Some((1, 1)));
+        assert_eq!(huff_decode(&[0x10, 0x0D], &codes, 4).unwrap(), vec![0, 1, 5, 4]);
+        let empty = Xxh64::new();
+        assert_eq!(empty.digest(), 0xEF46_DB37_51D8_E999);
+    }
+
+    #[test]
+    fn default_sequence_tables_match_the_published_states() {
+        let ll = fse_default_literals().unwrap();
+        let ml = fse_default_match().unwrap();
+        let of = fse_default_offset().unwrap();
+        assert_eq!((ll.entries[2].symbol, ll.entries[2].bits, ll.entries[2].base), (1, 5, 32));
+        assert_eq!((ll.entries[60].symbol, ll.entries[60].bits, ll.entries[60].base), (35, 6, 0));
+        assert_eq!(ll.entries[63].symbol, 32);
+        assert_eq!(ll.entries[62].symbol, 33);
+        assert_eq!(ll.entries[61].symbol, 34);
+        assert_eq!((ml.entries[1].symbol, ml.entries[1].bits, ml.entries[1].base), (1, 4, 0));
+        assert_eq!((of.entries[1].symbol, of.entries[1].bits, of.entries[1].base), (6, 4, 0));
+        assert_eq!((of.entries[31].symbol, of.entries[31].bits, of.entries[31].base), (24, 5, 0));
+    }
+
+    #[test]
+    fn brotli_compressed_metablock_decodes_to_the_expected_bytes() {
+        let mut writer = BitWriter::new();
+        writer.write_bits(0, 1);
+        writer.write_bits(1, 1);
+        writer.write_bits(0, 1);
+        writer.write_bits(0, 2);
+        writer.write_bits(2, 16);
+        writer.write_bits(0, 1);
+        writer.write_bits(0, 1);
+        writer.write_bits(0, 1);
+        writer.write_bits(0, 2);
+        writer.write_bits(0, 4);
+        writer.write_bits(0, 2);
+        writer.write_bits(0, 1);
+        writer.write_bits(0, 1);
+        writer.write_bits(1, 2);
+        writer.write_bits(0, 2);
+        writer.write_bits(1, 8);
+        writer.write_bits(1, 2);
+        writer.write_bits(0, 2);
+        writer.write_bits(136, 10);
+        writer.write_bits(1, 2);
+        writer.write_bits(0, 2);
+        writer.write_bits(16, 6);
+        writer.write_bits(0, 1);
+        writer.align();
+        let encoded = writer.take_bytes();
+        assert_eq!(decode_for_flags(SYNC_FLAG_BROTLI, &encoded).unwrap(), vec![1, 1, 1]);
+        assert_eq!(brotli_dictionary().len(), 122_784);
+        assert_eq!(crc32(brotli_dictionary()), 0x5136_cb04);
+        assert_eq!(crc32(&BROTLI_LUT0), 0x8e91_efb7);
+        assert_eq!(crc32(&BROTLI_LUT1), 0xd01a_32f4);
+        assert_eq!(crc32(&BROTLI_LUT2), 0x0dd7_a0d6);
+        let mut blob = Vec::new();
+        for (prefix, kind, suffix) in BROTLI_XFORM {
+            blob.extend_from_slice(prefix);
+            blob.push(0);
+            blob.push(kind);
+            blob.extend_from_slice(suffix);
+            blob.push(0);
+        }
+        assert_eq!(blob.len(), 648);
+        assert_eq!(crc32(&blob), 0x3d96_5f81);
+    }
+
+    #[test]
+    fn zstd_huffman_literals_and_fse_sequences_decode_to_the_expected_bytes() {
+        let mut weights = vec![0u8, 1, 1];
+        let max_bits = huff_weights_finish(&mut weights).unwrap();
+        let codes = huff_from_weights(&weights, max_bits).unwrap();
+        let mut symbols = BitWriter::new();
+        symbols.write_bits(1, 1);
+        symbols.write_bits(1, 2);
+        symbols.write_bits(0, 2);
+        symbols.write_bits(1, 1);
+        symbols.align();
+        let symbol_bytes = symbols.take_bytes();
+        assert_eq!(huff_decode(&symbol_bytes, &codes, 3).unwrap(), vec![1, 2, 3]);
+        let mut literal_body = vec![0x82, 0x01, 0x10];
+        literal_body.extend(symbol_bytes);
+        let regen = 3usize;
+        let comp = literal_body.len();
+        let word = 2u32 | ((regen as u32) << 4) | ((comp as u32) << 14);
+        let mut block = vec![word as u8, (word >> 8) as u8, (word >> 16) as u8];
+        block.extend(literal_body);
+        let ll = fse_default_literals().unwrap();
+        let of = fse_default_offset().unwrap();
+        let ml = fse_default_match().unwrap();
+        let ll_state = ll.entries.iter().position(|entry| entry.symbol == 3).unwrap() as u64;
+        let of_state = of.entries.iter().position(|entry| entry.symbol == 2).unwrap() as u64;
+        let ml_state = ml.entries.iter().position(|entry| entry.symbol == 0).unwrap() as u64;
+        let mut seq = BitWriter::new();
+        seq.write_bits(2, 2);
+        seq.write_bits(ml_state, ml.log);
+        seq.write_bits(of_state, of.log);
+        seq.write_bits(ll_state, ll.log);
+        seq.write_bits(1, 1);
+        seq.align();
+        block.push(1);
+        block.push(0);
+        block.extend(seq.take_bytes());
+        let header = 1u32 | (2 << 1) | ((block.len() as u32) << 3);
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&0xFD2F_B528u32.to_le_bytes());
+        frame.extend_from_slice(&[0x00, 0x38]);
+        frame.extend_from_slice(&[header as u8, (header >> 8) as u8, (header >> 16) as u8]);
+        frame.extend(block);
+        assert_eq!(decode_for_flags(SYNC_FLAG_ZSTD, &frame).unwrap(), vec![1, 2, 3, 1, 2, 3]);
+        let mut sum = Xxh64::new();
+        sum.update(b"cat");
+        let mut checked = Vec::new();
+        checked.extend_from_slice(&0xFD2F_B528u32.to_le_bytes());
+        checked.extend_from_slice(&[0x04, 0x38]);
+        let raw = 1u32 | (3 << 3);
+        checked.extend_from_slice(&[raw as u8, 0, 0, b'c', b'a', b't']);
+        checked.extend_from_slice(&sum.low32().to_le_bytes());
+        assert_eq!(decode_for_flags(SYNC_FLAG_ZSTD, &checked).unwrap(), b"cat");
+    }
+
+    #[test]
+    fn stalled_resolver_threads_stay_bounded() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        static STALL: AtomicBool = AtomicBool::new(false);
+        static STALL_ENTERED: AtomicUsize = AtomicUsize::new(0);
+        static STALL_DONE: AtomicUsize = AtomicUsize::new(0);
+        fn stall_hook(_host: &str, port: u16) -> std::io::Result<Option<SocketAddr>> {
+            STALL_ENTERED.fetch_add(1, Ordering::SeqCst);
+            while STALL.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(5));
+            }
+            STALL_DONE.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)))
+        }
+        *LOOKUP_HOOK.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
+        STALL.store(false, Ordering::SeqCst);
+        STALL_ENTERED.store(0, Ordering::SeqCst);
+        STALL_DONE.store(0, Ordering::SeqCst);
+        STALL.store(true, Ordering::SeqCst);
+        *LOOKUP_HOOK.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(stall_hook);
+        for _ in 0..50 {
+            let err = resolve_until("stalled.invalid", 9, Instant::now() + Duration::from_millis(25)).unwrap_err();
+            assert!(err.contains("resolved in time"), "{err}");
+        }
+        let threads = RESOLVER_THREADS.load(Ordering::SeqCst);
+        let entered = STALL_ENTERED.load(Ordering::SeqCst);
+        assert!(threads >= 1 && threads <= RESOLVER_LIMIT, "{threads}");
+        assert!(entered >= 1 && entered <= RESOLVER_LIMIT, "{entered}");
+        STALL.store(false, Ordering::SeqCst);
+        let started = Instant::now();
+        while STALL_DONE.load(Ordering::SeqCst) < 50 {
+            if started.elapsed() > Duration::from_secs(5) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        *LOOKUP_HOOK.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
+        assert_eq!(STALL_DONE.load(Ordering::SeqCst), 50);
+    }
+}
