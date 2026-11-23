@@ -113,10 +113,13 @@ public final class Activity extends android.app.Activity {
     private int dp(int n){return (int)(getResources().getDisplayMetrics().density*n+.5f);}
     private String root(){String selected=state==null?"":state.optString("workspace_selected");if(!selected.isEmpty()&&!selected.matches("[0-9]{1,24}-[0-9]{1,2}"))throw new IllegalStateException("Invalid workspace selection");return new File(getFilesDir(),selected.isEmpty()?"workspace":"workspace-"+selected).getAbsolutePath();}
     private volatile boolean phoneStorageAccess=true,networkStorageAccess=true,cloudStorageAccess=true,mcpStorageAccess=true;
+    private volatile boolean deviceRootEnabled;
+    private String deviceRootStatus="unchecked";
+    private int deviceRootRequest;
     private volatile String activeStorageProvider="";
     private String cloudTicket="";
     private volatile String cloudOwner="";
-    private void storageAccess(){JSONObject owner=state==null?null:state.optJSONObject("cloud_expected");cloudOwner=owner==null?"":owner.optString("ticket");JSONObject access=state==null?null:state.optJSONObject("storage_access");phoneStorageAccess=access==null||access.optBoolean("phone",true);networkStorageAccess=access==null||access.optBoolean("network",true);cloudStorageAccess=access==null||access.optBoolean("cloud",true);mcpStorageAccess=access==null||access.optBoolean("mcp",true);}
+    private void storageAccess(){JSONObject owner=state==null?null:state.optJSONObject("cloud_expected");cloudOwner=owner==null?"":owner.optString("ticket");JSONObject access=state==null?null:state.optJSONObject("storage_access");phoneStorageAccess=access==null||access.optBoolean("phone",true);networkStorageAccess=access==null||access.optBoolean("network",true);cloudStorageAccess=access==null||access.optBoolean("cloud",true);mcpStorageAccess=access==null||access.optBoolean("mcp",true);if(!phoneStorageAccess&&(deviceRootEnabled||"granted".equals(deviceRootStatus)||"checking".equals(deviceRootStatus))){deviceRootEnabled=false;deviceRootStatus="disabled";}}
     private JSONObject cloudResponse(String ticket,JSONObject response)throws JSONException{return new JSONObject().put("ticket",ticket).put("cloud_response",response);}
     private void cloudSelection(int result,Intent data){
         String selectedTicket=cloudTicket;cloudTicket="";if(closed||state==null||selectedTicket.isEmpty()||!selectedTicket.equals(cloudOwner))return;final String ticket=selectedTicket;
@@ -141,16 +144,70 @@ public final class Activity extends android.app.Activity {
     private void selectedDocumentAccess(Uri uri)throws IOException {DocumentAccess.check(uri,phoneStorageAccess,cloudStorageAccess,true);}
 
     @Override public void onCreate(Bundle bundle){super.onCreate(bundle);
-        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-        if(android.os.Build.VERSION.SDK_INT>=30)getWindow().setDecorFitsSystemWindows(false);
-        getWindow().setStatusBarColor(surface);getWindow().setNavigationBarColor(surface);
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        DocumentAccess.prepareHolding(this);
+        prepareWindow();
         vault=new AtomicFile(new File(getFilesDir(),"state.dat"));
         exportStore=new ExportStore(getFilesDir());
         transferStore=new TransferStore(getFilesDir());
         pendingExportTicket=bundle==null?null:bundle.getString("export_ticket");
-        try {state=load();File selectedWorkspace=new File(root());if(!selectedWorkspace.isDirectory()&&!selectedWorkspace.mkdirs())throw new IOException("Workspace directory could not be opened");storageAccess();documentJobs.execute(()->{JSONObject recovered=new JSONObject();try{JSONObject record=exportStore.load(key());recovered.put("export_record",record==null?new JSONObject():ExportStore.metadata(record)).put("export_empty",record==null);}catch(Exception problem){try{recovered.put("export_error",safe(problem));}catch(JSONException ignored){}}try{transferRecovery(recovered);}catch(Exception problem){try{recovered.put("project_error",safe(problem));}catch(JSONException ignored){}}runOnUiThread(()->{if(!closed){dispatch("resume",recovered);rebindTurn();deliverPendingAnnouncement();authorizationReturn(getIntent());requestConversation(getIntent());openRequestedConversation();}});});}
-        catch(Throwable e){fatal("Saved state could not be opened. It has not been overwritten.\n"+safe(e));}
+        documentJobs.execute(()->{try{JSONObject loaded=load();String selected=loaded==null?"":loaded.optString("workspace_selected");if(!selected.isEmpty()&&!selected.matches("[0-9]{1,24}-[0-9]{1,2}"))throw new IllegalStateException("Invalid workspace selection");File selectedWorkspace=new File(getFilesDir(),selected.isEmpty()?"workspace":"workspace-"+selected);if(!selectedWorkspace.isDirectory()&&!selectedWorkspace.mkdirs())throw new IOException("Workspace directory could not be opened");JSONObject recovered=new JSONObject();try{JSONObject record=exportStore.load(key());recovered.put("export_record",record==null?new JSONObject():ExportStore.metadata(record)).put("export_empty",record==null);}catch(Exception problem){try{recovered.put("export_error",safe(problem));}catch(JSONException ignored){}}try{transferRecovery(recovered);}catch(Exception problem){try{recovered.put("project_error",safe(problem));}catch(JSONException ignored){}}runOnUiThread(()->{if(!closed){state=loaded;storageAccess();dispatch("resume",recovered);rebindTurn();deliverPendingAnnouncement();authorizationReturn(getIntent());requestConversation(getIntent());openRequestedConversation();}});}catch(Throwable e){runOnUiThread(()->{if(!closed)fatal("Saved state could not be opened. It has not been overwritten.\n"+safe(e));});}});
+    }
+    private void prepareWindow(){
+        if(android.os.Build.VERSION.SDK_INT>=30){
+            getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
+            if(android.os.Build.VERSION.SDK_INT<35)fitDecorBeforeEdgeToEdge(getWindow());
+        }else resizeSoftInputBeforeInsets(getWindow());
+        paintSystemBars(surface);
+        showSystemBarAppearance(false);
+    }
+    @SuppressWarnings("deprecation")
+    private void fitDecorBeforeEdgeToEdge(android.view.Window window){window.setDecorFitsSystemWindows(false);}
+    @SuppressWarnings("deprecation")
+    private void resizeSoftInputBeforeInsets(android.view.Window window){window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);}
+    private void paintSystemBars(int color){if(android.os.Build.VERSION.SDK_INT<35)paintSystemBarsBeforeContrast(color);}
+    @SuppressWarnings("deprecation")
+    private void paintSystemBarsBeforeContrast(int color){getWindow().setStatusBarColor(color);getWindow().setNavigationBarColor(color);}
+    private void showSystemBarAppearance(boolean dark){
+        if(android.os.Build.VERSION.SDK_INT>=30){
+            WindowInsetsController controller=getWindow().getInsetsController();
+            if(controller!=null){int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;controller.setSystemBarsAppearance(dark?0:appearance,appearance);}
+        }else showSystemBarAppearanceBeforeController(dark);
+    }
+    @SuppressWarnings("deprecation")
+    private void showSystemBarAppearanceBeforeController(boolean dark){
+        getWindow().getDecorView().setSystemUiVisibility(dark?0:View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+    }
+    private void readContentInsets(WindowInsets insets){
+        if(android.os.Build.VERSION.SDK_INT>=30){Insets bars=insets.getInsets(WindowInsets.Type.systemBars()),ime=insets.getInsets(WindowInsets.Type.ime());insetLeft=bars.left;insetTop=bars.top;insetRight=bars.right;insetBottom=Math.max(bars.bottom,ime.bottom);}
+        else readContentInsetsBeforeTypes(insets);
+    }
+    @SuppressWarnings("deprecation")
+    private void readContentInsetsBeforeTypes(WindowInsets insets){insetLeft=insets.getSystemWindowInsetLeft();insetTop=insets.getSystemWindowInsetTop();insetRight=insets.getSystemWindowInsetRight();insetBottom=insets.getSystemWindowInsetBottom();}
+    private void prepareDialogWindow(android.view.Window window){
+        window.setBackgroundDrawable(panel(surface,20));
+        if(android.os.Build.VERSION.SDK_INT>=30){
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
+            if(android.os.Build.VERSION.SDK_INT<35)fitDecorBeforeEdgeToEdge(window);
+            View decor=window.getDecorView();
+            decor.setOnApplyWindowInsetsListener((view,insets)->{Insets ime=insets.getInsets(WindowInsets.Type.ime());view.setPadding(view.getPaddingLeft(),view.getPaddingTop(),view.getPaddingRight(),ime.bottom);return insets;});
+            decor.requestApplyInsets();
+        }else resizeSoftInputBeforeInsets(window);
+    }
+    private Object platformBackCallback;
+    private boolean platformBackRegistered;
+    private void syncPlatformBack(){
+        if(android.os.Build.VERSION.SDK_INT<33)return;
+        if(platformBackCallback==null)platformBackCallback=(android.window.OnBackInvokedCallback)this::dispatchPlatformBack;
+        android.window.OnBackInvokedCallback callback=(android.window.OnBackInvokedCallback)platformBackCallback;
+        android.window.OnBackInvokedDispatcher dispatcher=getOnBackInvokedDispatcher();
+        if(canNavigateBack&&!platformBackRegistered){dispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,callback);platformBackRegistered=true;}
+        else if(!canNavigateBack&&platformBackRegistered){dispatcher.unregisterOnBackInvokedCallback(callback);platformBackRegistered=false;}
+    }
+    private void dispatchPlatformBack(){if(!closed)dispatch("back");}
+    private void releasePlatformBack(){
+        if(android.os.Build.VERSION.SDK_INT<33||!platformBackRegistered||platformBackCallback==null)return;
+        getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback((android.window.OnBackInvokedCallback)platformBackCallback);
+        platformBackRegistered=false;
     }
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);authorizationReturn(intent);requestConversation(intent);}
     private void authorizationReturn(Intent intent){
@@ -168,37 +225,530 @@ public final class Activity extends android.app.Activity {
         return (SecretKey)store.getKey("client.state",null);
     }
     private JSONObject load() throws Exception {
-        if(!vault.getBaseFile().exists()&&!new File(vault.getBaseFile()+".bak").exists())return null;
-        byte[] bytes;try(InputStream in=vault.openRead()){bytes=read(in,8*1024*1024);}
-        if(bytes.length<29)throw new IOException("Encrypted state is incomplete");
-        Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Arrays.copyOfRange(bytes,0,12)));
-        return new JSONObject(new String(cipher.doFinal(Arrays.copyOfRange(bytes,12,bytes.length)),StandardCharsets.UTF_8));
+        synchronized(stateFile){
+            if(!vault.getBaseFile().exists()&&!new File(vault.getBaseFile()+".bak").exists())return null;
+            byte[] bytes;try(InputStream in=vault.openRead()){bytes=read(in,8*1024*1024);}
+            if(bytes.length<29)throw new IOException("Encrypted state is incomplete");
+            Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Arrays.copyOfRange(bytes,0,12)));
+            return new JSONObject(new String(cipher.doFinal(Arrays.copyOfRange(bytes,12,bytes.length)),StandardCharsets.UTF_8));
+        }
     }
+    private final Object saveOrder=new Object();
+    private final Object stateFile=new Object();
+    private long saveSerial,saveCommitted;
+    private byte[] pendingSnapshot;
+    private long pendingSnapshotSerial;
+    private boolean snapshotWriteScheduled,snapshotCommitActive;
     private void save(JSONObject next) throws Exception {
         byte[] plain=next.toString().getBytes(StandardCharsets.UTF_8);if(plain.length>6*1024*1024)throw new IOException("Encrypted history reached its 6 MiB limit. The previous saved state remains intact.");
+        synchronized(saveOrder){
+            long serial=++saveSerial;
+            pendingSnapshot=plain;
+            pendingSnapshotSerial=serial;
+            if(snapshotWriteScheduled)return;
+            snapshotWriteScheduled=true;
+            try{documentJobs.execute(this::writePendingSnapshot);}
+            catch(RuntimeException problem){snapshotWriteScheduled=false;pendingSnapshot=null;throw problem;}
+        }
+    }
+    private void writePendingSnapshot(){
+        while(true){
+            byte[] plain;long serial;
+            synchronized(saveOrder){
+                plain=pendingSnapshot;serial=pendingSnapshotSerial;pendingSnapshot=null;
+                if(plain==null){snapshotWriteScheduled=false;saveOrder.notifyAll();return;}
+                snapshotCommitActive=true;
+            }
+            try{commitSnapshot(plain,serial);}
+            finally{synchronized(saveOrder){snapshotCommitActive=false;saveOrder.notifyAll();}}
+        }
+    }
+    private void commitSnapshot(byte[] plain,long serial){
+        synchronized(stateFile){
+            synchronized(saveOrder){if(serial<saveCommitted)return;}
+            try{
+                writeEncrypted(plain);
+                synchronized(saveOrder){if(serial>saveCommitted)saveCommitted=serial;}
+            }catch(Exception problem){runOnUiThread(()->{if(!closed)Toast.makeText(this,"Saved state could not be written. The previous saved state remains intact. "+safe(problem),Toast.LENGTH_LONG).show();});}
+        }
+    }
+    private void flushPendingSave(){
+        for(;;){
+            byte[] plain;long serial;
+            synchronized(saveOrder){
+                while(snapshotCommitActive){
+                    try{saveOrder.wait();}
+                    catch(InterruptedException problem){Thread.currentThread().interrupt();return;}
+                }
+                if(pendingSnapshot==null)return;
+                plain=pendingSnapshot;serial=pendingSnapshotSerial;pendingSnapshot=null;
+            }
+            commitSnapshot(plain,serial);
+        }
+    }
+    private void writeEncrypted(byte[] plain) throws Exception {
         Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,key());
         FileOutputStream out=null;try{out=vault.startWrite();out.write(cipher.getIV());out.write(cipher.doFinal(plain));vault.finishWrite(out);}catch(Exception e){if(out!=null)vault.failWrite(out);throw e;}
     }
     private boolean phoneAccessGranted(){
-        if(android.os.Build.VERSION.SDK_INT>=30)return android.os.Environment.isExternalStorageManager();
-        return checkSelfPermission("android.permission.READ_EXTERNAL_STORAGE")==android.content.pm.PackageManager.PERMISSION_GRANTED && checkSelfPermission("android.permission.WRITE_EXTERNAL_STORAGE")==android.content.pm.PackageManager.PERMISSION_GRANTED;
+        return DocumentAccess.directGranted(this);
     }
     private void requestPhoneAccess(){
         if(android.os.Build.VERSION.SDK_INT>=30){
-            Intent intent=new Intent("android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION",Uri.parse("package:"+getPackageName()));
-            try{startActivityForResult(intent,48);}catch(android.content.ActivityNotFoundException unavailable){startActivityForResult(new Intent("android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION"),48);}
-        }else requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE","android.permission.WRITE_EXTERNAL_STORAGE"},48);
+            Intent intent=new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,Uri.fromParts("package",getPackageName(),null));
+            try{startActivityForResult(intent,48);}
+            catch(android.content.ActivityNotFoundException|SecurityException unavailable){
+                try{startActivityForResult(new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),48);}
+                catch(android.content.ActivityNotFoundException|SecurityException problem){
+                    deviceNotice("Device all-files Settings is unavailable");
+                    dispatch("phone_access_status");
+                }
+            }
+        }else if(android.os.Build.VERSION.SDK_INT==29&&!android.os.Environment.isExternalStorageLegacy()){
+            deviceNotice("Direct device paths are unavailable on this Android version. Selected-folder access remains available.");
+            dispatch("phone_access_status");
+        }else requestPermissions(new String[]{android.Manifest.permission.READ_EXTERNAL_STORAGE,android.Manifest.permission.WRITE_EXTERNAL_STORAGE},48);
     }
-    @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){super.onRequestPermissionsResult(code,permissions,grants);media.permission(code,grants);if(code==48)dispatch("phone_access_status");if(code==56)deliverPendingAnnouncement();}
+    @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){super.onRequestPermissionsResult(code,permissions,grants);media.permission(code,grants);if(code==48){refreshDeviceRoot();dispatch("phone_access_status");}if(code==56)deliverPendingAnnouncement();}
     private Object phoneReadOrDocument(JSONObject command,int token)throws Exception {
         if(!phoneStorageAccess)throw new IOException("Device storage access is off in Setup");
-        if(!command.optString("phone_scope").equals("shared"))return phoneTool(command,token);
-        String tool=command.getString("tool");
-        if(!tool.equals("phone_read")&&!tool.equals("phone_list"))throw new IOException("Shared-storage operation is unsupported");
-        if(token!=generation||closed)throw new IOException("Cancelled");
-        if(!phoneAccessGranted())throw new IOException("Android broad file access is not granted; enable it or choose limited browsing");
-        JSONObject request=new JSONObject(command.toString()).put("op","tool").put("tool",tool.equals("phone_read")?"read":"list").put("root",android.os.Environment.getExternalStorageDirectory().getAbsolutePath());
-        Object result=Core.call(request);if(token!=generation||closed)throw new IOException("Cancelled");return result;
+        JSONObject requested=command.getJSONObject("args");
+        String requestedTool=command.getString("tool");
+        String requestedPath=requested.optString("path");
+        if(requestedPath.startsWith("/")&&(requestedTool.equals("phone_create")||requestedTool.equals("phone_write")||requestedTool.equals("phone_update"))){
+            if(!phoneAccessGranted())throw new IOException("Device all-files access is unavailable. A native absolute path is written only with all-files access.");
+            DocumentAccess.boundPath(requestedPath);
+            File absolute=DocumentAccess.sharedFile(this,requestedPath);
+            DocumentAccess.Check absoluteCheck=()->deviceActive(token,null,true,false);
+            absoluteCheck.run();
+            return phoneDirect(requestedTool,requested,absolute,null,absoluteCheck);
+        }
+        boolean shared=command.optString("phone_scope").equals("shared");
+        File folder=shared&&phoneAccessGranted()?DocumentAccess.primary():
+            DocumentAccess.directTree(this,command.optString("tree"));
+        if(folder==null){
+            if(shared&&!command.has("tree"))throw new IOException("Device all-files access is unavailable. Choose a permitted device folder.");
+            return phoneTool(command,token);
+        }
+        JSONObject args=command.getJSONObject("args");
+        String path=args.getString("path"),tool=command.getString("tool");
+        DocumentAccess.boundPath(path);
+        File file;
+        if(shared&&path.startsWith("/"))file=DocumentAccess.sharedFile(this,path);
+        else file=DocumentAccess.within(folder,path);
+        DocumentAccess.Check check=()->deviceActive(token,null,true,false);
+        check.run();
+        File destination=null;
+        if(tool.equals("phone_rename")||tool.equals("phone_move")||tool.equals("phone_copy")){
+            String to=args.optString("destination");
+            if(to.isEmpty())throw new IOException("Enter a destination path");
+            DocumentAccess.boundPath(to);
+            destination=shared&&to.startsWith("/")?DocumentAccess.sharedFile(this,to):DocumentAccess.within(folder,to);
+        }
+        return phoneDirect(tool,args,file,destination,check);
+    }
+
+    private String phoneDirect(String tool,JSONObject args,File file,File destination,DocumentAccess.Check check)throws Exception {
+        if(tool.equals("phone_list"))return DocumentAccess.list(file,check).toString(2);
+        if(tool.equals("phone_read")){
+            byte[] bytes=deviceTextBytes(file,check);
+            return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+        }
+        if(tool.equals("phone_stat"))return DocumentAccess.metadata(file).toString(2);
+        if(tool.equals("phone_search"))return DocumentAccess.search(file,args.optString("query"),args.optString("mode"),check).toString(2);
+        if(tool.equals("phone_create")||tool.equals("phone_create_file")){
+            byte[] bytes=devicePayload(args);
+            createDeviceText(file,bytes,check);
+            return "Created and verified device file "+file.getName()+" ("+bytes.length+" bytes).";
+        }
+        if(tool.equals("phone_write")||tool.equals("phone_update")){
+            byte[] bytes=devicePayload(args);
+            if(DocumentAccess.exists(file))DocumentAccess.replace(file,new ByteArrayInputStream(bytes),check);
+            else DocumentAccess.create(file,new ByteArrayInputStream(bytes),check);
+            if(!Arrays.equals(bytes,deviceTextBytes(file,check)))throw new IOException("Device file readback differs from requested bytes");
+            return "Wrote and verified device file "+file.getName()+" ("+bytes.length+" bytes).";
+        }
+        if(tool.equals("phone_mkdir")||tool.equals("phone_create_folder")){
+            DocumentAccess.createDirectory(file);
+            return "Created device folder "+file.getName()+".";
+        }
+        if(tool.equals("phone_copy")){
+            DocumentAccess.copyTree(file,destination,check);
+            return "Copied to "+destination;
+        }
+        if(tool.equals("phone_rename")||tool.equals("phone_move")){
+            if(DocumentAccess.contains(file,destination))throw new IOException("Choose a destination outside the source");
+            return describeRelocation("Moved to",DocumentAccess.moveExclusive(file,destination,check));
+        }
+        throw new IOException("Unsupported device file tool");
+    }
+
+    private byte[] devicePayload(JSONObject args)throws Exception {
+        boolean content=args.has("content")&&!args.isNull("content");
+        boolean data=args.has("data")&&!args.isNull("data");
+        if(content==data)throw new IOException("Send exactly one of content or data");
+        if(content){
+            String text=args.getString("content");
+            if(text.length()>1024*1024||text.indexOf('\0')>=0)throw new IOException("Device text file must be UTF-8 and at most 1 MiB");
+            byte[] bytes=text.getBytes(StandardCharsets.UTF_8);
+            if(bytes.length>1024*1024)throw new IOException("Device text file must be UTF-8 and at most 1 MiB");
+            return bytes;
+        }
+        String encoded=args.getString("data");
+        if(encoded.length()>2*1024*1024)throw new IOException("Device file exceeds 1 MiB");
+        byte[] bytes;
+        try{bytes=Base64.decode(encoded,Base64.DEFAULT);}
+        catch(IllegalArgumentException problem){throw new IOException("Device data is not base64 text");}
+        if(bytes.length>1024*1024)throw new IOException("Device file exceeds 1 MiB");
+        return bytes;
+    }
+
+    private void deviceActive(int token,android.os.CancellationSignal signal,boolean direct,boolean privileged)throws IOException{
+        if(signal!=null)signal.throwIfCanceled();
+        if(closed||token!=generation||Thread.currentThread().isInterrupted())throw new IOException("Device operation cancelled");
+        if(!phoneStorageAccess)throw new IOException("Device storage access is off in Setup");
+        if(direct&&!phoneAccessGranted())throw new IOException("Device all-files permission is unavailable");
+        if(privileged&&!deviceRootEnabled)throw new IOException("Device root is disabled");
+    }
+
+    private byte[] deviceTextBytes(File file,DocumentAccess.Check check)throws IOException{
+        check.run();
+        try(InputStream input=DocumentAccess.regularInput(file)){
+            byte[] bytes=read(input,1024*1024);
+            check.run();return bytes;
+        }
+    }
+
+    private void createDeviceText(File file,byte[] bytes,DocumentAccess.Check check)throws IOException{
+        DocumentAccess.create(file,new ByteArrayInputStream(bytes),check);
+        if(!Arrays.equals(bytes,deviceTextBytes(file,check)))throw new IOException("Device file readback differs from requested bytes");
+    }
+
+    private void deviceNotice(String text){Toast.makeText(this,text,Toast.LENGTH_LONG).show();}
+
+    private void rootAccess(boolean enable){
+        int request=++deviceRootRequest;
+        deviceRootEnabled=false;
+        if(!enable){deviceRootStatus="disabled";dispatch("phone_access_status");return;}
+        if(!phoneStorageAccess){deviceRootStatus="disabled";dispatch("phone_access_status");deviceNotice("Device storage access is off in Setup");return;}
+        deviceRootStatus="checking";
+        dispatch("phone_access_status");
+        scheduleRootVerification(request);
+    }
+    private void refreshDeviceRoot(){
+        if(closed||!deviceRootEnabled)return;
+        int request=++deviceRootRequest;
+        deviceRootEnabled=false;
+        deviceRootStatus="checking";
+        scheduleRootVerification(request);
+    }
+    private void scheduleRootVerification(int request){
+        DocumentAccess.prepareHolding(this);
+        workers.execute(()->{
+            String status;
+            android.os.CancellationSignal signal=new android.os.CancellationSignal();documentSignals.add(signal);
+            try{
+                File su=DocumentAccess.findSu();
+                if(su==null)status="absent";
+                else{
+                    new DocumentAccess.Root(su,deadlines,signal).verify();
+                    status="granted";
+                }
+            }catch(Exception problem){status="denied_or_unavailable";}
+            finally{documentSignals.remove(signal);}
+            String result=status;
+            runOnUiThread(()->{
+                if(closed||request!=deviceRootRequest)return;
+                boolean allowed=phoneStorageAccess;
+                deviceRootStatus=allowed?result:"disabled";
+                deviceRootEnabled=result.equals("granted")&&allowed;
+                dispatch("phone_access_status");
+            });
+        });
+    }
+
+    private String deviceRootLabel(){
+        switch(deviceRootStatus){
+            case "checking":return "Checking Device root";
+            case "absent":return "Device root executable not found";
+            case "denied_or_unavailable":return "Device root permission was denied or unavailable";
+            case "granted":return deviceRootEnabled?"Device root enabled for this session":"Device root disabled";
+            default:return "Device root disabled";
+        }
+    }
+
+    private EditText deviceFileField(LinearLayout body,String hint,String value){
+        EditText field=new EditText(this);
+        field.setHint(hint);field.setContentDescription(hint);field.setText(value);field.setTextColor(ink);
+        body.addView(field,new LinearLayout.LayoutParams(-1,-2));return field;
+    }
+
+    private void deviceFiles(){
+        if(!phoneStorageAccess||state.optString("phone_access_mode").equals("off")){
+            deviceNotice("Device file tools are off in Setup");return;
+        }
+        boolean limited=state.optString("phone_access_mode").equals("limited");
+        String selected=state.optString("phone_uri");
+        LinearLayout body=column();body.setPadding(dp(16),dp(8),dp(16),dp(8));body.setBackgroundColor(surface);
+        TextView access=label("Checking device storage…",12);access.setTextIsSelectable(true);body.addView(access);
+        CheckBox rootMode=new CheckBox(this);rootMode.setText("Use Device root");
+        if(deviceRootEnabled&&!limited)body.addView(rootMode);
+        EditText source=deviceFileField(body,"Device path","");
+        EditText destination=deviceFileField(body,"Destination path","");
+        EditText content=deviceFileField(body,"Text to write","");
+        Spinner operations=new Spinner(this);
+        String[] labels={"List folder","Read binary and compute SHA-256","Create text file","Write text file","Rename","Copy file","Move to review"};
+        ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,labels);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        operations.setAdapter(adapter);body.addView(operations);
+        TextView result=label("",14);result.setTextIsSelectable(true);body.addView(result);
+        ScrollView scroll=new ScrollView(this);scroll.addView(body);
+        AlertDialog panel=new AlertDialog.Builder(this).setTitle("Device files").setView(scroll)
+            .setPositiveButton("Run",null).setNegativeButton("Close",null).create();
+        java.util.concurrent.atomic.AtomicReference<android.os.CancellationSignal> active=new java.util.concurrent.atomic.AtomicReference<>();
+        panel.setOnDismissListener(d->{android.os.CancellationSignal signal=active.get();if(signal!=null)signal.cancel();});
+        panel.show();
+        workers.execute(()->{
+            String note;String prefill="";
+            try{note=deviceAccessNote();if(phoneAccessGranted()&&!limited)prefill=DocumentAccess.primary().getPath();}
+            catch(Exception problem){note=safe(problem);}
+            String text=note,path=prefill;
+            runOnUiThread(()->{if(closed||!panel.isShowing())return;access.setText(text);if(source.getText().length()==0)source.setText(path);});
+        });
+        Button run=panel.getButton(AlertDialog.BUTTON_POSITIVE);
+        run.setOnClickListener(v->{
+            int operation=operations.getSelectedItemPosition();
+            CharSequence fromText=source.getText(),toText=destination.getText(),typed=content.getText();
+            if(fromText.length()>DocumentAccess.MAX_PATH_CHARS||toText.length()>DocumentAccess.MAX_PATH_CHARS){result.setText("Device path exceeds 4096 characters");return;}
+            if(DocumentAccess.pathParts(fromText)>DocumentAccess.MAX_PATH_PARTS||DocumentAccess.pathParts(toText)>DocumentAccess.MAX_PATH_PARTS){result.setText("Device path exceeds 256 components");return;}
+            if((operation==2||operation==3)&&typed.length()>1024*1024){result.setText("Device text file must be UTF-8 and at most 1 MiB");return;}
+            String from=fromText.toString(),to=toText.toString(),text=(operation==2||operation==3)?typed.toString():"";
+            boolean privileged=rootMode.isChecked();
+            Runnable start=()->{
+                android.os.CancellationSignal signal=new android.os.CancellationSignal();
+                if(!active.compareAndSet(null,signal))return;
+                int token=generation;
+                run.setEnabled(false);result.setText("Working…");documentSignals.add(signal);
+                workers.execute(()->{
+                    String message;
+                    try{message=deviceFileOperation(operation,from,to,text,selected,limited,privileged,token,signal);}
+                    catch(Exception problem){message=safe(problem);}
+                    finally{documentSignals.remove(signal);active.compareAndSet(signal,null);}
+                    String output=message;
+                    runOnUiThread(()->{if(panel.isShowing()){result.setText(output);run.setEnabled(true);}});
+                });
+            };
+            if(operation==3||operation==6)new AlertDialog.Builder(this)
+                .setTitle(labels[operation]).setMessage(from).setNegativeButton("Cancel",null)
+                .setPositiveButton("Continue",(d,w)->start.run()).show();
+            else start.run();
+        });
+    }
+
+    private static byte[] deviceWriteBytes(String content)throws IOException {
+        if(content.length()>1024*1024||content.indexOf('\0')>=0)throw new IOException("Device text file must be UTF-8 and at most 1 MiB");
+        byte[] bytes=content.getBytes(StandardCharsets.UTF_8);
+        if(bytes.length>1024*1024)throw new IOException("Device text file must be UTF-8 and at most 1 MiB");
+        return bytes;
+    }
+
+    private String deviceFileOperation(int operation,String from,String to,String content,String selected,
+        boolean limited,boolean privileged,int token,android.os.CancellationSignal signal)throws Exception {
+        DocumentAccess.prepareHolding(this);
+        DocumentAccess.boundPath(from);
+        if(!to.isEmpty())DocumentAccess.boundPath(to);
+        deviceActive(token,signal,false,privileged);
+        if(privileged){
+            File su=DocumentAccess.findSu();
+            if(su==null){deviceRootLost("absent");throw new IOException("Device root executable not found");}
+            DocumentAccess.Root root=new DocumentAccess.Root(su,deadlines,signal);
+            try{root.verify();}catch(Exception problem){if(!signal.isCanceled())deviceRootLost("denied_or_unavailable");throw problem;}
+            return devicePathOperation(operation,from,to,content,null,root,()->deviceActive(token,signal,false,true));
+        }
+        if(phoneAccessGranted()){
+            File folder=limited?DocumentAccess.directTree(this,selected):null;
+            if(!limited||folder!=null)return devicePathOperation(operation,from,to,content,folder,null,
+                ()->deviceActive(token,signal,true,false));
+        }
+        Uri uri=Uri.parse(selected);
+        DocumentAccess.Check check=()->{deviceActive(token,signal,false,false);documentSourceAccess(uri);};
+        check.run();
+        return deviceTreeOperation(new DocumentAccess.Tree(getContentResolver(),uri,operation>=2,signal,check),
+            operation,from,to,content,check);
+    }
+
+    private void deviceRootLost(String status){
+        int request=deviceRootRequest;
+        runOnUiThread(()->{
+            if(closed||request!=deviceRootRequest||!deviceRootStatus.equals("granted"))return;
+            deviceRootEnabled=false;deviceRootStatus=status;dispatch("phone_access_status");
+        });
+    }
+
+    private String deviceAccessNote(){
+        StringBuilder text=new StringBuilder();
+        text.append(phoneAccessGranted()?"All-files access is granted.":"All-files access is not granted. Selected-folder access remains available.");
+        text.append('\n').append(deviceRootLabel());
+        try{
+            text.append("\nShared storage:");
+            for(File volume:DocumentAccess.volumes(this))text.append('\n').append(volume.getPath());
+        }catch(IOException problem){text.append('\n').append(safe(problem));}
+        return text.toString();
+    }
+
+    private File devicePath(String path,File folder,DocumentAccess.Root root)throws Exception {
+        if(root!=null){
+            File requested=DocumentAccess.absolute(path);
+            if(DocumentAccess.sharedVolume(this,requested)!=null)throw new IOException("Choose shared device access for this path");
+            File resolved=root.resolve(requested);
+            if(DocumentAccess.sharedVolume(this,resolved)!=null)throw new IOException("Choose shared device access for this path");
+            return resolved;
+        }
+        if(folder!=null)return DocumentAccess.within(folder,path);
+        return DocumentAccess.sharedFile(this,path);
+    }
+
+    private JSONObject deviceFingerprint(File file,DocumentAccess.Root root,DocumentAccess.Check check)throws Exception {
+        if(root!=null)return root.fingerprint(file,check);
+        try(InputStream input=DocumentAccess.regularInput(file)){return DocumentAccess.fingerprint(input,check);}
+    }
+
+    private String devicePathOperation(int operation,String from,String to,String content,File folder,
+        DocumentAccess.Root root,DocumentAccess.Check check)throws Exception {
+        check.run();
+        File file=devicePath(from,folder,root);
+        if(operation==0)return (root==null?DocumentAccess.list(file,check,5000):root.list(file,check)).toString(2);
+        if(operation==1)return deviceFingerprint(file,root,check).toString(2);
+        File volume=root==null?DocumentAccess.sharedVolume(this,file):null;
+        if(from.isEmpty()||file.getParentFile()==null||file.equals(volume)||file.equals(folder))
+            throw new IOException("Choose a file or subfolder");
+        if(operation==2||operation==3){
+            byte[] bytes=deviceWriteBytes(content);
+            InputStream input=new ByteArrayInputStream(bytes);
+            if(root!=null)root.write(file,input,operation==2);
+            else if(operation==2)DocumentAccess.create(file,input,check);
+            else DocumentAccess.replace(file,input,check);
+            JSONObject verified=deviceFingerprint(file,root,check);
+            verifyFingerprint(DocumentAccess.fingerprint(new ByteArrayInputStream(bytes),check),verified);
+            return verified.toString(2);
+        }
+        File destination;
+        if(operation==6){
+            File base=root!=null?file.getParentFile():folder==null?volume:folder;
+            File review=new File(base,"review");
+            if(DocumentAccess.contains(review,file))throw new IOException("Device path is already in review");
+            if(root!=null)root.reviewFolder(review);
+            else DocumentAccess.ensureReviewDirectory(review);
+            check.run();
+            return describeRelocation("Moved to review at",claimReview(review,file,root,check));
+        }else{
+            if(to.isEmpty())throw new IOException("Enter a destination path");
+            destination=devicePath(to,folder,root);
+        }
+        check.run();
+        if(operation==5){
+            JSONObject original=deviceFingerprint(file,root,check);
+            JSONObject verified;
+            try{
+                if(root!=null)root.copy(file,destination);
+                else try(InputStream input=DocumentAccess.regularInput(file)){DocumentAccess.create(destination,input,check);}
+                verified=deviceFingerprint(destination,root,check);
+                verifyFingerprint(original,verified);
+            }catch(Exception problem){throw retainedCopy(destination,problem);}
+            return "Copied to "+destination+"\n"+verified.toString(2);
+        }
+        if(DocumentAccess.contains(file,destination))throw new IOException("Choose a destination outside the source");
+        DocumentAccess.Relocation relocation=root!=null?root.move(file,destination):DocumentAccess.moveExclusive(file,destination,check);
+        return describeRelocation("Moved to",relocation);
+    }
+    private DocumentAccess.Relocation claimReview(File review,File file,DocumentAccess.Root root,DocumentAccess.Check check)throws Exception {
+        long stamp=System.currentTimeMillis();
+        IOException collision=null;
+        for(int counter=0;counter<1000;counter++){
+            String leaf=DocumentAccess.reviewLeaf(file.getName(),stamp,counter);
+            if(leaf.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>DocumentAccess.MAX_NAME_BYTES)
+                throw new IOException("Device review name exceeds 255 bytes");
+            File destination=new File(review,leaf);
+            try{return root!=null?root.move(file,destination):DocumentAccess.moveExclusive(file,destination,check);}
+            catch(IOException problem){
+                String message=problem.getMessage();
+                if(message==null||!message.startsWith("Device destination already exists"))throw problem;
+                collision=problem;
+            }
+        }
+        throw collision==null?new IOException("Device review destination already exists"):collision;
+    }
+    private String describeRelocation(String action,DocumentAccess.Relocation relocation){
+        if("copied across volumes".equals(relocation.kind))
+            return "Copied across volumes to "+relocation.placed+"; original kept at "+relocation.retained;
+        if("moved by copy".equals(relocation.kind))
+            return action+" "+relocation.placed+" by a verified copy because this volume does not support a single no-replace rename";
+        if("moved by directory claim".equals(relocation.kind))
+            return action+" "+relocation.placed+" by claiming the directory and moving each entry. This is not a single rename";
+        if("moved by link".equals(relocation.kind))
+            return action+" "+relocation.placed+" by a confirmed link because this volume does not support a single no-replace rename";
+        if("moved by rename".equals(relocation.kind))
+            return action+" "+relocation.placed+" by a single no-replace rename";
+        return action+" "+relocation.placed;
+    }
+
+    private IOException retainedCopy(File destination,Exception problem){
+        String message=problem.getMessage()==null?"Device copy could not finish":problem.getMessage();
+        if(message.contains("may remain")||message.contains("no longer at")||message.contains("may be incomplete")
+            ||message.startsWith("Device destination already exists")||message.startsWith("Device path is a symbolic link")
+            ||message.startsWith("Device path is not a regular file")||message.startsWith("Device file exceeds")
+            ||message.startsWith("Device root permission was denied"))
+            return problem instanceof IOException?(IOException)problem:new IOException(message,problem);
+        return new IOException(message+" An incomplete destination may remain at "+destination+".",problem);
+    }
+
+    private void verifyFingerprint(JSONObject expected,JSONObject actual)throws Exception {
+        if(expected.getLong("bytes")!=actual.getLong("bytes")||!expected.getString("sha256").equals(actual.getString("sha256")))
+            throw new IOException("Device file readback differs from the requested bytes");
+    }
+
+    private String deviceTreeOperation(DocumentAccess.Tree tree,int operation,String from,String to,String content,
+        DocumentAccess.Check check)throws Exception {
+        String name=new File(from).getName();
+        int cut=from.lastIndexOf('/');
+        String parentPath=cut<0?"":from.substring(0,cut);
+        if(operation==0)return tree.list(tree.resolve(from)).toString(2);
+        if(from.isEmpty()||from.startsWith("/")||from.endsWith("/"))throw new IOException("Enter a path inside the selected device folder");
+        String parent=tree.resolve(parentPath);
+        String id=operation==2?tree.create(parent,name,"text/plain"):tree.resolve(from);
+        if(operation==1)try(InputStream input=tree.input(id)){return DocumentAccess.fingerprint(input,check).toString(2);}
+        if(operation==2||operation==3){
+            byte[] data=deviceWriteBytes(content);
+            if(operation==2)tree.writeFresh(id,new ByteArrayInputStream(data));
+            else tree.write(id,new ByteArrayInputStream(data));
+            String placed=tree.resolve(from);
+            try(InputStream input=tree.input(placed)){
+                JSONObject actual=DocumentAccess.fingerprint(input,check);
+                verifyFingerprint(DocumentAccess.fingerprint(new ByteArrayInputStream(data),check),actual);
+                return actual.toString(2);
+            }
+        }
+        if(operation==4){
+            if(to.isEmpty()||to.startsWith("/")||to.endsWith("/"))throw new IOException("Enter a destination inside the selected device folder");
+            int split=to.lastIndexOf('/');
+            if(split<0){tree.rename(id,parent,to);return "Moved to "+to+" by copying into the selected folder and removing the original after verification";}
+            return "Moved to "+to+" "+tree.move(id,parent,name,tree.resolve(to.substring(0,split)),to.substring(split+1));
+        }
+        if(operation==5){
+            if(to.isEmpty()||to.startsWith("/")||to.endsWith("/"))throw new IOException("Enter a destination inside the selected device folder");
+            int split=to.lastIndexOf('/');
+            String targetFolder=tree.resolve(split<0?"":to.substring(0,split));
+            JSONObject original;
+            try(InputStream input=tree.input(id)){original=DocumentAccess.fingerprint(input,check);}
+            String target=tree.create(targetFolder,to.substring(split+1),"application/octet-stream");
+            try(InputStream input=tree.input(id)){tree.writeFresh(target,input);}
+            try(InputStream input=tree.input(target)){
+                JSONObject actual=DocumentAccess.fingerprint(input,check);
+                verifyFingerprint(original,actual);
+                return "Copied to "+to+"\n"+actual.toString(2);
+            }
+        }
+        return "Moved to review/"+tree.review(id,parent,name);
     }
     private void appObservationActive(int token)throws IOException{if(token!=generation||closed)throw new IOException("App observation cancelled");}
     private String appOwnerFor(JSONObject current){
@@ -219,7 +769,7 @@ public final class Activity extends android.app.Activity {
         if(android.os.Build.VERSION.SDK_INT<35)throw new IOException("Selected-app usage requires Android 15 or later; package metadata remains available");
         android.app.AppOpsManager ops=(android.app.AppOpsManager)getSystemService(APP_OPS_SERVICE);
         if(ops==null)throw new IOException("Android usage access status unavailable");
-        int mode=ops.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,android.os.Process.myUid(),getPackageName());
+        int mode=ops.unsafeCheckOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,android.os.Process.myUid(),getPackageName());
         if(mode!=android.app.AppOpsManager.MODE_ALLOWED&&(mode!=android.app.AppOpsManager.MODE_DEFAULT||checkSelfPermission("android.permission.PACKAGE_USAGE_STATS")!=android.content.pm.PackageManager.PERMISSION_GRANTED))throw new IOException("Android usage access is not granted; open Android usage settings");
         android.os.UserManager user=(android.os.UserManager)getSystemService(USER_SERVICE);
         if(user==null||!user.isUserUnlocked())throw new IOException("Usage history unavailable while Android user storage is locked");
@@ -245,15 +795,21 @@ public final class Activity extends android.app.Activity {
         if(!selected.equals(info.packageName)||info.applicationInfo==null)throw new IOException("Package identity unavailable");
         String[] names=info.requestedPermissions;int[] flags=info.requestedPermissionsFlags;if(names!=null&&names.length>512)throw new IOException("Package exceeds512 requested permissions; no partial observation accepted");
         JSONArray permissions=new JSONArray();if(names!=null)for(int index=0;index<names.length;index++){appObservationActive(token);Object granted=flags!=null&&flags.length==names.length?Boolean.valueOf((flags[index]&android.content.pm.PackageInfo.REQUESTED_PERMISSION_GRANTED)!=0):JSONObject.NULL;permissions.put(new JSONObject().put("name",names[index]).put("granted",granted));}
-        long code=android.os.Build.VERSION.SDK_INT>=28?info.getLongVersionCode():Integer.toUnsignedLong(info.versionCode);
+        long code=packageVersionCode(info);
         return new JSONObject().put("package",info.packageName).put("version",info.versionName==null?"":info.versionName).put("version_code",Long.toString(code)).put("uid",info.applicationInfo.uid).put("system",(info.applicationInfo.flags&android.content.pm.ApplicationInfo.FLAG_SYSTEM)!=0).put("observed_ms",Long.toString(System.currentTimeMillis())).put("permissions",permissions);
     }
+    private static long packageVersionCode(android.content.pm.PackageInfo info){
+        if(android.os.Build.VERSION.SDK_INT>=28)return info.getLongVersionCode();
+        return packageVersionCodeBeforeLong(info);
+    }
+    @SuppressWarnings("deprecation")
+    private static long packageVersionCodeBeforeLong(android.content.pm.PackageInfo info){return Integer.toUnsignedLong(info.versionCode);}
     private JSONObject inputs(){JSONObject out=new JSONObject();try{if(draft!=null)out.put("draft",draft.getText().toString());for(Map.Entry<String,View> e:fields.entrySet()){View v=e.getValue();if(v instanceof android.widget.Spinner){Object item=((android.widget.Spinner)v).getSelectedItem();JSONArray choices=(JSONArray)v.getTag();int selected=((android.widget.Spinner)v).getSelectedItemPosition();if(selected>=0&&selected<choices.length())out.put(e.getKey(),choices.getJSONObject(selected).getString("value"));}else if(v instanceof CheckBox)out.put(e.getKey(),((CheckBox)v).isChecked());else if(v instanceof EditText)out.put(e.getKey(),((EditText)v).getText().toString());}}catch(JSONException ignored){throw new IllegalStateException(ignored);}return out;}
     private volatile String mcpPauseOwner="";
     private JSONObject eventInputs()throws Exception{return ratePaused||uiStale?new JSONObject():inputs();}
     private void dispatch(String action){dispatch(action,new JSONObject());}
     private void dispatch(String action,JSONObject extra){if(closed||(state==null&&!action.equals("resume")))return;JSONObject plannedEffect=null;boolean stateCommitted=false,effectStarted=false;
-        try{JSONObject in=eventInputs();if(action.equals("send")||action.equals("retry")||action.equals("regenerate")||extra.optString("purpose").startsWith("service_request:"))in.put("offset_minutes",java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis())/60000);if(action.equals("apps_usage_day")||action.equals("apps_usage_week"))in.put("usage_now_ms",Long.toString(System.currentTimeMillis()));android.app.ActivityManager.MemoryInfo memory=new android.app.ActivityManager.MemoryInfo();((android.app.ActivityManager)getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(memory);in.put("device",new JSONObject().put("memory_bytes",memory.totalMem).put("heap_bytes",Runtime.getRuntime().maxMemory()).put("cores",Runtime.getRuntime().availableProcessors()).put("abi",android.os.Build.SUPPORTED_ABIS[0]).put("application_id",getPackageName()).put("microphone_granted",checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)==android.content.pm.PackageManager.PERMISSION_GRANTED));in.put("phone_access_granted",phoneAccessGranted());in.put("gateway_status",Gateway.status);if(action.equals("gateway_edit")){byte[] entropy=new byte[32];new java.security.SecureRandom().nextBytes(entropy);in.put("generated_token",Base64.encodeToString(entropy,Base64.NO_WRAP));}if(action.equals("cancel")&&!rateTicket.isEmpty()&&rateTicket.equals(state.optString("model_expected")))in.put("elapsed_ms",android.os.SystemClock.elapsedRealtime()-rateStarted);Iterator<String> keys=extra.keys();while(keys.hasNext()){String k=keys.next();in.put(k,extra.get(k));}
+        try{JSONObject in=eventInputs();if(action.equals("send")||action.equals("retry")||action.equals("regenerate")||extra.optString("purpose").startsWith("service_request:"))in.put("offset_minutes",java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis())/60000);if(action.equals("apps_usage_day")||action.equals("apps_usage_week"))in.put("usage_now_ms",Long.toString(System.currentTimeMillis()));android.app.ActivityManager.MemoryInfo memory=new android.app.ActivityManager.MemoryInfo();((android.app.ActivityManager)getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(memory);in.put("device",new JSONObject().put("memory_bytes",memory.totalMem).put("heap_bytes",Runtime.getRuntime().maxMemory()).put("cores",Runtime.getRuntime().availableProcessors()).put("abi",android.os.Build.SUPPORTED_ABIS[0]).put("application_id",getPackageName()).put("microphone_granted",checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)==android.content.pm.PackageManager.PERMISSION_GRANTED).put("all_files_access",phoneAccessGranted()).put("device_root_status",deviceRootStatus).put("device_root_enabled",deviceRootEnabled));in.put("phone_access_granted",phoneAccessGranted());in.put("gateway_status",Gateway.status);if(action.equals("gateway_edit")){byte[] entropy=new byte[32];new java.security.SecureRandom().nextBytes(entropy);in.put("generated_token",Base64.encodeToString(entropy,Base64.NO_WRAP));}if(action.equals("cancel")&&!rateTicket.isEmpty()&&rateTicket.equals(state.optString("model_expected")))in.put("elapsed_ms",android.os.SystemClock.elapsedRealtime()-rateStarted);Iterator<String> keys=extra.keys();while(keys.hasNext()){String k=keys.next();in.put(k,extra.get(k));}
             JSONObject request=new JSONObject().put("op","event").put("defer_policy_commit",true).put("action",action).put("state",state==null?JSONObject.NULL:state).put("inputs",in).put("root",root());
             JSONObject result=(JSONObject)Core.call(request);JSONObject next=result.getJSONObject("state");plannedEffect=result.optJSONObject("effect");long plannedAt=android.os.SystemClock.elapsedRealtime();
             boolean progress=action.equals("model_progress")||action.equals("rate_tick")||action.equals("mcp_client_server_progress");if(!progress)save(next);state=next;media.context(next.optString("approval_root_identity")+"/"+next.optString("active"));media.state(next);storageAccess();appOwner=appOwnerFor(next);stateCommitted=true;if(!progress)Core.call(new JSONObject().put("op","harness_policy_commit").put("state",next));if(plannedEffect!=null&&!plannedEffect.optString("web_session").isEmpty())plannedEffect.put("transport_deadline_ms",pageDeadline.begin(plannedEffect.getString("web_session"),plannedEffect.getString("web_ticket"),plannedEffect.optString("web_parent_ticket"),plannedAt));JSONObject voiceUi=result.getJSONObject("ui").optJSONObject("voice_status");VoiceSession.reconcile(this,next,voiceUi==null?"Voice conversation active":voiceUi.optString("label"));if(!ratePaused){if(uiStale){render(result.getJSONObject("ui"));uiStale=false;}else if(progress){if(action.equals("rate_tick"))renderRate(result.getJSONObject("ui"));else if(action.equals("mcp_client_server_progress"))renderMcpProgress(result.getJSONObject("ui"));else renderProgress(result.getJSONObject("ui"));}else if(!(ratePaused&&(action.startsWith("media_input_")||action.startsWith("voice_")||action.startsWith("oauth_")||in.optString("purpose").startsWith("oauth_token:"))))render(result.getJSONObject("ui"));}
@@ -411,7 +967,7 @@ public final class Activity extends android.app.Activity {
         JSONObject appearance=ui.optJSONObject("appearance");if(appearance==null)appearance=new JSONObject();textScale=Math.max(1f,Math.min(2f,appearance.optInt("scale",100)/100f));proseFont=Typeface.create(appearance.optString("font","sans-serif"),Typeface.NORMAL);
         canNavigateBack=ui.optBoolean("can_navigate_back");JSONObject geometry=layout(ui);String page=ui.optString("page");boolean busy=ui.optBoolean("busy"),dark=ui.optString("theme").equals("dark");
         JSONObject palette=ui.getJSONObject("palette");ink=Color.parseColor(palette.getString("ink"));surface=Color.parseColor(palette.getString("surface"));card=Color.parseColor(palette.getString("card"));muted=Color.parseColor(palette.getString("muted"));accent=Color.parseColor(palette.getString("accent"));glass=Color.parseColor(palette.getString("glass"));border=Color.parseColor(palette.getString("border"));
-        getWindow().setStatusBarColor(surface);getWindow().setNavigationBarColor(surface);
+        paintSystemBars(surface);
         LinearLayout outer=new LinearLayout(this){@Override protected void onSizeChanged(int w,int h,int oldw,int oldh){super.onSizeChanged(w,h,oldw,oldh);queueViewport();}};
         outer.setOrientation(LinearLayout.VERTICAL);outer.setBackgroundColor(Color.TRANSPARENT);outer.setPadding(dp(8)+insetLeft,insetTop,dp(8)+insetRight,dp(8)+insetBottom);currentRoot=outer;
         setTitle("RLLM · "+ui.optString("title"));
@@ -485,8 +1041,8 @@ public final class Activity extends android.app.Activity {
         }else if(busy)outer.addView(button("Cancel",()->dispatch("cancel")),new LinearLayout.LayoutParams(-1,dp(48)));
         if(busy&&state.optBoolean("mcp_client_resumable")&&state.optString("mcp_client_expected").startsWith("mcp_client_server:"))outer.addView(button("Pause server stream",()->dispatch("mcp_client_pause")),new LinearLayout.LayoutParams(-1,dp(48)));
         if(page.equals("chat"))applyChatGeometry(geometry);
-        outer.setOnApplyWindowInsetsListener((view,insets)->{if(android.os.Build.VERSION.SDK_INT>=30){Insets bars=insets.getInsets(WindowInsets.Type.systemBars()),ime=insets.getInsets(WindowInsets.Type.ime());insetLeft=bars.left;insetTop=bars.top;insetRight=bars.right;insetBottom=Math.max(bars.bottom,ime.bottom);}else{insetLeft=insets.getSystemWindowInsetLeft();insetTop=insets.getSystemWindowInsetTop();insetRight=insets.getSystemWindowInsetRight();insetBottom=insets.getSystemWindowInsetBottom();}view.setPadding(dp(8)+insetLeft,insetTop,dp(8)+insetRight,dp(8)+insetBottom);queueViewport();return insets;});
-        setContentView(scene);if(android.os.Build.VERSION.SDK_INT>=30){WindowInsetsController controller=getWindow().getInsetsController();if(controller!=null)controller.setSystemBarsAppearance(dark?0:WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);}outer.requestApplyInsets();JSONObject modal=ui.optJSONObject("modal");if(modal!=null)modal(modal);else if(composerFocus&&draft!=null){draft.requestFocus();draft.setSelection(Math.min(selection,draft.length()));}rendering=false;
+        outer.setOnApplyWindowInsetsListener((view,insets)->{readContentInsets(insets);view.setPadding(dp(8)+insetLeft,insetTop,dp(8)+insetRight,dp(8)+insetBottom);queueViewport();return insets;});
+        setContentView(scene);showSystemBarAppearance(dark);syncPlatformBack();outer.requestApplyInsets();JSONObject modal=ui.optJSONObject("modal");if(modal!=null)modal(modal);else if(composerFocus&&draft!=null){draft.requestFocus();draft.setSelection(Math.min(selection,draft.length()));}rendering=false;
     }
     private void composerChoices(View anchor){
         JSONArray actions=composerActions;if(actions==null||actions.length()==0)return;
@@ -550,16 +1106,24 @@ public final class Activity extends android.app.Activity {
                 else{EditText e=new EditText(this);e.setId(View.generateViewId());fieldLabel.setLabelFor(e.getId());e.setHint(f.optString("label"));e.setMinHeight(dp(48));e.setTextSize(15*textScale);e.setTypeface(proseFont);e.setTextColor(ink);e.setText(value);if(name.equals("endpoint"))e.setHint("Local IP → http://; explicit https:// is kept");e.setHintTextColor(muted);e.setBackgroundTintList(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_focused},new int[]{}},new int[]{accent,muted}));e.setSingleLine(!kind.equals("multiline"));if(kind.equals("secret")){e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);e.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);}else if(kind.equals("uri"))e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);else if(kind.equals("number"))e.setInputType(InputType.TYPE_CLASS_NUMBER);else if(kind.equals("multiline")){e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);e.setMinLines(5);e.setGravity(Gravity.TOP);}content.addView(e,new LinearLayout.LayoutParams(-1,-2));fields.put(name,e);}}
         }
         boolean profileForm=state!=null&&state.optString("dialog").equals("profile");JSONArray actions=model.optJSONArray("buttons");if(actions!=null)for(int i=0;i<actions.length();i++){JSONObject b=actions.getJSONObject(i);String event=b.getString("event");if(profileForm&&event.equals("profile_save"))continue;Button control=button(b.getString("label"),()->{if(event.equals("conversation_export"))export();else dispatch(event);});control.setEnabled(b.optBoolean("enabled",true));control.setAlpha(control.isEnabled()?1f:.45f);if(model.optString("presentation").equals("list")){control.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);control.setTextColor(ink);control.setPadding(dp(12),dp(8),dp(12),dp(8));control.setMinHeight(dp(48));control.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf((accent&0x00ffffff)|0x33000000),new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT),null));content.addView(control,new LinearLayout.LayoutParams(-1,-2));View line=new View(this);line.setBackgroundColor(border);content.addView(line,new LinearLayout.LayoutParams(-1,dp(1)));}else{control.setPadding(dp(12),dp(8),dp(12),dp(8));LinearLayout.LayoutParams actionBounds=new LinearLayout.LayoutParams(-1,-2);actionBounds.setMargins(0,dp(4),0,dp(4));content.addView(control,actionBounds);}}
+        String screen=state==null?"":state.optString("dialog");
+        if(screen.equals("phone_access")||screen.equals("phone_locations")){
+            content.addView(button("Device files",this::deviceFiles));
+            content.addView(label(deviceRootLabel(),13));
+            boolean pending=deviceRootStatus.equals("checking");
+            content.addView(button(deviceRootEnabled||pending?"Disable Device root":"Enable Device root",
+                ()->rootAccess(!deviceRootEnabled&&!pending)));
+        }
         ScrollView scroll=new ScrollView(this);scroll.addView(content);
         TextView title=label(model.optString("title"),20);title.setTypeface(proseFont,Typeface.BOLD);title.setBackgroundColor(surface);title.setPadding(dp(24),dp(20),dp(24),dp(12));
         AlertDialog.Builder builder=new AlertDialog.Builder(this).setCustomTitle(title).setView(scroll).setNegativeButton(model.optString("close_label","Close"),(d,w)->dispatch("close"));
         if(profileForm){builder.setPositiveButton("Save",(d,w)->dispatch("profile_save"));}
         dialog=builder.create();dialog.setOnCancelListener(d->{if(!rendering)dispatch("close");});dialog.show();
         for(int id:new int[]{AlertDialog.BUTTON_NEGATIVE,AlertDialog.BUTTON_POSITIVE,AlertDialog.BUTTON_NEUTRAL}){Button control=dialog.getButton(id);if(control!=null){control.setTextColor(accent);control.setMinHeight(dp(48));if(control.getParent() instanceof View)((View)control.getParent()).setBackgroundColor(surface);}}
-        if(dialog.getWindow()!=null){dialog.getWindow().setBackgroundDrawable(panel(surface,20));dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);}
+        if(dialog.getWindow()!=null)prepareDialogWindow(dialog.getWindow());
 
     }
-    private static byte[] read(InputStream in,int max) throws IOException {ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;while((n=in.read(buffer))!=-1){if(out.size()+n>max)throw new IOException("Input exceeds size limit");out.write(buffer,0,n);}return out.toByteArray();}
+    private static byte[] read(InputStream in,int max) throws IOException {ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;while((n=in.read(buffer))!=-1){if(n<0||max<n||out.size()>max-n)throw new IOException("Input exceeds size limit");out.write(buffer,0,n);}return out.toByteArray();}
     private void loadWallpaper(String value,ImageView target){
         workers.execute(()->{try{Uri uri=Uri.parse(value);android.graphics.BitmapFactory.Options options=new android.graphics.BitmapFactory.Options();options.inJustDecodeBounds=true;try(InputStream input=getContentResolver().openInputStream(uri)){android.graphics.BitmapFactory.decodeStream(input,null,options);}if(options.outWidth<=0||options.outHeight<=0||options.outWidth>32768||options.outHeight>32768)throw new IOException("Unsupported background image");options.inSampleSize=1;while(Math.max(options.outWidth,options.outHeight)/options.inSampleSize>2048)options.inSampleSize*=2;options.inJustDecodeBounds=false;android.graphics.Bitmap bitmap;try(InputStream input=getContentResolver().openInputStream(uri)){bitmap=android.graphics.BitmapFactory.decodeStream(input,null,options);}if(bitmap==null)throw new IOException("Cannot read background image");runOnUiThread(()->{if(closed)return;customWallpaper=bitmap;customWallpaperUri=value;target.setImageBitmap(bitmap);});}catch(Exception problem){runOnUiThread(()->{if(!closed)Toast.makeText(this,"Background unavailable: "+safe(problem),Toast.LENGTH_LONG).show();});}});
     }
@@ -1125,7 +1689,7 @@ public final class Activity extends android.app.Activity {
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
         if(media.result(request,result,data))return;
-        if(request==48){dispatch("phone_access_status");return;}
+        if(request==48){refreshDeviceRoot();dispatch("phone_access_status");return;}
         if(request==49){cloudSelection(result,data);return;}
 
         if(request==42||request==44){finishSavedExport(result,data);return;}
@@ -1133,7 +1697,7 @@ public final class Activity extends android.app.Activity {
         Uri uri=data.getData();
         if(!"content".equals(uri.getScheme())||uri.getAuthority()==null){if(request==41){String failedTicket=documentTicket;documentTicket="";try{dispatch("document_failure",new JSONObject().put("document_ticket",failedTicket).put("error","Choose a document on the device storage; this URI is unsupported"));}catch(JSONException ignored){}}else Toast.makeText(this,"Choose a document on the device storage; this URI is unsupported",Toast.LENGTH_LONG).show();return;}
         if(request==47){try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);dispatch("wallpaper_result",new JSONObject().put("uri",uri.toString()));}catch(Exception e){Toast.makeText(this,safe(e),Toast.LENGTH_LONG).show();}return;}
-        if(request==43){try{getContentResolver().takePersistableUriPermission(uri,data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION));dispatch("folder_result",new JSONObject().put("uri",uri.toString()));}catch(Exception e){Toast.makeText(this,safe(e),Toast.LENGTH_LONG).show();}return;}
+        if(request==43){try{DocumentAccess.requireLocalTree(uri);getContentResolver().takePersistableUriPermission(uri,data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION));dispatch("folder_result",new JSONObject().put("uri",uri.toString()));}catch(Exception e){Toast.makeText(this,safe(e),Toast.LENGTH_LONG).show();}return;}
         if(request!=41&&request!=45&&request!=46)return;
         final int token=request==41?documentGeneration:generation;final String pickedTicket=request==41?documentTicket:"";if(request==41)documentTicket="";
         workers.execute(()->{try{
@@ -1196,6 +1760,7 @@ public final class Activity extends android.app.Activity {
         try(InputStream input=new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)){byte[] bytes=read(input,1024*1024);documentActive(token,signal);return bytes;}finally{documentFiles.remove(descriptor);}
     }
     private String[] phoneIdentity(Uri tree,String path,int token,android.os.CancellationSignal signal)throws Exception {
+        DocumentAccess.boundPath(path);
         String id=DocumentsContract.getTreeDocumentId(tree),parent=id;
         for(String segment:path.split("/",-1)){
             documentActive(token,signal);String next=null;parent=id;
@@ -1215,7 +1780,10 @@ public final class Activity extends android.app.Activity {
     private JSONObject phoneRevision(JSONObject e,int token)throws Exception {
         android.os.CancellationSignal signal=new android.os.CancellationSignal();documentSignals.add(signal);
         try{
-            documentActive(token,signal);Uri tree=Uri.parse(e.getString("tree"));boolean granted=false;
+            documentActive(token,signal);
+            File folder=DocumentAccess.directTree(this,e.getString("tree"));
+            if(folder!=null)return directDeviceRevision(e,folder,()->deviceActive(token,signal,true,false));
+            Uri tree=Uri.parse(e.getString("tree"));DocumentAccess.requireLocalTree(tree);boolean granted=false;
             for(android.content.UriPermission grant:getContentResolver().getPersistedUriPermissions())if(grant.getUri().equals(tree)&&grant.isReadPermission()&&grant.isWritePermission())granted=true;
             if(!granted)throw new IOException("Grant read and write permission to this device folder");
             String phase=e.getString("phase");JSONObject result=new JSONObject();
@@ -1232,9 +1800,9 @@ public final class Activity extends android.app.Activity {
                 documentActive(token,signal);Uri created=DocumentsContract.createDocument(getContentResolver(),DocumentsContract.buildDocumentUriUsingTree(tree,parent),"text/plain",name);
                 if(created==null||!tree.getAuthority().equals(created.getAuthority())||ids.contains(DocumentsContract.getDocumentId(created))||e.getString("document_id").equals(DocumentsContract.getDocumentId(created)))throw new IOException("Provider did not create a separate revision; no bytes were written");
                 try(Cursor cursor=getContentResolver().query(created,new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){if(cursor==null||!cursor.moveToFirst())throw new IOException("Revision metadata unavailable");name=cursor.getString(0);}
-                documentActive(token,signal);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(created,"w",signal);
+                documentActive(token,signal);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(created,"rw",signal);
                 if(descriptor==null)throw new IOException("Could not open the new device revision");documentFiles.add(descriptor);
-                try(OutputStream out=new android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor)){documentActive(token,signal);out.write(e.getString("previous").getBytes(StandardCharsets.UTF_8));out.flush();descriptor.getFileDescriptor().sync();}finally{documentFiles.remove(descriptor);}
+                try(OutputStream out=new android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor)){documentActive(token,signal);if(android.system.Os.fstat(descriptor.getFileDescriptor()).st_size!=0)throw new IOException("Revision name already exists; no existing document was replaced");out.write(e.getString("previous").getBytes(StandardCharsets.UTF_8));out.flush();descriptor.getFileDescriptor().sync();}finally{documentFiles.remove(descriptor);}
                 result.put("document_id",DocumentsContract.getDocumentId(created)).put("name",name).put("data",Base64.encodeToString(phoneBytes(created,token,signal),Base64.NO_WRAP));
             }else if(phase.equals("write")){
                 String[] identity=phoneIdentity(tree,e.getString("path"),token,signal);Uri target=DocumentsContract.buildDocumentUriUsingTree(tree,identity[0]);
@@ -1260,6 +1828,60 @@ public final class Activity extends android.app.Activity {
             documentActive(token,signal);return result;
         }finally{documentSignals.remove(signal);}
     }
+    private JSONObject directDeviceRevision(JSONObject e,File folder,DocumentAccess.Check check)throws Exception {
+        check.run();
+        File file=DocumentAccess.within(folder,e.getString("path")),parent=file.getParentFile();
+        String phase=e.getString("phase");
+        if(phase.equals("read"))return new JSONObject().put("document_id",file.getPath())
+            .put("parent_id",parent.getPath()).put("data",Base64.encodeToString(deviceTextBytes(file,check),Base64.NO_WRAP));
+        if(phase.equals("backup")){
+            if(!parent.getPath().equals(e.getString("parent_id"))||!file.getPath().equals(e.getString("document_id")))
+                throw new IOException("Device revision path changed; reopen the revision");
+            File backup=DocumentAccess.within(parent,e.getString("revision_name"));
+            byte[] previous=e.getString("previous").getBytes(StandardCharsets.UTF_8);
+            createDeviceText(backup,previous,check);
+            return new JSONObject().put("document_id",backup.getPath()).put("name",backup.getName())
+                .put("data",Base64.encodeToString(previous,Base64.NO_WRAP));
+        }
+        if(!phase.equals("write"))throw new IOException("Unexpected device revision phase");
+        byte[] replacement=e.getString("content").getBytes(StandardCharsets.UTF_8);
+        FileDescriptor fd=DocumentAccess.openReadWrite(file);
+        try{
+            try(android.os.ParcelFileDescriptor lockDescriptor=android.os.ParcelFileDescriptor.dup(fd);
+                FileOutputStream lockStream=new android.os.ParcelFileDescriptor.AutoCloseOutputStream(lockDescriptor);
+                java.nio.channels.FileLock lock=lockStream.getChannel().tryLock()){
+                if(lock==null)throw new IOException("Device file is locked by another writer");
+                android.system.Os.lseek(fd,0,android.system.OsConstants.SEEK_SET);
+                long size=android.system.Os.fstat(fd).st_size;
+                if(size>1024*1024)throw new IOException("Device original exceeds 1 MiB");
+                byte[] before=new byte[(int)size];
+                int filled=0;
+                while(filled<before.length){
+                    int count=android.system.Os.read(fd,before,filled,before.length-filled);
+                    if(count<=0)throw new IOException("Device original ended before its size");
+                    filled+=count;
+                }
+                Core.call(new JSONObject().put("op","phone_revision_check").put("record",e)
+                    .put("document_id",file.getPath()).put("data",Base64.encodeToString(before,Base64.NO_WRAP)));
+                check.run();
+                android.system.Os.lseek(fd,0,android.system.OsConstants.SEEK_SET);
+                android.system.Os.ftruncate(fd,0);
+                int offset=0;
+                while(offset<replacement.length){
+                    check.run();
+                    int count=android.system.Os.write(fd,replacement,offset,replacement.length-offset);
+                    if(count<=0)throw new IOException("Device update stopped before all bytes were written");
+                    offset+=count;
+                }
+                android.system.Os.fsync(fd);
+            }
+        }catch(android.system.ErrnoException problem){
+            throw new IOException("Device revision target is unavailable: "+file+". "+problem.getMessage(),problem);
+        }finally{
+            try{android.system.Os.close(fd);}catch(android.system.ErrnoException ignored){}
+        }
+        return new JSONObject().put("data",Base64.encodeToString(deviceTextBytes(file,check),Base64.NO_WRAP));
+    }
     // Platform document-provider binding. Rust owns destination/bytes/retry policy.
     private JSONObject projectPhone(JSONObject e,int token)throws Exception {
         android.os.CancellationSignal signal=new android.os.CancellationSignal();documentSignals.add(signal);
@@ -1269,11 +1891,14 @@ public final class Activity extends android.app.Activity {
         String createdName=null;TransferStore.ChunkReader stream=null;final boolean chunked=e.optBoolean("chunked");
         try{
             if(chunked)stream=documentJobs.submit(()->openTransfer(e)).get();
-            documentActive(token,signal);Uri tree=Uri.parse(e.getString("tree"));String name=e.getString("name"),phase=e.getString("phase");
-            if(!"content".equals(tree.getScheme())||tree.getAuthority()==null)throw new IOException("Unsupported device folder");
+            documentActive(token,signal);String name=e.getString("name"),phase=e.getString("phase");
             if(name.isEmpty()||name.equals(".")||name.equals("..")||name.contains("/")||name.contains("\\")||name.indexOf('%')>=0||name.indexOf(':')>=0||name.indexOf('\0')>=0||name.getBytes(StandardCharsets.UTF_8).length>255)throw new IOException("Invalid project filename");
             String mime=e.optString("mime","application/zip");if(!mime.equals("application/zip")&&!mime.equals("application/octet-stream"))throw new IOException("Unsupported snapshot content type");
             boolean write=phase.equals("write");if(!write&&!phase.equals("probe")&&!phase.equals("verify"))throw new IOException("Invalid device transfer phase");
+            File folder=DocumentAccess.directTree(this,e.getString("tree"));
+            if(folder!=null)return directDeviceProject(e,folder,name,write,stream,()->deviceActive(token,signal,true,false));
+            Uri tree=Uri.parse(e.getString("tree"));
+            DocumentAccess.requireLocalTree(tree);
             boolean granted=false;for(android.content.UriPermission grant:getContentResolver().getPersistedUriPermissions())if(grant.getUri().equals(tree)&&grant.isReadPermission()&&(!write||grant.isWritePermission()))granted=true;
             if(!granted)throw new IOException("The original device folder grant is unavailable; pending snapshot retained");
             String rootId=DocumentsContract.getTreeDocumentId(tree),match=null;Set<String> ids=new HashSet<>();
@@ -1289,8 +1914,8 @@ public final class Activity extends android.app.Activity {
                 if(file==null||!tree.getAuthority().equals(file.getAuthority())||ids.contains(DocumentsContract.getDocumentId(file)))throw new IOException("Provider did not return a new document; no bytes were written");
                 createdName=name;
                 try(Cursor c=getContentResolver().query(file,new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){if(c==null||!c.moveToFirst()||!name.equals(c.getString(0)))throw new IOException("Provider changed project filename; no bytes were written");}
-                documentActive(token,signal);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(file,"w",signal);if(descriptor==null)throw new IOException("New project document unavailable");documentFiles.add(descriptor);opened.set(descriptor);documentActive(token,signal);
-                try(OutputStream out=new android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor)){documentActive(token,signal);if(chunked){byte[] buffer=new byte[65536];int n;while((n=stream.read(buffer))!=-1){documentActive(token,signal);out.write(buffer,0,n);}}else out.write(bytes);out.flush();}finally{opened.compareAndSet(descriptor,null);documentFiles.remove(descriptor);}
+                documentActive(token,signal);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(file,"rw",signal);if(descriptor==null)throw new IOException("New project document unavailable");documentFiles.add(descriptor);opened.set(descriptor);documentActive(token,signal);
+                try(OutputStream out=new android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor)){documentActive(token,signal);if(android.system.Os.fstat(descriptor.getFileDescriptor()).st_size!=0)throw new IOException("Project document already exists; it was not replaced. Retry will verify existing bytes");if(chunked){byte[] buffer=new byte[65536];int n;while((n=stream.read(buffer))!=-1){documentActive(token,signal);out.write(buffer,0,n);}}else out.write(bytes);out.flush();}finally{opened.compareAndSet(descriptor,null);documentFiles.remove(descriptor);}
             }else{
                 if(match==null)return chunked?(JSONObject)Core.call(chunkInput("finish",e.getLong("snapshot_handle")).put("found",false)):new JSONObject().put("found",false);
                 file=DocumentsContract.buildDocumentUriUsingTree(tree,match);
@@ -1304,41 +1929,134 @@ public final class Activity extends android.app.Activity {
         }catch(Exception error){if(expired.get())error=new IOException("Device project transfer timed out; pending snapshot retained",error);if(createdName!=null)throw new IOException("New project document "+createdName+" may remain incomplete or unverified; existing files were not replaced. "+safe(error),error);throw error;}
         finally{if(stream!=null)try{stream.close();}catch(IOException ignored){}timeout.cancel(false);documentSignals.remove(signal);android.os.ParcelFileDescriptor file=opened.getAndSet(null);if(file!=null){documentFiles.remove(file);try{file.close();}catch(IOException ignored){}}}
     }
+    private JSONObject directDeviceProject(JSONObject e,File folder,String name,boolean write,InputStream stream,
+        DocumentAccess.Check check)throws Exception {
+        check.run();
+        File file=DocumentAccess.within(folder,name);
+        boolean chunked=e.optBoolean("chunked");
+        if(write){
+            if(chunked)DocumentAccess.create(file,stream,check);
+            else{
+                byte[] bytes=Base64.decode(e.getString("archive"),Base64.NO_WRAP);
+                if(bytes.length>5*1024*1024)throw new IOException("Project archive exceeds 5 MiB");
+                DocumentAccess.create(file,new ByteArrayInputStream(bytes),check);
+            }
+        }else if(!DocumentAccess.exists(file)){
+            if(chunked)return (JSONObject)Core.call(chunkInput("finish",e.getLong("snapshot_handle")).put("found",false));
+            return new JSONObject().put("found",false);
+        }
+        try(InputStream in=DocumentAccess.regularInput(file)){
+            if(!chunked){
+                byte[] actual=read(in,5*1024*1024);check.run();
+                return new JSONObject().put("found",true).put("data",Base64.encodeToString(actual,Base64.NO_WRAP));
+            }
+            try(InputStream expected=documentJobs.submit(()->openTransfer(e)).get()){
+                long handle=e.getLong("snapshot_handle");
+                byte[] buffer=new byte[65536];
+                int n;
+                while((n=in.read(buffer))!=-1){
+                    check.run();
+                    Core.call(chunkInput("compare",handle).put("data",Base64.encodeToString(Arrays.copyOf(buffer,n),Base64.NO_WRAP))
+                        .put("expected",Base64.encodeToString(chunkExpected(expected,n),Base64.NO_WRAP)));
+                }
+                if(expected.read()!=-1)throw new IOException("Destination readback ended early");
+                check.run();
+                return (JSONObject)Core.call(chunkInput("finish",handle).put("found",true));
+            }
+        }
+    }
     private String phoneTool(JSONObject e,int token) throws Exception {
         if(!phoneStorageAccess)throw new IOException("Device storage access is off in Setup");
         android.os.CancellationSignal signal=new android.os.CancellationSignal();documentSignals.add(signal);String createdName=null;
         try{
-            documentActive(token,signal);Uri tree=Uri.parse(e.getString("tree"));String id=DocumentsContract.getTreeDocumentId(tree);String path=e.getJSONObject("args").getString("path");
-            if(path.startsWith("/")||path.contains("\\")||path.indexOf('\0')>=0)throw new IOException("Invalid device path");
-            boolean creating=e.getString("tool").equals("phone_create");String[] segments=path.split("/",-1);String fileName=creating?segments[segments.length-1]:null;
-            if(creating&&(fileName.isEmpty()||fileName.equals(".")||fileName.equals("..")||fileName.getBytes(StandardCharsets.UTF_8).length>255||fileName.indexOf('%')>=0||fileName.indexOf(':')>=0))throw new IOException("Choose a plain new filename of at most 255 UTF-8 bytes");
-            if(creating){boolean writable=false;for(android.content.UriPermission grant:getContentResolver().getPersistedUriPermissions())if(grant.getUri().equals(tree)&&grant.isWritePermission())writable=true;if(!writable)throw new IOException("Grant write permission to this device folder");}
-            for(int index=0;index<segments.length-(creating?1:0);index++){String segment=segments[index];if(segment.isEmpty()||segment.equals("."))continue;if(segment.equals(".."))throw new IOException("Path leaves permitted folder");String next=null;Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,id);
-                documentActive(token,signal);try(Cursor c=getContentResolver().query(children,new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){if(c==null)throw new IOException("Folder unavailable");int count=0;while(c.moveToNext()){if(++count>5000)throw new IOException("Folder traversal limit exceeded");if(segment.equals(c.getString(1))){if(next!=null)throw new IOException("Ambiguous document name");next=c.getString(0);}}}
-                if(next==null)throw new IOException("Document not found: "+segment);id=next;
-            }
             documentActive(token,signal);
-            if(creating){String content=e.getJSONObject("args").getString("content");byte[] bytes=content.getBytes(StandardCharsets.UTF_8);if(bytes.length>1024*1024||content.indexOf('\0')>=0)throw new IOException("Device text file must be UTF-8 and at most 1 MiB");
-                Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,id);Set<String> existingIds=new HashSet<>();
-                try(Cursor c=getContentResolver().query(children,new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){if(c==null)throw new IOException("Folder unavailable");int count=0;while(c.moveToNext()){if(++count>5000)throw new IOException("Folder exceeds lookup limit");existingIds.add(c.getString(0));if(fileName.equals(c.getString(1)))throw new IOException("File already exists; it was not replaced");}}
-                documentActive(token,signal);Uri created=DocumentsContract.createDocument(getContentResolver(),DocumentsContract.buildDocumentUriUsingTree(tree,id),"text/plain",fileName);if(created==null)throw new IOException("Folder provider refused to create the file");
-                if(!tree.getAuthority().equals(created.getAuthority())||existingIds.contains(DocumentsContract.getDocumentId(created)))throw new IOException("Provider did not return a new document; no bytes were written");
-                createdName=fileName;documentActive(token,signal);try(Cursor c=getContentResolver().query(created,new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME},null,null,null,signal)){if(c==null||!c.moveToFirst())throw new IOException("New document metadata unavailable");createdName=c.getString(0);}
-                documentActive(token,signal);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(created,"w",signal);if(descriptor==null)throw new IOException("Could not open the new device file");documentFiles.add(descriptor);try(OutputStream out=new android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor)){documentActive(token,signal);out.write(bytes);out.flush();}finally{documentFiles.remove(descriptor);}
-                documentActive(token,signal);descriptor=getContentResolver().openFileDescriptor(created,"r",signal);if(descriptor==null)throw new IOException("Could not verify the new device file");documentFiles.add(descriptor);byte[] actual;try(InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)){documentActive(token,signal);actual=read(in,1024*1024);}finally{documentFiles.remove(descriptor);}documentActive(token,signal);
-                if(!Arrays.equals(bytes,actual))throw new IOException("Device file readback differs from the requested contents");return "Created and verified device file "+createdName+" ("+bytes.length+" bytes).";
+            String tool=e.getString("tool");
+            JSONObject args=e.getJSONObject("args");
+            String path=args.optString("path");
+            if(path.startsWith("/")||path.contains("\\")||path.indexOf('\0')>=0)throw new IOException("Invalid device path");
+            DocumentAccess.boundPath(path);
+            boolean mutating=tool.equals("phone_create")||tool.equals("phone_create_file")||tool.equals("phone_write")||tool.equals("phone_update")
+                ||tool.equals("phone_mkdir")||tool.equals("phone_create_folder")||tool.equals("phone_rename")||tool.equals("phone_move")||tool.equals("phone_copy");
+            boolean reading=tool.equals("phone_list")||tool.equals("phone_read")||tool.equals("phone_stat")||tool.equals("phone_search");
+            if(!mutating&&!reading)throw new IOException("Unsupported device file tool");
+            DocumentAccess.Check check=()->documentActive(token,signal);
+            DocumentAccess.Tree documents=new DocumentAccess.Tree(getContentResolver(),Uri.parse(e.getString("tree")),mutating,signal,check);
+            if(tool.equals("phone_list"))return documents.list(documents.resolve(path)).toString(2);
+            if(tool.equals("phone_stat"))return documents.describe(documents.resolve(path)).toString(2);
+            if(tool.equals("phone_search"))return documents.search(documents.resolve(path),path,args.optString("query"),args.optString("mode")).toString(2);
+            if(tool.equals("phone_read")){
+                try(InputStream in=documents.input(documents.resolve(path))){
+                    byte[] bytes=read(in,1024*1024);
+                    return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+                }
             }
-            if(e.getString("tool").equals("phone_list")){JSONArray rows=new JSONArray();Uri children=DocumentsContract.buildChildDocumentsUriUsingTree(tree,id);try(Cursor c=getContentResolver().query(children,new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME,DocumentsContract.Document.COLUMN_MIME_TYPE},null,null,null,signal)){if(c==null)throw new IOException("Folder unavailable");while(c.moveToNext()){if(rows.length()>=500)throw new IOException("Folder exceeds 500 entries");rows.put(new JSONObject().put("name",c.getString(0)).put("directory",DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(1))));}}documentActive(token,signal);return rows.toString(2);}
-            Uri file=DocumentsContract.buildDocumentUriUsingTree(tree,id);android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(file,"r",signal);if(descriptor==null)throw new IOException("Document unavailable");documentFiles.add(descriptor);try(InputStream in=new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor)){documentActive(token,signal);byte[] bytes=read(in,1024*1024);documentActive(token,signal);return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();}finally{documentFiles.remove(descriptor);}
+            if(path.isEmpty()||path.endsWith("/"))throw new IOException("Enter a path inside the selected device folder");
+            int cut=path.lastIndexOf('/');
+            String parentPath=cut<0?"":path.substring(0,cut);
+            String name=cut<0?path:path.substring(cut+1);
+            if(tool.equals("phone_create")||tool.equals("phone_create_file")){
+                if(name.isEmpty()||name.equals(".")||name.equals("..")||name.getBytes(StandardCharsets.UTF_8).length>255||name.indexOf('%')>=0||name.indexOf(':')>=0)
+                    throw new IOException("Choose a plain new filename of at most 255 UTF-8 bytes");
+                byte[] bytes=devicePayload(args);
+                String id=documents.create(documents.resolve(parentPath),name,"text/plain");
+                createdName=name;
+                documents.writeFresh(id,new ByteArrayInputStream(bytes));
+                try(InputStream in=documents.input(id)){
+                    byte[] actual=read(in,1024*1024);
+                    if(!Arrays.equals(bytes,actual))throw new IOException("Device file readback differs from the requested contents");
+                }
+                return "Created and verified device file "+name+" ("+bytes.length+" bytes).";
+            }
+            if(tool.equals("phone_write")||tool.equals("phone_update")){
+                byte[] bytes=devicePayload(args);
+                String parent=documents.resolve(parentPath);
+                String existing=documents.child(parent,name);
+                String id=existing;
+                if(existing==null){
+                    id=documents.create(parent,name,"application/octet-stream");
+                    createdName=name;
+                    documents.writeFresh(id,new ByteArrayInputStream(bytes));
+                }else documents.write(id,new ByteArrayInputStream(bytes));
+                String placed=documents.child(parent,name);
+                if(placed!=null)id=placed;
+                try(InputStream in=documents.input(id)){
+                    byte[] actual=read(in,1024*1024);
+                    if(!Arrays.equals(bytes,actual))throw new IOException("Device file readback differs from the requested contents");
+                }
+                return "Wrote and verified device file "+name+" ("+bytes.length+" bytes).";
+            }
+            if(tool.equals("phone_mkdir")||tool.equals("phone_create_folder")){
+                documents.create(documents.resolve(parentPath),name,DocumentsContract.Document.MIME_TYPE_DIR);
+                return "Created device folder "+name+".";
+            }
+            String destination=args.optString("destination");
+            if(destination.isEmpty()||destination.startsWith("/")||destination.contains("\\")||destination.indexOf('\0')>=0||destination.endsWith("/"))
+                throw new IOException("Enter a destination inside the selected device folder");
+            DocumentAccess.boundPath(destination);
+            int split=destination.lastIndexOf('/');
+            String targetParent=documents.resolve(split<0?"":destination.substring(0,split));
+            String targetName=split<0?destination:destination.substring(split+1);
+            String sourceParent=documents.resolve(parentPath);
+            String sourceId=documents.resolve(path);
+            if(tool.equals("phone_copy")){
+                documents.copy(sourceId,sourceParent,name,targetParent,targetName);
+                return "Copied to "+destination;
+            }
+            if(targetParent.equals(sourceParent)){
+                documents.rename(sourceId,sourceParent,targetName);
+                return "Moved to "+destination+" by copying into the selected folder and removing the original after verification";
+            }
+            return "Moved to "+destination+" "+documents.move(sourceId,sourceParent,name,targetParent,targetName);
         }catch(Exception error){if(createdName!=null)throw new IOException("New device document "+createdName+" may remain incomplete or unverified. Existing documents were not replaced. "+safe(error),error);throw error;}finally{documentSignals.remove(signal);}
     }
     private void preserveInputs(){if(closed||state==null)return;try{JSONObject result=(JSONObject)Core.call(new JSONObject().put("op","event").put("action","capture").put("state",state).put("inputs",inputs()).put("root",root()));JSONObject next=result.getJSONObject("state");save(next);state=next;media.state(next);JSONObject status=result.getJSONObject("ui").optJSONObject("voice_status");VoiceSession.reconcile(this,next,status==null?"Voice conversation active":status.optString("label"));}catch(Throwable problem){Toast.makeText(this,"Input could not be saved: "+safe(problem),Toast.LENGTH_LONG).show();}}
     boolean voiceForeground(){return !closed&&!ratePaused;}
     void voiceSessionReady(String session){if(!closed)media.backgroundReady(session);}
     void voiceSessionStopped(String session){if(closed||state==null||!state.optString("voice_consent").equals(session))return;media.stopVoice();try{dispatch("voice_session_stop",new JSONObject().put("voice_session",session));}catch(Exception failure){Toast.makeText(this,"Voice stopped",Toast.LENGTH_LONG).show();}}
-    @Override public void onBackPressed(){if(canNavigateBack)dispatch("back");else super.onBackPressed();}
-    @Override protected void onPause(){ratePaused=true;boolean background=state!=null&&VoiceSession.owns(this,state.optString("voice_consent"));if(state!=null&&state.optBoolean("voice_open")&&!background&&!media.permissionPending())dispatch("voice_suspend");media.pause(background);preserveInputs();uiStale=true;super.onPause();}
-    @Override protected void onResume(){ratePaused=false;media.resume();super.onResume();if(!loopArmed){loopArmed=true;rateHandler.postDelayed(loopTick,15000);}if(state!=null&&!closed){deliverPendingAnnouncement();announcePendingProtectionLoss();dispatch("phone_access_status");refreshRateClock();openRequestedConversation();}}
+    @Override public boolean onKeyDown(int keyCode,android.view.KeyEvent event){if(android.os.Build.VERSION.SDK_INT<33&&keyCode==android.view.KeyEvent.KEYCODE_BACK&&canNavigateBack){dispatch("back");return true;}return super.onKeyDown(keyCode,event);}
+    @Override protected void onPause(){ratePaused=true;boolean background=state!=null&&VoiceSession.owns(this,state.optString("voice_consent"));if(state!=null&&state.optBoolean("voice_open")&&!background&&!media.permissionPending())dispatch("voice_suspend");media.pause(background);preserveInputs();flushPendingSave();uiStale=true;super.onPause();}
+    @Override protected void onStop(){flushPendingSave();super.onStop();}
+    @Override protected void onResume(){ratePaused=false;media.resume();super.onResume();if(!loopArmed){loopArmed=true;rateHandler.postDelayed(loopTick,15000);}if(state!=null&&!closed){refreshDeviceRoot();deliverPendingAnnouncement();announcePendingProtectionLoss();dispatch("phone_access_status");refreshRateClock();openRequestedConversation();}}
     @Override public void onConfigurationChanged(android.content.res.Configuration configuration){super.onConfigurationChanged(configuration);viewportWidth=0;viewportHeight=0;queueViewport();}
-    @Override protected void onDestroy(){VoiceSession.release(this);TurnService.detach(this);media.close();closed=true;pageDeadline.clear();resolution.close();try{JSONObject expected=state==null?null:state.optJSONObject("web_expected");if(expected!=null&&!expected.optString("capture_token").isEmpty())Core.call(new JSONObject().put("op","capture_document_cancel").put("ticket",expected.getString("capture_token")));}catch(Exception ignored){}try{if(state!=null){Core.call(new JSONObject().put("op","stream_owner_cancel").put("owner",state.optString("mcp_client_expected")));}}catch(Exception ignored){}try{if(state!=null&&state.has("mcp_client_resume_token")&&!state.isNull("mcp_client_resume_token"))Core.call(new JSONObject().put("op","stream_resume_close").put("token",state.get("mcp_client_resume_token")));}catch(Exception ignored){}cleanupWorkers.shutdownNow();for(Socket socket:cleanupConnections)try{socket.close();}catch(IOException ignored){}rateHandler.removeCallbacksAndMessages(null);stopExecution();generation++;cancelDocuments();for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}try{Core.call(new JSONObject().put("op","cancel_tool"));}catch(Throwable ignored){}deadlines.shutdownNow();workers.shutdownNow();super.onDestroy();}
+    @Override protected void onDestroy(){releasePlatformBack();VoiceSession.release(this);TurnService.detach(this);media.close();closed=true;pageDeadline.clear();resolution.close();try{JSONObject expected=state==null?null:state.optJSONObject("web_expected");if(expected!=null&&!expected.optString("capture_token").isEmpty())Core.call(new JSONObject().put("op","capture_document_cancel").put("ticket",expected.getString("capture_token")));}catch(Exception ignored){}try{if(state!=null){Core.call(new JSONObject().put("op","stream_owner_cancel").put("owner",state.optString("mcp_client_expected")));}}catch(Exception ignored){}try{if(state!=null&&state.has("mcp_client_resume_token")&&!state.isNull("mcp_client_resume_token"))Core.call(new JSONObject().put("op","stream_resume_close").put("token",state.get("mcp_client_resume_token")));}catch(Exception ignored){}cleanupWorkers.shutdownNow();for(Socket socket:cleanupConnections)try{socket.close();}catch(IOException ignored){}rateHandler.removeCallbacksAndMessages(null);stopExecution();generation++;cancelDocuments();for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}try{Core.call(new JSONObject().put("op","cancel_tool"));}catch(Throwable ignored){}deadlines.shutdownNow();workers.shutdownNow();super.onDestroy();}
 }
