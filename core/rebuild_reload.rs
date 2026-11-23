@@ -1,7 +1,9 @@
 //! Rebuild plan for the desktop product.
-//! When the destination is free and a link is not already running, rustc writes
-//! RLLM.exe. A busy destination is left unchanged. The running process is not
-//! stopped.
+//! When the destination is free and a link is not already running, the desktop
+//! link writes a sibling output. That sibling replaces RLLM.exe only after the
+//! link succeeds. A failed link leaves an existing RLLM.exe unchanged. A busy
+//! destination is left unchanged. The running process is not stopped and is
+//! not switched onto the new binary.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -14,9 +16,12 @@ const TEST_COMMAND: &str = "rustc --edition 2021 --test --crate-name rebuild_rel
 
 /// Read `source_rel` inside `root`, bind a revision to those bytes and the edit
 /// marker, and record the desktop link command, the test command, and the
-/// successor path. A free destination is linked with rustc. A running link is
-/// left alone. A busy destination is not written, and the report says the
-/// running process was not replaced. The running process is not stopped.
+/// successor path. A free destination is published from a sibling output only
+/// after the link succeeds. A failed link leaves an existing destination
+/// unchanged. A running link is left alone. A busy destination is not written,
+/// and the report says the running process was not replaced. A written
+/// destination is compared with the running process image, and the report says
+/// that process was not switched. The running process is not stopped.
 pub fn rebuild_reload(
     root: &Path,
     source_rel: &str,
@@ -52,6 +57,7 @@ pub fn rebuild_reload(
         link_running,
         busy,
         outcome,
+        destination,
     ))
 }
 
@@ -166,8 +172,88 @@ enum LinkOutcome {
     Failed(String),
 }
 
+fn regular_file_present(path: &Path) -> bool {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => !meta.file_type().is_symlink() && meta.is_file(),
+        Err(_) => false,
+    }
+}
+
+fn incoming_output(destination: &Path) -> Result<std::path::PathBuf, String> {
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let sibling = parent.join("RLLM.incoming.exe");
+    if sibling.as_os_str() == destination.as_os_str() {
+        return Err("sibling output must differ from the destination".into());
+    }
+    match sibling.file_name().and_then(|name| name.to_str()) {
+        Some(name) if name != DEST_NAME && name.ends_with(".incoming.exe") => Ok(sibling),
+        _ => Err("sibling output must differ from the destination".into()),
+    }
+}
+
+fn discard_incoming(sibling: &Path, destination: &Path) {
+    if sibling.as_os_str() == destination.as_os_str() {
+        return;
+    }
+    match sibling.file_name().and_then(|name| name.to_str()) {
+        Some(name) if name != DEST_NAME && name.ends_with(".incoming.exe") => {}
+        _ => return,
+    }
+    if let (Ok(left), Ok(right)) = (fs::canonicalize(sibling), fs::canonicalize(destination)) {
+        if left == right {
+            return;
+        }
+    }
+    if regular_file_present(sibling) {
+        let _ = fs::remove_file(sibling);
+    }
+}
+
+fn publish_incoming(sibling: &Path, destination: &Path) -> Result<(), String> {
+    let name = sibling.file_name().and_then(|name| name.to_str()).unwrap_or("");
+    if sibling.as_os_str() == destination.as_os_str() || name == DEST_NAME || !name.ends_with(".incoming.exe")
+    {
+        return Err("sibling output must differ from the destination".into());
+    }
+    if !regular_file_present(sibling) {
+        return Err("linked output is not a real file".into());
+    }
+    if let Ok(true) = same_file(sibling, destination) {
+        return Err("sibling output must differ from the destination".into());
+    }
+    replace_file(sibling, destination)
+}
+
+fn replace_file(from: &Path, to: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
+        }
+        let source: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+        let dest: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+        if unsafe { MoveFileExW(source.as_ptr(), dest.as_ptr(), 0x1 | 0x8) } == 0 {
+            return Err(format!(
+                "destination was not replaced: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(from, to).map_err(|error| format!("destination was not replaced: {error}"))
+    }
+}
+
 fn run_link(source: &Path, destination: &Path) -> Result<(), String> {
-    let output = std::process::Command::new("rustc")
+    let sibling = incoming_output(destination)?;
+    let started = std::process::Command::new("rustc")
         .arg("--edition")
         .arg("2021")
         .arg("--crate-type")
@@ -175,17 +261,70 @@ fn run_link(source: &Path, destination: &Path) -> Result<(), String> {
         .arg("--crate-name")
         .arg("rllm_desktop")
         .arg("-o")
-        .arg(destination)
+        .arg(&sibling)
         .arg(source)
-        .output()
-        .map_err(|error| format!("rustc was not started: {error}"))?;
-    if output.status.success() && destination.is_file() {
-        return Ok(());
+        .output();
+    let output = match started {
+        Ok(output) => output,
+        Err(error) => {
+            discard_incoming(&sibling, destination);
+            return Err(format!("rustc was not started: {error}"));
+        }
+    };
+    if output.status.success() && regular_file_present(&sibling) {
+        match publish_incoming(&sibling, destination) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                discard_incoming(&sibling, destination);
+                return Err(error);
+            }
+        }
     }
-    let _ = fs::remove_file(destination);
+    discard_incoming(&sibling, destination);
     let err = String::from_utf8_lossy(&output.stderr);
     let text: String = err.chars().filter(|ch| !ch.is_control()).take(180).collect();
     Err(format!("rustc exited without writing the destination: {text}"))
+}
+
+fn one_line(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_control()).take(180).collect()
+}
+
+fn same_file(left: &Path, right: &Path) -> Result<bool, String> {
+    let left = fs::canonicalize(left).map_err(|error| error.to_string())?;
+    let right = fs::canonicalize(right).map_err(|error| error.to_string())?;
+    Ok(left == right)
+}
+
+fn written_process_lines(destination: &Path) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(format!("The running process id is {}.", std::process::id()));
+    match std::env::current_exe() {
+        Ok(image) => {
+            match path_text(&image) {
+                Ok(text) => lines.push(format!("The running process image is {text}.")),
+                Err(error) => lines.push(format!("The running process image was not read: {error}.")),
+            }
+            match same_file(&image, destination) {
+                Ok(true) => lines.push(
+                    "The running process image and the new binary are the same file.".to_string(),
+                ),
+                Ok(false) => lines.push(
+                    "The running process image and the new binary are different files.".to_string(),
+                ),
+                Err(error) => lines.push(format!(
+                    "The running process image was not compared: {}.",
+                    one_line(&error)
+                )),
+            }
+        }
+        Err(error) => lines.push(format!(
+            "The running process image was not read: {}.",
+            one_line(&error.to_string())
+        )),
+    }
+    lines.push("The running process was not switched onto the new binary.".to_string());
+    lines
 }
 
 fn revision_bytes(marker: &str, source: &[u8]) -> [u8; 32] {
@@ -205,6 +344,7 @@ fn report(
     link_running: bool,
     busy: bool,
     outcome: LinkOutcome,
+    destination: &Path,
 ) -> String {
     let mut lines = Vec::new();
     if busy {
@@ -222,10 +362,14 @@ fn report(
         LinkOutcome::Wrote => {
             lines.push("A desktop link was started.".to_string());
             lines.push("The destination file was written.".to_string());
+            lines.extend(written_process_lines(destination));
         }
         LinkOutcome::Failed(error) => {
             lines.push(format!("A desktop link failed: {error}."));
             lines.push("The destination file was not written.".to_string());
+            if regular_file_present(destination) {
+                lines.push("The existing destination was left unchanged.".to_string());
+            }
         }
         LinkOutcome::Idle if link_running => {
             lines.push("A second desktop link was not started.".to_string());
@@ -448,5 +592,86 @@ fn free_destination_is_linked_and_written() {
     assert!(!report.contains("The running process was not replaced."), "{report}");
     let written = fs::metadata(&destination).unwrap().len();
     assert!(written > 0, "{written}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn failed_link_leaves_the_existing_destination_untouched() {
+    let root = scratch("fail");
+    fs::write(root.join("core").join("desktop.rs"), b"this is not valid Rust\n").unwrap();
+    let destination = root.join("RLLM.exe");
+    let prior = b"existing-RLLM.exe-bytes";
+    fs::write(&destination, prior).unwrap();
+    let sibling = root.join("RLLM.incoming.exe");
+    let report = rebuild_reload(&root, SOURCE_REL, &destination, "source-edit", false).unwrap();
+    assert!(report.contains("A desktop link failed:"), "{report}");
+    assert!(
+        report.contains("rustc exited without writing the destination"),
+        "{report}"
+    );
+    assert!(report.contains("The destination file was not written."), "{report}");
+    assert!(
+        report.contains("The existing destination was left unchanged."),
+        "{report}"
+    );
+    assert!(report.contains("The running process was not stopped."), "{report}");
+    assert!(!report.contains("The running process was not replaced."), "{report}");
+    assert_eq!(fs::read(&destination).unwrap(), prior);
+    assert!(!sibling.exists(), "failed sibling output was left behind");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn successful_link_replaces_the_destination_from_the_sibling_output() {
+    let root = scratch("replace");
+    fs::write(root.join("core").join("desktop.rs"), b"fn main() {}\n").unwrap();
+    let destination = root.join("RLLM.exe");
+    let prior = b"existing-RLLM.exe-bytes";
+    fs::write(&destination, prior).unwrap();
+    let sibling = root.join("RLLM.incoming.exe");
+    let report = rebuild_reload(&root, SOURCE_REL, &destination, "source-edit", false).unwrap();
+    assert!(report.contains("A desktop link was started."), "{report}");
+    assert!(report.contains("The destination file was written."), "{report}");
+    assert!(!report.contains("The existing destination was left unchanged."), "{report}");
+    assert!(!report.contains("The destination file was not written."), "{report}");
+    let written = fs::read(&destination).unwrap();
+    assert_ne!(written.as_slice(), prior.as_slice());
+    assert!(written.len() > prior.len(), "{}", written.len());
+    assert!(!sibling.exists(), "sibling output was not published onto the destination");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn linked_file_does_not_switch_the_running_process() {
+    let root = scratch("image");
+    fs::write(root.join("core").join("desktop.rs"), b"fn main() {}\n").unwrap();
+    let destination = root.join("RLLM.exe");
+    let before_id = std::process::id();
+    let before_image = std::env::current_exe().unwrap();
+    let before_len = fs::metadata(&before_image).unwrap().len();
+    let report = rebuild_reload(&root, SOURCE_REL, &destination, "source-edit", false).unwrap();
+    let after_id = std::process::id();
+    let after_image = std::env::current_exe().unwrap();
+    assert_eq!(before_id, after_id);
+    assert_eq!(before_image, after_image);
+    assert_eq!(fs::metadata(&after_image).unwrap().len(), before_len);
+    assert_ne!(after_image, destination);
+    assert_eq!(same_file(&after_image, &destination), Ok(false));
+    assert!(destination.is_file());
+    assert!(fs::metadata(&destination).unwrap().len() > 0);
+    let image = after_image.to_str().unwrap();
+    assert!(report.contains(&format!("The running process id is {after_id}.")), "{report}");
+    assert!(report.contains(&format!("The running process image is {image}.")), "{report}");
+    assert!(
+        report.contains("The running process image and the new binary are different files."),
+        "{report}"
+    );
+    assert!(
+        report.contains("The running process was not switched onto the new binary."),
+        "{report}"
+    );
+    assert!(report.contains("The running process was not stopped."), "{report}");
+    assert!(!report.contains("was switched onto"));
+    assert!(!report.contains("was replaced."));
     let _ = fs::remove_dir_all(&root);
 }
