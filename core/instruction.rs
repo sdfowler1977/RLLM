@@ -345,7 +345,45 @@ pub(super) fn analyze(words:&[Word],label:&str,cancelled:&dyn Fn()->bool)->Resul
  conditional_paths(words,&ends,&mut statements,label,&mut out,cancelled)?;
  let _=writeln!(out.body,"Computed {blocks} candidate blocks over {} captured words; recognized {recognized} supported instruction encodings, {} unclassified; reported {} IR/graph rows, omitted {} rows. Omitted rows are not absent behavior.",words.len(),words.len()-recognized,out.rows,out.omitted);
  out.body.push_str("Supported IR: existing branches, NOP, move-wide immediates, ADR/ADRP, immediate/shifted-register ADD/SUB and register ADC/ADCS/SBC/SBCS with NZCV, immediate/shifted-register logical operations, signed/unsigned bitfield moves, register extraction, conditional selects, integer multiply-add/subtract, signed/unsigned division, variable shifts/rotates, unsigned/unscaled/pre/post-indexed integer loads/stores, integer register pairs, literal integer loads and selected exception encodings. Source-coordinate arithmetic uses checked address bounds; integer arithmetic follows encoded widths.\n");
+ let mut reconstruction=String::new();let mut index=0;
+ while index<statements.len(){
+  let block=statements[index].block;let mut end=index+1;while end<statements.len()&&statements[end].block==block{end+=1;}
+  let mut next=reconstruction.clone();structured(&mut next,&statements[index..end]);
+  if out.body.len()+next.len()>=OUTPUT{break;}reconstruction=next;index=end;
+ }
+ if reconstruction.is_empty(){structured(&mut reconstruction,&[]);}
+ if out.body.len()+reconstruction.len()<OUTPUT{out.body.push_str(&reconstruction);}
  Ok(Analysis{text:out.body,statements})
+}
+const RECONSTRUCTED:&str="The instructions were not executed. This is reconstructed text.\n";
+/// Assignment, branch, and return lines for one straight-line block.
+/// Registers are the names already written on each statement. Nothing here is executed.
+fn structured(text:&mut String,statements:&[Statement]){
+ if text.ends_with(RECONSTRUCTED){text.truncate(text.len()-RECONSTRUCTED.len());}
+ let block=statements.first().map(|statement|statement.block);
+ for statement in statements.iter().filter(|statement|Some(statement.block)==block){
+  let mnemonic=statement.mnemonic;
+  let line=if mnemonic=="unclassified"{statement.text.clone()}else{
+   let kind=if mnemonic=="B"||mnemonic=="BL"{"branch"}else if matches!(mnemonic,"RET"|"RETAA"|"RETAB"){"return"}else if matches!(mnemonic,"MOVN"|"MOVZ"|"MOVK"|"SBFM"|"BFM"|"UBFM"|"ADD"|"ADDS"|"ADC"|"ADCS"|"MADD"|"SUB"|"SUBS"|"SBC"|"SBCS"|"MSUB"|"AND"|"BIC"|"ORR"|"ORN"|"EOR"|"EON"|"ANDS"|"BICS"|"LDR"|"LDRB"|"LDRH"|"LDUR"|"LDURB"|"LDURH"|"STR"|"STRB"|"STRH"|"STUR"|"STURB"|"STURH"|"LDP"|"STP"){"assignment"}else{""};
+   if kind.is_empty(){statement.text.clone()}else{
+    let mut registers=String::new();let bytes=statement.text.as_bytes();let mut i=0;
+    while i<bytes.len(){
+     if !statement.text.is_char_boundary(i){i+=1;continue;}
+     if i>0&&bytes[i-1].is_ascii_alphanumeric(){i+=1;continue;}
+     let mut len=0usize;
+     for name in ["WSP","XZR","WZR","SP"]{if statement.text[i..].starts_with(name){let end=i+name.len();if bytes.get(end).is_some_and(|byte|byte.is_ascii_alphanumeric()){continue;}len=name.len();break;}}
+     if len==0&&(bytes[i]==b'X'||bytes[i]==b'W'){let mut end=i+1;if end<bytes.len()&&bytes[end].is_ascii_digit(){while end<bytes.len()&&bytes[end].is_ascii_digit(){end+=1;}if !bytes.get(end).is_some_and(|byte|byte.is_ascii_alphanumeric()){if let Ok(n)=statement.text[i+1..end].parse::<u8>(){if n<=30{len=end-i;}}}}}
+     if len==0{i+=1;continue;}
+     let name=&statement.text[i..i+len];
+     if !registers.split(' ').any(|prior|prior==name){if !registers.is_empty(){registers.push(' ');}registers.push_str(name);}
+     i+=len;
+    }
+    if registers.is_empty(){format!("{kind} {mnemonic}")}else{format!("{kind} {mnemonic} {registers}")}
+   }
+  };
+  text.push_str(&line);text.push('\n');
+ }
+ if !text.ends_with(RECONSTRUCTED){text.push_str(RECONSTRUCTED);}
 }
 /// Observe the captured encoding candidates and return the instruction IR with
 /// its retained statements. The observation is the captured instruction
@@ -531,5 +569,26 @@ pub(super) fn observe(words:&[Word],label:&str,cancelled:&dyn Fn()->bool)->Resul
  }
  #[test]fn conditional_path_cancellation_is_cooperative(){
   let w=words(&[0xd28000e0,0x14000001,0x91000401]);let mut a=report(&[0xd28000e0,0x14000001,0x91000401]);let mut state=State::new();let _=statement(w[0].4,w[0].3,0,&mut state,"RVA ");let mut out=Text{body:String::new(),rows:0,omitted:0};assert!(conditional_paths(&w,&[(1,0,state)],&mut a.statements,"RVA ",&mut out,&||true).unwrap_err().contains("cancelled"));
+ }
+ #[test]fn one_assignment_line_uses_the_mnemonic_and_registers(){
+  let analysis=report(&[0x91000401]);let mut text=String::new();structured(&mut text,&analysis.statements);
+  assert_eq!(text,"assignment ADD X1 X0\nThe instructions were not executed. This is reconstructed text.\n");
+  assert!(analysis.text.ends_with("The instructions were not executed. This is reconstructed text.\n"));
+ }
+ #[test]fn one_direct_branch_is_one_branch_line(){
+  let analysis=report(&[0x14000002]);let mut text=String::new();structured(&mut text,&analysis.statements);
+  assert_eq!(text,"branch B\nThe instructions were not executed. This is reconstructed text.\n");
+  assert!(analysis.text.ends_with("The instructions were not executed. This is reconstructed text.\n"));
+ }
+ #[test]fn one_return_mnemonic_is_one_return_line(){
+  let analysis=report(&[0xd65f03c0]);let mut text=String::new();structured(&mut text,&analysis.statements);
+  assert_eq!(text,"return RET X30\nThe instructions were not executed. This is reconstructed text.\n");
+  assert!(analysis.text.ends_with("The instructions were not executed. This is reconstructed text.\n"));
+ }
+ #[test]fn one_unclassified_word_keeps_the_existing_line(){
+  let analysis=report(&[0xffffffff]);let mut text=String::new();structured(&mut text,&analysis.statements);
+  assert_eq!(analysis.statements[0].text,"unclassified/reserved/unsupported word; candidate block and register/flag knowledge end here");
+  assert_eq!(text,"unclassified/reserved/unsupported word; candidate block and register/flag knowledge end here\nThe instructions were not executed. This is reconstructed text.\n");
+  assert!(analysis.text.ends_with("The instructions were not executed. This is reconstructed text.\n"));
  }
 }
