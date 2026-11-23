@@ -39,7 +39,16 @@ fn binding(v:&mut Json,old:&str,prior:&Json,current:&Json){
  }
 }
 fn hosted_mode(v:&mut Json){
- if let Obj(fields)=v{if fields.get("hosted_search")==Some(&s("minimax_messages_v1")){fields.insert("hosted_search".into(),s("messages_search_v1"));}}
+ const STORED:[(&str,&str);4]=[
+  ("minimax_messages_v1",crate::hosted_search::MODE),
+  ("messages_search_v1",crate::hosted_search::MODE),
+  ("responses_search_v1",crate::hosted_search::RESPONSES_SEARCH),
+  ("google_search_v1",crate::hosted_search::GOOGLE_SEARCH),
+ ];
+ let Obj(fields)=v else{return};
+ let Some(current)=fields.get("hosted_search").and_then(|value|match value{Str(text)=>Some(text.clone()),_=>None}) else{return};
+ let Some(next)=STORED.iter().find(|pair|current==pair.0).map(|pair|pair.1) else{return};
+ fields.insert("hosted_search".into(),s(next));
 }
 pub(super) fn apply(st:&mut Json){
  if let Obj(fields)=st{
