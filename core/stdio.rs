@@ -47,7 +47,7 @@ fn rpc_error(id: Json, code: i32, message: &str) -> Json {
 fn rpc_result(id: Json, value: Json) -> Json {
     obj(vec![("jsonrpc", s("2.0")), ("id", id), ("result", value)])
 }
-fn object<'a>(value: &'a Json, allowed: &[&str]) -> Result<&'a BTreeMap<String, Json>> {
+fn object<'a>(value: &'a Json, allowed: &[&str]) -> Result<&'a JsonObject> {
     let Obj(fields) = value else { return Err("Expected object".into()); };
     if fields.keys().any(|key| !allowed.contains(&key.as_str())) {
         return Err("Unknown parameter".into());
@@ -89,7 +89,7 @@ impl Server {
     fn tools(&self) -> Json {
         let mut tools = vec![];
         for name in ["inspect", "compare"] {
-            let mut properties = BTreeMap::new();
+            let mut properties = JsonObject::new();
             let mut required = vec![s("path")];
             properties.insert("path".into(), obj(vec![("type", s("string")), ("maxLength", Num("1024".into())),
                 ("description", s("Relative path within the startup workspace. No parent traversal or escaping symlinks."))]));

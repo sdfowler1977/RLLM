@@ -55,7 +55,7 @@ pub fn response_endpoint(endpoint:&str)->Result<String>{
 }
 // Private profile-only binding, never copied into message/provenance metadata.
 // This detects imported/direct profile changes as well as normal editor saves.
-pub fn binding(p:&Json)->Json{let mut fields=BTreeMap::new();for key in ["endpoint","model","protocol","key","auth_header","auth_prefix","plain"]{fields.insert(key.into(),p.get(key).unwrap_or(&Null).clone());}if p.get("oauth_enabled")==Ok(&Bool(true)){let tokens=p.get("oauth_tokens").unwrap_or(&Null);fields.insert("authorization".into(),obj(vec![("mode",s("oauth")),("identity",tokens.get("identity").unwrap_or(&Null).clone()),("binding",tokens.get("binding").unwrap_or(&Null).clone())]));}Obj(fields)}
+pub fn binding(p:&Json)->Json{let mut fields=JsonObject::new();for key in ["endpoint","model","protocol","key","auth_header","auth_prefix","plain"]{fields.insert(key.into(),p.get(key).unwrap_or(&Null).clone());}if p.get("oauth_enabled")==Ok(&Bool(true)){let tokens=p.get("oauth_tokens").unwrap_or(&Null);fields.insert("authorization".into(),obj(vec![("mode",s("oauth")),("identity",tokens.get("identity").unwrap_or(&Null).clone()),("binding",tokens.get("binding").unwrap_or(&Null).clone())]));}Obj(fields)}
 pub fn identity()->Result<Json>{static SERIAL:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);let n=SERIAL.try_update(std::sync::atomic::Ordering::Relaxed,std::sync::atomic::Ordering::Relaxed,|n|n.checked_add(1)).map_err(|_|"Hosted context identity exhausted")?;let t=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|"System clock unavailable")?.as_nanos();Ok(s(&format!("hosted-{t}-{n}")))}
 pub fn declare(body:&mut Json,mode:Mode,profile:&Json)->Result<()>{
  let tool=match mode{

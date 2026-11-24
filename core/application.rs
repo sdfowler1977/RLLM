@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 use super::workspace_command;
 #[path="harness.rs"] mod harness;
 #[path="services.rs"] mod services;
@@ -728,7 +729,7 @@ fn capture(st: &mut Json, inputs: &Json) {
         }
         put(st, "edit", edit)
     } else if !dialog.is_empty() {
-        let mut values=BTreeMap::new();
+        let mut values=JsonObject::new();
         if let Obj(fields)=inputs {
             for (key,value) in fields {
                 if !["draft","device","gateway_status","generated_token","stream_text","model_metadata"].contains(&key.as_str()) {
@@ -1660,7 +1661,7 @@ fn task_xml_args(body: &str) -> Result<Json> {
         rest = inner.strip_suffix(close).unwrap_or(inner).trim();
     }
     if rest.starts_with('{') { return parse(rest); }
-    let mut fields = BTreeMap::new();
+    let mut fields = JsonObject::new();
     while !rest.is_empty() {
         let (tag, after) = rest.strip_prefix('<').and_then(|tail| tail.split_once('>'))
             .ok_or("Expected an argument tag in the tool call")?;
@@ -1996,7 +1997,7 @@ fn drive_xml_namespaces(mut attributes: &str, scopes: &[DriveXmlScope<'_>]) -> R
 #[derive(Default)]
 struct DriveProperties { name:String, collection:bool, status:String, has_name:bool, has_type:bool, has_status:bool }
 #[derive(Default)]
-struct DriveEntry { href:String, name:String, collection:bool, status:String, has_href:bool, has_status:bool, properties:DriveProperties, property_errors:BTreeMap<String,Json> }
+struct DriveEntry { href:String, name:String, collection:bool, status:String, has_href:bool, has_status:bool, properties:DriveProperties, property_errors:JsonObject }
 fn drive_status(value:&str)->Result<Option<u16>>{
  if value.trim().is_empty(){return Ok(None);}
  let mut parts=value.split_whitespace();let version=parts.next().ok_or("Invalid WebDAV status line")?;let code=parts.next().ok_or("Missing WebDAV status code")?;

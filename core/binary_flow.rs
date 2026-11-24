@@ -1,5 +1,6 @@
 //! Typed encoding relationships, not an executable graph or recovered program.
 use super::*;
+use std::collections::BTreeMap;
 const ROWS:usize=48;
 const BYTES:usize=12*1024;
 fn integer(v:&Json)->Result<u64>{match v{Num(n)=>n.parse().map_err(|_|"Invalid encoded-flow integer".into()),_=>Err("Encoded-flow integer missing".into())}}

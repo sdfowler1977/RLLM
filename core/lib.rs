@@ -70,8 +70,11 @@ mod apk_sign;
 mod zipalign;
 mod smali;
 #[path="js_evidence.rs"] mod js_evidence;
-use std::{collections::BTreeMap, ffi::CString, os::raw::c_char};
+use std::{ffi::CString, os::raw::c_char};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+// desktop.rs includes this file and uses BTreeMap::new for an empty JSON object.
+use JsonObject as BTreeMap;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Json {
@@ -80,10 +83,149 @@ enum Json {
     Num(String),
     Str(String),
     Arr(Vec<Json>),
-    Obj(BTreeMap<String, Json>),
+    Obj(JsonObject),
 }
 use Json::*;
 type Result<T> = std::result::Result<T, String>;
+
+type JsonField = (String, Json);
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct JsonObject(Vec<JsonField>);
+
+impl JsonObject {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn from_parsed_fields(mut fields: Vec<JsonField>) -> Result<Self> {
+        // In-place sorting keeps large, unordered objects O(n log n) without
+        // allocating scratch space or shifting the vector on every insertion.
+        fields.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        if fields.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err("Duplicate JSON field".into());
+        }
+        Ok(Self(fields))
+    }
+
+    fn find(&self, key: &str) -> std::result::Result<usize, usize> {
+        self.0.binary_search_by(|(name, _)| name.as_str().cmp(key))
+    }
+
+    fn get(&self, key: &str) -> Option<&Json> {
+        self.find(key).ok().map(|index| &self.0[index].1)
+    }
+
+    fn get_mut(&mut self, key: &str) -> Option<&mut Json> {
+        self.find(key).ok().map(|index| &mut self.0[index].1)
+    }
+
+    fn contains_key(&self, key: &str) -> bool {
+        self.find(key).is_ok()
+    }
+
+    fn insert(&mut self, key: String, value: Json) -> Option<Json> {
+        match self.find(&key) {
+            Ok(index) => Some(std::mem::replace(&mut self.0[index].1, value)),
+            Err(index) => {
+                self.0.insert(index, (key, value));
+                None
+            }
+        }
+    }
+
+    fn get_or_insert(&mut self, key: String, value: Json) -> &mut Json {
+        let index = match self.find(&key) {
+            Ok(index) => index,
+            Err(index) => {
+                self.0.insert(index, (key, value));
+                index
+            }
+        };
+        &mut self.0[index].1
+    }
+
+    fn remove(&mut self, key: &str) -> Option<Json> {
+        self.find(key).ok().map(|index| self.0.remove(index).1)
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(&String, &mut Json) -> bool) {
+        self.0.retain_mut(|(key, value)| keep(key, value));
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn iter(&self) -> impl DoubleEndedIterator<Item = (&String, &Json)> + ExactSizeIterator {
+        self.into_iter()
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &String> {
+        self.iter().map(|(key, _)| key)
+    }
+
+    fn values(&self) -> impl Iterator<Item = &Json> {
+        self.iter().map(|(_, value)| value)
+    }
+}
+
+impl FromIterator<JsonField> for JsonObject {
+    fn from_iter<I: IntoIterator<Item = JsonField>>(fields: I) -> Self {
+        let mut fields: Vec<_> = fields.into_iter().collect();
+        fields.sort_by(|a, b| a.0.cmp(&b.0));
+        // Stable sorting preserves input order for equal keys, so the last
+        // value replaces the earlier ones as it does in BTreeMap.
+        fields.dedup_by(|later, earlier| {
+            if later.0 != earlier.0 {
+                return false;
+            }
+            std::mem::swap(&mut later.1, &mut earlier.1);
+            true
+        });
+        Self(fields)
+    }
+}
+
+impl Extend<JsonField> for JsonObject {
+    fn extend<I: IntoIterator<Item = JsonField>>(&mut self, fields: I) {
+        for (key, value) in fields {
+            self.insert(key, value);
+        }
+    }
+}
+
+impl IntoIterator for JsonObject {
+    type Item = JsonField;
+    type IntoIter = std::vec::IntoIter<JsonField>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a JsonObject {
+    type Item = (&'a String, &'a Json);
+    type IntoIter = std::iter::Map<std::slice::Iter<'a, JsonField>, fn(&'a JsonField) -> Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter().map(|(key, value)| (key, value))
+    }
+}
+
+impl<'a> IntoIterator for &'a mut JsonObject {
+    type Item = (&'a String, &'a mut Json);
+    type IntoIter = std::iter::Map<std::slice::IterMut<'a, JsonField>, fn(&'a mut JsonField) -> Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut().map(|(key, value)| (&*key, value))
+    }
+}
+
 impl Json {
     fn get(&self, k: &str) -> Result<&Json> {
         if let Obj(o) = self {
@@ -229,9 +371,9 @@ impl<'a> Parser<'a> {
             Some(b'"') => Ok(Str(self.str()?)),
             Some(b'{') => {
                 self.i += 1;
-                let mut m = BTreeMap::new();
+                let mut fields = Vec::new();
                 if self.take(b'}') {
-                    return Ok(Obj(m));
+                    return Ok(Obj(JsonObject::new()));
                 }
                 loop {
                     let k = self.str()?;
@@ -239,9 +381,8 @@ impl<'a> Parser<'a> {
                         return Err("Missing colon".into());
                     }
                     let v = self.value(depth + 1)?;
-                    if m.insert(k, v).is_some() {
-                        return Err("Duplicate JSON field".into());
-                    }
+                    fields.try_reserve(1).map_err(|_| "Insufficient memory to parse JSON object")?;
+                    fields.push((k, v));
                     if self.take(b'}') {
                         break;
                     }
@@ -249,7 +390,7 @@ impl<'a> Parser<'a> {
                         return Err("Missing comma".into());
                     }
                 }
-                Ok(Obj(m))
+                Ok(Obj(JsonObject::from_parsed_fields(fields)?))
             }
             Some(b'[') => {
                 self.i += 1;

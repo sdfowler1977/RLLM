@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 use super::provider::{copy_document_text, parse_stream_document, serialize_stream_document, DOCUMENT_MEMORY};
 use std::sync::{Mutex, OnceLock};
 
@@ -195,7 +196,7 @@ impl Transfer {
     fn message_usage(&mut self, usage:&Json)->Result<()> {
         let Obj(fields)=usage else {return Err("Invalid Messages usage".into());};
         // Counts are cumulative provider reports, never summed or tokenized here.
-        let mut saved=match self.usage.take(){Some(Obj(fields))=>fields,_=>BTreeMap::new()};
+        let mut saved=match self.usage.take(){Some(Obj(fields))=>fields,_=>JsonObject::new()};
         for key in ["input_tokens","output_tokens","cache_creation_input_tokens","cache_read_input_tokens"] {
             if let Some(value)=fields.get(key) {
                 let Num(n)=value else {return Err("Invalid Messages token count".into());};
@@ -213,7 +214,7 @@ impl Transfer {
         }
         if let Ok(usage)=record.get("usageMetadata") {
             let Obj(fields)=usage else{return Err("Invalid Content usage".into());};
-            let mut saved=match self.usage.take(){Some(Obj(fields))=>fields,_=>BTreeMap::new()};
+            let mut saved=match self.usage.take(){Some(Obj(fields))=>fields,_=>JsonObject::new()};
             for key in ["promptTokenCount","candidatesTokenCount","totalTokenCount","cachedContentTokenCount","thoughtsTokenCount","toolUsePromptTokenCount"] {
                 if let Some(value)=fields.get(key) {let Num(n)=value else{return Err("Invalid Content token count".into());};n.parse::<u64>().map_err(|_|"Invalid Content token count")?;saved.insert(key.into(),value.clone());}
             }
@@ -1200,8 +1201,8 @@ fn take_element(text: &str, pos: usize, depth: usize) -> Option<(String, Json, u
 fn value_of(inner: &str, depth: usize) -> Json {
     if let Some(items) = parse_sequence(inner, depth) {
         if items.iter().all(|(name, _)| name == "item") { return Arr(items.into_iter().map(|(_, value)| value).collect()); }
-        let mut fields = BTreeMap::new();
-        for (name, value) in items { fields.entry(name).or_insert(value); }
+        let mut fields = JsonObject::new();
+        for (name, value) in items { fields.get_or_insert(name, value); }
         return Obj(fields);
     }
     scalar(inner)

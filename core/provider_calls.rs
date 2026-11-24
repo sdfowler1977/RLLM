@@ -1,6 +1,7 @@
 //! Provider tool proposals are data. The application still validates and reviews
 //! each proposed operation through its existing permission boundary.
 use super::*;
+use std::collections::BTreeMap;
 const LIMIT: usize = 65536;
 fn value<'a>(v: &'a Json, k: &str) -> &'a Json { v.get(k).unwrap_or(&Null) }
 fn bounded(v: &Json) -> Result<()> {

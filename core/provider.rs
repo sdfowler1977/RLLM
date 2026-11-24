@@ -77,18 +77,19 @@ fn stream_value(parser: &mut Parser<'_>, depth: usize) -> Result<Json> {
         Some(b'"') => Ok(Str(stream_string(parser)?)),
         Some(b'{') => {
             parser.i += 1;
-            let mut fields = BTreeMap::new();
+            let mut fields = Vec::new();
             if !parser.take(b'}') {
                 loop {
                     let key = stream_string(parser)?;
                     if !parser.take(b':') { return Err("Missing colon".into()); }
                     let value = stream_value(parser, depth + 1)?;
-                    if fields.insert(key, value).is_some() { return Err("Duplicate JSON field".into()); }
+                    fields.try_reserve(1).map_err(|_| DOCUMENT_MEMORY)?;
+                    fields.push((key, value));
                     if parser.take(b'}') { break; }
                     if !parser.take(b',') { return Err("Missing comma".into()); }
                 }
             }
-            Ok(Obj(fields))
+            Ok(Obj(JsonObject::from_parsed_fields(fields)?))
         }
         Some(b'[') => {
             parser.i += 1;

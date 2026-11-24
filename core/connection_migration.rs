@@ -16,7 +16,7 @@ fn needed(v:&Json,old:&str,prefix:&str,depth:usize)->bool{
 }
 fn token(v:&mut Json,old:&str){if v==&s(old){*v=s("mcp");}}
 fn preferences(v:&mut Json){
- if let Obj(m)=v{if let Some(previous)=m.remove("investigation_skill"){m.entry("investigation_preferences".into()).or_insert(previous);}}
+ if let Obj(m)=v{if let Some(previous)=m.remove("investigation_skill"){m.get_or_insert("investigation_preferences".into(),previous);}}
 }
 fn agent(v:&mut Json,old:&str){
  preferences(v);
@@ -33,7 +33,7 @@ fn run(v:&mut Json,old:&str){
 }
 fn binding(v:&mut Json,old:&str,prior:&Json,current:&Json){
  if let Obj(m)=v{
-  if let Some(x)=m.remove(old){m.entry("mcp".into()).or_insert(x);}
+  if let Some(x)=m.remove(old){m.get_or_insert("mcp".into(),x);}
   for key in ["agent","child"]{if let Some(a)=m.get_mut(key){agent(a,old);}}
   if m.get("harness")==Some(prior){m.insert("harness".into(),current.clone());}
  }
@@ -67,14 +67,14 @@ pub(super) fn apply(st:&mut Json){
  if let Obj(m)=st{
   if let Some(previous)=m.remove("investigation_skill"){
    if m.get("investigation_preferences").is_some_and(|current|current!=&previous){
-    let retained=m.entry("investigation_saved_preferences".into()).or_insert(Arr(vec![]));if let Arr(rows)=retained{if !rows.contains(&previous){rows.push(previous);}}
-   }else{m.entry("investigation_preferences".into()).or_insert(previous);}
+    let retained=m.get_or_insert("investigation_saved_preferences".into(),Arr(vec![]));if let Arr(rows)=retained{if !rows.contains(&previous){rows.push(previous);}}
+   }else{m.get_or_insert("investigation_preferences".into(),previous);}
   }
   let names=m.keys().filter(|k|*k==&old||k.starts_with(&prefix)).cloned().collect::<Vec<_>>();
   for name in names{
    let value=m.remove(&name).unwrap();let target=if name==old{"mcp".into()}else{format!("mcp_client_{}",&name[prefix.len()..])};
    if target=="mcp"&&m.get(&target).is_some_and(|v|v!=&value)&&value!=Null{
-    let retained=m.entry("mcp_saved_connections".into()).or_insert(Arr(vec![]));if let Arr(rows)=retained{if !rows.contains(&value){rows.push(value);}}
+    let retained=m.get_or_insert("mcp_saved_connections".into(),Arr(vec![]));if let Arr(rows)=retained{if !rows.contains(&value){rows.push(value);}}
    }else if !m.contains_key(&target){if target=="mcp_client_expected"&&matches!(&value,Str(v)if v.starts_with(&prefix)){interrupted=true;}m.insert(target,value);}
   }
   for key in ["dialog","form_dialog"]{if let Some(Str(v))=m.get_mut(key){if v.starts_with(&prefix){*v=format!("mcp_client_{}",&v[prefix.len()..]);}else if v=="investigation_skill"{*v="investigation_preferences".into();}else if v=="analysis_advanced"{*v="mcp_client_menu".into();}}}

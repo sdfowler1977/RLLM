@@ -1,5 +1,6 @@
 //! Bounded, owned HTTP-to-file transfer; large bodies never enter chat state.
 use super::*;
+use std::collections::BTreeMap;
 use std::sync::{Mutex,OnceLock};
 use std::time::{Duration,Instant};
 struct Transfer{purpose:String,record:Json,file:media::StreamFile,http:network::ResponseFrame,digest:incremental_digest::Digest,bytes:usize,limit:usize,submission:bool,created:Instant}

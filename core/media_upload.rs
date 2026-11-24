@@ -1,5 +1,6 @@
 //! Typed request segments keep selected bytes out of state and JNI envelopes.
 use super::*;
+use std::collections::BTreeMap;
 use std::io::{Seek,SeekFrom};
 use std::sync::{Mutex,OnceLock};
 use std::time::{Duration,Instant};

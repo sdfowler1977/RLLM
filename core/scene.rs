@@ -1,6 +1,7 @@
 //! Owned static GLB geometry and a bounded deterministic software viewport.
 //! No scene URI is fetched, and no validation/report file is a runtime input.
 use super::*;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::io::{Read,Seek,SeekFrom};
 use crate::host_fs::{OpenOptionsExt,MetadataExt};

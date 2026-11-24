@@ -85,7 +85,7 @@ fn json_field_checks(input: &Json) -> Result<Json> {
     Err("Enter a JSON object up to 8 KiB with one to eight JSON Pointer keys and their expected values".into())
 }
 
-fn valid_json_fields(fields: &BTreeMap<String, Json>) -> bool {
+fn valid_json_fields(fields: &JsonObject) -> bool {
     (1..=8).contains(&fields.len()) && fields.keys().all(|path| {
         path.len() <= 512 && !path.chars().any(char::is_control)
             && (path.is_empty() || path.starts_with('/'))

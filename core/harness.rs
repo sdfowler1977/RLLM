@@ -1823,7 +1823,7 @@ fn mcp_record_catalog_change(st:&mut Json,changed:bool) {
   return;
  }
  let owner=mcp_connection_identity(get(st,"mcp"));
- let mut changes=match get(st,"mcp_catalog_changes") {Obj(entries)=>entries.clone(),_=>BTreeMap::new()};
+ let mut changes=match get(st,"mcp_catalog_changes") {Obj(entries)=>entries.clone(),_=>JsonObject::new()};
  if changes.len()<64 {
   changes.insert(owner,Bool(true));
   put(st,"mcp_catalog_changes",Obj(changes));

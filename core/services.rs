@@ -1,5 +1,6 @@
 //! Optional server capabilities share the normal reviewed operation path.
 use super::*;
+use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -9,7 +10,7 @@ const BODY_LIMIT: usize = 4 * 1024 * 1024;
 struct Owner { expected: String, created: Instant, timeout:u64 }
 static OWNERS: OnceLock<Mutex<BTreeMap<String, Owner>>> = OnceLock::new();
 fn owners() -> &'static Mutex<BTreeMap<String, Owner>> { OWNERS.get_or_init(|| Mutex::new(BTreeMap::new())) }
-fn object(value:&Json)->Result<&BTreeMap<String,Json>>{if let Obj(v)=value{Ok(v)}else{Err("Expected JSON object".into())}}
+fn object(value:&Json)->Result<&JsonObject>{if let Obj(v)=value{Ok(v)}else{Err("Expected JSON object".into())}}
 fn config(st: &Json) -> &Json { get(st, "service_connections") }
 const KEPT_SECRET:&str="<unchanged>";
 pub(super) fn redacted(cfg:&Json)->Json{
@@ -52,7 +53,7 @@ pub(super) fn map_request(template: &Json, input: &Json, depth:usize, budget:&mu
     let transformed=transform(template)?;
     let out=match &transformed{
         Obj(fields) if fields.len()==1 && fields.contains_key("$input")=>pointer(input,field(template,"$input")?)?.clone(),
-        Obj(fields)=>{let mut out=BTreeMap::new();for(k,v)in fields{out.insert(k.clone(),map_request(v,input,depth+1,budget,transform)?);}Obj(out)},
+        Obj(fields)=>{let mut out=JsonObject::new();for(k,v)in fields{out.insert(k.clone(),map_request(v,input,depth+1,budget,transform)?);}Obj(out)},
         Arr(values)=>Arr(values.iter().map(|v|map_request(v,input,depth+1,budget,transform)).collect::<Result<Vec<_>>>()?),
         _=>transformed.clone()};
     let bytes=out.string().len();if bytes>*budget{return Err("Mapped request exceeds its size budget".into());}*budget-=bytes;Ok(out)

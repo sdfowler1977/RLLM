@@ -1,5 +1,6 @@
 //! Owned input/output files; binary payloads do not enter conversation state.
 use super::*;
+use std::collections::BTreeMap;
 use crate::host_fs::{MetadataExt,OpenOptionsExt};
 use std::sync::{Mutex,OnceLock};
 use std::time::{Instant,Duration};

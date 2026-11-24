@@ -2683,7 +2683,12 @@ fn parse_object(text: &str) -> Result<HashMap<String, Json>, String> {
             parser.bump();
             parser.skip();
             let value = parser.value()?;
-            map.insert(key, value);
+            if let Some(previous) = map.get_mut(&key) {
+                *previous = value;
+            } else {
+                map.try_reserve(1).map_err(|_| "Insufficient memory to parse the device request")?;
+                map.insert(key, value);
+            }
             parser.skip();
             match parser.peek() {
                 Some(',') => {
