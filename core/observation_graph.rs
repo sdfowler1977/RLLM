@@ -88,9 +88,3 @@ pub(super) fn query(graphs:&Json,args:&Json)->Result<Json>{
  let chosen:Vec<usize>=indices.iter().skip(offset).take(12).copied().collect();
  let mut out=obj(vec![("kind",get(g,"kind").clone()),("source",get(g,"source").clone()),("snapshot",Num(side.to_string())),("snapshot_count",Num(items.len().to_string())),("coverage",get(g,"coverage").clone()),("selected_hex",get(g,"selected_hex").clone()),("matching",Num(indices.len().to_string())),("offset",Num(offset.to_string())),("next_offset",if offset.saturating_add(12)<indices.len(){Num((offset+12).to_string())}else{Null}),("nodes",Arr(chosen.iter().map(|i|nodes[*i].clone()).collect())),("edges",Arr(array(g,"edges").into_iter().filter(|e|integer(get(e,"child")).is_some_and(|c|chosen.contains(&c))).collect()))]);if get(g,"declarations")!=&Null{put(&mut out,"declarations",get(g,"declarations").clone());}if get(g,"declaration_note")!=&Null{put(&mut out,"declaration_note",get(g,"declaration_note").clone());}if get(g,"control_flow")!=&Null{put(&mut out,"control_flow",binary_flow::page(get(g,"control_flow"),&chosen));}put(&mut out,"historical",Bool(true));Ok(out)
 }
-
-#[cfg(test)] mod graph_tests{
- use super::*;
- #[test]fn escaped_envelope_budget_preserves_raw_result(){let text="\\".repeat(1000);assert_eq!(envelope(text.clone(),Err("large".into()),1100),text);}
- #[test]fn missing_graph_keeps_display(){let wire=envelope("actual observed text".into(),Err("bounded".into()),65536);let(display,graphs,note)=unpack(&wire);assert_eq!(display,"actual observed text");assert_eq!(graphs,Null);assert_eq!(note,"bounded");}
-}

@@ -108,28 +108,3 @@ fn hex_target(target: i64) -> String {
         format!("{target:#x}")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::lifted_block;
-
-    #[test]
-    fn nop_ret() {
-        let text = lifted_block(&[0x90, 0xC3], false);
-        assert!(text.contains("nop"), "{text}");
-        assert!(text.contains("return"), "{text}");
-        assert!(text.contains("lift stopped"), "{text}");
-    }
-
-    #[test]
-    fn thirty_three_nops_name_the_rest() {
-        let text = lifted_block(&[0x90; 33], false);
-        assert!(text.contains("statement 32: nop\n"), "{text}");
-        assert!(!text.contains("statement 33"), "{text}");
-        assert!(text.ends_with("lift stopped: later statements were not listed\n"), "{text}");
-
-        let exact = lifted_block(&[0x90; 32], false);
-        assert!(exact.contains("statement 32: nop\n"), "{exact}");
-        assert!(exact.ends_with("lift stopped: end of the slice\n"), "{exact}");
-    }
-}

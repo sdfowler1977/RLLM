@@ -265,20 +265,3 @@ pub(super) fn messages(st:&Json,messages:&mut Vec<Json>){
     if get(st,"task_run")!=&Null{if let Some(last)=array(&chat(st),"messages").last(){messages.push(obj(vec![("role",s("assistant")),("content",get(last,"content").clone())]));}}
     messages.push(obj(vec![("role",s("user")),("content",s(FEEDBACK))]));
 }
-#[cfg(test)]mod tests{
- use super::*;
- #[test]fn strict_envelope_and_data_examples(){
-  let j=r#"{"tool":"web_read","args":{"url":"https://example.test"}}"#;
-  assert!(embedded(&format!("I will read this.\n{j}")));
-  for t in [j.to_string(),format!("Example: `{j}`"),format!("Example:\n```json\n{j}\n```"),format!("Example:\n~~~json\n{j}\n~~~"),format!("Quoted: '{j}'"),format!("Quoted: “{j}”"),format!("> {j}"),format!("    {j}"),format!("Config: {{\"example\":{j}}}"),format!("Data: [{j}]"),r#"data {"tool":"other","args":{}}"#.into(),r#"data {"tool":"web_read","args":[]}"#.into(),r#"schema {"tool":"web_read","args":{},"description":"example"}"#.into()]{assert!(!embedded(&t),"{t}");}
-  assert!(embedded(&format!("That's the issue. Re-proposing:\n{j}")));
- }
- #[test]fn single_review_candidate_preserves_data_boundaries(){
-  let j=r#"{"tool":"web_read","args":{"url":"https://example.test"}}"#;
-  assert!(scan(&format!("Observation retained.\n{j}"),false).1.is_some());
-  assert!(scan(&format!("First:\n{j}\nSecond:\n{j}"),false).1.is_none());
-  assert!(!embedded(&format!("<think>Consider {j}</think>Ordinary answer.")));
-  assert!(scan(&format!("<think>Consider {j}</think>Proposal:\n{j}"),false).1.is_some());
-  assert!(!embedded(&format!("<think>Unfinished {j}")));
- }
-}

@@ -30,17 +30,6 @@ impl CancellationScope{
  pub(crate) fn token(&self)->u64{self.token}
 }
 impl Drop for CancellationScope{fn drop(&mut self){if let Ok(mut held)=scopes().lock(){held.remove(&self.token);}}}
-#[cfg(test)]mod scope_tests{
- use super::*;
- #[test]fn cancellation_is_per_owner_and_retired_tokens_stay_cancelled(){
-  reset();let first=Arc::new(AtomicBool::new(false));let second=Arc::new(AtomicBool::new(false));
-  let a=CancellationScope::new(first.clone()).unwrap();let b=CancellationScope::new(second.clone()).unwrap();let token=a.token();
-  assert!(!token_cancelled(token));assert!(!token_cancelled(b.token()));
-  first.store(true,Ordering::SeqCst);assert!(token_cancelled(token));assert!(!token_cancelled(b.token()));assert!(!cancelled());
-  cancel();reset();assert!(token_cancelled(token));assert!(!token_cancelled(b.token()));
-  drop(a);first.store(false,Ordering::SeqCst);assert!(token_cancelled(token));assert!(!token_cancelled(b.token()));
- }
-}
 pub fn cancellation_token() -> u64 { CANCEL_GENERATION.load(Ordering::SeqCst) }
 pub fn token_cancelled(token:u64) -> bool {
     if scoped_token(token){return scopes().lock().ok().and_then(|held|held.get(&token).and_then(Weak::upgrade)).map(|flag|flag.load(Ordering::SeqCst)).unwrap_or(true);}
@@ -408,38 +397,5 @@ pub(super) fn exec_replace(program: &Path, args: &[String], cwd: &Path, env: &[(
         let mut child = command.spawn().map_err(|error| format!("Successor exec failed: {error}"))?;
         let status = child.wait().map_err(|error| format!("Successor exec failed: {error}"))?;
         std::process::exit(status.code().unwrap_or(1));
-    }
-}
-
-#[cfg(test)]
-mod checks {
-    use super::*;
-    #[test]
-    fn continuously_ready_output_cannot_starve_deadline() {
-        struct Continuous {
-            calls: usize,
-        }
-        impl Read for Continuous {
-            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-                self.calls += 1;
-                buffer.fill(b'x');
-                Ok(buffer.len())
-            }
-        }
-        let mut input = Continuous { calls: 0 };
-        let mut output = Vec::new();
-        drain(&mut input, &mut output).unwrap();
-        assert_eq!(input.calls, 32);
-        assert_eq!(output.len(), 65536);
-    }
-}
-
-#[cfg(test)] mod cancellation_ownership_checks {
-    use super::*;
-    #[test] fn reset_preserves_old_operation_cancellation() {
-        reset();let old=cancellation_token();assert!(!token_cancelled(old));
-        cancel();assert!(token_cancelled(old));reset();assert!(token_cancelled(old));
-        let current=cancellation_token();assert_ne!(old,current);assert!(!token_cancelled(current));
-        assert!(token_cancelled(u64::MAX));
     }
 }

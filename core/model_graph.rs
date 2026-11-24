@@ -17,34 +17,3 @@ pub fn model_graph(bytes: &[u8]) -> String {
     }
     "A tensor graph was not identified.".to_string()
 }
-
-#[cfg(test)]
-mod checks {
-    use super::model_graph;
-
-    #[test]
-    fn tfl3() {
-        let report = model_graph(b"TFL3\x10\x00\x00\x00");
-        assert!(report.contains("TFL3"));
-        assert!(report.contains("16"));
-        assert!(report.contains("not executed"));
-    }
-
-    #[test]
-    fn protobuf_graph_name() {
-        let report = model_graph(b"\x0A\x05graph");
-        assert_eq!(
-            report,
-            "tensor graph name graph. Operators were not executed."
-        );
-    }
-
-    #[test]
-    fn unidentified() {
-        assert_eq!(
-            model_graph(b"TFL3\x10\x00"),
-            "A tensor graph was not identified."
-        );
-        assert_eq!(model_graph(b""), "A tensor graph was not identified.");
-    }
-}

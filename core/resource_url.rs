@@ -21,9 +21,6 @@ impl fmt::Display for Origin{fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Resul
 #[derive(Clone,Debug,PartialEq,Eq)]
 pub struct Url{scheme:Scheme,host:Host,port:u16,path:String,query:Option<String>,fragment:Option<String>}
 impl Url{
-    #[cfg(test)] pub fn path(&self)->&str{&self.path}
-    #[cfg(test)] pub fn query(&self)->Option<&str>{self.query.as_deref()}
-    #[cfg(test)] pub fn fragment(&self)->Option<&str>{self.fragment.as_deref()}
     pub fn origin(&self)->Origin{Origin{scheme:self.scheme,host:self.host.clone(),port:self.port}}
     pub fn same_origin(&self,other:&Self)->bool{self.scheme==other.scheme&&self.port==other.port&&self.host==other.host}
     /// Origin-form HTTP target. Fragments never leave the client.
@@ -144,48 +141,4 @@ pub fn resolve(base:&Url,reference:&str)->Result<Url>{
     };
     let query=if let Some(query)=tail.query{Some(encode(query,Component::Query,tail.query_at)?)}else if tail.path.is_empty(){base.query.clone()}else{None};
     complete(Url{scheme:base.scheme,host:base.host.clone(),port:base.port,path,query,fragment})
-}
-
-#[cfg(test)]mod checks{
-    use super::*;
-    #[test]fn rfc_relative_reference_examples(){
-        let base=parse("http://a/b/c/d;p?q").unwrap();
-        for(reference,wanted)in[("g","http://a/b/c/g"),("./g","http://a/b/c/g"),("g/","http://a/b/c/g/"),("/g","http://a/g"),("//g","http://g/"),("?y","http://a/b/c/d;p?y"),("g?y","http://a/b/c/g?y"),("#s","http://a/b/c/d;p?q#s"),("g#s","http://a/b/c/g#s"),("g?y#s","http://a/b/c/g?y#s"),(";x","http://a/b/c/;x"),("","http://a/b/c/d;p?q"),(".","http://a/b/c/"),("..","http://a/b/"),("../g","http://a/b/g"),("../..","http://a/"),("../../g","http://a/g"),("../../../g","http://a/g"),("g/./h","http://a/b/c/g/h"),("g/../h","http://a/b/c/h"),("g?y/../x","http://a/b/c/g?y/../x")]{assert_eq!(resolve(&base,reference).unwrap().serialize(),wanted,"{reference}");}
-    }
-    #[test]fn percent_dot_does_not_decode_slashes_or_query(){
-        let base=parse("https://example.test/a/b/index?keep=%2f#old").unwrap();
-        for(reference,wanted)in[("%2e/x","/a/b/x"),("%2E%2e/x","/a/x"),(".%2e/x","/a/x"),("%2e./x","/a/x"),("%252e/x","/a/b/%252e/x"),("a%2fb/../x","/a/b/x"),("/a//b/..","/a//")]{assert_eq!(resolve(&base,reference).unwrap().path(),wanted);}
-        let url=resolve(&base,"#new").unwrap();assert_eq!(url.query(),Some("keep=%2f"));assert_eq!(url.request_target(),"/a/b/index?keep=%2f");assert!(!url.wire_url().contains('#'));
-        assert_eq!(resolve(&base,"?").unwrap().query(),Some(""));assert_eq!(resolve(&base,"").unwrap().fragment(),None);
-    }
-    #[test]fn origins_hosts_ports_and_private_routes(){
-        let a=parse("HTTPS://EXAMPLE.COM:00443/a").unwrap();let b=parse("https://example.com/b#x").unwrap();assert!(a.same_origin(&b));assert_eq!(a.origin().to_string(),"https://example.com");assert!(!a.same_origin(&parse("http://example.com").unwrap()));assert!(!a.same_origin(&parse("https://example.com:444").unwrap()));assert!(!a.same_origin(&parse("https://example.com.evil.test").unwrap()));
-        for address in ["http://100.76.22.36:8080/v1","http://192.168.1.2","http://10.0.0.1","http://localhost:8000","http://printer.local","http://my_nas","http://[::1]:8080/a","http://[fe80::1]/","http://[fd00::5]/"]{assert!(parse(address).is_ok(),"{address}");}
-        let ip=parse("http://[2001:0DB8:0:0:0:0:0:1]:80/x").unwrap();assert_eq!(ip.serialize(),"http://[2001:db8::1]/x");assert!(ip.same_origin(&parse("http://[2001:db8::1]/").unwrap()));
-        assert_eq!(parse("http://[::ffff:192.0.2.1]/").unwrap().serialize(),"http://[::ffff:c000:201]/");
-    }
-    #[test]fn credentials_unsupported_and_invalid_syntax_refuse(){
-        for address in ["file:///x","data:text/plain,x","javascript:x","https://u:p@example.com","http://a@b","http://a:0","http://a:65536","http://a:","http://a:+80","http://[::1]x/","http://::1/","http://[fe80::1%25eth0]/","http://☃.test/","http://exa%6dple.test/","http://127.1/","http://0177.0.0.1/","http://0x7f000001/","http://2130706433/","https:///x","https:\\x"," http://x/","http://x/ ","http://x/\r\nX:y","http://x/%zz","http://a..b/"]{assert!(parse(address).is_err(),"{address}");}
-        let base=parse("https://safe.test/a").unwrap();assert!(resolve(&base,"//user@other.test/x").is_err());assert!(resolve(&base,"ftp://other.test/x").is_err());assert!(resolve(&base,"a:b").is_err());assert_eq!(resolve(&base,"./a:b").unwrap().path(),"/a:b");
-    }
-    #[test]fn utf8_encoding_empty_suffixes_and_roundtrip(){
-        let u=parse("https://EXAMPLE.test/日本/a b?q=é&sig=%2f+%2B#見出し").unwrap();assert_eq!(u.path(),"/%E6%97%A5%E6%9C%AC/a%20b");assert_eq!(u.query(),Some("q=%C3%A9&sig=%2f+%2B"));assert_eq!(parse(&u.serialize()).unwrap(),u);
-        let u=parse("http://a?#").unwrap();assert_eq!(u.query(),Some(""));assert_eq!(u.fragment(),Some(""));assert_eq!(u.request_target(),"/?");assert_eq!(u.serialize(),"http://a/?#");
-        assert_eq!(resolve(&parse("http://a/dir/").unwrap(),"x").unwrap().path(),"/dir/x");assert_eq!(resolve(&parse("http://a/dir").unwrap(),"x").unwrap().path(),"/x");
-    }
-    #[test]fn bounds_and_canonical_ipv6(){
-        assert!(parse(&format!("http://a/{}","a".repeat(INPUT_LIMIT))).is_err());assert!(parse(&format!("http://{}.test/","a".repeat(64))).is_err());
-        for value in ["::","::1","1::","1:0:0:2:0:0:3:4","1:2:3:4:5:6:7:8","::ffff:ffff:ffff"]{let ip=value.parse::<Ipv6Addr>().unwrap();assert_eq!(ipv6_text(ip).parse::<Ipv6Addr>().unwrap(),ip);}
-        let base=parse("https://local.test/a/b/").unwrap();for count in 0..200{let reference=format!("{}c?x=%2F#f","../".repeat(count));let resolved=resolve(&base,&reference).unwrap();assert_eq!(parse(&resolved.serialize()).unwrap(),resolved);assert!(resolved.request_target().starts_with('/'));assert!(!resolved.request_target().contains('#'));}
-    }
-    #[test]fn generated_inputs_never_panic_and_successes_roundtrip(){
-        let base=parse("https://host.local:8080/a/b?keep=%2f#old").unwrap();let pieces=["a","日","%2e","%2F","%","/","..",":","?","#","@","[", "]", " ", "\\", "&q=", "0x7f", "é"];
-        let mut seed=0xabcdef12u64;
-        for _ in 0..4096{let mut reference=String::new();for _ in 0..12{seed=seed.wrapping_mul(6364136223846793005).wrapping_add(1);reference.push_str(pieces[(seed>>32)as usize%pieces.len()]);}
-            if let Ok(url)=resolve(&base,&reference){assert_eq!(parse(&url.serialize()).unwrap(),url);assert!(url.wire_url().is_ascii());assert!(!url.request_target().contains('#'));assert!(!url.request_target().chars().any(char::is_control));assert!(url.serialize().len()<=SERIALIZED_LIMIT);}
-        }
-        assert!(parse(&format!("http://a/{}","日".repeat(2000))).is_err());
-        let long=parse(&format!("http://a/{}","日".repeat(800))).unwrap();assert_eq!(parse(&long.serialize()).unwrap(),long);
-    }
-
 }

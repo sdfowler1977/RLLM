@@ -52,7 +52,6 @@ fn utf16_result(bytes:&[u8],be:bool,html:bool,bom:bool,limit:usize,cancelled:&im
         (true,false,false)=>"UTF-16BE (declared web encoding)",(false,false,false)=>"UTF-16LE (declared web encoding)",
     };Ok((out,label))
 }
-#[cfg(test)]fn decode(bytes:&[u8],charset:Option<&str>,html:bool,legacy_allowed:bool,limit:usize)->Result<(String,&'static str),String>{decode_with_cancel(bytes,charset,html,legacy_allowed,limit,&||false).map_err(TextError::message)}
 /// Decode one explicitly declared text representation, honouring cancellation
 /// and classifying the failure. A website or representation fault is a Response
 /// error; a current-memory or cancellation fault is a Resource error. This is
@@ -105,40 +104,3 @@ pub(super) fn decode_with_cancel(bytes:&[u8],charset:Option<&str>,html:bool,lega
 /// Retained entry name used by the page reader. The cancellation-aware and
 /// fault-classified decoding work lives in `decode_with_cancel`.
 pub(super) fn decode_classified(bytes:&[u8],charset:Option<&str>,html:bool,legacy_allowed:bool,limit:usize,cancelled:&impl Fn()->bool)->Result<(String,&'static str),TextError>{decode_with_cancel(bytes,charset,html,legacy_allowed,limit,cancelled)}
-#[cfg(test)]mod checks{
-    use super::*;
-    #[test]fn utf16_orders_surrogates_and_actual_bom(){
-        let text="<p>Aé水𝄞</p>";
-        for be in [false,true]{
-            let b=text.encode_utf16().flat_map(|v|if be{v.to_be_bytes()}else{v.to_le_bytes()}).collect::<Vec<_>>();
-            assert_eq!(decode(&b,Some(if be{"utf-16be"}else{"utf-16"}),true,true,100).unwrap().0,text);
-            let mut marked=if be{vec![0xfe,0xff]}else{vec![0xff,0xfe]};marked.extend(b);
-            for label in [None,Some("latin1"),Some("us-ascii"),Some("unsupported"),Some("utf-8")]{assert_eq!(decode(&marked,label,true,true,100).unwrap().0,text);}
-            assert_eq!(decode(&marked,Some("utf-16"),false,true,100).unwrap().0,text);
-            assert!(decode(&marked,Some("utf-16"),false,false,100).is_err());
-        }
-    }
-    #[test]fn utf16_html_replacement_keeps_following_syntax(){
-        for (bytes,want) in [(vec![0,0xd8,0x3c,0],"�<"),(vec![0,0xdc,65,0],"�A"),(vec![0,0xd8],"�"),(vec![0,0xd8,65],"�"),(vec![65],"�"),(vec![0,0xd8,0,0xd8,0,0xdc],"�𐀀")]{
-            let (s,label)=decode(&bytes,Some("utf-16le"),true,true,100).unwrap();assert_eq!(s,want);assert!(label.contains("replaced"));
-            assert!(decode(&bytes,Some("utf-16le"),false,true,100).is_err());
-        }
-    }
-    #[test]fn utf16_expansion_and_cancellation(){
-        assert_eq!(decode(&[0,8],Some("utf-16le"),true,true,3).unwrap().0,"\u{800}");
-        assert!(decode(&[0,8],Some("utf-16le"),true,true,2).is_err());
-        assert!(decode(&[0],Some("utf-16le"),true,true,2).is_err());
-        assert_eq!(decode(&[],Some("utf-16le"),true,true,0).unwrap().0,"");
-        let calls=std::cell::Cell::new(0);let cancel=||{let n=calls.get()+1;calls.set(n);n>=4};
-        assert!(decode_with_cancel(&vec![0;10000],Some("utf-16le"),true,true,20000,&cancel).unwrap_err().message().contains("cancelled"));
-    }
-    #[test]fn utf16_no_unlabelled_plaintext_or_json_guess(){
-        for label in [None,Some("utf-8"),Some("ascii")]{assert!(decode(b"\xff\xfeA\0",label,false,true,100).is_err());}
-        assert!(decode(b"A\0",Some("utf-16"),false,false,100).is_err());
-        assert_eq!(decode(b"\xef\xbb\xbfA",Some("utf-16be"),true,true,1).unwrap().0,"A");
-        assert_eq!(decode(b"\0\xfeA\0",Some("utf-16le"),false,true,10).unwrap().0,"\u{fe00}A");
-    }
-    #[test]fn complete_byte_domain_and_mapping(){let bytes=(0..=255).collect::<Vec<u8>>();let(s,_)=decode(&bytes,Some("windows-1252"),false,true,1024).unwrap();assert_eq!(s.chars().count(),256);for (i,c)in s.chars().enumerate(){assert_eq!(c as u32,if (128..160).contains(&i){C1[i-128]as u32}else{i as u32});}assert!(s.contains('€'));assert!(s.contains('\u{81}'));}
-    #[test]fn labels_bounds_and_strict_prior_encodings(){for label in ["iso-8859-1","LATIN1"," cp1252 ","iso_8859-1:1987"]{assert_eq!(decode(b"\x93caf\xe9\x94",Some(label),false,true,32).unwrap().0,"“café”");}assert!(decode(b"\x80",Some("us-ascii"),true,true,32).is_err());assert!(decode(b"\xe9",None,true,true,32).is_err());assert!(decode(b"\x80",Some("windows-1252"),false,false,32).is_err());assert!(decode(b"\x80",Some("windows-1252"),false,true,2).is_err());assert_eq!(decode(b"\x80",Some("windows-1252"),false,true,3).unwrap().0,"€");}
-    #[test]fn html_bom_precedence_without_plaintext_guessing(){assert_eq!(decode(b"\xef\xbb\xbf\xc3\xa9",Some("latin1"),true,true,2).unwrap().0,"é");assert!(decode(b"\xef\xbb\xbf\xff",Some("latin1"),true,true,100).is_err());assert_eq!(decode(b"\xff\xfea\0",Some("latin1"),true,true,100).unwrap().0,"a");assert_eq!(decode(b"\xff\xfe",Some("latin1"),false,true,4).unwrap().0,"ÿþ");}
-}

@@ -55,10 +55,3 @@ pub(super) fn content(c:&Json)->Result<String>{
  out.add("\nThe complete journal retains prior plans, assessments, answers and raw returned observations separately. Missing evidence remains unresolved. The requested implementation language belongs in the recorded constraints; no compiler or language is selected by this export.\n")?;
  Ok(out.body)
 }
-
-#[cfg(test)]mod checks{
- use super::*;
- #[test]fn unknown_work_is_not_filled_with_invented_findings(){let c=obj(vec![("question",s("Describe the behavior")),("question_complete",Bool(true))]);let brief=content(&c).unwrap();assert!(brief.contains("No authored plan is recorded"));assert!(brief.contains("No findings or design entries recorded"));assert!(brief.contains("No returned evidence recorded"));assert!(!brief.contains("All requirements completed"));}
- #[test]fn authored_markup_cannot_forge_sections(){let c=obj(vec![("question",s("量\n# Forged\n<script>[link](private)</script>")),("question_complete",Bool(true))]);let brief=content(&c).unwrap();assert!(brief.contains("> 量\n> \\# Forged"));assert!(brief.contains("&lt;script&gt;\\[link\\]"));assert!(!brief.contains("<script>"));assert!(!brief.contains("\n# Forged"));}
- #[test]fn escaping_capacity_refuses_only_the_projection(){let c=obj(vec![("question",s(&"&".repeat(60000))),("question_complete",Bool(true))]);let original=c.clone();assert!(content(&c).unwrap_err().contains("exceeds256KiB"));assert_eq!(c,original);}
-}

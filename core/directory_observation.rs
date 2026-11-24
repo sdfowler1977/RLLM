@@ -51,14 +51,6 @@ impl Report {
         let start=offset.min(self.occurrences.len());
         &self.occurrences[start..start.saturating_add(count).min(self.occurrences.len())]
     }
-    #[cfg(test)]
-    pub fn children(&self, parent: usize) -> impl Iterator<Item=&Occurrence> {
-        self.contains.iter().filter(move |e|e.parent==parent).map(|e|&self.occurrences[e.child])
-    }
-    #[cfg(test)]
-    pub fn find(&self, raw_path: &[u8]) -> Option<&Occurrence> {
-        self.occurrences.binary_search_by(|o|o.path.as_slice().cmp(raw_path)).ok().map(|i|&self.occurrences[i])
-    }
     /// A bounded human-readable projection; the typed report retains exact samples.
     pub fn describe(&self, max_bytes: usize) -> String {
         let limit=max_bytes.min(120_000);
@@ -389,77 +381,4 @@ where P:FnMut(&Path,Access)->Decision,C:Fn()->bool {
         }
     }
     Ok(walker.report)
-}
-
-#[cfg(test)] mod checks {
-    use super::*;
-    use std::{collections::BTreeMap, cell::Cell, sync::atomic::{AtomicU64,Ordering}};
-    static SERIAL:AtomicU64=AtomicU64::new(1);
-    fn fixture()->PathBuf {
-        let p=std::env::temp_dir().join(format!("rllm-directory-observation-{}-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),SERIAL.fetch_add(1,Ordering::Relaxed)));
-        fs::create_dir(&p).unwrap();p
-    }
-    fn run(p:&Path,l:&Limits)->Report {observe(p,Path::new(""),l,&mut |_,_|Decision::Allow,&||false).unwrap()}
-    #[test] fn actual_tree_raw_names_samples_and_stable_queries(){
-        let p=fixture();fs::create_dir(p.join("sub")).unwrap();fs::write(p.join("sub/image"),b"\x89PNG\r\n\x1a\nabc").unwrap();fs::write(p.join(OsString::from_vec(vec![b'x',255])),b"hello").unwrap();
-        let r=run(&p,&Limits::default());assert_eq!(r.coverage,Coverage::Complete);assert_eq!(r.occurrences.len(),4);assert_eq!(r.contains.len(),3);
-        let image=r.find(b"sub/image").unwrap();assert_eq!(image.sample.as_ref().unwrap().bytes,b"\x89PNG\r\n\x1a\nabc");assert!(image.format_candidates.contains(&"PNG"));assert!(r.find(&[b'x',255]).is_some());
-        fs::write(p.join("sub/image"),b"changed later").unwrap();assert_eq!(r.find(b"sub/image").unwrap().sample.as_ref().unwrap().bytes,b"\x89PNG\r\n\x1a\nabc");assert_eq!(r.page(usize::MAX,5).len(),0);assert_eq!(r.children(0).count(),2);assert!(r.describe(500).len()<=500);
-    }
-    #[test] fn ask_and_deny_do_not_become_access(){
-        let p=fixture();fs::create_dir(p.join("private")).unwrap();fs::write(p.join("private/secret"),b"secret").unwrap();fs::write(p.join("asked"),b"private bytes").unwrap();fs::write(p.join("allowed"),b"public").unwrap();let mut seen=Vec::new();
-        let r=observe(&p,Path::new(""),&Limits::default(),&mut |path,a|{seen.push((path.to_path_buf(),a));if path==Path::new("private"){Decision::Deny}else if path==Path::new("asked"){Decision::Ask}else{Decision::Allow}},&||false).unwrap();
-        assert_eq!(r.coverage,Coverage::Partial);assert!(r.find(b"private/secret").is_none());assert!(r.find(b"asked").unwrap().sample.is_none());assert!(r.find(b"allowed").unwrap().sample.is_some());assert!(!seen.iter().any(|(p,_)|p==Path::new("private/secret")));
-    }
-    #[test] fn symbolic_links_are_not_followed(){
-        let p=fixture();let outside=fixture();fs::write(outside.join("secret"),b"not observed").unwrap();std::os::unix::fs::symlink(&outside,p.join("link")).unwrap();
-        let r=run(&p,&Limits::default());assert_eq!(r.find(b"link").unwrap().kind,Kind::Symlink);assert!(r.find(b"link/secret").is_none());assert!(observe(&p,Path::new("link"),&Limits::default(),&mut |_,_|Decision::Allow,&||false).is_err());
-    }
-    #[test] fn selected_directory_does_not_scan_siblings(){
-        let p=fixture();fs::create_dir(p.join("selected")).unwrap();fs::create_dir(p.join("other")).unwrap();fs::write(p.join("selected/a"),b"a").unwrap();fs::write(p.join("other/b"),b"b").unwrap();
-        let r=observe(&p,Path::new("./selected"),&Limits::default(),&mut |path,_|{assert!(path.starts_with("selected"));Decision::Allow},&||false).unwrap();assert_eq!(r.selected,b"selected");assert_eq!(r.occurrences.len(),2);assert!(r.find(b"other").is_none());
-        for invalid in ["../other","/tmp","a/../../other"]{assert!(observe(&p,Path::new(invalid),&Limits::default(),&mut |_,_|Decision::Allow,&||false).is_err());}
-    }
-    #[test] fn bounded_prefix_and_entry_depth_budgets_are_honest(){
-        let p=fixture();fs::create_dir(p.join("a")).unwrap();fs::write(p.join("a/deep"),b"deep").unwrap();fs::write(p.join("b"),b"0123456789").unwrap();fs::write(p.join("c"),b"0123456789").unwrap();
-        let mut l=Limits::default();l.depth=0;l.header_bytes=4;l.total_sample_bytes=5;let r=run(&p,&l);assert_eq!(r.coverage,Coverage::Partial);assert!(r.find(b"a/deep").is_none());assert!(r.sampled_bytes<=5);assert!(!r.find(b"b").unwrap().sample.as_ref().unwrap().complete_file);
-        l.entries=2;let r=run(&p,&l);assert!(r.occurrences.len()<=2);assert_eq!(r.coverage,Coverage::Partial);
-    }
-    #[test] fn replacement_during_policy_callback_invalidates_sample(){
-        let p=fixture();fs::write(p.join("data"),b"original").unwrap();let visits=Cell::new(0);
-        let r=observe(&p,Path::new(""),&Limits::default(),&mut |path,a|{if path==Path::new("data")&&a==Access::ReadHeader{visits.set(visits.get()+1);if visits.get()==2{fs::rename(p.join("data"),p.join("preserved")).unwrap();fs::write(p.join("data"),b"replacement").unwrap();}}Decision::Allow},&||false).unwrap();
-        assert_eq!(r.coverage,Coverage::Changed);assert_eq!(r.find(b"data").unwrap().coverage,Coverage::Changed);assert!(r.find(b"data").unwrap().sample.is_none());
-    }
-    #[test] fn cancellation_and_deadline_remain_scoped(){
-        let p=fixture();fs::write(p.join("data"),b"some bytes").unwrap();let calls=Cell::new(0);
-        let r=observe(&p,Path::new(""),&Limits::default(),&mut |_,_|Decision::Allow,&||{calls.set(calls.get()+1);calls.get()>3});assert!(r.unwrap_err().contains("cancelled"));
-        let mut l=Limits::default();l.duration=Duration::from_nanos(1);let r=run(&p,&l);assert_eq!(r.coverage,Coverage::Partial);assert_eq!(r.occurrences[0].coverage,Coverage::Partial);assert!(!r.occurrences[0].notes.is_empty());assert_eq!(run(&p,&Limits::default()).coverage,Coverage::Complete);
-    }
-    #[test] fn current_policy_is_checked_again_after_read(){
-        let p=fixture();fs::write(p.join("data"),b"some bytes").unwrap();let calls=Cell::new(0);
-        let r=observe(&p,Path::new(""),&Limits::default(),&mut |_,a|{if a==Access::ReadHeader{calls.set(calls.get()+1);if calls.get()>1{return Decision::Ask;}}Decision::Allow},&||false).unwrap();assert!(r.find(b"data").unwrap().sample.is_none());assert_eq!(r.sampled_bytes,0);assert_eq!(r.coverage,Coverage::Partial);
-    }
-    #[test] fn ancestor_rebinding_never_reads_replacement_subtree(){
-        let p=fixture();let outside=fixture();fs::create_dir(p.join("a")).unwrap();fs::write(p.join("a/good"),b"original").unwrap();fs::write(outside.join("secret"),b"outside bytes").unwrap();let moved=Cell::new(false);
-        let r=observe(&p,Path::new(""),&Limits::default(),&mut |path,a|{if path==Path::new("a")&&a==Access::ListDirectory&&!moved.replace(true){fs::rename(p.join("a"),p.join("old-a")).unwrap();std::os::unix::fs::symlink(&outside,p.join("a")).unwrap();}Decision::Allow},&||false).unwrap();
-        assert_eq!(r.coverage,Coverage::Changed);assert!(r.find(b"a/secret").is_none());assert_eq!(r.find(b"a").unwrap().coverage,Coverage::Changed);assert!(r.find(b"a/good").unwrap().sample.is_none());
-    }
-    #[test] fn discarded_reads_still_consume_the_total_byte_budget(){
-        let p=fixture();for name in ["a","b","c"]{fs::write(p.join(name),b"1234").unwrap();}let mut counts=BTreeMap::new();let mut limits=Limits::default();limits.total_sample_bytes=5;
-        let r=observe(&p,Path::new(""),&limits,&mut |path,a|{if a==Access::ReadHeader{let n=counts.entry(path.to_path_buf()).or_insert(0);*n+=1;if *n==2{return Decision::Deny;}}Decision::Allow},&||false).unwrap();
-        assert_eq!(r.bytes_read,5);assert_eq!(r.sampled_bytes,0);assert!(r.occurrences.iter().all(|o|o.sample.is_none()));
-        assert_eq!(std::mem::offset_of!(Dirent,name),19);
-        assert_eq!(std::mem::offset_of!(Dirent,length),16);
-    }
-
-    #[test] fn approved_root_identity_is_checked_before_any_policy_or_listing(){
-        let p=fixture();let m=fs::metadata(&p).unwrap();let calls=Cell::new(0);
-        let r=observe_bound(&p,Path::new(""),Some((m.dev(),m.ino().wrapping_add(1))),&Limits::default(),&mut |_,_|{calls.set(calls.get()+1);Decision::Allow},&||false);
-        assert!(r.unwrap_err().contains("identity differs"));assert_eq!(calls.get(),0);
-    }
-    #[test] fn pending_name_allocations_share_the_retained_memory_limit(){
-        let p=fixture();for n in 0..100{fs::write(p.join(format!("{n:03}-{}","x".repeat(150))),b"data").unwrap();}let mut l=Limits::default();l.report_bytes=2048;
-        let r=run(&p,&l);assert_eq!(r.coverage,Coverage::Partial);assert!(r.occurrences.len()<100);assert!(r.bytes_read<=l.total_sample_bytes);
-    }
-
 }

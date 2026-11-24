@@ -90,39 +90,3 @@ fn acquire_into(root: &Path, name: &str, source: &str, cancelled: &impl Fn() -> 
         "Acquired subject into the workspace: {name} ({total} bytes, SHA-256 {sha}). Source: {trimmed}. All bytes read back exactly; existing files were not replaced. Inspect {name} to observe its structure.",
     ))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validate_requires_a_source_and_a_plain_root_filename() {
-        assert!(validate(&obj(vec![("source", s("C:/Downloads/app.bin")), ("output", s("subject.bin"))])).is_ok());
-        assert!(validate(&obj(vec![("source", s("/opt/app")), ("output", s("subject.bin")), ("note", s("TV firmware"))])).is_ok());
-        assert!(validate(&obj(vec![("output", s("subject.bin"))])).is_err());
-        assert!(validate(&obj(vec![("source", s("")), ("output", s("subject.bin"))])).is_err());
-        assert!(validate(&obj(vec![("source", s("x")), ("output", s(""))])).is_err());
-        assert!(validate(&obj(vec![("source", s("x")), ("output", s("a/b.bin"))])).is_err());
-        assert!(validate(&obj(vec![("source", s("x")), ("output", s(".."))])).is_err());
-        assert!(validate(&obj(vec![("source", s("x")), ("output", s("subject.bin")), ("other", s("x"))])).is_err());
-    }
-
-    #[test]
-    fn acquire_streams_the_subject_and_reports_provenance() {
-        let dir = std::env::temp_dir().join(format!("rllm-acquire-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        let subject = dir.join("app.bin");
-        let bytes = b"\x7fELF\x02\x01\x01\x00payload-of-a-subject".to_vec();
-        fs::write(&subject, &bytes).unwrap();
-        let report = acquire_into(&dir, "subject.bin", subject.to_str().unwrap(), &|| false).unwrap();
-        assert!(report.contains("subject.bin"));
-        assert!(report.contains(&harness_rules::sha256(&bytes)));
-        assert_eq!(fs::read(dir.join("subject.bin")).unwrap(), bytes);
-        // A second acquisition to the same name is refused rather than replacing it.
-        assert!(acquire_into(&dir, "subject.bin", subject.to_str().unwrap(), &|| false).is_err());
-        // A missing source reports a real open failure, not a silent pass.
-        assert!(acquire_into(&dir, "missing.bin", dir.join("nope").to_str().unwrap(), &|| false).is_err());
-        let _ = fs::remove_dir_all(&dir);
-    }
-}

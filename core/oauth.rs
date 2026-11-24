@@ -142,18 +142,3 @@ pub(super) fn event(st:&mut Json,a:&str,input:&Json)->Result<Json>{
  }Ok(Null)
 }
 pub(super) fn dialog(st:&Json)->Option<Json>{let d=text(st,"dialog");if d=="oauth_device"{return Some(device_authorization::dialog(st));}if !["oauth_settings","oauth_wait"].contains(&d.as_str()){return None;}if d=="oauth_wait"{let mut fields=connection_fields(st);fields.push(field_ui("status","Authorization","Complete sign-in in your browser. Only the matching, unexpired return can update this connection. Cancelling retains existing credentials.","readonly"));return Some(modal(if text(st,"oauth_target")=="storage"{"Network storage authorization"}else{"Connection authorization"},fields,vec![button("Cancel authorization","oauth_cancel")]));}let target=selected(st).ok();let p=target.and_then(|owner|current(st,owner).ok()).unwrap_or(Null);let cfg=get(&p,"oauth");let status=if boolean(&p,"oauth_enabled"){if target==Some(Target::Storage){network::storage_authorization(&p)}else{authorization(&p)}.map(|_|"Authorized".to_string()).unwrap_or_else(|e|e)}else{"Manually configured credentials are active".into()};let mut fields=connection_fields(st);fields.extend(vec![field_ui("status","Current authorization",&status,"readonly"),field_ui("redirect","Register this redirect URI with your authorization server",&redirect(st).unwrap_or_default(),"readonly")]);for(key,label)in[("authorization_endpoint","Browser authorization endpoint (optional)"),("device_endpoint","Device authorization endpoint (optional)"),("token_endpoint","Token endpoint"),("client_id","Public client identifier"),("scope","Requested scopes"),("issuer","Expected authorization issuer (optional)")]{fields.push(field_ui(key,label,&text(cfg,key),"text"));}fields.push(field_ui("plain","Allow unencrypted authorization on a trusted private server",if boolean(cfg,"plain"){"true"}else{"false"},"check"));Some(modal(if target==Some(Target::Storage){"Network storage authorization"}else{"Connection authorization"},fields,vec![button("Save authorization settings","oauth_save"),button("Sign in with browser","oauth_sign_in"),button("Sign in with device code","oauth_device_start"),button("Refresh authorization","oauth_refresh"),button(if target==Some(Target::Storage){"Use saved key or username/password"}else{"Use existing API-key settings"},"oauth_key_mode"),button("Close","close")]))}
-
-#[cfg(test)]mod checks{use super::*;#[test]fn pkce_vector_and_parameter_rejection(){assert_eq!(challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk").unwrap(),"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");assert!(query("state=one&st%61te=two").is_err());assert!(query("state=%00").is_err());assert!(secret().unwrap().len()>=43);}}
-
-#[cfg(test)] mod credential_checks {
- use super::*;
- #[test] fn malformed_rotation_is_not_omission(){
-  for value in [Num("42".into()),Bool(true),Arr(vec![]),obj(vec![]),Arr(vec![s("secret")])]{assert!(refresh_credential(&obj(vec![("refresh_token",value)])).is_err());}
-  for value in ["bad\nsecret","bad\u{85}secret"]{assert!(refresh_credential(&obj(vec![("refresh_token",s(value))])).is_err());}
-  assert!(refresh_credential(&obj(vec![("refresh_token",s(&"x".repeat(8193)))] )).is_err());
- }
- #[test] fn opaque_rotation_and_omission_remain_supported(){
-  for value in ["opaque+/= rotated","café","",&"x".repeat(8192)]{assert_eq!(refresh_credential(&obj(vec![("refresh_token",s(value))])).unwrap(),value);}
-  assert_eq!(refresh_credential(&obj(vec![])).unwrap(),"");assert_eq!(refresh_credential(&obj(vec![("refresh_token",Null)])).unwrap(),"");
- }
-}

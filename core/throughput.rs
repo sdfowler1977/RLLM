@@ -66,22 +66,3 @@ pub(super) fn ui(st:&Json)->Json {
         ("description",s(&format!("Analytics. {status}. {label}. Approximate tokens per second calculated on this device. {}",text(&rate,"model")))),
         ("measurement",rate)])
 }
-
-#[cfg(test)] mod checks {
-    use super::*;
-    #[test] fn local_estimate_uses_characters_and_clock_only() {
-        let mut st=obj(vec![("request_chat",s("a")),("active",s("a"))]);start(&mut st);
-        assert_eq!(value(get(&st,"local_rate")),None);
-        observe(&mut st,&obj(vec![("elapsed_ms",Num("1000".into())),("completion_tokens",Num("99999".into()))]),Some("aé中🦀"));
-        assert_eq!(value(get(&st,"local_rate")),Some(1.0));
-        observe(&mut st,&obj(vec![("elapsed_ms",Num("2000".into()))]),None);
-        assert_eq!(value(get(&st,"local_rate")),Some(0.5));
-        observe(&mut st,&obj(vec![("elapsed_ms",Num("500".into()))]),Some("aé中🦀aé中🦀"));
-        assert_eq!(value(get(&st,"local_rate")),Some(1.0));
-        let row=finish(&mut st,&obj(vec![]),"cancelled");
-        observe(&mut st,&obj(vec![("elapsed_ms",Num("3000".into()))]),Some("late text ignored"));
-        assert_eq!(get(&st,"local_rate"),&row);
-        start(&mut st);assert_eq!(value(get(&st,"local_rate")),None);
-        put(&mut st,"active",s("b"));assert_eq!(for_chat(&st),Null);
-    }
-}

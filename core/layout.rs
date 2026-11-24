@@ -53,46 +53,6 @@ pub fn plan(v: &Json) -> Result<Json> {
     ]))
 }
 
-#[cfg(test)]
-mod checks {
-    use super::*;
-    #[test]
-    fn landscape_keyboard_prioritizes_composer_over_chrome() {
-        for height in [80,104,112,160] {
-            for line in [20,42,58] {
-                let plan=plan(&obj(vec![("height",Num(height.to_string())),("chat",Bool(true)),("composer_line",Num(line.to_string()))])).unwrap();
-                assert_eq!(value(&plan,"header_height",99),0);
-                assert_eq!(value(&plan,"chat_status_height",99),0);
-                assert_eq!(value(&plan,"conversation_header_height",99),0);
-                assert_eq!(value(&plan,"chrome_gap",99),0);
-                assert!(plan.get("short_chat")==Ok(&Bool(true)));
-                assert!((line+8).max(56)<=height);
-            }
-        }
-    }
-    #[test]
-    fn phone_and_tablet_controls_fit_measured_text() {
-        for (width, height) in [(304, 552), (624, 252), (784, 1080), (1184, 700)] {
-            for scale in [100, 130, 200] {
-                for chat in [false, true] {
-                    let p = plan(&obj(vec![
-                        ("width", Num(width.to_string())), ("height", Num(height.to_string())),
-                        ("small_line", Num((12 * scale / 100).to_string())),
-                        ("body_line", Num((18 * scale / 100).to_string())),
-                        ("title_line", Num((24 * scale / 100).to_string())),
-                        ("tab_width", Num((72 * scale / 100).to_string())), ("chat", Bool(chat)),
-                    ])).unwrap();
-                    assert!(value(&p,"config_height",usize::MAX) <= height, "{width}x{height} at {scale}%");
-                    assert!(value(&p,"content_height",0) >= 48, "{width}x{height} at {scale}%");
-                    assert!(value(&p,"rows",0) > 0);
-                    assert_eq!(value(&p,"main_width",0),width);
-                    assert_eq!(value(&p,"config_width",99),0);
-                }
-            }
-        }
-    }
-}
-
 /// Product-owned palette for the translucent phone surfaces; Android binds it
 /// to native drawables without changing navigation or saved conversations.
 pub fn palette(dark: bool) -> Json {

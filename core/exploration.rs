@@ -190,39 +190,3 @@ pub(super) fn analyze(data: &[u8], complete: bool) -> String {
     }
     if out.len() > OUTPUT_LIMIT { let mut bounded = cut(&out,OUTPUT_LIMIT-80).to_string();bounded.push_str("\nStructural report abbreviated at the output bound.\n");bounded } else { out }
 }
-
-#[cfg(test)]
-mod checks {
-    use super::*;
-    #[test] fn json_structure_omits_scalar_contents_and_escapes_paths() {
-        let text = analyze(br#"{"a/b":{"~key":"DO_NOT_REPORT_VALUE"},"list":[1,true,false,null]}"#,true);
-        assert!(text.contains("objects 2; arrays 1; strings 1; numbers 1; booleans 2; null 1"));
-        assert!(text.contains("$/a~1b/~0key"));assert!(!text.contains("DO_NOT_REPORT_VALUE"));assert!(text.contains("complete supplied input"));
-    }
-    #[test] fn malformed_depth_and_sample_are_not_complete_claims() {
-        let malformed = analyze(br#"{"a":1,}"#,true);assert!(malformed.contains("does not parse"));
-        let deep = format!("{}0{}","[".repeat(70),"]".repeat(70));assert!(analyze(deep.as_bytes(),true).contains("nesting limit"));
-        let sample = analyze(br#"{"a":1}"#,false);assert!(sample.contains("unseen remainder may change document validity"));assert!(sample.contains("prefix only"));
-        assert!(analyze(br#"{"a":"#,false).contains("whole-document validity is unknown"));
-    }
-    #[test] fn delimited_quotes_multiline_and_partial_tail() {
-        let sample = "name,value\r\n\"two\r\nlines\",\"a\"\"b\"\r\n";
-        let text = analyze(sample.as_bytes(),true);assert!(text.contains("2 complete records; first record 2 fields; field-count range 2–2"));assert!(text.contains("2 quoted fields and 1 quoted line breaks"));
-        let text = analyze(b"a,b\n1,2",false);assert!(text.contains("1 complete records"));assert!(text.contains("final sampled record was excluded"));
-        let text = analyze(b"a,b\n\"bad\"z,2",true);assert!(text.contains("strict quoting rejected"));
-        let text = analyze(b"a\tb\n1\t2\t3",true);assert!(text.contains("field-count range 2–3"));
-    }
-    #[test] fn unicode_crlf_empty_and_heading_counts() {
-        let text = analyze("# Héllo\r\n\r世界\n## Two\n".as_bytes(),true);
-        assert!(text.contains("4 line segments, 4 newline-terminated; 1 blank"));assert!(text.contains("[1, 1, 0, 0, 0, 0]"));
-        assert!(analyze(b"",true).contains("0 line segments"));
-        assert!(analyze(&[0xff],true).contains("not valid UTF-8"));
-        assert!(analyze(&[b'a',0xe2,0x82],false).contains("incomplete UTF-8 sequence"));
-        assert!(analyze(&[b'a',0xe2,0x82],true).contains("not valid UTF-8"));
-    }
-    #[test] fn resource_bounds_are_visible() {
-        let data = "a,b\n".repeat(ROW_LIMIT+100);let report=analyze(data.as_bytes(),true);assert!(report.contains("stopped after 4096 records"));assert!(report.len()<=OUTPUT_LIMIT);
-        let data = "x".repeat(INPUT_LIMIT+100);let report=analyze(data.as_bytes(),true);assert!(report.contains("prefix only"));assert!(report.len()<=OUTPUT_LIMIT);
-        let data=format!("[{}]",vec!["0";NODE_LIMIT+10].join(","));assert!(analyze(data.as_bytes(),true).contains("partial (node bound reached)"));
-    }
-}

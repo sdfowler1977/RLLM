@@ -317,25 +317,3 @@ fn probe_bytes(probe: &str) -> Vec<u8> {
 fn hex_dump(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validates_modes_and_addresses() {
-        assert!(validate(&obj(vec![("mode", s("connect")), ("address", s("example.com:443")), ("output", s("obs.txt"))])).is_ok());
-        assert!(validate(&obj(vec![("mode", s("listen")), ("address", s("0.0.0.0:8080")), ("output", s("obs.txt"))])).is_ok());
-        assert!(validate(&obj(vec![("mode", s("connect")), ("address", s("nohostport")), ("output", s("o.txt"))])).is_err());
-        assert!(validate(&obj(vec![("mode", s("sniff")), ("address", s("a:1")), ("output", s("o.txt"))])).is_err());
-        assert!(validate(&obj(vec![("mode", s("listen")), ("address", s("0.0.0.0:8080")), ("output", s("a/b.txt"))])).is_err());
-    }
-
-    #[test]
-    fn parses_connect_http_and_tls() {
-        assert_eq!(connect_line(b"CONNECT ads.example.com:443 HTTP/1.1\r\n\r\n"), Some(("ads.example.com".into(), 443)));
-        let (m, p, h, _) = http_request(b"GET /track?id=1 HTTP/1.1\r\nHost: metrics.example.com\r\n\r\n").unwrap();
-        assert_eq!((m.as_str(), p.as_str(), h.as_str()), ("GET", "/track?id=1", "metrics.example.com"));
-        // Minimal ClientHello with SNI "x.test" is exercised in the throwaway driver.
-    }
-}

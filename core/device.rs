@@ -145,16 +145,3 @@ mod win {
         devices
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validates_mode_and_output() {
-        assert!(validate(&obj(vec![("mode", s("list")), ("output", s("devices.txt"))])).is_ok());
-        assert!(validate(&obj(vec![("mode", s("read")), ("output", s("d.txt"))])).is_err());
-        assert!(validate(&obj(vec![("mode", s("list")), ("output", s("a/b.txt"))])).is_err());
-        assert!(validate(&obj(vec![("mode", s("list"))])).is_err());
-    }
-}

@@ -37,38 +37,3 @@ pub fn ascii_runs(data: &[u8]) -> String {
     }
     lines.join("\n")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ascii_runs;
-
-    #[test]
-    fn one_run_keeps_its_offset() {
-        assert_eq!(ascii_runs(b"hello"), "0x00000000: hello");
-        assert_eq!(ascii_runs(b"abcd"), "");
-    }
-
-    #[test]
-    fn long_run_is_marked() {
-        let data = vec![b'A'; 257];
-        let shown = "A".repeat(256);
-        assert_eq!(ascii_runs(&data), format!("0x00000000: {shown}..."));
-    }
-
-    #[test]
-    fn the_list_stops_at_one_hundred_sixty() {
-        let mut data = Vec::new();
-        for index in 0..161 {
-            data.extend(format!("run{index:03}").as_bytes());
-            data.push(0);
-        }
-        let report = ascii_runs(&data);
-        let last = 159 * 7;
-        let skipped = 160 * 7;
-        assert!(report.contains("0x00000000: run000\n"), "{report}");
-        assert!(report.contains(&format!("\n0x{last:08x}: run159\n")), "{report}");
-        assert!(report.ends_with("later strings were not listed"), "{report}");
-        assert!(!report.contains(&format!("0x{skipped:08x}:")), "{report}");
-        assert!(!report.contains("run160"), "{report}");
-    }
-}

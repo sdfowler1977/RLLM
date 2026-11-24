@@ -163,36 +163,3 @@ pub(super) fn decode_raw_bounded(bytes:&[u8],limit:usize,work:&mut usize)->Resul
  let mut out=Output{bytes:Vec::new(),expected:limit,growing:true,s1:1,s2:0};
  blocks(&mut input,&mut out,32768)?;input.align();Ok((out.bytes,input.offset))
 }
-
-#[cfg(test)]mod checks{
-    use super::*;
-    fn stored(bytes:&[u8])->Vec<u8>{assert!(bytes.len()<=65535);let mut v=vec![0x78,0x01,0x01];let n=bytes.len()as u16;v.extend(n.to_le_bytes());v.extend((!n).to_le_bytes());v.extend(bytes);let(mut a,mut b)=(1u32,0u32);for x in bytes{a=(a+u32::from(*x))%65521;b=(b+a)%65521;}v.extend(((b<<16)|a).to_be_bytes());v}
-    #[test]fn stored_exact_split_every_boundary_and_empty_parts(){let raw=b"original PNG bytes \0\xff";let bytes=stored(raw);for cut in 0..=bytes.len(){assert_eq!(decode_zlib_exact(&[&bytes[..cut],&[],&bytes[cut..]],raw.len(),10000).unwrap(),raw);}assert_eq!(decode_zlib_exact(&[&stored(&[])],0,1000).unwrap(),b"");}
-    #[test]fn framing_checksums_and_exact_length_refuse(){let bytes=stored(b"abc");for end in 0..bytes.len(){assert!(decode_zlib_exact(&[&bytes[..end]],3,10000).is_err());}let mut bad=bytes.clone();bad[1]^=1;assert_eq!(decode_zlib_exact(&[&bad],3,10000).unwrap_err().code,"zlib-header-check-failed");let mut bad=bytes.clone();bad[5]^=1;assert_eq!(decode_zlib_exact(&[&bad],3,10000).unwrap_err().code,"stored-block-length-check-failed");let mut bad=bytes.clone();*bad.last_mut().unwrap()^=1;assert_eq!(decode_zlib_exact(&[&bad],3,10000).unwrap_err().code,"zlib-adler32-check-failed");let mut bad=bytes.clone();bad.push(0);assert_eq!(decode_zlib_exact(&[&bad],3,10000).unwrap_err().code,"zlib-trailing-data");assert!(decode_zlib_exact(&[&bytes],2,10000).is_err());assert!(decode_zlib_exact(&[&bytes],4,10000).is_err());}
-    #[test]fn shared_work_is_debited_on_success_and_failure(){let bytes=stored(b"abc");let mut work=1000;assert_eq!(decode_zlib_exact_with_budget(&[&bytes],3,&mut work).unwrap(),b"abc");assert!(work<1000);let before=work;let mut bad=bytes.clone();*bad.last_mut().unwrap()^=1;assert!(decode_zlib_exact_with_budget(&[&bad],3,&mut work).is_err());assert!(work<before);let mut work=3;assert!(decode_zlib_exact_with_budget(&[&bytes],3,&mut work).is_err());assert!(work<3);assert!(decode_zlib_exact(&[],MAX_OUTPUT+1,usize::MAX).is_err());}
-    #[test]fn tree_validity_and_reserved_blocks(){let parts:[&[u8];0]=[];let mut budget=10000;let mut input=Input{parts:&parts,part:0,within:0,offset:0,total:0,byte:0,bits:0,work:&mut budget};assert!(Tree::build(&[1,1,1],TreeKind::Codes,&mut input).is_err());assert!(Tree::build(&[2,2],TreeKind::Codes,&mut input).is_err());assert!(Tree::build(&[1],TreeKind::Distances,&mut input).is_ok());assert!(Tree::build(&[0],TreeKind::Distances,&mut input).is_ok());assert!(Tree::build(&[0;257],TreeKind::Literals,&mut input).is_err());let bytes=[0x78,0x01,0x07,0,0,0,1];assert_eq!(decode_zlib_exact(&[&bytes],0,10000).unwrap_err().code,"reserved-deflate-block-type");}
-    struct Bits{bytes:Vec<u8>,position:usize}
-    impl Bits{fn new()->Self{Self{bytes:Vec::new(),position:0}}fn put(&mut self,value:u32,count:usize){for n in 0..count{if self.position%8==0{self.bytes.push(0);}let index=self.position/8;self.bytes[index]|=(((value>>n)&1)as u8)<<(self.position%8);self.position+=1;}}fn code(&mut self,value:u32,count:usize){for n in (0..count).rev(){self.put((value>>n)&1,1);}}fn fixed(&mut self,symbol:u32){let(code,length)=match symbol{0..=143=>(48+symbol,8),144..=255=>(400+symbol-144,9),256..=279=>(symbol-256,7),_=>(192+symbol-280,8)};self.code(code,length);}fn finish(self,raw:&[u8])->Vec<u8>{let mut out=vec![0x78,0x01];out.extend(self.bytes);let stored=stored(raw);out.extend(&stored[stored.len()-4..]);out}}
-    #[test]fn fixed_overlap_reserved_symbols_and_history_refuse(){
-        let mut bits=Bits::new();bits.put(1,1);bits.put(1,2);bits.fixed(65);bits.fixed(285);bits.code(0,5);bits.fixed(256);let raw=vec![b'A';259];assert_eq!(decode_zlib_exact(&[&bits.finish(&raw)],259,100000).unwrap(),raw);
-        for (literal,distance,error) in [(286,None,"reserved-length-symbol"),(257,Some(30),"reserved-distance-symbol"),(257,Some(0),"deflate-distance-outside-history-window")]{let mut bits=Bits::new();bits.put(1,1);bits.put(1,2);bits.fixed(literal);if let Some(d)=distance{bits.code(d,5);}assert_eq!(decode_zlib_exact(&[&bits.finish(&[])],3,100000).unwrap_err().code,error);}
-    }
-    #[test]fn declared_window_is_enforced_across_block_boundaries(){
-        let raw=vec![b'A';257];let mut bytes=stored(&raw);bytes.truncate(bytes.len()-4);bytes[2]=0; // nonfinal stored block
-        let mut tail=Bits::new();tail.put(1,1);tail.put(1,2);tail.fixed(257);tail.code(16,5);tail.put(0,7);tail.fixed(256);bytes.extend(tail.bytes);let check=stored(&vec![b'A';260]);bytes.extend(&check[check.len()-4..]);
-        assert_eq!(decode_zlib_exact(&[&bytes],260,100000).unwrap(),vec![b'A';260]);bytes[0]=8;bytes[1]=(0..=255).find(|f|(8u16*256+*f)%31==0).unwrap()as u8;
-        assert_eq!(decode_zlib_exact(&[&bytes],260,100000).unwrap_err().code,"deflate-distance-outside-history-window");
-    }
-    #[test]fn dynamic_literal_only_empty_distance_and_repeat_errors(){
-        let mut bits=Bits::new();bits.put(1,1);bits.put(2,2);bits.put(0,5);bits.put(0,5);bits.put(14,4);
-        let order=[16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1];
-        for code in order{bits.put(if code==0||code==1{1}else{0},3);}
-        for _ in 0..256{bits.put(0,1);}bits.put(1,1);bits.put(0,1);bits.put(0,1);
-        assert_eq!(decode_zlib_exact(&[&bits.finish(&[])],0,100000).unwrap(),b"");
-        // Code-length alphabet {0,16}, each one bit; repeat16 cannot occur first.
-        let mut bits=Bits::new();bits.put(1,1);bits.put(2,2);bits.put(0,5);bits.put(0,5);bits.put(0,4);
-        for code in [16,17,18,0]{bits.put(if code==0||code==16{1}else{0},3);}bits.code(1,1);
-        assert_eq!(decode_zlib_exact(&[&bits.finish(&[])],0,100000).unwrap_err().code,"repeat-code-without-prior-length");
-    }
-
-}

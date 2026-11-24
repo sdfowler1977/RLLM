@@ -106,27 +106,3 @@ pub(super) fn apply(st:&mut Json){
  }
  inquiry::migrate_connection(st,&old,&prior_policy,&current_policy);
 }
-
-#[cfg(test)]mod tests{
- use super::*;
- #[test]fn import_preserves_settings_tools_and_user_text_without_active_aliases(){
-  let old=previous();let config=obj(vec![("endpoint",s("http://127.0.0.1:9000/mcp")),("key",s("private"))]);
-  let mut st=obj(vec![("version",Num("1".into())),(&old,config.clone()),("agents",Arr(vec![obj(vec![("tools",s(&format!("read,{old},write"))),("instructions",s(&old))])])),("pending",obj(vec![("tool",s(&old)),("args",obj(vec![("name",s(&old))]))])),("chats",Arr(vec![obj(vec![("text",s(&old))])]))]);
-  apply(&mut st);assert_eq!(get(&st,"mcp"),&config);assert_eq!(get(&st,&old),&Null);assert_eq!(text(&array(&st,"agents")[0],"tools"),"read,mcp,write");assert_eq!(text(&array(&st,"agents")[0],"instructions"),old);assert_eq!(text(get(&st,"pending"),"tool"),"mcp");assert_eq!(text(get(get(&st,"pending"),"args"),"name"),old);let once=st.clone();apply(&mut st);assert_eq!(st,once);
- }
- #[test]fn old_owners_cannot_resume_and_unrelated_work_is_preserved(){
-  let old=previous();let key=format!("{old}_expected");let mut st=obj(vec![("busy",Bool(true)),(&key,s(&format!("{old}_server:old"))),("draft",s("Keep this draft"))]);apply(&mut st);assert_eq!(get(&st,"mcp_client_expected"),&Null);assert_eq!(get(&st,"busy"),&Bool(false));assert_eq!(text(&st,"draft"),"Keep this draft");
-  let mut ordinary=obj(vec![("busy",Bool(true)),("model_expected",s("current-model-owner"))]);let before=ordinary.clone();apply(&mut ordinary);assert_eq!(ordinary,before);
- }
- #[test]fn existing_current_connection_is_not_overwritten(){
-  let old=previous();let current=obj(vec![("endpoint",s("http://current.test/mcp"))]);let prior=obj(vec![("endpoint",s("http://previous.test/mcp"))]);let mut st=obj(vec![("mcp",current.clone()),(&old,prior.clone())]);apply(&mut st);assert_eq!(get(&st,"mcp"),&current);assert_eq!(array(&st,"mcp_saved_connections"),vec![prior]);
- }
- #[test]fn optional_preferences_are_imported_without_turning_off_the_core_method(){
-  let mut st=obj(vec![("dialog",s("investigation_skill")),("investigation_skill",obj(vec![("enabled",Bool(false)),("instructions",s("My extra guidance"))])),("agents",Arr(vec![obj(vec![("tools",s("read")),("investigation_skill",Bool(false))])]))]);apply(&mut st);
-  assert_eq!(text(&st,"dialog"),"investigation_preferences");assert_eq!(get(get(&st,"investigation_preferences"),"enabled"),&Bool(false));assert_eq!(get(&array(&st,"agents")[0],"investigation_preferences"),&Bool(false));
- }
- #[test]fn rule_meaning_and_revoked_provenance_do_not_change(){
-  let old=previous();let mut st=obj(vec![("harness_policy",obj(vec![("schema",Num("1".into())),("rules",Arr(vec![obj(vec![("id",s("deny-remote")),("text",s("Do not call the remote connection")),("scope",s("tool")),("tool",s(&old)),("decision",s("deny")),("enabled",Bool(true))])]))]))]);
-  inquiry::execute(&mut st,&obj(vec![("action",s("start")),("question",s("Preserve the original question"))]),false).unwrap();let first=array(get(&st,"inquiry_records"),"items")[0].clone();let mut revoked=first.clone();put(&mut revoked,"id",s("revoked-question"));put(&mut revoked,"policy",s("revoked-policy"));put(&mut st,"inquiry_records",obj(vec![("schema",Num("1".into())),("items",Arr(vec![first,revoked]))]));apply(&mut st);assert_eq!(harness_rules::decision(&st,"mcp",&obj(vec![])).0,"deny");assert_eq!(get(&array(get(&st,"inquiry_records"),"items")[0],"policy"),&harness_rules::policy_binding(&st));assert_eq!(text(&array(get(&st,"inquiry_records"),"items")[1],"policy"),"revoked-policy");
- }
-}

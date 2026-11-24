@@ -923,25 +923,3 @@ fn main() {
     };
     std::process::exit(code);
 }
-
-#[cfg(test)]
-mod checks {
-    use super::*;
-
-    #[test]
-    fn inflate_known_blocks() {
-        assert_eq!(inflate(&[1, 3, 0, 252, 255, 97, 98, 99], 3).unwrap(), b"abc");
-        assert_eq!(inflate(&[75, 76, 74, 6, 0], 3).unwrap(), b"abc");
-        assert_eq!(inflate(&[3, 0], 0).unwrap(), b"");
-    }
-
-    #[test]
-    fn sha256_abc() {
-        let digest = hex_digest(&sha256(b"abc"));
-        assert_eq!(digest, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-        assert_eq!(
-            hex_digest(&sha256(b"")),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-    }
-}

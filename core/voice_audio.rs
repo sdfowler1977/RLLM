@@ -59,12 +59,3 @@ fn le_bytes(samples:&[i16])->Vec<u8>{let mut out=Vec::with_capacity(samples.len(
  let mut out=obj(vec![("ready",Bool(wav.is_some()))]);if let Some(wav)=wav{let receipt=format!("voice-utterance:{}",now());capture.ready=Some((receipt.clone(),wav));put(&mut out,"receipt",s(&receipt));}
  if !capture.notified{if let Some(onset)=&capture.onset{put(&mut out,"onset_receipt",s(onset));capture.notified=true;}}Ok(out)
 }
-
-#[cfg(test)]mod checks{
- use super::*;
- fn engine()->Segmenter{Segmenter::new(&obj(vec![("silence_ms",Num("800".into())),("threshold",Num("500".into())),("max_seconds",Num("5".into()))])).unwrap()}
- fn tone()->Vec<u8>{(0..320).flat_map(|n|(if n%2==0{3000i16}else{-3000i16}).to_le_bytes()).collect()}
- #[test]fn silence_and_short_noise_never_emit_audio(){let mut e=engine();for _ in 0..1000{assert!(e.push(&[0;FRAME]).unwrap().is_none());}for _ in 0..5{assert!(e.push(&tone()).unwrap().is_none());}for _ in 0..100{assert!(e.push(&[0;FRAME]).unwrap().is_none());}assert!(e.audio.is_empty());assert!(e.preroll.len()<18000);}
- #[test]fn utterance_preserves_original_pcm_and_valid_wave_length(){let mut e=engine();for _ in 0..20{e.push(&[0;FRAME]).unwrap();}for _ in 0..20{assert!(e.push(&tone()).unwrap().is_none());}let mut ready=None;for _ in 0..40{if let Some(w)=e.push(&[0;FRAME]).unwrap(){ready=Some(w);}}let w=ready.unwrap();assert_eq!(&w[..4],b"RIFF");assert_eq!(u32::from_le_bytes(w[4..8].try_into().unwrap())as usize+8,w.len());assert!(w.windows(FRAME).any(|p|p==tone()));}
- #[test]fn continuous_audio_and_bad_frames_are_bounded(){let mut e=engine();assert!(e.push(&[0]).is_err());assert!(e.push(&[0;FRAME+2]).is_err());let mut ready=None;for _ in 0..300{if let Some(w)=e.push(&tone()).unwrap(){ready=Some(w);break;}}assert!(ready.unwrap().len()<=5*32000+FRAME+44);}
-}

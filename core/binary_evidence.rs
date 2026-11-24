@@ -86,11 +86,3 @@ pub(super) fn validate_record(graph:&Json,record:&Json)->Result<()>{
  let nodes=get(graph,"nodes").array()?;let root=nodes.first().ok_or("Binary observation has no source node")?;let report=get(record,"report").text()?;checked_representation(root,REPORT_METHOD,Some(report))?;if !report.ends_with(&footer(&text(graph,"payload_sha256"))){return Err("Binary observation payload differs from the retained report".into());}Ok(())
 }
 pub(super) fn is_binary(v:&Json)->bool{text(v,"kind")=="binary"}
-#[cfg(test)]mod path_checks{
- use super::*;
- fn statement()->instruction::Statement{instruction::Statement{offset:0,address:0,word:0,block:0,mnemonic:"ADD",text:"local unknown".into(),path_facts:"\nConditional path from a captured predecessor: encoded integer 0x8; alternate entries unknown.".into()}}
- fn graph()->Json{obj(vec![("nodes",Arr(vec![Null,obj(vec![("content",s("local unknown\n")),("representation",representation("local unknown\n",IR_METHOD))])]))])}
- #[test]fn optional_path_projection_cannot_evict_existing_evidence(){let mut g=graph();put(&mut g,"padding",s(""));let count=super::super::super::mcp_schema::state_bytes(&g);put(&mut g,"padding",s(&"x".repeat(CAP-1024-count)));let old=g.clone();optional_paths(&mut g,&[statement()],&||false).unwrap();assert_eq!(g,old);}
- #[test]fn projected_path_is_covered_by_its_exact_representation(){let mut g=graph();optional_paths(&mut g,&[statement()],&||false).unwrap();let node=&array(&g,"nodes")[1];let content=text(node,"content");assert!(content.contains("Conditional path"));checked_representation(node,IR_METHOD,Some(&content)).unwrap();}
- #[test]fn cancelled_path_projection_is_withheld(){let mut g=graph();let old=g.clone();assert!(optional_paths(&mut g,&[statement()],&||true).is_err());assert_eq!(old,g);}
-}

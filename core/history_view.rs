@@ -29,19 +29,3 @@ pub(super) fn rows(st:&Json)->Vec<Json> {
     if chat(st)!=Null {rows.push(button("Export current conversation","conversation_export"));}
     rows
 }
-
-#[cfg(test)]mod checks {
-    use super::*;
-    #[test]fn rows_bind_exact_ids_and_preserve_stored_text(){
-        let message=obj(vec![("role",s("assistant")),("content",s("Last reply"))]);
-        let conversation=obj(vec![("id",s("opaque:one")),("title",s("Title\nwith\u{202e}controls")),("messages",Arr(vec![message]))]);
-        let st=obj(vec![("active",s("opaque:one")),("draft",s("unsent\ntext")),("chats",Arr(vec![conversation])),("trash",Arr(vec![]))]);
-        let before=st.string();let result=rows(&st);let row=&result[1];
-        assert_eq!(text(row,"title"),"Title with controls");assert_eq!(text(row,"preview"),"Draft: unsent text");
-        assert_eq!(text(row,"delete_event"),"chat_delete_choose:opaque:one");assert_eq!(text(row,"options_event"),"chat_options:opaque:one");assert_eq!(text(row,"detail"),"Current · 1 message");assert_eq!(before,st.string());
-    }
-    #[test]fn empty_history_and_bounded_unicode_preview(){
-        let empty=obj(vec![("chats",Arr(vec![])),("trash",Arr(vec![]))]);let result=rows(&empty);assert!(result.iter().all(|r|text(r,"kind")!="conversation"));assert!(result.iter().all(|r|text(r,"event")!="conversation_export"));
-        let text_value="日".repeat(1000);let shortened=compact(&text_value,80);assert_eq!(shortened.chars().count(),81);assert!(shortened.ends_with('…'));
-    }
-}

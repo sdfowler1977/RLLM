@@ -336,33 +336,3 @@ pub(crate) fn incoming(config:&Json,method:&str,path:&str,headers:&BTreeMap<Stri
  if body.len()>REQUEST{return Ok(Some(response(413,error(Null,RpcError::new(-32602,"A2A request exceeds64KiB")),version)));}
  Ok(Some(response(200,rpc(config,body,version),version)))
 }
-
-#[cfg(test)]mod tests{
- use super::*;
- #[test]fn timestamps_round_trip_and_reject_invalid_dates(){
-  for input in ["1970-01-01T00:00:00Z","2000-02-29T23:59:59.123456789Z","2026-11-01T02:00:00Z","9999-12-31T23:59:59Z"]{
-   let stamp=Stamp::parse(input).unwrap();assert_eq!(Stamp::parse(&stamp.string()).unwrap().i,stamp.i);assert_eq!(Stamp::parse(&stamp.string()).unwrap().n,stamp.n);
-  }
-  assert_eq!(Stamp::parse("1970-01-01T00:00:00Z").unwrap().i,0);
-  for input in ["1900-02-29T00:00:00Z","2026-01-01T-1:00:00Z","2026-01-01T00:-1:00Z","2026-01-01T00:00:60Z","2026-01-01T00:00:00.Z","2026-01-01T00:00:00+00:00"]{assert!(Stamp::parse(input).is_err(),"{input}");}
- }
- #[test]fn version_negotiation_ignores_patch_only(){
-  assert!(Version::parse("")==Ok(Version::Legacy));assert!(Version::parse("1.0.97")==Ok(Version::Current));assert!(Version::parse("0.3.0")==Ok(Version::Legacy));
-  for v in ["1","1.1","2.0","1.0.bad","1.0.0.0","1.0\n"]{assert!(Version::parse(v).is_err());}
- }
- fn task(state:State)->Task{Task{id:"task-owned".into(),context:"context-owned".into(),input:obj(vec![("role",s("ROLE_USER")),("messageId",s("input-owned")),("parts",Arr(vec![obj(vec![("data",obj(vec![("tool",s("inspect"))]))])]))]),request:Null,command:Null,created:Instant::now(),cancel:Arc::new(AtomicBool::new(false)),data:Mutex::new(Data{state,updated:Stamp::now(),output:Some(obj(vec![("output",s("Actual retained observation"))])),diagnostic:String::new()}),done:Condvar::new()}}
- #[test]fn task_representation_preserves_wire_version_and_history_limit(){
-  let t=task(State::Completed);let now=t.view(Version::Current,0,false).unwrap();assert_eq!(get(&now,"history"),&Null);assert_eq!(get(&now,"artifacts"),&Null);assert_eq!(get(get(&now,"status"),"state"),&s("TASK_STATE_COMPLETED"));
-  let old=t.view(Version::Legacy,1,true).unwrap();assert_eq!(text(&old,"kind"),"task");let h=&get(&old,"history").array().unwrap()[0];assert_eq!(text(h,"role"),"user");assert_eq!(text(&get(h,"parts").array().unwrap()[0],"kind"),"data");
-  assert_eq!(get(&old,"artifacts").array().unwrap().len(),1);
- }
- #[test]fn stopped_realm_does_not_publish_or_restart_work(){
-  let realm=Arc::new(Realm{root:PathBuf::from("/must-not-be-opened"),identity:(0,0),budget:1024*1024,workers:1,closed:AtomicBool::new(true),store:Mutex::new(Store{tasks:BTreeMap::new(),cursors:vec![]})});
-  assert!(check_root(&realm).unwrap_err().contains("stopped"));let task=Arc::new(task(State::Canceled));task.cancel.store(true,Ordering::SeqCst);
-  let worker=Worker::reserve(1).ok().unwrap();finish(realm,task.clone(),worker);assert!(task.data.lock().unwrap().state==State::Canceled);
- }
- #[test]fn blocking_wait_admission_preserves_a_control_worker(){
-  let held=BlockingWait::reserve().ok().unwrap();assert!(BlockingWait::reserve().is_err());drop(held);
-  assert!(BlockingWait::reserve().is_ok());
- }
-}

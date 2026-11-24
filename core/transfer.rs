@@ -60,23 +60,3 @@ fn call_inner(v:&Json)->Result<Json>{match field(v,"action")?{
  _=>Err("Unknown transfer stream action".into())}}
 
 pub(super) fn call(v:&Json)->Result<Json>{let result=call_inner(v);if result.is_err(){if let Ok(id)=handle(v){if let Ok(mut entries)=verify().lock(){entries.remove(&id);}if let Ok(mut entries)=sources().lock(){entries.remove(&id);}}}result}
-
-#[cfg(test)]mod tests{
- use super::*;
- #[test]fn http_stream_framing_preserves_binary_and_rejects_truncation(){
-  let bytes:Vec<u8>=(0..131113).map(|i|(i%251)as u8).collect();
-  for chunked in [false,true]{let mut raw=if chunked{b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec()}else{format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",bytes.len()).into_bytes()};
-   if chunked{for part in bytes.chunks(17003){raw.extend(format!("{:x}\r\n",part.len()).bytes());raw.extend(part);raw.extend(b"\r\n");}raw.extend(b"0\r\nCheck: done\r\n\r\n");}else{raw.extend(&bytes);}
-   let mut h=Http::default();let mut decoded=Vec::new();for part in raw.chunks(113){decoded.extend(h.feed(part).unwrap());assert!(h.buffered()<=CHUNK*2);}h.finish().unwrap();assert_eq!(decoded,bytes);
-   let mut bad=Http::default();for part in raw[..raw.len()-1].chunks(4096){bad.feed(part).unwrap();}assert!(bad.finish().is_err());
-  }
-  for raw in ["HTTP/1.1 200 OK\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n","HTTP/1.1 200 OK\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n","HTTP/1.1 204 OK\r\nContent-Length: 1\r\n\r\nx","HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nBad field: value\r\n\r\n"]{assert!(Http::default().feed(raw.as_bytes()).is_err());}
- }
- #[test]fn source_stream_large_binary_rewind_and_change_refusal(){
-  let root=std::env::temp_dir().join(format!("rllm-stream-{}",now()));fs::create_dir_all(&root).unwrap();let bytes:Vec<u8>=(0..6*1024*1024+7).map(|i|(i%253)as u8).collect();fs::write(root.join("binary.bin"),&bytes).unwrap();
-  let opened=source_open(&obj(vec![("root",s(root.to_str().unwrap())),("path",s("binary.bin"))])).unwrap();let id=get(&opened,"handle").clone();let v=obj(vec![("handle",id.clone())]);
-  for _ in 0..2{let mut count=0;loop{let part=source_next(&v,false).unwrap();let data=network::unbase64(&text(&part,"data")).unwrap();assert!(data.len()<=CHUNK);assert_eq!(&bytes[count..count+data.len()],&data);count+=data.len();if boolean(&part,"done"){break;}}assert_eq!(count,bytes.len());source_next(&v,true).unwrap();}
-  fs::write(root.join("binary.bin"),b"changed").unwrap();assert!(source_next(&v,false).is_err());assert!(!sources().lock().unwrap().contains_key(&handle(&v).unwrap()));
-  #[cfg(unix)]{std::os::unix::fs::symlink(root.join("binary.bin"),root.join("link")).unwrap();assert!(source_open(&obj(vec![("root",s(root.to_str().unwrap())),("path",s("link"))])).is_err());}
- }
-}

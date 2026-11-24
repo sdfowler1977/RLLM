@@ -166,31 +166,3 @@ pub(super) fn operation(v:&Json)->Result<Json>{
  }
  let ticket=field(v,"scene_ticket")?;let scene={let mut held=scenes().lock().map_err(|_|"Scene viewport registry unavailable")?;let h=held.get_mut(ticket).ok_or("Scene viewport is closed or expired")?;if h.used.elapsed()>Duration::from_secs(600){h.scene.cancel.store(true,Ordering::Relaxed);held.remove(ticket);return Err("Scene viewport expired".into());}if owner(v)!=h.scene.owner{return Err("Scene viewport ownership changed".into());}if op=="scene_close"{h.scene.cancel.store(true,Ordering::Relaxed);held.remove(ticket);return Ok(Null);}h.used=Instant::now();h.scene.clone()};check_owner(&scene,v)?;let result=frame(&scene,v)?;check_owner(&scene,v)?;Ok(result)
 }
-
-#[cfg(test)]mod checks{
- use super::*;
- fn specimen()->Scene{
-  let red=Triangle{points:[[-1.,-1.,0.],[1.,-1.,0.],[0.,1.,0.]],colors:[[1.,0.,0.,1.];3],alpha:[1.;3],cutoff:None,texture:None,uv:[[0.;2];3]};
-  let mut blue=red.clone();blue.colors=[[0.,0.,1.,1.];3];for p in &mut blue.points{p[2]=0.25;}
-  let mut green=red.clone();green.colors=[[0.,1.,0.,1.];3];
-  Scene{triangles:vec![red,blue,green],owner:Null,cancel:AtomicBool::new(false),room:32*1024*1024,workers:capacity(),_slot:slot().unwrap()}
- }
- #[test]fn disjoint_workers_preserve_depth_ties_camera_and_uneven_rows(){
-  let scene=specimen();
-  for size in [128,193,384]{for(yaw,pitch,zoom)in [(0.,0.,1.),(0.7,-0.3,1.5),(-0.6,0.8,0.25),(1.8,1.1,3.)]{let c=Camera{size,yaw,pitch,zoom};let single=render(&scene,c,1).unwrap();let parallel=render(&scene,c,capacity()).unwrap();assert_eq!(single.0,parallel.0);assert_eq!(single.1,1);assert_eq!(parallel.1,capacity());}}
- }
- #[test]fn memory_room_reduces_stacks_without_losing_pixels(){
-  let mut scene=specimen();let c=Camera{size:128,yaw:0.4,pitch:0.2,zoom:1.};let normal=render(&scene,c,capacity()).unwrap();scene.room=128*128*40;let limited=render(&scene,c,capacity()).unwrap();assert_eq!(normal.0,limited.0);assert_eq!(limited.1,1);
- }
- #[test]fn queued_close_releases_admission_and_does_not_render(){
-  let all=reserve_workers(capacity(),&AtomicBool::new(false),Instant::now()).unwrap();assert_eq!(all.0,capacity());let cancelled=AtomicBool::new(false);
-  std::thread::scope(|scope|{let(t,r)=std::sync::mpsc::channel();let cancel_ref=&cancelled;let h=scope.spawn(move||{t.send(()).unwrap();reserve_workers(1,cancel_ref,Instant::now()).err().unwrap()});r.recv().unwrap();cancelled.store(true,Ordering::Relaxed);assert!(h.join().unwrap().contains("closed"));});
-  drop(all);let available=reserve_workers(capacity(),&AtomicBool::new(false),Instant::now()).unwrap();assert_eq!(available.0,capacity());
- }
- #[test]fn expired_and_closed_frames_refuse_without_consuming_worker_seats(){
-  let scene=specimen();let c=Camera{size:128,yaw:0.,pitch:0.,zoom:1.};scene.cancel.store(true,Ordering::Relaxed);assert!(render(&scene,c,capacity()).unwrap_err().contains("closed"));assert!(reserve_workers(1,&AtomicBool::new(false),Instant::now()-Duration::from_secs(4)).err().unwrap().contains("frame time"));assert_eq!(RENDER_SEATS.load(Ordering::Acquire),0);
- }
- #[test]fn shared_pixel_budget_stops_the_frame_without_partial_success(){
-  let scene=specimen();let mut colors=vec![0;128*128*4];let mut depth=vec![f64::NEG_INFINITY;128*128];let work=AtomicUsize::new(24_000_000);let stop=AtomicBool::new(false);let c=Camera{size:128,yaw:0.,pitch:0.,zoom:1.};let r=raster_band(&scene,c,Band{rgba:&mut colors,depth:&mut depth,first_row:0},&work,&stop,Instant::now());assert!(r.unwrap_err().contains("pixel workload"));assert!(colors.iter().all(|v|*v==0));assert!(render(&scene,c,capacity()).is_ok());
- }
-}

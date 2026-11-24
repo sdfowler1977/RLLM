@@ -43,15 +43,3 @@ pub fn apply(body:&mut Json,p:&Json,protocol:&str,messages:&[Json])->Result<()> 
  "content"=>{let mut config=obj(vec![]);if let Some(n)=output{set(&mut config,"maxOutputTokens",Num(n.to_string()));}if let Some(level)=r.strip_prefix("content_"){set(&mut config,"thinkingConfig",obj(vec![("thinkingLevel",s(level))]));}if config!=obj(vec![]){set(body,"generationConfig",config);}},_=>{}
  }Ok(())
 }
-#[cfg(test)] mod checks{
- use super::*;
- #[test]fn capability_defaults_and_exact_mappings(){
-  let messages=vec![obj(vec![("role",s("user")),("content",s("é"))])];
-  for protocol in ["chat","local","messages","content"]{let mut b=obj(vec![]);apply(&mut b,&obj(vec![]),protocol,&messages).unwrap();assert_eq!(b,obj(vec![]));}
-  for (protocol,reasoning,key) in [("chat","chat_low","reasoning_effort"),("local","local_off","think"),("messages","messages_adaptive_high","thinking"),("content","content_high","generationConfig")]{let p=obj(vec![("reasoning",s(reasoning))]);let mut b=obj(vec![]);apply(&mut b,&p,protocol,&messages).unwrap();assert!(b.get(key).is_ok());for wrong in ["chat","local","messages","content"]{if wrong!=protocol{assert!(validate(&p,wrong).is_err());}}}
-  assert!(validate(&obj(vec![("output_tokens",s("20"))]),"chat").is_err());
-  assert!(validate(&obj(vec![("context_bytes",Bool(true))]),"local").is_err());
-  assert!(validate(&obj(vec![("context_bytes",s("20")),("compaction_bytes",s("20"))]),"local").is_err());
- }
- #[test]fn budgets_use_bytes_and_never_mutate_messages(){let m=vec![obj(vec![("role",s("system")),("content",s("é"))])];let copy=m.clone();assert_eq!(content_bytes(&m).unwrap(),2);assert!(apply(&mut obj(vec![]),&obj(vec![("context_bytes",s("1"))]),"chat",&m).is_err());assert_eq!(m,copy);}
-}

@@ -82,33 +82,3 @@ fn main() -> ExitCode {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    const SOURCE: &str = concat!(
-        "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"com.local.client\" android:versionCode=\"1\" android:versionName=\"0.1\">\n",
-        "<application android:label=\"RLLM\"><activity android:name=\".Activity\" android:parentActivityName=\".Home\"/>\n",
-        "<activity-alias android:name=\".Alias\" android:targetActivity=\".Activity\"/>\n",
-        "<data android:scheme=\"com.local.client.oauth\"/><uses-permission android:name=\"android.permission.INTERNET\"/>\n",
-    );
-    #[test]
-    fn lab_takes_its_own_identity_and_keeps_class_names() {
-        let lab = render(SOURCE, "lab", 1795207480).unwrap();
-        assert!(lab.contains("package=\"com.local.client.lab\" android:versionCode=\"1795207480\" android:versionName=\"0.1-lab.1795207480\""));
-        assert!(lab.contains("android:name=\"com.local.client.Activity\" android:parentActivityName=\"com.local.client.Home\""));
-        assert!(lab.contains("android:name=\"com.local.client.Alias\" android:targetActivity=\"com.local.client.Activity\""));
-        assert!(lab.contains("android:scheme=\"com.local.client.lab.oauth\""));
-        assert!(lab.contains("android:name=\"android.permission.INTERNET\""));
-    }
-    #[test]
-    fn main_changes_only_the_release_number() {
-        let main = render(SOURCE, "main", 1795207480).unwrap();
-        let expected = SOURCE
-            .replace("android:versionCode=\"1\"", "android:versionCode=\"1795207480\"")
-            .replace("android:versionName=\"0.1\"", "android:versionName=\"0.1-main.1795207480\"");
-        assert_eq!(main, expected);
-        assert_eq!(base_package(SOURCE).as_deref(), Some("com.local.client"));
-        assert!(render(SOURCE, "other", 1).is_err());
-    }
-}

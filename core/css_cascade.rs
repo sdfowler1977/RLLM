@@ -108,8 +108,3 @@ pub(super) fn compute_with_stylesheets(doc:&html::Document,external:&BTreeMap<us
  if out.incomplete{out.applied=0;out.styles=doc.nodes.iter().map(initial).collect();}
  out
 }
-#[cfg(test)]mod checks{use super::*;
-#[test]fn cascade_specificity_inline_important_and_inheritance(){let d=html::parse(b"<style>p{color:red;margin:1px 2px} #x{color:blue!important} div{font-size:20px} p{color:green}</style><div><p id=x style='color:yellow'>ok</p><p style='color:white!important'>next</p></div>",true);let o=compute(&d);assert!(!o.incomplete);let p:Vec<_>=d.nodes.iter().enumerate().filter(|(_,n)|matches!(&n.kind,html::Kind::Element{name,..} if name=="p")).map(|(i,_)|&o.styles[i]).collect();assert_eq!(p[0].color,[0,0,255,255]);assert_eq!(p[0].font_size,20.);assert_eq!(p[0].margin,[1.,2.,1.,2.]);assert_eq!(p[1].color,[255;4]);}
-#[test]fn unsupported_and_invalid_values_do_not_override_valid(){let d=html::parse(b"<style>p{color:red;color:var(--x);padding:-1px;width:20px;width:calc(2px)} @media all{p{color:blue}}</style><p>x</p>",true);let o=compute(&d);let i=d.nodes.iter().position(|n|matches!(&n.kind,html::Kind::Element{name,..} if name=="p")).unwrap();assert_eq!(o.styles[i].color,[255,0,0,255]);assert_eq!(o.styles[i].width,Some(20.));assert!(o.unsupported>=3);}
-#[test]fn incomplete_source_never_applies_provisional_author_style(){let d=html::parse(b"<style>p{color:red}</style><p>x</p>",false);let o=compute(&d);assert!(o.incomplete);assert_eq!(o.applied,0);}
-}

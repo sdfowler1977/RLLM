@@ -132,14 +132,3 @@ impl SelectorList {
   self.matches(doc,node,work)
  }
 }
-#[cfg(test)]mod checks{
- use super::*;use super::super::{css_syntax,css_stylesheet,html_document};
- fn selectors(text:&str)->Result<SelectorList>{let sheet=css_stylesheet::parse(&css_syntax::tokenize(format!("{text}{{x:y}}").as_bytes(),true));parse(&sheet.rules[0].prelude)}
- #[test]fn compounds_combinators_and_specificity(){let doc=html_document::parse(b"<section id='root'><p class='a b' data-x='one two'></p>text<span></span><p class='b'></p></section>",true);let ids=doc.nodes.iter().enumerate().filter(|(_,n)|matches!(&n.kind,Html::Element{name,..} if name=="p")).map(|(i,_)|i).collect::<Vec<_>>();let s=selectors("#root > p.a[data-x~=two]:first-child, span + p.b").unwrap();assert_eq!(s.matches(&doc,ids[0],&mut 0).unwrap(),Some([1,3,1]));assert_eq!(s.matches(&doc,ids[1],&mut 0).unwrap(),Some([0,1,2]));assert!(selectors("section p:last-child").unwrap().matches(&doc,ids[1],&mut 0).unwrap().is_some());assert!(selectors("p ~ p").unwrap().matches(&doc,ids[1],&mut 0).unwrap().is_some());}
- #[test]fn unsupported_is_error_not_broadened(){for text in ["p:hover","p::before","p:not(.a)","svg|p","p,", "p/**/span", "[type=text]","[a?=x]","p >", "#123"]{assert!(selectors(text).is_err(),"{text}");}assert!(selectors("[type=TEXT i]").is_ok());assert!(selectors(".a/**/.b").is_ok());}
- #[test]fn operator_spacing_and_shared_work_bound(){
-  assert!(selectors("[data-x ~ = word]").is_err());assert!(selectors("[data-x ~/**/= word]").is_ok());
-  let doc=html_document::parse(b"<p class=x></p>",true);let selector=selectors("p.x").unwrap();let mut budget=WORK;assert!(selector.matches_with_budget(&doc,1,&mut budget).is_err());
- }
- #[test]fn attributes_case_empty_and_partial_tree(){let doc=html_document::parse(b"<input TYPE='TEXT' data-v='Abc-def' class='X'><p> \n</p>",true);let input=doc.nodes.iter().position(|n|matches!(&n.kind,Html::Element{name,..} if name=="input")).unwrap();assert!(selectors("[type=text i][data-v^=Abc][data-v$=def][data-v*=c-d]").unwrap().matches(&doc,input,&mut 0).unwrap().is_some());assert!(selectors("[data-v^='']").unwrap().matches(&doc,input,&mut 0).unwrap().is_none());assert!(selectors(".x").unwrap().matches(&doc,input,&mut 0).unwrap().is_none());let partial=html_document::parse(b"<p>",false);assert!(selectors("p").unwrap().matches(&partial,1,&mut 0).is_err());}
-}

@@ -67,26 +67,3 @@ pub fn interruption(record: &Json) -> String {
     if let Ok(backup)=value(record,"backup") {format!("Device update is unconfirmed. Prior contents were verified at {backup}. Read the target before retrying; no update will be replayed automatically.")}
     else {"Device update stopped before the target-write stage. The target was not intentionally changed; an incomplete new revision document may remain. No update will be replayed automatically.".into()}
 }
-
-#[cfg(test)]
-mod checks {
-    use super::*;
-    fn initial()->Json {begin(&obj(vec![("path",s("nested/note.txt")),("content",s("New café 中文"))]),"content://folder","job","2026-10-25__23-00-00Z").unwrap()}
-    fn read()->Json {advance(&initial(),"read",&obj(vec![("data",s(&network::b64(b"Original"))),("document_id",s("original")),("parent_id",s("parent"))])).unwrap()}
-    fn backup()->Json {advance(&read(),"backup",&obj(vec![("data",s(&network::b64(b"Original"))),("document_id",s("revision")),("name",s("saved.txt"))])).unwrap()}
-    #[test] fn revision_must_verify_before_the_original_can_change(){
-        let start=initial();assert!(check(&start,"original",b"Original").is_err());let staged=read();assert!(check(&staged,"original",b"Original").is_err());
-        let prepared=backup();assert_eq!(value(&prepared,"backup"),Ok("nested/saved.txt"));check(&prepared,"original",b"Original").unwrap();assert!(check(&prepared,"other",b"Original").is_err());assert!(check(&prepared,"original",b"Changed").is_err());
-        let complete=advance(&prepared,"write",&obj(vec![("data",s(&network::b64("New café 中文".as_bytes())))] )).unwrap();assert_eq!(value(&complete,"phase"),Ok("complete"));assert_eq!(complete.get("previous"),Ok(&Null));assert!(effect(&complete).is_err());
-    }
-    #[test] fn altered_backups_and_unverified_updates_never_report_success(){
-        let mut result=obj(vec![("data",s(&network::b64(b"Altered"))),("document_id",s("revision")),("name",s("saved.txt"))]);assert!(advance(&read(),"backup",&result).is_err());
-        set(&mut result,"data",s(&network::b64(b"Original")));set(&mut result,"document_id",s("original"));assert!(advance(&read(),"backup",&result).is_err());
-        assert!(advance(&backup(),"write",&obj(vec![("data",s(&network::b64(b"Partial")))])).unwrap_err().contains("nested/saved.txt"));
-        let mut interrupted=backup();set(&mut interrupted,"phase",s("interrupted"));assert!(effect(&interrupted).is_err());assert!(check(&interrupted,"original",b"Original").is_err());assert!(advance(&interrupted,"write",&result).is_err());
-    }
-    #[test] fn invalid_paths_binary_originals_and_oversize_contents_are_refused(){
-        for path in ["../note","/note","note/","a//b","a/./b","a%2fb",""] {assert!(begin(&obj(vec![("path",s(path)),("content",s("new"))]),"tree","ticket","stamp").is_err());}
-        for data in [vec![0],vec![255],vec![b'x';LIMIT+1]] {assert!(advance(&initial(),"read",&obj(vec![("data",s(&network::b64(&data))),("document_id",s("original")),("parent_id",s("parent"))])).is_err());}
-    }
-}

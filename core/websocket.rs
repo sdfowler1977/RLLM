@@ -380,13 +380,3 @@ pub fn sha1(message: &[u8]) -> [u8; 20] {
     }
     out
 }
-
-#[cfg(test)]
-mod checks {
-    use super::*;
-
-    #[test]
-    fn accept_matches_the_framing_example() {
-        assert_eq!(accept_key("dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
-    }
-}

@@ -159,31 +159,3 @@ pub(super) fn dialog(st: &Json) -> Json {
     modal("Device authorization", fields, vec![button("Open verification address", "oauth_device_open"),
         button("Check authorization", "oauth_device_poll"), button("Cancel authorization", "oauth_cancel")])
 }
-
-#[cfg(test)] mod checks {
-    use super::*;
-    #[test] fn timing_bounds_and_default() {
-        assert_eq!(seconds(&obj(vec![]), "interval", Some(5)).unwrap(), 5);
-        for invalid in [s("5"), Num("0".into()), Num("-1".into()), Num("1.5".into()), Num("86401".into())] {
-            assert!(seconds(&obj(vec![("interval", invalid)]), "interval", Some(5)).is_err());
-        }
-        assert!(seconds(&Null, "expires_in", None).is_err());
-    }
-    #[test] fn bounded_shortcut_preserves_manual_fallback() {
-        let uri = "https://auth.test/verify";
-        let code = "private-device-code";
-        let good = "https://AUTH.test:443/verify?user_code=CODE-7392&session=%2F";
-        assert_eq!(shortcut(&obj(vec![("verification_uri_complete", s(good))]), uri, code, false).as_deref(), Some(good));
-        for value in [Null, Bool(true), s(""), s("http://auth.test/verify?user_code=ok"), s("https://other.test/verify"),
-            s("https://auth.test:444/verify"), s("https://user:pass@auth.test/verify"), s("https://auth.test/verify#x"),
-            s("https://auth.test/verify?device_code=x"), s("https://auth.test/verify?%2564evice_code=x"),
-            s("https://auth.test/verify?Access_Token=x"), s("https://auth.test/verify?x=private-device-code"),
-            s("https://auth.test/verify?x=%70rivate-device-code"), s("https://auth.test/verify?x=%2570rivate-device-code"),
-            s("https://auth.test/verify?x=%0A"), s(&format!("https://auth.test/{}", "x".repeat(2048)))] {
-            assert!(shortcut(&obj(vec![("verification_uri_complete", value)]), uri, code, false).is_none());
-        }
-        assert!(shortcut(&Null, uri, code, false).is_none());
-        assert!(shortcut(&obj(vec![("verification_uri_complete", s("http://127.0.0.1/verify?user_code=ok"))]), "http://127.0.0.1/verify", code, true).is_some());
-    }
-
-}

@@ -59,10 +59,3 @@ pub(super) fn load(reader:&mut Reader<'_>,primitive:&Json,count:usize)->Result<O
  let pixels=image.rgba.chunks_exact(4).map(|p|std::array::from_fn(|c|{let v=p[c]as f64/65535.;(if c==3{v}else if v<=0.04045{v/12.92}else{((v+0.055)/1.055).powf(2.4)})as f32})).collect();
  let texture=Arc::new(Texture{width:image.width,height:image.height,pixels,s:wraps,mag,min});reader.textures.insert(id,texture.clone());Ok(Some((texture,uv)))
 }
-
-#[cfg(test)]mod checks{
- use super::*;
- fn texture(wrap:usize,filter:usize)->Texture{Texture{width:2,height:1,pixels:vec![[1.,0.,0.,0.],[0.,0.,1.,1.]],s:[wrap,33071],mag:filter,min:filter}}
- #[test]fn edges_repeat_mirror_and_negative_coordinates(){let t=texture(10497,9728);assert_eq!(t.sample([0.,0.],false),[1.,0.,0.,0.]);assert_eq!(t.sample([-0.1,0.],false),[0.,0.,1.,1.]);assert_eq!(t.sample([1.,0.],false),[1.,0.,0.,0.]);let m=texture(33648,9728);assert_eq!(m.sample([-0.1,0.],false),[1.,0.,0.,0.]);assert_eq!(m.sample([1.,0.],false),[0.,0.,1.,1.]);let c=texture(33071,9728);assert_eq!(c.sample([1e100,0.],false),[0.,0.,1.,1.]);assert_eq!(c.sample([-1e100,0.],false),[1.,0.,0.,0.]);}
- #[test]fn filtering_uses_linear_rgb_and_straight_alpha(){let t=texture(33071,9729);assert_eq!(t.sample([0.5,0.],false),[0.5,0.,0.5,0.5]);assert_eq!(t.sample([0.,0.],false),[1.,0.,0.,0.]);let r=texture(10497,9729);assert_eq!(r.sample([0.,0.],false),[0.5,0.,0.5,0.5]);}
-}

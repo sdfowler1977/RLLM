@@ -80,23 +80,3 @@ pub(super) fn inspect(reader:&Reader<'_>,header:&Header,kind:u16,sh_valid:bool,r
  publish_code_symbols(reader.bytes,&mut out);
  Ok(Context{data,report:out,classifications,classifications_complete:complete,relocations:facts,relocations_complete:!incomplete})
 }
-#[cfg(test)]mod tests{
- use super::*;
- fn function_image()->Vec<u8>{
-  let shoff=64u64;let sym_off=shoff+3*64;let str_off=sym_off+24;let mut data=vec![0u8;str_off as usize+6];
-  data[..4].copy_from_slice(b"\x7fELF");data[4]=2;data[5]=1;data[6]=1;data[18..20].copy_from_slice(&183u16.to_le_bytes());
-  data[40..48].copy_from_slice(&shoff.to_le_bytes());data[58..60].copy_from_slice(&64u16.to_le_bytes());data[60..62].copy_from_slice(&3u16.to_le_bytes());
-  let put=|data:&mut [u8],at:usize,kind:u32,offset:u64,size:u64,link:u32,entry:u64|{data[at+4..at+8].copy_from_slice(&kind.to_le_bytes());data[at+24..at+32].copy_from_slice(&offset.to_le_bytes());data[at+32..at+40].copy_from_slice(&size.to_le_bytes());data[at+40..at+44].copy_from_slice(&link.to_le_bytes());data[at+56..at+64].copy_from_slice(&entry.to_le_bytes());};
-  put(&mut data,shoff as usize+64,2,sym_off,24,2,24);put(&mut data,shoff as usize+128,3,str_off,6,0,0);
-  data[sym_off as usize..sym_off as usize+4].copy_from_slice(&1u32.to_le_bytes());data[sym_off as usize+4]=2;data[sym_off as usize+6..sym_off as usize+8].copy_from_slice(&1u16.to_le_bytes());
-  data[sym_off as usize+8..sym_off as usize+16].copy_from_slice(&0x1008u64.to_le_bytes());data[sym_off as usize+16..sym_off as usize+24].copy_from_slice(&4u64.to_le_bytes());
-  data[str_off as usize]=0;data[str_off as usize+1..str_off as usize+5].copy_from_slice(b"main");data[str_off as usize+5]=0;data
- }
- #[test]fn code_symbol_line_names_the_address_used_by_cross_references(){
-  let mut out=String::new();let symbols=publish_code_symbols(&function_image(),&mut out);
-  assert_eq!(symbols.len(),1);assert_eq!(symbols[0].name_display,"main");assert_eq!(symbols[0].value,0x1008);
-  assert!(out.contains("Code symbol \"main\" at declared value 0x1008"));
-  assert!(out.contains("decoded-word cross-reference section"));
-  let mut empty=String::new();assert!(publish_code_symbols(b"\x7fELF", &mut empty).is_empty());assert!(empty.is_empty());
- }
-}

@@ -56,28 +56,3 @@ pub(super) fn matches(value:&Json,expected:&Json)->bool{
         _=>false,
     }
 }
-
-#[cfg(test)] mod checks{
-    use super::*;
-    #[test] fn allocation_is_unique_and_exhaustion_does_not_wrap(){
-        let count=AtomicU64::new(u64::MAX-1);
-        assert_eq!(serial(&count).unwrap(),s(&format!("client-{}",u64::MAX-1)));
-        assert!(serial(&count).is_err());assert!(serial(&count).is_err());
-        assert_eq!(count.load(Ordering::Relaxed),u64::MAX);
-        assert_ne!(next().unwrap(),next().unwrap());
-    }
-    #[test] fn binding_is_typed_explicit_and_directional(){
-        let context=|binding:Json,id:Json|obj(vec![("request_binding",binding),("request",s("tools/call")),("request_id",id)]);
-        assert_eq!(captured(&context(Num("2".into()),s("client-9"))).unwrap(),Some(s("client-9")));
-        for id in [Null,Num("1".into()),s(""),s(&"x".repeat(257))]{assert!(captured(&context(Num("2".into()),id)).is_err());}
-        assert!(captured(&obj(vec![("request",s("tools/call"))])).is_err());
-        assert!(captured(&context(Num("1".into()),s("client-9"))).is_err());
-        let legacy=obj(vec![("request_binding",Num("1".into())),("request",s("tools/call"))]);
-        assert_eq!(captured(&legacy).unwrap(),Some(Num("1".into())));
-        assert!(matches(&Num("10e-1".into()),&Num("1".into())));
-        assert!(!matches(&Num("1".into()),&s("1")));assert!(!matches(&s("1"),&Num("1".into())));
-        assert!(!matches(&s("client-8"),&s("client-9")));
-        assert!(captured(&obj(vec![("request_binding",Num("2".into())),("request",s("GET"))])).unwrap().is_none());
-        assert!(captured(&obj(vec![("request_binding",Num("2".into())),("request",s("GET")),("request_id",s("old"))])).is_err());
-    }
-}

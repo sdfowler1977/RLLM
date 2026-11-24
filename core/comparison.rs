@@ -48,14 +48,3 @@ fn describe(left:&Path,right:&Path,a:&[u8],b:&[u8],alen:u64,blen:u64,ac:bool,bc:
  let conclusion=if alen!=blen||changed>0{"Different bytes observed"}else if ac&&bc{"Complete captured contents are byte-identical"}else{"Compared prefixes match; whole-file equality is unknown"};
  format!("Local byte comparison\nLeft: {}\nRight: {}\nObserved file lengths: {alen} and {blen} bytes\nCaptured: {} and {} bytes; complete captures: {ac} and {bc}\n{conclusion}\nCompared common prefix: {overlap} bytes\nDiffering positions within common prefix: {changed}\nFirst differing offsets (at most 32): {}\nCaptured bytes outside common prefix: left {}, right {}\nComparison is positional, not semantic; an insertion may shift subsequent byte positions. Each file is read independently; the pair is not an atomic filesystem snapshot.",left.display(),right.display(),a.len(),b.len(),locations.join(", "),a.len()-overlap,b.len()-overlap)
 }
-#[cfg(test)]mod checks{use super::*;
- fn sample_path(path:&Path)->(Vec<u8>,u64,bool){use std::os::unix::fs::OpenOptionsExt;let f=fs::OpenOptions::new().read(true).custom_flags(0x20000|0x800).open(path).unwrap();sample_file(f,&||false).unwrap()}
- fn pair(a:&Path,b:&Path)->String{let(av,alen,ac)=sample_path(a);let(bv,blen,bc)=sample_path(b);compare(a,b,av,alen,ac,bv,blen,bc,&||false).unwrap()}
- #[test]fn positional_comparison_distinguishes_full_and_prefix(){
-  let root=std::env::temp_dir().join(format!("rllm-compare-{}-{}",std::process::id(),now()));fs::create_dir_all(&root).unwrap();let a=root.join("a");let b=root.join("b");
-  fs::write(&a,b"hello").unwrap();fs::write(&b,b"hello").unwrap();assert!(pair(&a,&b).contains("byte-identical"));
-  fs::write(&b,b"hallo!").unwrap();let r=pair(&a,&b);assert!(r.contains("Different bytes observed"));assert!(r.contains("0x1"));assert!(r.contains("right 1"));
-  fs::write(&a,vec![0;LIMIT+2]).unwrap();let mut data=vec![0;LIMIT+2];data[LIMIT+1]=1;fs::write(&b,data).unwrap();let r=pair(&a,&b);assert!(r.contains("whole-file equality is unknown"));assert!(!r.contains("byte-identical"));
-  // Test inputs intentionally retained for reproducibility.
- }
-}

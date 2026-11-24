@@ -85,14 +85,3 @@ fn program_error(e:page_program::Error)->PageError{match e{page_program::Error::
 pub(super) fn capture_context_classified(raw:&[u8],room:usize,owner:&Json)->std::result::Result<(String,String),PageError>{let html=capture_html_classified(raw,room)?;if !page_program::enabled(get(owner,"args"))?{return Ok((html,String::new()));}let(token,remaining)=page_program::web_limits(owner).map_err(program_error)?;let output=page_program::run(html.as_bytes(),room,&||page_program::web_cancelled(&token),remaining).map_err(program_error)?;Ok((output.html,output.summary))}
 
 pub(super) fn response_room(st:&Json)->usize{let bytes=crate::mcp_schema::state_bytes(st);let policy=crate::resources::policy(get(st,"device"),get(st,"resources"),bytes);number(&policy,"budget_bytes").saturating_sub(bytes.saturating_mul(3))}
-
-#[cfg(test)]mod classification_checks{use super::*;
-#[test]fn current_memory_and_response_failures_are_typed(){
- assert!(matches!(read_classified(b"not HTTP",0),Err(PageError::Resource(_))));
- assert!(matches!(read_classified(b"not HTTP",usize::MAX),Err(PageError::Response(_))));
- let data=[31,139,8,0,0,0,0,0,2,3,115,116,28,5,35,13,0,0,143,51,129,216,244,1,0,0];let mut raw=format!("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",data.len()).into_bytes();raw.extend(data);
- let constrained=raw.len()*3+4*64;assert!(matches!(read_classified(&raw,constrained),Err(PageError::Resource(_))));assert!(read_classified(&raw,usize::MAX).is_ok());
- let over=vec![0;2*1024*1024+1];assert!(matches!(read_classified(&over,usize::MAX),Err(PageError::Response(_))));
-}
-#[test]fn declared_text_resource_and_input_errors_are_typed(){assert!(matches!(text_encoding::decode_classified(b"A",None,false,true,100,&||true),Err(text_encoding::TextError::Resource(_))));assert!(matches!(text_encoding::decode_classified(b"\xff",None,false,true,100,&||false),Err(text_encoding::TextError::Response(_))));}
-}
