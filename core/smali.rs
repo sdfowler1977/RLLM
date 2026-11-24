@@ -14,6 +14,9 @@ pub(crate) fn disassemble(dex: &[u8]) -> Result<String> {
         let flags = access_text(class.access, true);
         out.push_str(&format!(".class {flags}{}\n", file.types[class.type_idx]));
         out.push_str(&format!(".super {}\n", file.types[class.super_idx]));
+        for interface in &class.interfaces {
+            out.push_str(&format!(".implements {}\n", file.types[*interface]));
+        }
         if let Some(source) = class.source {
             out.push_str(&format!(".source \"{}\"\n", escape(&file.strings[source])));
         }
@@ -52,7 +55,10 @@ fn emit_method(file: &Dex, class: &Class, method: &Method, out: &mut String) -> 
     desc.push_str(&file.types[*ret]);
     let flags = access_text(method.access, false);
     out.push_str(&format!(".method {flags}{}{desc}\n", file.strings[name]));
-    let code = method.code.as_ref().ok_or("Method has no code")?;
+    let Some(code) = method.code.as_ref() else {
+        out.push_str(".end method\n");
+        return Ok(());
+    };
     out.push_str(&format!("    .registers {}\n", code.registers));
     let mut labels = std::collections::BTreeSet::new();
     for insn in &code.insns {
@@ -206,6 +212,7 @@ struct Class {
     access: u32,
     super_idx: usize,
     source: Option<usize>,
+    interfaces: Vec<usize>,
     fields: Vec<Member>,
     methods: Vec<Method>,
 }
@@ -325,12 +332,15 @@ fn parse(dex: &[u8]) -> Result<Dex> {
     for i in 0..class_defs.0 {
         let at = class_defs.1 + i * 32;
         let source = u32_at(dex, at + 16)?;
+        let interfaces_off = u32_at(dex, at + 12)? as usize;
+        let interfaces = if interfaces_off == 0 { Vec::new() } else { read_type_list(dex, interfaces_off)? };
         let data_off = u32_at(dex, at + 24)? as usize;
         let mut class = Class {
             type_idx: u32_at(dex, at)? as usize,
             access: u32_at(dex, at + 4)?,
             super_idx: u32_at(dex, at + 8)? as usize,
             source: if source == NO_INDEX { None } else { Some(source as usize) },
+            interfaces,
             fields: Vec::new(),
             methods: Vec::new(),
         };
@@ -593,6 +603,7 @@ struct TextClass {
     access: u32,
     super_name: String,
     source: Option<String>,
+    interfaces: Vec<String>,
     fields: Vec<TextField>,
     methods: Vec<TextMethod>,
 }
@@ -643,12 +654,21 @@ fn parse_text(text: &str) -> Result<TextDex> {
                 classes.push(class);
             }
             let (access, name) = split_access(rest, true)?;
-            current = Some(TextClass { name, access, super_name: "Ljava/lang/Object;".into(), source: None, fields: Vec::new(), methods: Vec::new() });
+            current = Some(TextClass { name, access, super_name: "Ljava/lang/Object;".into(), source: None, interfaces: Vec::new(), fields: Vec::new(), methods: Vec::new() });
         } else if let Some(rest) = line.strip_prefix(".super ") {
             current.as_mut().ok_or("Superclass is outside a class")?.super_name = rest.trim().to_string();
         } else if let Some(rest) = line.strip_prefix(".source ") {
             let name = unquote(rest.trim())?;
             current.as_mut().ok_or("Source is outside a class")?.source = Some(name);
+        } else if let Some(rest) = line.strip_prefix(".implements ") {
+            if method.is_some() {
+                return Err(format!("Interface is inside a method at line {line_no}"));
+            }
+            let interface = rest.trim();
+            if interface.is_empty() {
+                return Err(format!("Interface is missing a type at line {line_no}"));
+            }
+            current.as_mut().ok_or("Interface is outside a class")?.interfaces.push(interface.to_string());
         } else if let Some(rest) = line.strip_prefix(".field ") {
             let (access, body) = split_access(rest, false)?;
             let (name, ty) = body.split_once(':').ok_or("Field is missing a type")?;
@@ -876,6 +896,10 @@ fn emit(text: &TextDex) -> Result<Vec<u8>> {
         let type_idx = intern_type(&mut pool, &mut types, &class.name);
         let super_idx = intern_type(&mut pool, &mut types, &class.super_name);
         let source = class.source.as_ref().map(|s| pool.intern(s));
+        let mut interfaces = Vec::new();
+        for interface in &class.interfaces {
+            interfaces.push(intern_type(&mut pool, &mut types, interface));
+        }
         let mut out_fields = Vec::new();
         for field in &class.fields {
             let owner = type_idx;
@@ -899,10 +923,14 @@ fn emit(text: &TextDex) -> Result<Vec<u8>> {
             if method.name == "<init>" || method.name == "<clinit>" {
                 access |= 0x10000;
             }
-            let code = encode_method(&mut pool, &mut types, &mut fields, &mut methods, &mut protos, method)?;
-            out_methods.push(Method { idx, access, code: Some(code) });
+            let code = if access & (0x400 | 0x100) != 0 {
+                None
+            } else {
+                Some(encode_method(&mut pool, &mut types, &mut fields, &mut methods, &mut protos, method)?)
+            };
+            out_methods.push(Method { idx, access, code });
         }
-        classes.push(Class { type_idx, access: class.access, super_idx, source, fields: out_fields, methods: out_methods });
+        classes.push(Class { type_idx, access: class.access, super_idx, source, interfaces, fields: out_fields, methods: out_methods });
     }
     let mut shorties = Vec::new();
     for (ret, args) in &protos {
@@ -985,6 +1013,9 @@ fn emit(text: &TextDex) -> Result<Vec<u8>> {
     for class in &mut classes {
         class.type_idx = tr(class.type_idx);
         class.super_idx = tr(class.super_idx);
+        for interface in &mut class.interfaces {
+            *interface = tr(*interface);
+        }
         if let Some(source) = class.source.as_mut() {
             *source = remap(*source);
         }
@@ -1399,6 +1430,26 @@ fn write_dex(file: &Dex) -> Result<Vec<u8>> {
             put_u16(&mut data, 0);
         }
     }
+    let mut interface_off = vec![0usize; class_count];
+    for (i, class) in file.classes.iter().enumerate() {
+        if class.interfaces.is_empty() {
+            continue;
+        }
+        if let Some(off) = type_list_off.get(&class.interfaces) {
+            interface_off[i] = *off;
+            continue;
+        }
+        let off = data_off + data.len();
+        type_list_off.insert(class.interfaces.clone(), off);
+        interface_off[i] = off;
+        put_u32(&mut data, class.interfaces.len() as u32);
+        for interface in &class.interfaces {
+            put_u16(&mut data, *interface as u16);
+        }
+        if class.interfaces.len() % 2 == 1 {
+            put_u16(&mut data, 0);
+        }
+    }
     while (data_off + data.len()) % 4 != 0 {
         data.push(0);
     }
@@ -1534,7 +1585,7 @@ fn write_dex(file: &Dex) -> Result<Vec<u8>> {
     }
     // Strings were interned without shorty. Rebuild is too late if shorty is absent.
     // write_dex requires shorty strings to be present. emit() adds them before write.
-    write_ids(&mut out, file, proto_param_off, class_data_off)?;
+    write_ids(&mut out, file, proto_param_off, interface_off, class_data_off)?;
     let sha = sha1(&out[32..]);
     out[12..32].copy_from_slice(&sha);
     let sum = adler32(&out[12..]);
@@ -1542,12 +1593,22 @@ fn write_dex(file: &Dex) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn write_ids(out: &mut [u8], file: &Dex, proto_param_off: Vec<usize>, class_data_off: Vec<usize>) -> Result<()> {
+fn write_ids(
+    out: &mut [u8],
+    file: &Dex,
+    proto_param_off: Vec<usize>,
+    interface_off: Vec<usize>,
+    class_data_off: Vec<usize>,
+) -> Result<()> {
     let string_count = file.strings.len();
     let type_count = file.types.len();
     let proto_count = file.protos.len();
     let field_count = file.fields.len();
     let method_count = file.methods.len();
+    let class_count = file.classes.len();
+    if interface_off.len() != class_count || class_data_off.len() != class_count {
+        return Err("Class table offsets are inconsistent".into());
+    }
     let mut cursor = 112 + string_count * 4;
     for (i, name) in file.types.iter().enumerate() {
         let sid = file.strings.iter().position(|s| s == name).ok_or("Type string was dropped")?;
@@ -1579,7 +1640,7 @@ fn write_ids(out: &mut [u8], file: &Dex, proto_param_off: Vec<usize>, class_data
         put_at(out, cursor, class.type_idx as u32);
         put_at(out, cursor + 4, class.access);
         put_at(out, cursor + 8, class.super_idx as u32);
-        put_at(out, cursor + 12, 0);
+        put_at(out, cursor + 12, interface_off[i] as u32);
         put_at(out, cursor + 16, class.source.map(|v| v as u32).unwrap_or(NO_INDEX));
         put_at(out, cursor + 20, 0);
         put_at(out, cursor + 24, class_data_off[i] as u32);
