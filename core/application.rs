@@ -2009,7 +2009,21 @@ fn percent_decode(s: &str) -> Result<String> {
     String::from_utf8(out).map_err(|_| "Invalid path text".into())
 }
 pub fn event(v:&Json)->Result<Json>{
- let mut result=event_inner(v)?;
+ finish_event(v, event_inner(v)?)
+}
+pub(super) fn provider_completion(state: &Json, root: &str, inputs: Json, bytes: &[u8]) -> Result<Json> {
+    if field(&inputs, "purpose")? != "model" {
+        return Err("Provider completion requires a model callback".into());
+    }
+    let request = obj(vec![
+        ("state", state.clone()),
+        ("action", s("network_result")),
+        ("inputs", inputs),
+        ("root", s(root)),
+    ]);
+    finish_event(&request, event_inner_with_completion(&request, Some(bytes))?)
+}
+fn finish_event(v: &Json, mut result: Json) -> Result<Json> {
  if !boolean(v,"defer_policy_commit")&&get(&result,"state")!=&Null{if let Err(reason)=harness_rules::publish_global(get(&result,"state")){
   let effect=get(&result,"effect").clone();if !text(&effect,"capture_token").is_empty(){capture_job::cancel(&text(&effect,"capture_token"));}
   if let Obj(fields)=&mut result{if let Some(state)=fields.get_mut("state"){operation::interrupt(state);}}
@@ -2021,6 +2035,9 @@ pub(super) fn gateway_policy_current(config:&Json)->Result<Json>{harness_rules::
 pub(super) fn gateway_policy_check(policy:&Json,tool:&str,args:&Json)->Result<()>{harness_rules::gateway_check(policy,tool,args)}
 pub(super) fn gateway_policy_messages(policy:&Json,messages:Vec<Json>)->Vec<Json>{harness_rules::gateway_messages(policy,messages)}
 fn event_inner(v: &Json) -> Result<Json> {
+    event_inner_with_completion(v, None)
+}
+fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Result<Json> {
     let mut st = get(v, "state").clone();
     if st == Null {
         st = blank()
@@ -2890,14 +2907,20 @@ fn event_inner(v: &Json) -> Result<Json> {
             }
             "network_result" => {
                 put(&mut st, "busy", Bool(false));
-                let encoded=field(inputs,"data").map_err(|e|{if web_callback&&!capture_phase{web_failure_kind=Some("response_encoding");}e})?;
-                if web_callback {
-                    let raw_bound=encoded.find('=').unwrap_or(encoded.len()).saturating_mul(3)/4;
-                    let room=web_document::response_room(&st);
-                    if room<65536||raw_bound.saturating_mul(3)>room{return Err("Current resource budget cannot admit incoming website response buffers".into());}
-                    if text(&web_context,"phase")=="resources"{capture_job::resource_preflight(&st,&web_context,field(v,"root")?)?;}
-                }
-                let bytes = network::unbase64(encoded).map_err(|e|{if web_callback&&!capture_phase{web_failure_kind=Some("response_encoding");}e})?;
+                let ordinary;
+                let bytes = if let Some(bytes) = provider_bytes {
+                    bytes
+                } else {
+                    let encoded=field(inputs,"data").map_err(|e|{if web_callback&&!capture_phase{web_failure_kind=Some("response_encoding");}e})?;
+                    if web_callback {
+                        let raw_bound=encoded.find('=').unwrap_or(encoded.len()).saturating_mul(3)/4;
+                        let room=web_document::response_room(&st);
+                        if room<65536||raw_bound.saturating_mul(3)>room{return Err("Current resource budget cannot admit incoming website response buffers".into());}
+                        if text(&web_context,"phase")=="resources"{capture_job::resource_preflight(&st,&web_context,field(v,"root")?)?;}
+                    }
+                    ordinary = network::unbase64(encoded).map_err(|e|{if web_callback&&!capture_phase{web_failure_kind=Some("response_encoding");}e})?;
+                    &ordinary
+                };
                 if text(inputs,"purpose")=="web_tool" && text(&web_context,"phase")=="resources"{effect=capture_job::resource_result(&mut st,&web_context,&bytes,field(v,"root")?)?;return Ok(());}
                 if text(inputs,"purpose")=="web_tool"{
                     let redirect=web_operation::redirect(&mut st,&web_context,&bytes).map_err(|reason|{
@@ -2909,7 +2932,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 if text(inputs,"purpose")=="web_tool"&&get(&web_context,"capture")!=&Null{
                     let(html,program_note)=web_document::capture_html(&bytes,web_document::response_room(&st),&web_context).map_err(|e|{let(response,text)=web_document::explain(e);if response{web_failure_kind=Some("response");web_operation::page_error(text)}else{text}})?;if !program_note.is_empty(){page_program::set_web_summary(&mut web_context,&program_note)?;}let state_bytes=super::mcp_schema::state_bytes(&st);let policy=super::resources::policy(get(&st,"device"),get(&st,"resources"),state_bytes);let room=number(&policy,"budget_bytes").saturating_sub(state_bytes.saturating_mul(3));if capture_file::minimum_bytes(&html,get(&web_context,"capture"))?>room{return Err("Current resource budget cannot admit remote capture staging; no render job was created".into());}effect=capture_job::prepare(&mut st,&web_context,html,field(v,"root")?,room)?;return Ok(());
                 }
-                let decoded=if text(inputs,"purpose")=="web_tool"&&text(&web_context,"tool")=="web_read"{web_document::read(&bytes,web_document::response_room(&st),&web_context).map_err(|e|{let(response,text)=web_document::explain(e);if response{web_failure_kind=Some("response");web_operation::page_error(text)}else{text}})}else if text(inputs,"purpose")=="saved_probe"{network::decoded_optional_file(&bytes)}else{network::decoded(&bytes)};
+                let decoded=if provider_bytes.is_some(){network::decoded_provider_stream(bytes)}else if text(inputs,"purpose")=="web_tool"&&text(&web_context,"tool")=="web_read"{web_document::read(bytes,web_document::response_room(&st),&web_context).map_err(|e|{let(response,text)=web_document::explain(e);if response{web_failure_kind=Some("response");web_operation::page_error(text)}else{text}})}else if text(inputs,"purpose")=="saved_probe"{network::decoded_optional_file(bytes)}else{network::decoded(bytes)};
                 let (status, body) = decoded.map_err(|error| {
                     if web_callback&&text(&web_context,"tool")!="web_read"{web_failure_kind=Some("response");}
                     if ["drive_update_write", "drive_update_confirm"].contains(&text(inputs, "purpose").as_str()) {

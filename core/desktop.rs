@@ -1039,6 +1039,9 @@ fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str,
                 break;
             }
         }
+        if provider {
+            return provider_stream_completion(&id, ended);
+        }
         let finished = core_call(obj(vec![("op", s("stream_finish")), ("id", id.clone()), ("eof", Bool(ended))]))?;
         network::unbase64(&text(&finished, "data"))
     })();
@@ -3136,7 +3139,7 @@ fn microphone(effect: &Json, state: &mut Json, root: &str) -> Result<CaptureDone
 
 /// The core keeps operation ownership in state and names it on the effect, so the
 /// callback replays the same tokens instead of claiming a fresh operation.
-fn callback_inputs(effect: &Json, state: &Json, response: &[u8], failure: Option<String>) -> Json {
+fn callback_inputs(effect: &Json, state: &Json) -> Json {
     let purpose = text(effect, "purpose");
     let mut inputs = obj(vec![("purpose", s(&purpose))]);
     for key in TICKETS {
@@ -3150,11 +3153,6 @@ fn callback_inputs(effect: &Json, state: &Json, response: &[u8], failure: Option
     let drive = get(state, "drive_expected");
     if drive != &Null && get(drive, "purpose").text().unwrap_or("") == purpose && get(&inputs, "drive_ticket") == &Null {
         put(&mut inputs, "drive_ticket", get(drive, "ticket").clone());
-    }
-    if let Some(error) = failure {
-        put(&mut inputs, "error", s(&error));
-    } else {
-        put(&mut inputs, "data", s(&network::b64(response)));
     }
     inputs
 }
@@ -3185,12 +3183,18 @@ fn advance(state: &mut Json, root: &str, action: &str, inputs: Json) -> Result<J
 fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown: &mut dyn FnMut(&Json)) -> Result<Json> {
     let mut action = action.to_string();
     let mut inputs = inputs;
+    let mut provider_bytes = None::<Vec<u8>>;
     for _ in 0..EFFECT_HOPS {
-        let reply = core_event(state, root, &action, &inputs)?;
-        *state = reply.get("state")?.clone();
-        let effect = reply.get("effect")?.clone();
+        let mut reply = if let Some(bytes) = provider_bytes.take() {
+            application::provider_completion(state, root, std::mem::replace(&mut inputs, Null), &bytes)?
+        } else {
+            core_event(state, root, &action, &inputs)?
+        };
+        let Obj(fields) = &mut reply else { return Err("Invalid application reply".into()); };
+        *state = fields.remove("state").ok_or("Missing state")?;
+        let effect = fields.remove("effect").ok_or("Missing effect")?;
         if effect == Null {
-            return Ok(reply.get("ui")?.clone());
+            return fields.remove("ui").ok_or_else(|| "Missing ui".into());
         }
         shown(reply.get("ui")?);
         match text(&effect, "kind").as_str() {
@@ -3227,13 +3231,22 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
                     }
                 });
                 let (next, callback) = match outcome {
-                    Ok(response) => ("network_result", callback_inputs(&effect, state, &response, None)),
+                    Ok(response) => {
+                        let mut callback = callback_inputs(&effect, state);
+                        if text(&effect, "purpose") == "model" && boolean(&effect, "stream") {
+                            provider_bytes = Some(response);
+                        } else {
+                            put(&mut callback, "data", Str(network::b64(&response)));
+                        }
+                        ("network_result", callback)
+                    }
                     Err(error) if error.message == CANCELLED => {
                         CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
                         ("cancel", obj(vec![("elapsed_ms", Num(started.elapsed().as_millis().to_string()))]))
                     }
                     Err(error) => {
-                        let mut callback = callback_inputs(&effect, state, &[], Some(error.message));
+                        let mut callback = callback_inputs(&effect, state);
+                        put(&mut callback, "error", Str(error.message));
                         if error.received_bytes > 0 {
                             put(&mut callback, "received_bytes", Num(error.received_bytes.to_string()));
                         }

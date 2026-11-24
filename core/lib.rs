@@ -934,6 +934,43 @@ fn envelope(input: &str) -> String {
         Err(e) => obj(vec![("error", s(&e))]).string(),
     }
 }
+
+/// Finish an in-process provider stream without serializing its response envelope.
+fn provider_stream_completion(id: &Json, eof: bool) -> Result<Vec<u8>> {
+    let finished = stream::operation(&obj(vec![
+        ("op", s("stream_finish")),
+        ("id", id.clone()),
+        ("eof", Bool(eof)),
+    ]))?;
+    let Obj(mut fields) = finished else { return Err("Invalid stream completion".into()); };
+    let Some(Str(data)) = fields.remove("data") else { return Err("Missing stream completion data".into()); };
+
+    // The encoded buffer is owned and never grows during decoding.
+    let mut data = data.into_bytes();
+    let mut written = 0;
+    let mut bits = 0;
+    let mut accumulator = 0u32;
+    for i in 0..data.len() {
+        let value = match data[i] {
+            b'A'..=b'Z' => data[i] - b'A',
+            b'a'..=b'z' => data[i] - b'a' + 26,
+            b'0'..=b'9' => data[i] - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => return Err("Invalid encoded response".into()),
+        };
+        accumulator = (accumulator << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            data[written] = (accumulator >> bits) as u8;
+            written += 1;
+        }
+    }
+    data.truncate(written);
+    Ok(data)
+}
 #[no_mangle]
 pub unsafe extern "C" fn client_process(data: *const u8, len: usize) -> *mut c_char {
     let result = std::panic::catch_unwind(|| {
