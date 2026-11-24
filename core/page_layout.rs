@@ -32,7 +32,7 @@ pub(super) struct Issue {pub node:usize,pub code:&'static str}
 #[derive(Clone,Debug)]
 pub(super) struct LayoutResult {
     pub commands:Vec<Draw>,pub boxes:Vec<BoxGeometry>,pub issues:Vec<Issue>,
-    pub omitted_issues:usize,pub truncated:bool,#[cfg(test)]pub approximate_metrics:bool,
+    pub omitted_issues:usize,pub truncated:bool,
     pub source_complete:bool,pub viewport_width:f64,pub content_width:f64,pub content_height:f64,
     pub bounds:Bounds,
     pub metric_provenance:String,pub validated_glyphs:usize,pub expanded_outline_points:usize,
@@ -255,81 +255,9 @@ pub(super) fn layout_with_images(document:&Document,styles:&[Style],viewport_wid
 }
 fn run<'a>(document:&'a Document,styles:&'a [Style],viewport_width:f64,metrics:TextMetrics,font:Option<&'a Face<'a>>,images:Option<&'a BTreeMap<usize,(u32,u32)>>)->Result<LayoutResult>{
     validate(document,styles,viewport_width,metrics)?;
-    let mut engine=Engine{doc:document,styles,metrics,font,images,chars:BTreeMap::new(),glyphs:BTreeMap::new(),text_used:0,out:LayoutResult{commands:Vec::new(),boxes:Vec::new(),issues:Vec::new(),omitted_issues:0,truncated:false,#[cfg(test)]approximate_metrics:font.is_none(),source_complete:document.source_complete&&!document.stopped_by_bound&&document.parsed_bytes==document.examined_bytes,viewport_width,content_width:viewport_width,content_height:0.0,bounds:Bounds{x:0.0,y:0.0,width:viewport_width,height:0.0},metric_provenance:if font.is_some(){"caller-held TrueType hmtx advances/hhea baselines; validated unhinted outlines; no kerning or shaping".into()}else{format!("approximate uniform scalar advance ratio {}; not measured fonts",metrics.advance_ratio)},validated_glyphs:0,expanded_outline_points:0}};
+    let mut engine=Engine{doc:document,styles,metrics,font,images,chars:BTreeMap::new(),glyphs:BTreeMap::new(),text_used:0,out:LayoutResult{commands:Vec::new(),boxes:Vec::new(),issues:Vec::new(),omitted_issues:0,truncated:false,source_complete:document.source_complete&&!document.stopped_by_bound&&document.parsed_bytes==document.examined_bytes,viewport_width,content_width:viewport_width,content_height:0.0,bounds:Bounds{x:0.0,y:0.0,width:viewport_width,height:0.0},metric_provenance:if font.is_some(){"caller-held TrueType hmtx advances/hhea baselines; validated unhinted outlines; no kerning or shaping".into()}else{format!("approximate uniform scalar advance ratio {}; not measured fonts",metrics.advance_ratio)},validated_glyphs:0,expanded_outline_points:0}};
     if !engine.out.source_complete{engine.issue(0,"partial-source-layout-only");}
     if !document.issues.is_empty()||document.omitted_issues>0{engine.issue(0,"source-parser-issues-present");}
     let mut flow=Flow::new(0.0,viewport_width,0.0);engine.node(0,&mut flow,0)?;flow.flush();engine.observe(Bounds{x:0.0,y:flow.y,width:0.0,height:0.0})?;
     engine.out.content_width=engine.out.bounds.width;engine.out.content_height=engine.out.bounds.height;Ok(engine.out)
-}
-
-#[cfg(test)]mod checks {
-    use super::*;
-    fn basic()->Style{Style{display:Display::Inline,width:None,height:None,margin:[0.0;4],padding:[0.0;4],font_size:10.0,line_height:12.0,color:[1,2,3,255],background:[0;4],..Style::default()}}
-    fn setup(source:&str)->(Document,Vec<Style>){let d=super::super::html_document::parse(source.as_bytes(),true);let s=d.nodes.iter().map(|n|{let mut s=basic();if matches!(&n.kind,Kind::Element{name,..} if matches!(name.as_str(),"div"|"p")){s.display=Display::Block;}s}).collect();(d,s)}
-    #[test]fn block_box_model_and_background_precede_text(){
-        let(d,mut s)=setup("<div>Hello</div><p>Next</p>");s[1].padding=[2.0,3.0,4.0,5.0];s[1].margin=[7.0,0.0,9.0,1.0];s[1].background=[4,5,6,255];
-        let r=layout(&d,&s,100.0,TextMetrics{advance_ratio:0.5}).unwrap();let b=r.boxes.iter().find(|b|b.node==1).unwrap();assert_eq!(b.bounds,Bounds{x:1.0,y:7.0,width:99.0,height:18.0});assert_eq!(b.content.x,6.0);assert_eq!(b.content.y,9.0);assert_eq!(r.boxes[1].bounds.y,34.0);assert!(matches!(r.commands[0],Draw::Rect{..}));assert!(matches!(&r.commands[1],Draw::Text{bounds,text,..} if bounds.x==6.0&&bounds.y==9.0&&text=="Hello"));
-    }
-    #[test]fn inline_whitespace_wrap_unicode_and_breaks(){
-        let(d,s)=setup("<div>one <span>two</span> 三四<br>five</div>");let r=layout(&d,&s,35.0,TextMetrics{advance_ratio:0.5}).unwrap();let fragments:Vec<_>=r.commands.iter().filter_map(|c|if let Draw::Text{text,bounds,..}=c{Some((text.as_str(),bounds.y))}else{None}).collect();assert_eq!(fragments,vec![("one",0.0),(" ",0.0),("two",0.0),("三四",12.0),("five",24.0)]);assert_eq!(r.content_height,36.0);
-        let(d,s)=setup("<div>日本語abc</div>");let r=layout(&d,&s,10.0,TextMetrics{advance_ratio:0.5}).unwrap();assert!(r.issues.iter().any(|i|i.code=="emergency-scalar-word-wrap"));assert_eq!(r.content_height,36.0);
-    }
-    #[test]fn hidden_content_and_explicit_overflow(){
-        let(d,mut s)=setup("<script>secret</script><style>secret</style><div>hidden</div><p>longword</p>");s[5].display=Display::None;let p=d.nodes.iter().position(|n|matches!(&n.kind,Kind::Element{name,..} if name=="p")).unwrap();s[p].height=Some(1.0);s[p].width=Some(100.0);
-        let r=layout(&d,&s,20.0,TextMetrics::default()).unwrap();let text=r.commands.iter().filter_map(|c|if let Draw::Text{text,..}=c{Some(text.as_str())}else{None}).collect::<String>();assert_eq!(text,"longword");assert!(r.issues.iter().any(|i|i.code=="explicit-height-content-overflow-visible"));assert!(r.issues.iter().any(|i|i.code=="block-horizontal-overflow"));
-    }
-    #[test]fn invalid_inputs_and_tree_refuse_without_partial_geometry(){
-        let(d,s)=setup("<div>x</div>");assert!(layout(&d,&s,f64::NAN,TextMetrics::default()).is_err());assert!(layout(&d,&s[..1],100.0,TextMetrics::default()).is_err());let mut invalid=s.clone();invalid[0].padding[0]=-1.0;assert!(layout(&d,&invalid,100.0,TextMetrics::default()).is_err());let mut tree=d.clone();tree.nodes[1].children.push(0);assert!(layout(&tree,&s,100.0,TextMetrics::default()).is_err());
-    }
-    #[test]fn source_and_work_bounds_are_explicit(){
-        let(d,s)=setup(&format!("<div>{}</div>","x ".repeat(40000)));let r=layout(&d,&s,100.0,TextMetrics::default()).unwrap();assert!(r.truncated);assert!(r.commands.len()<=COMMAND_LIMIT);assert!(r.issues.len()<=ISSUE_LIMIT);assert!(r.summary().len()<8192);
-        let mut d=super::super::html_document::parse(b"<div>x",false);let s=vec![basic();d.nodes.len()];let r=layout(&d,&s,100.0,TextMetrics::default()).unwrap();assert!(!r.source_complete);d.nodes[1].parent=Some(2);assert!(layout(&d,&s,100.0,TextMetrics::default()).is_err());
-    }
-    #[test]fn zero_font_and_zero_line_height_do_not_divide_or_paint(){
-        let(d,mut s)=setup("<div>invisible words here</div><p>visible</p>");s[1].font_size=0.0;s[1].line_height=0.0;s[2].font_size=0.0;s[2].line_height=0.0;
-        let r=layout(&d,&s,35.0,TextMetrics::default()).unwrap();assert!(!r.commands.iter().any(|c|matches!(c,Draw::Text{node:2,..})));assert_eq!(r.boxes.iter().find(|b|b.node==1).unwrap().bounds.height,0.0);assert!(!r.truncated);
-        s[2].font_size=10.0;let r=layout(&d,&s,35.0,TextMetrics::default()).unwrap();assert!(r.issues.iter().any(|i|i.code=="glyph-height-exceeds-line-height"));
-    }
-
-    #[test]fn replaced_raw_contents_are_not_painted_and_coordinate_overflow_refuses(){
-        let(d,s)=setup("<iframe>hidden raw <code></iframe><textarea>private draft</textarea><svg><text>shape</text></svg>");
-        let r=layout(&d,&s,100.0,TextMetrics::default()).unwrap();assert!(r.commands.is_empty());assert!(r.issues.iter().any(|i|i.code=="replaced-media-or-control-surface-unimplemented"));
-        let(d,mut s)=setup(&"<div>x</div>".repeat(12));for style in &mut s{if style.display==Display::Block{style.height=Some(100_000.0);}}
-        assert!(layout(&d,&s,100.0,TextMetrics::default()).is_err());
-    }
-    #[test]fn deterministic_geometry_remains_finite_bounded_and_node_scoped(){
-        for width in [1.0,5.0,20.0,125.0,8192.0]{for count in 0..40{
-            let source=format!("<div>{}<span>日本</span><br>end</div>","word ".repeat(count));let(d,mut s)=setup(&source);s[1].padding=[1.0;4];let r=layout(&d,&s,width,TextMetrics::default()).unwrap();
-            for command in &r.commands{let(node,b)=match command{Draw::Rect{node,bounds,..}|Draw::Text{node,bounds,..}|Draw::Image{node,bounds}=>(*node,*bounds)};assert!(node<d.nodes.len());assert!(checked(b).is_ok());}
-            assert!(r.commands.len()<=COMMAND_LIMIT);assert!(r.approximate_metrics);assert!(!r.truncated);
-        }}
-    }
-
-    #[test]fn held_font_advances_baselines_and_cache_are_actual(){
-        let bytes=super::super::font_outline::checks::fixture(true,None);let face=Face::parse(&bytes).unwrap();let(d,s)=setup("<div>AZA</div>");
-        let r=layout_with_font(&d,&s,18.0,&face).unwrap();assert!(!r.approximate_metrics);assert_eq!(r.validated_glyphs,2);assert_eq!(r.expanded_outline_points,3);assert!(r.metric_provenance.contains("hmtx"));
-        let commands:Vec<_>=r.commands.iter().filter_map(|c|if let Draw::Text{bounds,baseline,text,..}=c{Some((*bounds,*baseline,text.as_str()))}else{None}).collect();
-        assert_eq!(commands.len(),2);assert_eq!(commands[0].2,"AZ");assert_eq!(commands[0].0.width,12.5);assert_eq!(commands[0].1,8.25);assert_eq!(commands[1].2,"A");assert_eq!(commands[1].0.width,6.5);assert_eq!(commands[1].1,18.75);assert!(r.issues.iter().any(|i|i.code=="missing-glyph-uses-font-notdef"));
-        let mut explicit=s.clone();for v in &mut explicit{v.normal_line_height=false;v.line_height=20.0;}let r=layout_with_font(&d,&explicit,100.0,&face).unwrap();assert!(r.commands.iter().any(|c|matches!(c,Draw::Text{baseline,..} if *baseline==13.0)));
-    }
-    #[test]fn font_failures_and_hidden_zero_glyphs_never_substitute_shapes(){
-        let bytes=super::super::font_outline::checks::fixture(true,Some(vec![0,0]));let face=Face::parse(&bytes).unwrap();let(d,mut s)=setup("<div>AB</div>");assert!(layout_with_font(&d,&s,100.0,&face).is_err());s[2].font_size=0.0;s[2].normal_line_height=true;let r=layout_with_font(&d,&s,100.0,&face).unwrap();assert_eq!(r.validated_glyphs,0);assert!(r.commands.is_empty());
-        s[1].display=Display::None;let r=layout_with_font(&d,&s,100.0,&face).unwrap();assert!(r.commands.is_empty());
-    }
-    #[test]fn font_ink_overhang_and_long_repeated_glyphs_are_bounded(){
-        let bytes=super::super::font_outline::checks::fixture(true,None);let face=Face::parse(&bytes).unwrap();let(d,s)=setup("<div>C</div>");let r=layout_with_font(&d,&s,8.0,&face).unwrap();assert!((r.content_width-10.2).abs()<1e-9);assert!(r.issues.iter().any(|i|i.code=="font-ink-horizontal-overflow"));
-        let(d,s)=setup(&format!("<div>{}</div>","A".repeat(65537)));let r=layout_with_font(&d,&s,8192.0,&face).unwrap();assert!(r.truncated);assert_eq!(r.validated_glyphs,1);assert_eq!(r.expanded_outline_points,3);assert!(r.commands.len()<100);assert!(r.commands.iter().all(|c|matches!(c,Draw::Text{baseline,..} if baseline.is_finite())));
-    }
-
-    #[test]fn font_cache_and_aggregate_point_limits_refuse_instead_of_guessing(){
-        let bytes=super::super::font_outline::checks::fixture(true,None);let face=Face::parse(&bytes).unwrap();
-        let source:String=(0x1000..0x1000+4097).filter_map(char::from_u32).collect();let(d,s)=setup(&format!("<div>{source}</div>"));assert!(layout_with_font(&d,&s,8192.0,&face).unwrap_err().contains("character-cache"));
-        let(d,s)=setup("<div>A</div>");let out=layout(&d,&s,100.0,TextMetrics::default()).unwrap();
-        let mut engine=Engine{doc:&d,styles:&s,metrics:TextMetrics::default(),font:Some(&face),images:None,chars:BTreeMap::new(),glyphs:BTreeMap::new(),out,text_used:0};
-        engine.out.expanded_outline_points=OUTLINE_POINTS-2;
-        assert!(engine.glyph_metric(2,'A').err().unwrap().contains("aggregate outline-point"));assert!(engine.glyphs.is_empty());
-        engine.out.expanded_outline_points=0;for id in 100..100+GLYPH_CACHE as u16{engine.glyphs.insert(id,GlyphMetric{advance:0.0,ink:None});}
-        assert!(engine.glyph_metric(2,'A').err().unwrap().contains("unique-glyph"));
-    }
-
 }

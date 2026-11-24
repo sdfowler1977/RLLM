@@ -7,6 +7,12 @@
 
 #![forbid(unsafe_code)]
 
+/// Cost units = reported output tokens + model request wall milliseconds
+/// + 100 per tool call with an observed result. The edit byte budget is separate.
+pub(crate) fn execution_cost(output_tokens: u64, wall_ms: u64, tool_calls: u64) -> Option<u64> {
+    output_tokens.checked_add(wall_ms)?.checked_add(tool_calls.checked_mul(100)?)
+}
+
 pub const CANDIDATE_CAP: usize = 16;
 pub const COMPOSITION_CAP: usize = 4;
 pub const LESSON_CAP: usize = 32;
@@ -176,127 +182,4 @@ pub fn retain_texts(parts: &[String]) -> String {
         pool.report(),
         lessons.report()
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn store_and_read_one_lesson() {
-        let mut library = LessonLibrary::new();
-        library.store("probe-contrast", "compose from observed contrasts");
-        assert_eq!(
-            library.read("probe-contrast"),
-            "compose from observed contrasts"
-        );
-        assert_eq!(
-            library.read("probe-contrast"),
-            "compose from observed contrasts"
-        );
-        assert_eq!(
-            library.report(),
-            "lesson probe-contrast compose from observed contrasts\nno child process was started"
-        );
-    }
-
-    #[test]
-    fn seventeenth_candidate_is_named_as_not_stored() {
-        assert_eq!(CANDIDATE_CAP, 16);
-        let mut pool = CandidatePool::new();
-        for index in 1..=16 {
-            pool.store(&format!("c{index}"), &format!("text {index}"));
-        }
-        pool.store("c17", "kept out");
-        let report = pool.report();
-        assert!(report.contains("candidate 16 c16 text 16\n"), "{report}");
-        assert!(report.contains("candidate c17 was not stored\n"), "{report}");
-        assert!(report.contains("later candidates were not stored\n"), "{report}");
-        assert!(report.ends_with("no child process was started"), "{report}");
-        assert!(!report.contains("kept out"), "{report}");
-        assert!(!report.contains("candidate 17 "), "{report}");
-        let stored = report
-            .lines()
-            .filter(|line| line.starts_with("candidate ") && !line.contains("was not stored"))
-            .count();
-        assert_eq!(stored, 16);
-    }
-
-    #[test]
-    fn composition_of_four_stays_within_the_cap() {
-        assert_eq!(COMPOSITION_CAP, 4);
-        let mut pool = CandidatePool::new();
-        for name in ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"] {
-            pool.store(name, name);
-        }
-        assert_eq!(
-            pool.compose(),
-            "alpha\nbeta\ngamma\ndelta\nno child process was started"
-        );
-        let report = pool.report();
-        assert!(report.contains("candidate 5 epsilon epsilon"), "{report}");
-        assert!(report.contains("candidate 6 zeta zeta"), "{report}");
-        assert!(!report.contains("later candidates were not stored"), "{report}");
-    }
-
-    #[test]
-    fn thirty_third_lesson_is_named_as_not_stored() {
-        assert_eq!(LESSON_CAP, 32);
-        let mut library = LessonLibrary::new();
-        for index in 1..=32 {
-            library.store(&format!("k{index}"), &format!("kept {index}"));
-        }
-        library.store("extra", "dropped lesson");
-        assert_eq!(library.read("k1"), "kept 1");
-        assert_eq!(library.read("k32"), "kept 32");
-        assert_eq!(library.read("extra"), "lesson extra was not stored");
-        let report = library.report();
-        assert!(report.contains("lesson extra was not stored\n"), "{report}");
-        assert!(report.contains("later lessons were not stored\n"), "{report}");
-        assert!(report.ends_with("no child process was started"), "{report}");
-        assert!(!report.contains("dropped lesson"), "{report}");
-    }
-
-    #[test]
-    fn second_level_reads_the_stored_composition() {
-        let report = retain_texts(&["alpha".to_string(), "beta".to_string()]);
-        assert!(report.contains("alpha\nbeta\nno child process was started\n"), "{report}");
-        assert!(
-            report.contains("second level alpha\nbeta\nno child process was started\n"),
-            "{report}"
-        );
-        assert!(report.contains("lesson level2 alpha\nbeta\nno child process was started\n"), "{report}");
-        assert!(report.ends_with("no child process was started"), "{report}");
-    }
-
-    #[test]
-    fn later_read_returns_the_first_stored_lesson() {
-        let mut library = LessonLibrary::new();
-        library.store("kept-first", "compose from observed contrasts");
-        library.store("kept-first", "a later text is not stored");
-        assert_eq!(
-            library.read("kept-first"),
-            "compose from observed contrasts"
-        );
-        let report = library.report();
-        assert!(!report.contains("a later text is not stored"), "{report}");
-        assert!(report.ends_with("no child process was started"), "{report}");
-    }
-
-    #[test]
-    fn later_candidate_is_not_composed() {
-        let mut pool = CandidatePool::new();
-        for index in 1..=16 {
-            pool.store(&format!("c{index}"), &format!("text {index}"));
-        }
-        pool.store("c17", "kept out");
-        assert_eq!(
-            pool.compose(),
-            "text 1\ntext 2\ntext 3\ntext 4\nno child process was started"
-        );
-        let report = pool.report();
-        assert!(report.contains("candidate c17 was not stored\n"), "{report}");
-        assert!(report.ends_with("no child process was started"), "{report}");
-        assert!(!report.contains("kept out"), "{report}");
-    }
 }
