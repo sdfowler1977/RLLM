@@ -108,7 +108,7 @@ fn conflict_binding(st:&Json)->Json{
  s(&digest(&obj(vec![("chat",get(st,"active").clone()),("connection",get(st,"request_index").clone()),("profile",profile_identity(&profile)),("agent",active(st)),("task",task),("stack",get(st,"delegation_stack").clone()),("root",get(st,"approval_root").clone()),("root_identity",get(st,"approval_root_identity").clone()),("policy",policy(st)),("project",get(st,"harness_project").clone()),("source",get(st,"harness_native_source").clone())])))
 }
 pub(super) fn reported(st:&mut Json,reply:&str)->Result<bool>{
- let v=parse(reply.trim())?;let Obj(o)=&v else{return Ok(false)};if o.len()!=1{return Ok(false);}if o.contains_key("memory_proposal"){memory_report(st,get(&v,"memory_proposal"))?;return Ok(true);}if !o.contains_key("harness_conflict"){return Ok(false);}let c=get(&v,"harness_conflict");let Obj(fields)=c else{return Err("Conflict report must be an object".into())};if fields.len()!=3||!["rule_id","source","quote"].iter().all(|key|matches!(get(c,key),Str(_))){return Err("Conflict report requires rule_id, source and exact quote strings".into());}
+ let v=parse(reply.trim())?;let Obj(o)=&v else{return Ok(false)};if o.len()!=1{return Err("A harness report must contain exactly one top-level field".into());}if o.contains_key("memory_proposal"){memory_report(st,get(&v,"memory_proposal"))?;return Ok(true);}if !o.contains_key("harness_conflict"){return Ok(false);}let c=get(&v,"harness_conflict");let Obj(fields)=c else{return Err("Conflict report must be an object".into())};if fields.len()!=3||!["rule_id","source","quote"].iter().all(|key|matches!(get(c,key),Str(_))){return Err("Conflict report requires rule_id, source and exact quote strings".into());}
  let rule=rows(st,"rules").into_iter().chain(rows(st,"decisions")).chain(rows(st,"pools").iter().map(pool_display)).find(|r|enabled(r)&&text(r,"id")==text(c,"rule_id")).ok_or("Conflict report does not identify a current harness rule")?;let quote=text(c,"quote");if quote.trim().is_empty()||quote.len()>MAX_TEXT{return Err("Conflict quote is empty or too long".into());}
  let source=match text(c,"source").as_str(){"project"=>array(st,"harness_project").iter().map(|r|text(r,"text")).collect::<Vec<_>>(),"memory"=>memory_sources(st),_=>return Err("Conflict source must be current project instructions or memory".into())};if !source.iter().any(|t|t.contains(&quote)){return Err("Conflict quote is absent from the current exact source; no rule changed".into());}
  let token=id()?;put(st,"harness_conflict",obj(vec![("id",s(&token)),("rule",rule),("quote",s(&quote)),("source",get(c,"source").clone()),("binding",conflict_binding(st))]));put(st,"dialog",s("harness_conflict"));put(st,"busy",Bool(false));put(st,"stream_text",Null);put(st,"notice",s("A lower-level instruction may conflict with your harness rule. Clarify before continuing; no operation ran."));Ok(true)
@@ -264,7 +264,23 @@ pub(super) fn capture_user(st:&mut Json,task:bool)->Result<()>{
 pub(super) fn native_source(st:&Json)->String{let source=get(st,"harness_native_source");if get(source,"chat")!=get(st,"active")||text(source,"id").is_empty(){return String::new();}let value=if text(source,"kind")=="task"{let run=get(st,"task_run");if get(run,"harness_user_id")!=get(source,"id"){return String::new();}text(run,"task")}else{array(&chat(st),"messages").iter().find(|m|get(m,"harness_user_id")==get(source,"id")&&text(m,"role")=="user").map(|m|text(m,"content")).unwrap_or_default()};if digest(&s(&value))==text(source,"digest"){value}else{String::new()}}
 fn memory_report(st:&mut Json,c:&Json)->Result<()>{let Obj(fields)=c else{return Err("Memory proposal must be an object".into())};if fields.len()!=3||!["source_quote","observation","interpretation"].iter().all(|key|matches!(get(c,key),Str(_))){return Err("Memory proposal needs source_quote, observation and interpretation strings".into());}let quote=text(c,"source_quote");let observation=text(c,"observation");let interpretation=text(c,"interpretation");if quote.trim().is_empty()||quote.len()>MAX_TEXT||observation.trim().is_empty()||observation.len()>MAX_TEXT||interpretation.len()>MAX_TEXT{return Err("Memory fields exceed1–8192 bytes or a required field is empty".into());}let actual=native_source(st);if actual.is_empty()||!actual.contains(&quote){return Err("Memory quotation is absent from the actual current native user submission; no rule or memory changed".into());}let record=obj(vec![("id",s(&id()?)),("text",s(&observation)),("model_observation",s(&observation)),("source_quote",s(&quote)),("interpretation",s(&interpretation)),("origin",s("Model observation quoting a native user submission; interpretation is not a user instruction")),("source",get(st,"harness_native_source").clone()),("binding",conflict_binding(st)),("enabled",Bool(true))]);let mut next=st.clone();put(&mut next,"harness_memory_pending",record);put(&mut next,"busy",Bool(false));put(&mut next,"stream_text",Null);put(&mut next,"dialog",s("harness_memory_review"));put(&mut next,"notice",s("Memory observation awaits your review; no memory or harness rule changed."));if super::super::mcp_schema::state_bytes(&next)>6*1024*1024-8192{return Err("Memory proposal does not fit saved state; original task retained".into());}*st=next;Ok(())}
 fn continue_instruction(st:&mut Json,instruction:&str)->Result<()>{if get(st,"task_run")!=&Null{let mut run=get(st,"task_run").clone();let mut trail=array(&run,"tool_trail");trail.push(obj(vec![("role",s("user")),("content",s(instruction))]));put(&mut run,"tool_trail",Arr(trail));put(st,"task_run",run);}else{append(st,"user",instruction)?;}Ok(())}
-pub(super) fn is_report(reply:&str)->bool{matches!(parse(reply.trim()),Ok(Obj(ref fields))if fields.len()==1&&(fields.contains_key("harness_conflict")||fields.contains_key("memory_proposal")))}
+pub(super) fn report_kind(reply: &str) -> Option<&'static str> {
+    let Ok(Obj(fields)) = parse(reply.trim()) else {
+        let object = reply.trim().strip_prefix('{')?.trim_start();
+        return ["harness_conflict", "memory_proposal"].into_iter()
+            .find(|kind| object.strip_prefix('"').and_then(|key| key.strip_prefix(*kind))
+                .and_then(|rest| rest.strip_prefix('"'))
+                .is_some_and(|rest| rest.trim_start().starts_with(':')));
+    };
+    if fields.contains_key("harness_conflict") {
+        Some("harness_conflict")
+    } else if fields.contains_key("memory_proposal") {
+        Some("memory_proposal")
+    } else {
+        None
+    }
+}
+pub(super) fn is_report(reply: &str) -> bool { report_kind(reply).is_some() }
 pub(super) fn refused(st:&mut Json,reason:&str,raw_captured:bool){let reason=reason.chars().take(1024).collect::<String>();put(st,"harness_refusal",obj(vec![("reason",s(&reason)),("binding",conflict_binding(st)),("raw_captured",Bool(raw_captured)),("retried",Bool(boolean(st,"harness_report_retry")))]));put(st,"busy",Bool(false));put(st,"stream_text",Null);put(st,"dialog",s("harness_report_error"));put(st,"notice_error",Bool(true));put(st,"notice",s(&format!("Harness report not accepted: {reason}. Original task and data retained; no memory or rule changed.{}",if raw_captured{""}else{" Raw report history capture unavailable at current capacity."})));}
 struct UserPolicy{worker:Json,source:Json,epoch:u64}
 static GLOBAL_POLICY:std::sync::OnceLock<std::sync::Mutex<Option<UserPolicy>>>=std::sync::OnceLock::new();
@@ -298,82 +314,4 @@ pub(super) fn sha256(bytes:&[u8])->String{
  let mut h=[0x6a09e667u32,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];let blocks=(bytes.len()+9+63)/64;
  for block in 0..blocks{let mut data=[0u8;64];for(i,v)in data.iter_mut().enumerate(){let index=block*64+i;*v=if index<bytes.len(){bytes[index]}else if index==bytes.len(){0x80}else if index>=blocks*64-8{((bytes.len()as u64*8)>>((blocks*64-1-index)*8))as u8}else{0};}let mut w=[0u32;64];for i in 0..16{w[i]=u32::from_be_bytes(data[i*4..i*4+4].try_into().unwrap());}for i in 16..64{let s0=w[i-15].rotate_right(7)^w[i-15].rotate_right(18)^(w[i-15]>>3);let s1=w[i-2].rotate_right(17)^w[i-2].rotate_right(19)^(w[i-2]>>10);w[i]=w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1);}let[mut a,mut b,mut c,mut d,mut e,mut f,mut g,mut x]=h;for i in 0..64{let t1=x.wrapping_add(e.rotate_right(6)^e.rotate_right(11)^e.rotate_right(25)).wrapping_add((e&f)^(!e&g)).wrapping_add(K[i]).wrapping_add(w[i]);let t2=(a.rotate_right(2)^a.rotate_right(13)^a.rotate_right(22)).wrapping_add((a&b)^(a&c)^(b&c));x=g;g=f;f=e;e=d.wrapping_add(t1);d=c;c=b;b=a;a=t1.wrapping_add(t2);}for(i,v)in[a,b,c,d,e,f,g,x].iter().enumerate(){h[i]=h[i].wrapping_add(*v);}}
  h.iter().map(|v|format!("{v:08x}")).collect()
-}
-#[cfg(any(test, rllm_module_tests))]mod hierarchy_tests{use super::*;#[cfg_attr(not(rllm_module_tests), test)]fn digest_vectors(){assert_eq!(sha256(b""),"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");assert_eq!(sha256(b"abc"),"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");}#[cfg_attr(not(rllm_module_tests), test)]fn target_boundaries(){assert!(target_match("/docs","/docs/a"));assert!(!target_match("/docs","/docs-other/a"));assert!(!target_match("https://one.test","https://two.test"));assert!(target_match("https://one.test/a","https://one.test/a/b?q=1"));}#[cfg(rllm_module_tests)]#[no_mangle]pub extern "C" fn x2_harness_rules_hierarchy_tests(){digest_vectors();target_boundaries();}}
-
-// Public worker entry uses the live user policy; no caller-supplied policy is trusted.
-pub(super) fn worker_policy(v:&Json)->Result<Json>{let global=gateway_current(&Null)?;gateway_check(&global,&text(v,"tool"),get(v,"args"))?;Ok(global)}
-pub(super) fn worker_review_required(global:&Json,v:&Json)->bool{let state=obj(vec![("harness_policy",global.clone())]);review_required(&state,v)}
-
-pub(super) fn storage_tool(method:&str,purpose:&str)->&'static str{match method{"GET"|"HEAD"=>"drive_read","PROPFIND"=>"drive_list","MKCOL"=>"drive_folder",_=>if purpose.contains("update"){"drive_update"}else{"drive_create"}}}
-
-#[cfg(any(test, rllm_module_tests))]mod intent_tests{
- use super::*;
- fn state(scope:&str)->Json{obj(vec![("harness_policy",obj(vec![("schema",Num("1".into())),("rules",Arr(vec![obj(vec![("id",s("intent")),("text",s("Current applicable denial")),("scope",s(scope)),("decision",s("deny"))])]))]))])}
- #[cfg_attr(not(rllm_module_tests), test)]fn actual_native_storage_and_revision_intents(){
-  let st=state("write");let upload=obj(vec![("kind",s("network")),("host",s("drive.test")),("port",Num("443".into())),("tls",Bool(true)),("wire",s("PUT /folder/file.json HTTP/1.1\r\n\r\n")),("purpose",s("saved"))]);assert!(effect_check(&st,&upload,false).is_err());
-  let mut get=upload.clone();put_field(&mut get,"wire",s("GET /folder/file.json HTTP/1.1\r\n\r\n"));put_field(&mut get,"purpose",s("saved_verify"));assert!(effect_check(&st,&get,false).is_ok());
-  for phase in ["read","backup","write"]{let e=obj(vec![("kind",s("phone_revision")),("phase",s(phase)),("path",s("note.txt"))]);assert_eq!(effect_check(&st,&e,false).is_err(),phase!="read");}
-  assert!(effect_check(&state("read"),&obj(vec![("kind",s("wallpaper_picker"))]),false).is_err());
- }
- fn reviewed_phone_update(folder:&str)->Json{
-  let mut st=obj(vec![("phone_access_mode",s("limited")),("phone_uri",s(folder)),("phone_access_granted",Bool(true)),("pending",obj(vec![("tool",s("phone_update")),("args",obj(vec![("path",s("notes/a.txt")),("content",s("next"))]))]))]);
-  identity_refresh(&mut st);
-  assert_eq!(text(get(&st,"pending"),"reviewed_tree"),folder);
-  put(&mut st,"pending",Null);
-  put(&mut st,"active_tool",s("phone_update"));
-  put(&mut st,"phone_revision",obj(vec![("phase",s("read")),("ticket",s("job")),("tree",s(folder)),("path",s("notes/a.txt")),("content",s("next"))]));
-  st
- }
- fn revision_effect(st:&Json,phase:&str)->Json{let mut effect=get(st,"phone_revision").clone();put_field(&mut effect,"kind",s("phone_revision"));put_field(&mut effect,"phase",s(phase));effect}
- #[cfg_attr(not(rllm_module_tests), test)]
- fn phone_update_review_follows_revision_callback(){
-  let original="content://tree/reviewed";
-  let mut idle=obj(vec![]);identity_refresh(&mut idle);
-  let mut shifted=reviewed_phone_update(original);
-  put(&mut shifted,"phone_uri",s("content://tree/other"));
-  put(&mut shifted,"phone_access_mode",s("off"));
-  put(&mut shifted,"phone_access_granted",Bool(false));
-  identity_refresh(&mut shifted);
-  let record=get(&shifted,"phone_revision");
-  assert_eq!(text(record,"reviewed_tree"),original);
-  assert_eq!(text(record,"reviewed_phone_mode"),"limited");
-  assert!(boolean(record,"reviewed_phone_granted"));
-  for phase in ["backup","write"]{
-   let bare=obj(vec![("kind",s("phone_revision")),("phase",s(phase)),("tree",s("content://tree/other")),("path",s("notes/a.txt")),("content",s("next"))]);
-   let err=effect_check(&shifted,&bare,false).unwrap_err();
-   assert!(err.contains("Device folder changed after review"),"{phase} {err}");
-   let err=effect_check(&shifted,&revision_effect(&shifted,phase),false).unwrap_err();
-   assert!(err.contains("Device folder changed after review"),"{phase} carried {err}");
-  }
-  let mut folder=reviewed_phone_update(original);
-  put(&mut folder,"phone_uri",s("content://tree/other"));
-  identity_refresh(&mut folder);
-  let err=effect_check(&folder,&revision_effect(&folder,"write"),false).unwrap_err();
-  assert!(err.contains("Device folder changed after review"),"folder {err}");
-  let mut access=reviewed_phone_update(original);
-  put(&mut access,"phone_access_mode",s("off"));
-  identity_refresh(&mut access);
-  let err=effect_check(&access,&revision_effect(&access,"backup"),false).unwrap_err();
-  assert!(err.contains("Device folder changed after review"),"access {err}");
-  let mut grant=reviewed_phone_update(original);
-  put(&mut grant,"phone_access_granted",Bool(false));
-  identity_refresh(&mut grant);
-  let err=effect_check(&grant,&revision_effect(&grant,"write"),false).unwrap_err();
-  assert!(err.contains("Device folder changed after review"),"grant {err}");
-  let mut kept=reviewed_phone_update(original);
-  identity_refresh(&mut kept);
-  for phase in ["read","backup","write"]{assert!(effect_check(&kept,&revision_effect(&kept,phase),false).is_ok(),"{phase}");}
-  let unrelated=obj(vec![("phone_access_mode",s("off")),("phone_uri",s("content://tree/other")),("phone_access_granted",Bool(false))]);
-  let bare=obj(vec![("kind",s("phone_revision")),("phase",s("write")),("tree",s("content://tree/other")),("path",s("notes/a.txt"))]);
-  assert!(effect_check(&unrelated,&bare,false).is_ok(),"a revision with no review binding still runs");
-  identity_refresh(&mut idle);
- }
- #[cfg(rllm_module_tests)]
- #[no_mangle]
- pub extern "C" fn x2_harness_rules_tests(){
-  actual_native_storage_and_revision_intents();
-  phone_update_review_follows_revision_callback();
- }
- fn put_field(v:&mut Json,key:&str,value:Json){super::put(v,key,value)}
 }

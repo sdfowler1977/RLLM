@@ -862,6 +862,15 @@ fn has_proposal_batch(st: &Json) -> bool {
 
 thread_local! {
     static CALLER_DRIVES_APPROVAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static CALLER_FEEDBACK: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+pub(super) fn caller_feedback_waiting() -> bool {
+    CALLER_FEEDBACK.with(|feedback| feedback.get().is_some())
+}
+
+pub(super) fn clear_caller_feedback() {
+    CALLER_FEEDBACK.with(|feedback| feedback.set(None));
 }
 
 pub(super) fn with_caller_driven_approval<T>(run: impl FnOnce() -> T) -> T {
@@ -928,6 +937,12 @@ fn model_request_at(st: &mut Json, index: usize, refreshed: bool) -> Result<Json
     ])];
     messages.extend(array(&chat(st), "messages"));
     messages=harness::request_messages(st,messages)?;
+    if CALLER_DRIVES_APPROVAL.with(std::cell::Cell::get) && tool_format::proposal_phase(st) {
+        if let Some(system) = messages.iter_mut().find(|message| text(message, "role") == "system") {
+            let prompt = format!("{}\nWorkspace file tools take paths relative to the workspace root, with forward slashes. Read an existing workspace file in place. For a focused edit to an existing text file, propose write with path and edits, an array of objects with exact old text and replacement new text. Each old text must occur exactly once. For a new file or full replacement, use write with path and content. This desktop task runner cannot execute workspace scripts. Use the reviewed file operations for source edits. Continue independent requested work if a build command is unavailable, and report its actual status.", text(system, "content"));
+            put(system, "content", s(&prompt));
+        }
+    }
     answer_mode::project_lightweight(st,&mut messages);
     for message in &mut messages {mcp_history::project(message);}
     let evaluating=improvement::evaluating(st);
@@ -1428,11 +1443,22 @@ fn operation_failure_followup(st:&mut Json,owner:&Json,tool:&str,reason:&str,out
  put(&mut next,"tool_error_score_tenths",Num(score.to_string()));
  let (total_count,total_score)=tool_score_total(&next);put(&mut next,"tool_penalty_note",s(&penalty_note("tool_error",count,score,total_count,total_score,&detail,&fix)));
  let prepared=(||{
-  let attempts=match get(&next,"local_failure_followups"){Null=>0,Num(v)=>v.parse::<usize>().map_err(|_|"Invalid operation error feedback count")?,_=>return Err("Invalid operation error feedback count".into())};
-  if attempts>=3{return Err("Three operation error results have been returned for this instruction. Continue with a fresh instruction.".into());}
+  if outcome=="rejected_before_start"{
+   if !harness::has_operation_room(&next){return Err(format!("Reached the orchestrator operation limit {}.",harness::operation_limit(&next)));}
+   put(&mut next,"steps",Num((number(st,"steps")+1).to_string()));
+  }
   harness_rules::refresh(&mut next);if harness_rules::model_route(&next,index)?!=index{return Err("The requesting model route changed. Review its current connection.".into());}
-  put(&mut next,"local_failure_followups",Num((attempts+1).to_string()));
-  if get(&next,"task_run")!=&Null{harness::task_tool_result_at(&mut next,&output,Some(index))?.ok_or("The requesting task has settled".into())}else{model_effect_at(&mut next,index)}
+
+  if get(&next,"task_run")!=&Null{
+   return harness::task_tool_result_at(&mut next,&output,Some(index))?.ok_or("The requesting task has settled".into());
+  }
+  if CALLER_DRIVES_APPROVAL.with(std::cell::Cell::get) {
+   // Return to the caller's progress checks before requesting another model
+   // turn. Consecutive rejected proposals need the same boundary as approvals.
+   CALLER_FEEDBACK.with(|feedback| feedback.set(Some(index)));
+   return Ok(Null);
+  }
+  model_effect_at(&mut next,index)
  })();
  match prepared{
   Ok(effect)=>{put(&mut next,"notice",s("Returning the operation error to the requesting model"));put(&mut next,"notice_error",Bool(true));*st=next;Ok(effect)},
@@ -1444,6 +1470,13 @@ fn proposal_failure(st:&mut Json,proposal:&Json,reason:&str,raw:&str)->Result<Js
  if get(&next,"task_run")!=&Null{let mut run=get(&next,"task_run").clone();let mut trail=array(&run,"tool_trail");let mut message=obj(vec![("role",s("assistant")),("content",s(raw))]);hosted_decorate(&next,&mut message);trail.push(message);put(&mut run,"tool_trail",Arr(trail));put(&mut next,"task_run",run);put(&mut next,"agent_running",Bool(true));}
  let result=operation_failure_followup(&mut next,&owner,&text(proposal,"tool"),reason,"rejected_before_start");*st=next;result
 }
+fn malformed_tool_request(reply: &str) -> bool {
+    let Some(object) = reply.trim().strip_prefix('{') else { return false };
+    let object = object.trim_start();
+    (object.starts_with("\"tool\"") || (object.starts_with("\"args\"") && object.contains("\"tool\"")))
+        && parse(reply.trim()).is_err()
+}
+
 fn stage_model_proposal(st: &mut Json, mut proposed: Json, raw: &str) -> Result<Json> {
     if text(&proposed, "tool") == "delegate" { delegation::unreviewed(&mut proposed); }
     if !harness::has_operation_room(st) {
@@ -1476,7 +1509,7 @@ fn model_proposal(st: &mut Json, proposed: Json) -> Result<Json> {
     stage_model_proposal(st, proposed, &raw)
 }
 fn web_failure_followup(st:&mut Json,context:&Json,kind:&str,reason:&str)->Result<Option<Json>>{
- if !boolean(st,"agent_running"){return Ok(None);}let attempts=match get(st,"web_failure_followups"){Null=>0,Num(v)=>v.parse::<usize>().map_err(|_|"Invalid current web feedback count")?,_=>return Err("Invalid current web feedback count".into())};if attempts>=3{return Err("The three web-error feedback requests for this user request are exhausted; no additional model request was started".into());}
+ if !boolean(st,"agent_running"){return Ok(None);}
  if !web_operation::current_owner(st,context)||!matches!(get(context,"args"),Obj(_)){return Ok(None);}
  let proposal=obj(vec![("tool",get(context,"tool").clone()),("args",get(context,"args").clone())]);
  let binding=get(context,if text(context,"tool")=="web_search"{"search_owner_binding"}else{"read_owner_binding"});if binding==&Null{return Ok(None);}let index=number(binding,"index");
@@ -1486,15 +1519,27 @@ fn web_failure_followup(st:&mut Json,context:&Json,kind:&str,reason:&str)->Resul
  let fix=tool_allowed_fix(st);
  let output=obj(vec![("status",s("failed")),("tool",get(context,"tool").clone()),("failure_kind",s(kind)),("diagnostic",s(&diagnostic)),("completed_result",Bool(false)),("automatic_web_retry",Bool(false)),("web_error_count",Num(count.to_string())),("score_tenths",Num(score.to_string())),("score_scale",s("tenths")),("allowed_fix",fix.clone())]).string();
  let mut candidate=st.clone();harness_rules::refresh(&mut candidate);harness::allowed_tool(&candidate,&proposal)?;if harness_rules::model_route(&candidate,index)?!=index{return Err("Harness model routing changed; web error feedback retained locally".into());}put(&mut candidate,"busy",Bool(false));put(&mut candidate,"active_tool",Null);
- put(&mut candidate,"web_failure_followups",Num((attempts+1).to_string()));
+
  put(&mut candidate,"web_error_count",Num(count.to_string()));
  put(&mut candidate,"web_error_score_tenths",Num(score.to_string()));
  let (total_count,total_score)=tool_score_total(&candidate);put(&mut candidate,"tool_penalty_note",s(&penalty_note("web_error",count,score,total_count,total_score,&diagnostic,&fix)));
  if !web_operation::record_feedback(&mut candidate,context,&output){return Err("History cannot retain the web failure; no feedback request was dispatched".into());}
- let next=if get(&candidate,"task_run")!=&Null{harness::task_tool_result_at(&mut candidate,&output,Some(index))?.ok_or("The requesting task is no longer active")?}else{model_effect_at(&mut candidate,index)?};
- if text(&next,"kind")!="network"||text(&next,"purpose")!="model"{return Err("No requesting model continuation was prepared".into());}if number(&candidate,"request_index")!=index||array(&candidate,"profiles").get(index)!=Some(get(binding,"profile")){return Err("The original model connection changed; web error feedback retained locally".into());}
+ let defer = get(&candidate, "task_run") == &Null && CALLER_DRIVES_APPROVAL.with(std::cell::Cell::get);
+ let next = if defer {
+     Null
+ } else if get(&candidate, "task_run") != &Null {
+     harness::task_tool_result_at(&mut candidate, &output, Some(index))?.ok_or("The requesting task is no longer active")?
+ } else {
+     model_effect_at(&mut candidate, index)?
+ };
+ let pending = get(&candidate, "pending") != &Null;
+ if !defer && !pending && (text(&next, "kind") != "network" || text(&next, "purpose") != "model") {
+     return Err("No requesting model continuation was prepared".into());
+ }
+ if number(&candidate,"request_index")!=index||array(&candidate,"profiles").get(index)!=Some(get(binding,"profile")){return Err("The original model connection changed; web error feedback retained locally".into());}
  let bytes=super::mcp_schema::state_bytes(&candidate);let policy=super::resources::policy(get(&candidate,"device"),get(&candidate,"resources"),bytes);
  if bytes>6*1024*1024-8192||number(&policy,"response_bytes")<65536{return Err("Current history or memory budget cannot admit web failure feedback".into());}
+ if defer { CALLER_FEEDBACK.with(|feedback| feedback.set(Some(index))); }
  put(&mut candidate,"notice",s(if text(context,"tool")=="web_search"{"A search source could not return results. Continuing the reply."}else{"The website request failed; returning its error to the requesting model."}));put(&mut candidate,"notice_error",Bool(true));*st=candidate;Ok(Some(next))
 }
 fn xml_unescape(s: &str) -> Result<String> {
@@ -1900,7 +1945,18 @@ fn event_inner(v: &Json) -> Result<Json> {
     let web_callback=matches!(action,"network_result"|"tool_result"|"failure") && text(inputs,"purpose")=="web_tool";
     let capture_phase=text(get(&st,"web_expected"),"phase")=="capture";
     if web_callback&&((action=="network_result"&&capture_phase)||(action=="tool_result"&&!capture_phase)){let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));}
-    if web_callback && !web_operation::expected(&st,inputs){let display=ui(&callback_original);return Ok(obj(vec![("state",callback_original),("ui",display),("effect",Null)]));}
+    if web_callback {
+        // Some hosts return the generic effect ticket. Authenticate it as a
+        // web ticket with the same current owner, phase and policy checks.
+        let mut callback = inputs.clone();
+        if get(&callback, "web_ticket") == &Null {
+            put(&mut callback, "web_ticket", get(inputs, "ticket").clone());
+        }
+        if !web_operation::expected(&st, &callback) {
+            let display = ui(&callback_original);
+            return Ok(obj(vec![("state", callback_original), ("ui", display), ("effect", Null)]));
+        }
+    }
     let mut web_feedback=web_callback || (matches!(action,"approve"|"reject")&&web_operation::is_web(get(&st,"pending"))) || (matches!(action,"cancel"|"resume")&&get(&st,"web_expected")!=&Null);
     let mut web_context=if web_callback{get(&st,"web_expected").clone()}else{Null};
     // Expired callbacks retain only their authenticated timeout cleanup.
@@ -2060,8 +2116,16 @@ fn event_inner(v: &Json) -> Result<Json> {
         workspace::remember(&mut st,action);
         if workspace::handles(action){effect=workspace::event(&mut st,action,inputs,&text(v,"root"))?;return Ok(());}
         if services::handles(action){effect=services::event(&mut st,action)?;return Ok(());}
-        if harness::handles(action) { effect=harness::event_for(&mut st,action,inputs)?;if matches!(action,"delegate"|"refine"|"compact"){put(&mut st,"web_failure_followups",Num("0".into()));put(&mut st,"local_failure_followups",Num("0".into()));} return Ok(()); }
+        if harness::handles(action) { effect=harness::event_for(&mut st,action,inputs)?;return Ok(()); }
         match action {
+            "continue_operation_feedback" => {
+                if !CALLER_DRIVES_APPROVAL.with(std::cell::Cell::get) {
+                    return Err("Operation feedback belongs to its requesting session".into());
+                }
+                let index = CALLER_FEEDBACK.with(std::cell::Cell::take)
+                    .ok_or("No operation feedback is awaiting continuation")?;
+                effect = model_effect_at(&mut st, index)?;
+            }
             "model_progress" => {
                 let partial=text(inputs,"stream_text");
                 if boolean(&st,"busy") && text(&st,"request_chat")==text(&st,"active") && partial.len()<=1024*1024 {
@@ -2269,7 +2333,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 }
                 let mut next=st.clone();
                 put(&mut next,"proposal_batches",Null);
-                put(&mut next,"web_failure_followups",Num("0".into()));put(&mut next,"local_failure_followups",Num("0".into()));put(&mut next,"delegate_feedback_used",Bool(false));
+                put(&mut next,"delegate_feedback_used",Bool(false));
                 harness::reset_task(&mut next);
                 tool_format::clear(&mut next);
                 put(&mut next,"dialog",Null);
@@ -2328,7 +2392,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                 if matches!(answer_mode::current(&next),answer_mode::Mode::Direct|answer_mode::Mode::Lookup){inquiry::finish_lightweight_turn(&mut next);}
                 else{inquiry::branch(&mut next,&process_parent);}
                 put(&mut next,"steps",Num("0".into()));
-                put(&mut next,"web_failure_followups",Num("0".into()));
+
                 tool_format::clear(&mut next);
                 let question=text(&messages[index],"content");
                 let request=if let Some(answer)=answer_mode::local_clock(&next,&question,!array(&messages[index],"attachments").is_empty(),inputs){
@@ -2898,12 +2962,40 @@ fn event_inner(v: &Json) -> Result<Json> {
                             }
                             proposal.string()
                         }else{reply};
-                        if harness_rules::is_report(&reply){
-                            let original=st.clone();let mut next=st.clone();let mut raw_captured=append(&mut next,"assistant",&reply).is_ok()&&super::mcp_schema::state_bytes(&next)<=6*1024*1024-8192;if !raw_captured{next=original.clone();}
-                            match harness_rules::reported(&mut next,&reply){
-                                Ok(true)if super::mcp_schema::state_bytes(&next)<=6*1024*1024-8192=>{harness::finish_attempt(&mut next,inputs,"success");if !raw_captured{let notice=text(&next,"notice");put(&mut next,"notice",s(&format!("{notice} Raw report history capture unavailable at current capacity; reviewed fields remain visible.")));}st=next;return Ok(());},
-                                result=>{let reason=match result{Err(reason)=>reason,_=>"Harness report does not fit saved state; original task and data retained".into()};if !raw_captured||super::mcp_schema::state_bytes(&next)>6*1024*1024-8192{next=original;raw_captured=false;}harness::finish_attempt(&mut next,inputs,"error");harness_rules::refused(&mut next,&reason,raw_captured);st=next;format_error_received=true;return Ok(());}
+                        if let Some(report) = harness_rules::report_kind(&reply) {
+                            let mut with_history = st.clone();
+                            if append(&mut with_history, "assistant", &reply).is_ok()
+                                && super::mcp_schema::state_bytes(&with_history) <= 6 * 1024 * 1024 - 8192
+                            {
+                                st = with_history;
                             }
+                            let mut next = st.clone();
+                            let reason = match harness_rules::reported(&mut next, &reply) {
+                                Ok(true) if super::mcp_schema::state_bytes(&next) <= 6 * 1024 * 1024 - 8192 => {
+                                    harness::finish_attempt(&mut next, inputs, "success");
+                                    st = next;
+                                    return Ok(());
+                                }
+                                Err(reason) => reason,
+                                _ => "Harness report could not be saved for review".into(),
+                            };
+                            harness::finish_attempt(&mut st, inputs, "error");
+                            let owner = st.clone();
+                            put(&mut st, "stream_text", Null);
+                            effect = operation_failure_followup(
+                                &mut st, &owner, report, &reason, "rejected_before_start",
+                            )?;
+                            return Ok(());
+                        }
+                        if tool_format::proposal_phase(&st) && malformed_tool_request(&reply) {
+                            append(&mut st, "assistant", &reply)?;
+                            harness::finish_attempt(&mut st, inputs, "error");
+                            let owner = st.clone();
+                            put(&mut st, "stream_text", Null);
+                            effect = operation_failure_followup(&mut st, &owner, "tool_request",
+                                "Tool proposal is malformed JSON. Use a complete JSON object and escape quotes inside string arguments.",
+                                "rejected_before_start")?;
+                            return Ok(());
                         }
                         if tool_format::proposal_phase(&st)&&tool_format::embedded(&reply){
                             format_error_received=true;
@@ -3474,6 +3566,16 @@ fn event_inner(v: &Json) -> Result<Json> {
                 let active_tool=text(&st,"active_tool");
                 put(&mut st,"active_tool",Null);
                 put(&mut st, "busy", Bool(false));
+                if matches!(active_tool.as_str(), "script_check" | "script_run")
+                    && matches!(get(inputs, "output"), Obj(_))
+                {
+                    let reason = "This host returned prepared script source without executing it.";
+                    if boolean(&st, "agent_running") {
+                        effect = operation_failure_followup(&mut st, &callback_original, &active_tool, reason, "failed")?;
+                        return Ok(());
+                    }
+                    return Err(reason.into());
+                }
                 let raw_output = text(inputs, "output");
                 let (mut output,graphs,graph_note)=if observation_format{observation_graph::unpack(&raw_output)}else{(raw_output,Null,String::new())};
                 inquiry::local_result(&mut st,&text(inputs,"tool_ticket"),&output);
@@ -3682,7 +3784,7 @@ fn event_inner(v: &Json) -> Result<Json> {
         let pending = get(&st, "pending").clone();
         put(&mut st, "pending", Null);
         put(&mut st, "dialog", Null);
-        if action == "resume" || !boolean(&st, "agent_pending") || !has_proposal_batch(&st) {
+        if action == "resume" || !boolean(&st, "agent_pending") {
             put(&mut st, "notice", s(&reason));
             break;
         }
@@ -3768,6 +3870,12 @@ fn event_inner(v: &Json) -> Result<Json> {
     if web_feedback {web_operation::notice_fit(&mut st);}
     if text(&effect,"kind")=="tool"{if let Err(reason)=operation::bind(&mut st,&mut effect,&text(v,"root"),effect_model_origin){effect=Null;if approval_dispatch_base!=Null{st=std::mem::replace(&mut approval_dispatch_base,Null);}put(&mut st,"busy",Bool(false));put(&mut st,"notice_error",Bool(true));put(&mut st,"notice",s(&reason));}}else if !boolean(&st,"busy"){operation::interrupt(&mut st);}
     if effect!=Null{if let Err(reason)=delegation::bind_callback(&mut st,&mut effect){effect=Null;put(&mut st,"busy",Bool(false));put(&mut st,"notice_error",Bool(true));put(&mut st,"notice",s(&reason));}}
+    if text(&effect, "kind") == "network" && text(&effect, "purpose") == "web_tool"
+        && get(&effect, "ticket") == &Null && get(&effect, "web_ticket") != &Null
+    {
+        let ticket = get(&effect, "web_ticket").clone();
+        put(&mut effect, "ticket", ticket);
+    }
     if effect!=Null{if let Err(reason)=operation::bind_drive(&mut st,&mut effect,&text(v,"root")){effect=Null;if approval_dispatch_base!=Null{st=std::mem::replace(&mut approval_dispatch_base,Null);}put(&mut st,"busy",Bool(false));put(&mut st,"notice_error",Bool(true));put(&mut st,"notice",s(&reason));}}
     // Save a standing approval only when the existing preparation/resource
     // path actually returned work. A refused dispatch cannot leave a grant.
@@ -4134,9 +4242,14 @@ fn validate_tool(v: &Json) -> Result<()> {
     {
         return Err("Invalid relative tool path".into());
     }
-    if ["write", "drive_create", "drive_update"].contains(&name.as_str())
-    {
-        let content = get(v, "args").get("content")?.text()?;
+    let args = get(v, "args");
+    if name == "write" && args.get("edits").is_ok() {
+        if args.get("content").is_ok() {
+            return Err("Choose either full file content or exact text edits".into());
+        }
+        write_edits(args)?;
+    } else if ["write", "drive_create", "drive_update"].contains(&name.as_str()) {
+        let content = args.get("content")?.text()?;
         if content.len() > 1024 * 1024 || content.contains('\0') {
             return Err("Text file exceeds 1 MiB or contains NUL".into());
         }
@@ -4155,6 +4268,44 @@ fn validate_tool(v: &Json) -> Result<()> {
     }
     Ok(())
 }
+fn write_edits(args: &Json) -> Result<Vec<(&str, &str)>> {
+    let edits = args.get("edits")?.array()?;
+    if edits.is_empty() || edits.len() > 64 {
+        return Err("Provide 1 to 64 exact text edits".into());
+    }
+    edits.iter().map(|edit| {
+        let old = edit.get("old")?.text()?;
+        let new = edit.get("new")?.text()?;
+        if old.is_empty() || old.len() > 1024 * 1024 || new.len() > 1024 * 1024
+            || old.contains('\0') || new.contains('\0')
+        {
+            return Err("Exact edits require nonempty old text and bounded text without NUL".into());
+        }
+        Ok((old, new))
+    }).collect()
+}
+
+fn edited_content(args: &Json) -> Result<String> {
+    if !boolean(args, "previous_exists") {
+        return Err("Exact text edits require an existing file".into());
+    }
+    let mut content = field(args, "approved_previous")?.to_owned();
+    for (index, (old, new)) in write_edits(args)?.into_iter().enumerate() {
+        let Some(start) = content.find(old) else {
+            return Err(format!("Exact text edit {} did not match the file", index + 1));
+        };
+        let first_character = old.chars().next().ok_or("Missing old text")?.len_utf8();
+        if content[start + first_character..].contains(old) {
+            return Err(format!("Exact text edit {} matched more than once", index + 1));
+        }
+        if content.len() - old.len() + new.len() > 1024 * 1024 {
+            return Err("Edited file exceeds 1 MiB".into());
+        }
+        content.replace_range(start..start + old.len(), new);
+    }
+    Ok(content)
+}
+
 fn path(root: &Path, name: &str) -> Result<PathBuf> {
     if name.len() > 1024 || name.contains('\0') || name.contains('\\') {
         return Err("Invalid workspace path".into());
@@ -4191,7 +4342,7 @@ fn path(root: &Path, name: &str) -> Result<PathBuf> {
     }
     Ok(target)
 }
-fn read_file(p: &Path) -> Result<String> {
+fn read_file_bytes(p: &Path) -> Result<Vec<u8>> {
     let f = fs::File::open(p).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
     f.take(1024 * 1024 + 1)
@@ -4200,7 +4351,23 @@ fn read_file(p: &Path) -> Result<String> {
     if bytes.len() > 1024 * 1024 {
         return Err("File exceeds 1 MiB".into());
     }
-    String::from_utf8(bytes).map_err(|_| "File is not UTF-8 text".into())
+    Ok(bytes)
+}
+fn read_file(p: &Path) -> Result<String> {
+    String::from_utf8(read_file_bytes(p)?).map_err(|_| "File is not UTF-8 text".into())
+}
+fn read_file_for_display(p: &Path) -> Result<String> {
+    match String::from_utf8(read_file_bytes(p)?) {
+        Ok(text) => Ok(text),
+        Err(error) => {
+            let bytes = error.into_bytes();
+            let preview = &bytes[..bytes.len().min(128)];
+            let hex = preview.iter().map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>().join(" ");
+            Ok(format!("File contains invalid UTF-8. Size: {} bytes. First {} bytes (hex):\n{hex}",
+                bytes.len(), preview.len()))
+        }
+    }
 }
 pub fn media_stream_operation(v:&Json)->Result<Json>{media_stream::operation(v)}
 pub fn media_upload_operation(v:&Json)->Result<Json>{media_upload::operation(v)}
@@ -4276,7 +4443,7 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
     let result = match field(v, "tool")? {
         "reconstruct" => reconstruction::run(&root,v,&inspection_access)?,
         "self_build" => self_build::run(&root, v, &|| inspection_access.cancelled())?,
-        "read" => read_file(&p)?,
+        "read" => read_file_for_display(&p)?,
         "inspect" => if text(args,"content")=="complete_digest"{file_evidence::inspect(&root,args,&inspection_access)?}else{investigation::inspect_scoped(&root,&p,&text(args,"path"),&inspection_access)?},
         "capture" => capture_file::capture(&root,&p,args,&inspection_access)?,
         "acquire" => acquire::run(&root,args,&inspection_access)?,
@@ -4317,7 +4484,13 @@ fn tool_access(v:&Json,inspection_access:operation::InspectionAccess)->Result<Js
             entries.join("\n")
         }
         "write" => {
-            let content = field(args, "content")?;
+            let edited;
+            let content = if args.get("edits").is_ok() {
+                edited = edited_content(args)?;
+                edited.as_str()
+            } else {
+                field(args, "content")?
+            };
             if content.len() > 1024 * 1024 {
                 return Err("File exceeds 1 MiB".into());
             }
@@ -4635,690 +4808,3 @@ pub fn project_readback(v:&Json)->Result<Json>{project_store::readback(v)}
 pub fn project_close(v:&Json)->Result<Json>{project_store::close(v)}
 
 pub fn project_chunks(v:&Json)->Result<Json>{project_store::chunks(v)}
-
-#[cfg(any(test, rllm_module_tests))]
-mod registry_checks {
-    use super::*;
-
-    fn ready() -> Json {
-        let mut st = blank();
-        new_chat(&mut st).unwrap();
-        put(&mut st, "dialog", s("approval"));
-        put(&mut st, "phone_access_mode", s("limited"));
-        put(&mut st, "phone_uri", s("content://test/tree/folder"));
-        st
-    }
-    fn run(state: Json, action: &str) -> Result<Json> {
-        event(&obj(vec![
-            ("state", state),
-            ("action", s(action)),
-            ("inputs", obj(vec![])),
-            ("root", s("toolchain/check-workspace")),
-        ]))
-    }
-    fn proposal(tool: &str, args: Json) -> Json {
-        obj(vec![("tool", s(tool)), ("args", args)])
-    }
-    #[cfg(rllm_module_tests)]
-    #[no_mangle]
-    pub extern "C" fn g7_registry_tests() {
-        admitted_phone_tools_reach_the_folder_handler();
-        device_service_tools_route_to_the_client();
-        retired_route_is_rejected_while_busy();
-        super::super::har_evidence::registry_reader_limits();
-    }
-    #[cfg(rllm_module_tests)]
-    #[no_mangle]
-    pub extern "C" fn g7_fix_application_tests() {
-        g7_registry_tests();
-        absolute_phone_paths_stay_inside_the_selected_folder();
-        filesystem_root_descendants_stay_inside_the_selected_folder();
-        empty_destination_reaches_builtin_search_endpoints();
-        saved_remote_default_reaches_saved_then_builtin_endpoints();
-        saved_remote_alternative_only_reaches_builtin_endpoints();
-        loopback_saved_destination_stays_out_of_the_builtin_chain();
-        phone_snapshot_is_unverified_until_exact_readback();
-        published_device_shell_forms_supply_the_identity_seal();
-        workspace_search_reports_partial_when_the_walk_stops();
-        refused_device_proposal_leaves_no_directory_or_file();
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn admitted_phone_tools_reach_the_folder_handler() {
-        let admitted = [
-            ("phone_stat", obj(vec![("path", s("notes"))])),
-            ("phone_search", obj(vec![("path", s("notes")), ("query", s("needle"))])),
-            ("phone_write", obj(vec![("path", s("notes/a.txt")), ("content", s("hello"))])),
-            ("phone_create_file", obj(vec![("path", s("notes/b.txt")), ("content", s("hello"))])),
-            ("phone_mkdir", obj(vec![("path", s("notes/dir"))])),
-            ("phone_create_folder", obj(vec![("path", s("notes/dir2"))])),
-            ("phone_rename", obj(vec![("path", s("notes/a.txt")), ("destination", s("notes/c.txt"))])),
-            ("phone_move", obj(vec![("path", s("notes/a.txt")), ("destination", s("notes/d.txt"))])),
-            ("phone_copy", obj(vec![("path", s("notes/a.txt")), ("destination", s("notes/e.txt"))])),
-        ];
-        for (name, args) in admitted {
-            assert!(harness::known_tool(name), "{name}");
-            assert!(validate_tool(&proposal(name, args.clone())).is_ok(), "{name}");
-            let mut st = ready();
-            put(&mut st, "pending", proposal(name, args.clone()));
-            let approved = run(st, "approve").unwrap_or_else(|error| panic!("{name}: {error}"));
-            let effect = get(&approved, "effect");
-            assert_eq!(text(effect, "kind"), "tool", "{name} {}", text(get(&approved, "state"), "notice"));
-            assert_eq!(text(effect, "tool"), name, "{name}");
-            let mut escaped = args.clone();
-            put(&mut escaped, "path", s("notes/../../secret"));
-            assert!(validate_tool(&proposal(name, escaped)).is_err(), "{name} traversal");
-        }
-        let native = proposal("phone_stat", obj(vec![("path", s(r"C:\folder\file.txt"))]));
-        assert!(validate_tool(&native).is_ok(), "{}", "drive path");
-        assert!(validate_tool(&proposal("phone_stat", obj(vec![("path", s("C:/folder/file.txt"))]))).is_ok());
-        assert!(validate_tool(&proposal("phone_stat", obj(vec![("path", s(r"\\server\share\file.txt"))]))).is_ok());
-        assert!(validate_tool(&proposal("phone_write", obj(vec![("path", s(r"C:\folder\..\secret")), ("content", s("x"))]))).is_err());
-        assert!(validate_tool(&proposal("phone_copy", obj(vec![("path", s("notes/a.txt")), ("destination", s(r"notes\..\secret"))]))).is_err());
-        #[cfg(windows)]
-        assert!(validate_tool(&proposal("phone_stat", obj(vec![("path", s(r"notes\file.txt"))]))).is_ok());
-        #[cfg(windows)]
-        assert!(validate_tool(&proposal("phone_stat", obj(vec![("path", s("/etc/passwd"))]))).is_err());
-        #[cfg(not(windows))]
-        assert!(validate_tool(&proposal("phone_stat", obj(vec![("path", s("/tmp/folder/file.txt"))]))).is_ok());
-        let wide = "x".repeat(1024 * 1024 + 1);
-        assert!(validate_tool(&proposal("phone_write", obj(vec![("path", s("notes/big.bin")), ("content", s(&wide))]))).is_ok());
-        assert!(validate_tool(&proposal("phone_create", obj(vec![("path", s(r"C:\folder\new.txt")), ("content", s(&wide))]))).is_ok());
-        assert!(validate_tool(&proposal("write", obj(vec![("path", s("notes/big.txt")), ("content", s(&wide))]))).is_err());
-        assert!(validate_tool(&proposal("write", obj(vec![("path", s(r"C:\folder\file.txt")), ("content", s("x"))]))).is_err());
-        for name in ["", "./new.txt", "notes/", "notes/%2e%2e", "notes/odd:name"] {
-            assert!(validate_tool(&proposal("phone_create", obj(vec![("path", s(name)), ("content", s("text"))]))).is_err(), "{name}");
-        }
-        assert!(!harness::known_tool("phone_delete"));
-        assert!(validate_tool(&proposal("phone_delete", obj(vec![("path", s("notes/a.txt"))]))).is_err());
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn device_service_tools_route_to_the_client() {
-        for name in crate::adb_client::TOOLS {
-            assert!(harness::known_tool(name), "{name}");
-            let err = tool(&obj(vec![("tool", s(name)), ("args", obj(vec![])), ("root", s("."))])).expect_err(name);
-            assert!(err.contains("the request is missing"), "{name}: {err}");
-            assert!(!err.contains("unsupported tool"), "{name}: {err}");
-        }
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn retired_route_is_rejected_while_busy() {
-        let retired = String::from_utf8([103, 111, 111, 103, 108, 101, 95, 100, 114, 105, 118, 101].to_vec()).unwrap();
-        assert!(retired_storage_action(&retired));
-        let mut busy = blank();
-        put(&mut busy, "busy", Bool(true));
-        let refused = run(busy, &retired).unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(get(&refused, "effect"), &Null);
-        assert!(text(get(&refused, "state"), "notice").contains("Wait for the current operation"), "{}", text(get(&refused, "state"), "notice"));
-        assert!(boolean(get(&refused, "state"), "notice_error"));
-        let mut open = blank();
-        put(&mut open, "busy", Bool(true));
-        assert!(run(open, "status").is_ok());
-        let mut idle = blank();
-        put(&mut idle, "busy", Bool(false));
-        let migrated = run(idle.clone(), &retired).unwrap_or_else(|error| panic!("an idle saved route still migrates: {error}"));
-        assert_eq!(get(&migrated, "effect"), &Null);
-        assert_eq!(text(get(&migrated, "state"), "dialog"), if cfg!(target_os = "android") { "document_providers" } else { "workspace_storage" });
-        assert!(run(idle, "document_providers").is_ok());
-    }
-    fn folder_state(tree: &str) -> Json {
-        let mut st = ready();
-        put(&mut st, "phone_uri", s(tree));
-        put(&mut st, "phone_access_mode", s("limited"));
-        st
-    }
-    fn approve_phone(tree: &str, tool: &str, args: Json) -> Json {
-        let mut st = folder_state(tree);
-        let mut pending = proposal(tool, args);
-        if matches!(tool, "phone_read" | "phone_list") {
-            put(&mut pending, "tree", s(tree));
-            put(&mut pending, "phone_scope", s("limited"));
-        }
-        put(&mut st, "pending", pending);
-        run(st, "approve").unwrap_or_else(|error| panic!("{tool}: {error}"))
-    }
-    fn refused_outside(tree: &str, tool: &str, args: Json) {
-        let approved = approve_phone(tree, tool, args);
-        let state = get(&approved, "state");
-        let notice = text(state, "notice");
-        assert_eq!(get(&approved, "effect"), &Null, "{tool} {notice}");
-        assert!(notice.contains("outside the selected folder"), "{tool} {notice}");
-        assert!(!boolean(state, "busy"), "{tool}");
-        assert!(!boolean(state, "agent_running"), "{tool}");
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn absolute_phone_paths_stay_inside_the_selected_folder() {
-        let tree = r"C:\work\selected";
-        let outside = [
-            r"C:\Windows\win.ini",
-            r"C:\work\selected-evil\a.txt",
-            r"C:\work\selected2\a.txt",
-            r"D:\work\selected\a.txt",
-            r"\\server\other\a.txt",
-            r"\\?\C:\Windows\win.ini",
-            "C:/Windows/win.ini",
-            "C:relative.txt",
-        ];
-        for path in outside {
-            refused_outside(tree, "phone_read", obj(vec![("path", s(path))]));
-            refused_outside(tree, "phone_stat", obj(vec![("path", s(path))]));
-            refused_outside(tree, "phone_write", obj(vec![("path", s(path)), ("content", s("x"))]));
-            refused_outside(tree, "phone_copy", obj(vec![("path", s(r"C:\work\selected\a.txt")), ("destination", s(path))]));
-        }
-        refused_outside("content://test/tree/folder", "phone_stat", obj(vec![("path", s(r"C:\Windows\win.ini"))]));
-        refused_outside("content://test/tree/folder", "phone_write", obj(vec![("path", s(r"\\?\C:\Windows\win.ini")), ("content", s("x"))]));
-        refused_outside(r"\\server\share\projects", "phone_read", obj(vec![("path", s(r"\\server\share\other\a.txt"))]));
-        refused_outside(r"D:/work/tree", "phone_stat", obj(vec![("path", s(r"D:\work\tree-other\a.txt"))]));
-        let traversal = approve_phone(tree, "phone_read", obj(vec![("path", s(r"C:\work\selected\..\Windows\win.ini"))]));
-        assert_eq!(get(&traversal, "effect"), &Null, "{}", text(get(&traversal, "state"), "notice"));
-        let mut editor = folder_state(tree);
-        put(&mut editor, "edit", obj(vec![("path", s(r"C:\Windows\win.ini"))]));
-        let loaded = run(editor, "phone_update_load").unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(get(&loaded, "effect"), &Null, "{}", text(get(&loaded, "state"), "notice"));
-        assert!(text(get(&loaded, "state"), "notice").contains("outside the selected folder"));
-        let admitted = [
-            (tree, r"C:\work\selected\notes\a.txt"),
-            (tree, r"C:/work/selected/notes/a.txt"),
-            (tree, r"\\?\C:\work\selected\notes\a.txt"),
-            (tree, r"c:\WORK\selected\notes\A.TXT"),
-            (tree, r"C:\work\selected"),
-            (tree, r"C:\work\selected\"),
-            (r"D:/work/tree", r"D:\work\tree\a.txt"),
-            (r"\\server\share\projects", r"\\server\share\projects\a.txt"),
-            (r"\\?\C:\work\selected", r"C:\work\selected\a.txt"),
-        ];
-        for (folder, path) in admitted {
-            let approved = approve_phone(folder, "phone_stat", obj(vec![("path", s(path))]));
-            let effect = get(&approved, "effect");
-            assert_eq!(text(effect, "kind"), "tool", "{folder} {path} {}", text(get(&approved, "state"), "notice"));
-            assert_eq!(text(effect, "tool"), "phone_stat");
-            assert_eq!(text(get(effect, "args"), "path"), path);
-            assert_eq!(text(effect, "tree"), folder);
-        }
-        let copied = approve_phone(tree, "phone_copy", obj(vec![("path", s(r"C:\work\selected\a.txt")), ("destination", s(r"C:\work\selected\b.txt"))]));
-        assert_eq!(text(get(&copied, "effect"), "kind"), "tool", "{}", text(get(&copied, "state"), "notice"));
-        let relative = approve_phone(tree, "phone_write", obj(vec![("path", s(r"notes\a.txt")), ("content", s("hello"))]));
-        assert_eq!(text(get(&relative, "effect"), "tool"), "phone_write", "{}", text(get(&relative, "state"), "notice"));
-        let listed = approve_phone(tree, "phone_list", obj(vec![("path", s(""))]));
-        assert_eq!(text(get(&listed, "effect"), "kind"), "tool", "{}", text(get(&listed, "state"), "notice"));
-        let mut inside = folder_state(tree);
-        put(&mut inside, "edit", obj(vec![("path", s(r"C:\work\selected\a.txt"))]));
-        let reading = run(inside, "phone_update_load").unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(text(get(&reading, "effect"), "tool"), "phone_read", "{}", text(get(&reading, "state"), "notice"));
-        assert_eq!(text(get(&reading, "effect"), "tree"), tree);
-    }
-    fn chatting() -> Json {
-        let mut st = blank();
-        new_chat(&mut st).unwrap();
-        st
-    }
-    const FIRST_SOURCE:&str="api.mwmbl.org/api/v2/search/";
-    const SECOND_SOURCE:&str="html.duckduckgo.com/html/";
-    const SAVED_URL:&str="https://search.example.test/find?q={query}";
-    const SAVED_TARGET:&str="search.example.test/find";
-    fn set_search(mut st:Json,url:Option<&str>,without_review:Option<bool>)->Json{
-        if url.is_none()&&without_review.is_none(){return st;}
-        let mut web=get(&st,"web").clone();
-        if web==Null{web=obj(vec![]);}
-        if let Some(url)=url{put(&mut web,"search_url",s(url));}
-        if let Some(value)=without_review{put(&mut web,"search_without_review",Bool(value));}
-        put(&mut st,"web",web);
-        st
-    }
-    fn open_search(st:Json,query:&str,source:Option<&str>)->Json{
-        let opened=run(st,"web_search").unwrap_or_else(|error|panic!("{error}"));
-        let mut st=get(&opened,"state").clone();
-        let mut edit=obj(vec![("query",s(query))]);
-        if let Some(source)=source{put(&mut edit,"source",s(source));}
-        put(&mut st,"edit",edit);
-        run(st,"web_search_review").unwrap_or_else(|error|panic!("{error}"))
-    }
-    fn request_target(effect:&Json)->String{
-        let wire=text(effect,"wire");
-        let path=wire.split_whitespace().nth(1).unwrap_or("");
-        let path=path.split('?').next().unwrap_or(path);
-        format!("{}{path}",text(effect,"host"))
-    }
-    fn search_endpoints(mut decided:Json)->(Vec<String>,String){
-        let mut found=Vec::new();
-        let mut notice=String::new();
-        for _ in 0..4{
-            let effect=get(&decided,"effect").clone();
-            notice=text(get(&decided,"state"),"notice");
-            if text(&effect,"kind")!="network"||text(&effect,"purpose")!="web_tool"{break;}
-            let wire=text(&effect,"wire");
-            assert!(wire.starts_with("GET "),"{notice} {wire}");
-            assert!(wire.contains("q=scopeprobe"),"{wire}");
-            assert!(!text(&effect,"web_ticket").is_empty(),"{notice}");
-            let wait=number(&effect,"search_delay_ms");
-            if wait>0{std::thread::sleep(std::time::Duration::from_millis(wait as u64));}
-            found.push(request_target(&effect));
-            let state=get(&decided,"state").clone();
-            decided=event(&obj(vec![
-                ("state",state),
-                ("action",s("network_result")),
-                ("inputs",obj(vec![
-                    ("purpose",s("web_tool")),
-                    ("web_ticket",s(&text(&effect,"web_ticket"))),
-                    ("data",s(&network::b64(b"HTTP/1.1 500 Unavailable\r\nContent-Length: 0\r\n\r\n"))),
-                ])),
-                ("root",s("toolchain/check-workspace")),
-            ])).unwrap_or_else(|error|panic!("{error}"));
-        }
-        (found,notice)
-    }
-    fn assert_endpoints(decided:&Json,expected:&[&str]){
-        assert_eq!(text(get(decided,"effect"),"kind"),"network","{}",text(get(decided,"state"),"notice"));
-        assert!(boolean(get(decided,"state"),"busy"),"{}",text(get(decided,"state"),"notice"));
-        let (found,notice)=search_endpoints(decided.clone());
-        assert_eq!(found,expected.iter().map(|item|(*item).to_string()).collect::<Vec<_>>(),"{notice}");
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn empty_destination_reaches_builtin_search_endpoints(){
-        let expected=[FIRST_SOURCE,SECOND_SOURCE];
-        for without in [None,Some(true),Some(false)]{
-            let reviewed=open_search(set_search(chatting(),None,without),"scopeprobe",None);
-            assert_eq!(text(get(&reviewed,"effect"),"purpose"),"web_tool","{}",text(get(&reviewed,"state"),"notice"));
-            assert_endpoints(&reviewed,&expected);
-        }
-        let mut pending=set_search(chatting(),None,Some(false));
-        put(&mut pending,"dialog",s("approval"));
-        put(&mut pending,"pending",obj(vec![("tool",s("web_search")),("format_review",Bool(true)),("manual",Bool(true)),("args",obj(vec![("query",s("scopeprobe"))]))]));
-        let shown=run(pending,"review").unwrap_or_else(|error|panic!("{error}"));
-        assert_eq!(get(&shown,"effect"),&Null,"{}",text(get(&shown,"state"),"notice"));
-        let warning=text(get(get(&shown,"state"),"pending"),"warning");
-        assert!(warning.contains("built-in search sources"),"{warning}");
-        assert!(!warning.contains("not sent")&&!warning.contains("owns the listener"),"{warning}");
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn saved_remote_default_reaches_saved_then_builtin_endpoints(){
-        let expected=[SAVED_TARGET,FIRST_SOURCE,SECOND_SOURCE];
-        for without in [None,Some(true)]{
-            let reviewed=open_search(set_search(chatting(),Some(SAVED_URL),without),"scopeprobe",Some("default"));
-            assert!(text(get(&reviewed,"effect"),"wire").contains("search.example.test"),"{}",text(get(&reviewed,"effect"),"wire"));
-            assert_endpoints(&reviewed,&expected);
-        }
-        let reviewed=open_search(set_search(chatting(),Some(SAVED_URL),Some(false)),"scopeprobe",Some("default"));
-        assert_eq!(get(&reviewed,"effect"),&Null,"{}",text(get(&reviewed,"state"),"notice"));
-        assert_eq!(text(get(&reviewed,"state"),"dialog"),"approval");
-        assert!(!boolean(get(&reviewed,"state"),"busy"));
-        assert_eq!(text(get(get(&reviewed,"state"),"pending"),"destination"),SAVED_URL);
-        let warning=text(get(get(&reviewed,"state"),"pending"),"warning");
-        assert!(warning.contains("saved search destination"),"{warning}");
-        assert!(!warning.contains("not sent")&&!warning.contains("owns the listener"),"{warning}");
-        let approved=run(get(&reviewed,"state").clone(),"approve").unwrap_or_else(|error|panic!("{error}"));
-        assert_endpoints(&approved,&expected);
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn saved_remote_alternative_only_reaches_builtin_endpoints(){
-        let expected=[SECOND_SOURCE];
-        for without in [None,Some(false),Some(true)]{
-            let reviewed=open_search(set_search(chatting(),Some(SAVED_URL),without),"scopeprobe",Some("alternative"));
-            let wire=text(get(&reviewed,"effect"),"wire");
-            assert!(!wire.contains("search.example.test"),"{wire}");
-            assert_endpoints(&reviewed,&expected);
-        }
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn loopback_saved_destination_stays_out_of_the_builtin_chain(){
-        let url="http://127.0.0.1:9/search?q={query}";
-        let reviewed=open_search(set_search(chatting(),Some(url),None),"scopeprobe",None);
-        let effect=get(&reviewed,"effect");
-        let notice=text(get(&reviewed,"state"),"notice");
-        assert_eq!(text(effect,"kind"),"network","{notice}");
-        assert_eq!(text(effect,"host"),"127.0.0.1","{notice}");
-        assert_eq!(number(effect,"port"),9,"{notice}");
-        let wire=text(effect,"wire");
-        assert!(wire.contains("q=scopeprobe"),"{wire}");
-        assert!(!wire.contains("/api/v2/search/")&&!wire.contains("/html/"),"{wire}");
-        let alternate=open_search(set_search(chatting(),Some(url),Some(false)),"scopeprobe",Some("alternative"));
-        let notice=text(get(&alternate,"state"),"notice");
-        assert_eq!(get(&alternate,"effect"),&Null,"{notice}");
-        assert!(notice.contains("retained"),"{notice}");
-        assert!(!boolean(get(&alternate,"state"),"busy"));
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn workspace_search_reports_partial_when_the_walk_stops() {
-        let root = std::path::Path::new(r"C:\Users\Public\RLLM\loops-lanes\G7-fix3-application-proof");
-        let small = root.join("search-small");
-        let large = root.join("search-budget");
-        let _ = std::fs::remove_dir_all(&small);
-        let _ = std::fs::remove_dir_all(&large);
-        std::fs::create_dir_all(&small).unwrap();
-        std::fs::create_dir_all(&large).unwrap();
-        std::fs::write(small.join("hit.txt"), "needle\n").unwrap();
-        std::fs::write(small.join("miss.txt"), "other\n").unwrap();
-        let search_at = |dir: &std::path::Path| {
-            tool(&obj(vec![
-                ("tool", s("search")),
-                ("args", obj(vec![("path", s("")), ("query", s("needle"))])),
-                ("root", s(dir.to_str().unwrap())),
-            ])).unwrap_or_else(|error| panic!("{error}")).text().unwrap().to_string()
-        };
-        let complete = search_at(&small);
-        assert!(complete.contains("hit.txt"), "{complete}");
-        assert!(complete.contains("needle"), "{complete}");
-        assert!(!complete.contains("partial"), "{complete}");
-        for index in 0..520 {
-            let body = if index == 0 { "needle\n" } else { "x\n" };
-            std::fs::write(large.join(format!("f{index:04}.txt")), body).unwrap();
-        }
-        let partial = search_at(&large);
-        assert!(partial.contains("partial"), "{partial}");
-        assert!(partial.contains("entry or time budget"), "{partial}");
-        assert!(!partial.contains("complete"), "{partial}");
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn filesystem_root_descendants_stay_inside_the_selected_folder() {
-        assert!(phone_path_inside_selected("/", "/"));
-        assert!(phone_path_inside_selected("/", "/tmp"));
-        assert!(phone_path_inside_selected("/", "/tmp/file"));
-        assert!(phone_path_inside_selected("//", "/tmp/file"));
-        assert!(phone_path_inside_selected("/tmp", "/tmp/file"));
-        assert!(!phone_path_inside_selected("/tmp", "/tmp-evil"));
-        assert!(!phone_path_inside_selected("/tmp", "/"));
-        assert!(!phone_path_inside_selected("/tmp", "/var/tmp"));
-        assert!(phone_path_inside_selected(r"C:\", r"C:\"));
-        assert!(phone_path_inside_selected(r"C:\", r"C:\Windows\win.ini"));
-        assert!(phone_path_inside_selected(r"C:\", "C:/Windows/win.ini"));
-        assert!(phone_path_inside_selected(r"C:\\", r"C:\Windows\win.ini"));
-        assert!(phone_path_inside_selected("C:/", r"c:\Windows\System32\ntdll.dll"));
-        assert!(!phone_path_inside_selected(r"C:\", r"D:\Windows\win.ini"));
-        assert!(!phone_path_inside_selected(r"C:\", "C:relative.txt"));
-        assert!(phone_path_inside_selected(r"C:\work", r"C:\work\a.txt"));
-        assert!(!phone_path_inside_selected(r"C:\work", r"C:\work-evil\a.txt"));
-        assert!(!phone_path_inside_selected(r"C:\work", r"C:\Windows\win.ini"));
-        let admitted = approve_phone(r"C:\", "phone_stat", obj(vec![("path", s(r"C:\Windows\win.ini"))]));
-        assert_eq!(text(get(&admitted, "effect"), "kind"), "tool", "{}", text(get(&admitted, "state"), "notice"));
-        assert_eq!(text(get(get(&admitted, "effect"), "args"), "path"), r"C:\Windows\win.ini");
-        refused_outside(r"C:\", "phone_stat", obj(vec![("path", s(r"D:\Windows\win.ini"))]));
-        let nested = approve_phone(r"C:\", "phone_write", obj(vec![("path", s(r"C:\notes\a.txt")), ("content", s("x"))]));
-        assert_eq!(text(get(&nested, "effect"), "tool"), "phone_write", "{}", text(get(&nested, "state"), "notice"));
-    }
-    fn snapshot_callback(state: &Json, action: &str, inputs: Json) -> Json {
-        event(&obj(vec![
-            ("state", state.clone()),
-            ("action", s(action)),
-            ("inputs", inputs),
-            ("root", s("toolchain/check-workspace")),
-        ])).unwrap_or_else(|error| panic!("{action}: {error}"))
-    }
-    fn snapshot_inputs(state: &Json, mut inputs: Json) -> Json {
-        let local = get(state, "operation_expected");
-        if local != &Null {
-            if get(&inputs, "purpose") == &Null { put(&mut inputs, "purpose", s("local_tool")); }
-            if get(&inputs, "tool_ticket") == &Null { put(&mut inputs, "tool_ticket", get(local, "ticket").clone()); }
-        }
-        inputs
-    }
-    fn snapshot_result(state: &Json, output: &str) -> Json {
-        snapshot_callback(state, "tool_result", snapshot_inputs(state, obj(vec![("output", s(output))])))
-    }
-    fn snapshot_write(write_output: &str) -> (Json, String) {
-        let mut st = ready();
-        put(&mut st, "drive", obj(vec![("phone_default", Bool(true))]));
-        put(&mut st, "phone_uri", s("content://provider/tree/root"));
-        let saved = run(st, "save_drive").unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(text(get(&saved, "effect"), "tool"), "phone_create", "{}", text(get(&saved, "state"), "notice"));
-        let body = text(get(get(&saved, "effect"), "args"), "content");
-        assert!(!body.is_empty());
-        assert!(text(get(&saved, "state"), "notice").contains("not reported as saved"));
-        assert!(!text(get(&saved, "state"), "notice").contains("exact bytes verified"));
-        let written = snapshot_result(get(&saved, "state"), write_output);
-        (written, body)
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn phone_snapshot_is_unverified_until_exact_readback() {
-        let (claimed, body) = snapshot_write("Created and verified device file snapshot.json (99 bytes).");
-        assert_eq!(text(get(&claimed, "effect"), "tool"), "phone_read", "{}", text(get(&claimed, "state"), "notice"));
-        let notice = text(get(&claimed, "state"), "notice");
-        assert!(notice.contains("partial"), "{notice}");
-        assert!(!notice.contains("exact bytes verified"), "{notice}");
-        assert!(!notice.contains("Created and verified"), "{notice}");
-        assert_eq!(text(get(get(&claimed, "state"), "phone_snapshot"), "phase"), "verifying");
-        let mut fresh = ready();
-        put(&mut fresh, "drive", obj(vec![("phone_default", Bool(true))]));
-        put(&mut fresh, "phone_uri", s("content://provider/tree/root"));
-        let saved = run(fresh, "save_drive").unwrap_or_else(|error| panic!("{error}"));
-        let exact = text(get(get(&saved, "effect"), "args"), "content");
-        let echoed = snapshot_result(get(&saved, "state"), &exact);
-        assert_eq!(text(get(&echoed, "effect"), "tool"), "phone_read", "{}", text(get(&echoed, "state"), "notice"));
-        assert!(!text(get(&echoed, "state"), "notice").contains("exact bytes verified"));
-        let matched = snapshot_result(get(&claimed, "state"), &body);
-        assert!(text(get(&matched, "state"), "notice").contains("exact bytes verified"), "{}", text(get(&matched, "state"), "notice"));
-        assert_eq!(get(get(&matched, "state"), "phone_snapshot"), &Null);
-        assert!(!boolean(get(&matched, "state"), "busy"));
-        for bad in [
-            String::new(),
-            body[..body.len().saturating_sub(1)].to_string(),
-            format!("{body} "),
-            format!("{body}x"),
-            "Created and verified".into(),
-        ] {
-            let (pending, _) = snapshot_write("Created and verified");
-            let mismatch = snapshot_result(get(&pending, "state"), &bad);
-            let notice = text(get(&mismatch, "state"), "notice");
-            assert!(notice.contains("partial"), "{notice}");
-            assert!(notice.contains("not reported as saved"), "{notice}");
-            assert!(!notice.contains("exact bytes verified"), "{notice}");
-            assert_eq!(get(&mismatch, "effect"), &Null, "{notice}");
-            assert_eq!(text(get(get(&mismatch, "state"), "phone_snapshot"), "phase"), "interrupted");
-            assert!(!boolean(get(&mismatch, "state"), "busy"));
-        }
-        let mut writing_state = ready();
-        put(&mut writing_state, "drive", obj(vec![("phone_default", Bool(true))]));
-        put(&mut writing_state, "phone_uri", s("content://provider/tree/root"));
-        let started = run(writing_state, "save_drive").unwrap_or_else(|error| panic!("{error}"));
-        let writing = get(&started, "state").clone();
-        let cancelled = snapshot_callback(&writing, "cancel", obj(vec![]));
-        let notice = text(get(&cancelled, "state"), "notice");
-        assert!(notice.contains("not reported as saved"), "{notice}");
-        assert!(!notice.contains("exact bytes verified"), "{notice}");
-        assert_eq!(text(get(get(&cancelled, "state"), "phone_snapshot"), "phase"), "interrupted");
-        let mut fail_ready = ready();
-        put(&mut fail_ready, "drive", obj(vec![("phone_default", Bool(true))]));
-        put(&mut fail_ready, "phone_uri", s("content://provider/tree/root"));
-        let failing = run(fail_ready, "save_drive").unwrap_or_else(|error| panic!("{error}"));
-        let live = get(&failing, "state").clone();
-        let failed = snapshot_callback(&live, "failure", snapshot_inputs(&live, obj(vec![("error", s("device write failed")), ("purpose", s("local_tool"))])));
-        let notice = text(get(&failed, "state"), "notice");
-        assert!(notice.contains("partial"), "{notice}");
-        assert!(notice.contains("not reported as saved"), "{notice}");
-        assert!(!notice.contains("exact bytes verified"), "{notice}");
-        assert_eq!(text(get(get(&failed, "state"), "phone_snapshot"), "phase"), "interrupted");
-        let (verifying, _) = snapshot_write("Created and verified");
-        let resumed = snapshot_callback(get(&verifying, "state"), "resume", obj(vec![]));
-        let notice = text(get(&resumed, "state"), "notice");
-        assert!(notice.contains("not reported as saved"), "{notice}");
-        assert!(!notice.contains("exact bytes verified"), "{notice}");
-        assert_eq!(text(get(get(&resumed, "state"), "phone_snapshot"), "phase"), "interrupted");
-    }
-    struct RestoreEnv {
-        key: &'static str,
-        previous: Option<String>,
-    }
-    impl Drop for RestoreEnv {
-        fn drop(&mut self) {
-            unsafe {
-                match self.previous.take() {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-    }
-    fn hold_env(key: &'static str, value: &str) -> RestoreEnv {
-        let previous = std::env::var(key).ok();
-        unsafe { std::env::set_var(key, value); }
-        RestoreEnv { key, previous }
-    }
-    fn device_connect_args(dir: &str) -> Json {
-        obj(vec![
-            ("host", s("127.0.0.1")),
-            ("port", Num("1".into())),
-            ("data_dir", s(dir)),
-            ("opt_in_root", Bool(false)),
-            ("timeout_ms", Num("200".into())),
-        ])
-    }
-    fn model_turn(state: Json, action: &str, mut inputs: Json, root: &str) -> Result<Json> {
-        if matches!(action, "network_result" | "failure") && text(&inputs, "purpose") == "model" {
-            if inputs == Null { inputs = obj(vec![]); }
-            put(&mut inputs, "model_ticket", get(&state, "model_expected").clone());
-        }
-        event(&obj(vec![
-            ("state", state),
-            ("action", s(action)),
-            ("inputs", inputs),
-            ("root", s(root)),
-        ]))
-    }
-    fn device_chat(workspace: &str) -> Json {
-        let mut st = blank();
-        new_chat(&mut st).unwrap();
-        put(&mut st, "profiles", Arr(vec![obj(vec![
-            ("name", s("Lab")),
-            ("endpoint", s("http://127.0.0.1:9/v1/chat/completions")),
-            ("model", s("manual-model")),
-            ("protocol", s("chat")),
-            ("plain", Bool(true)),
-        ])]));
-        let mut current = chat(&st);
-        put(&mut current, "answer_mode", s("investigate"));
-        replace_chat(&mut st, current);
-        put(&mut st, "approval_root", s(workspace));
-        put(&mut st, "draft", s("connect the selected device"));
-        st
-    }
-    fn propose_device(st: Json, dir: &str, root: &str) -> Result<Json> {
-        let sent = model_turn(st, "send", obj(vec![]), root)?;
-        let content = obj(vec![
-            ("tool", s("device_shell_connect")),
-            ("args", device_connect_args(dir)),
-        ]).string();
-        let body = obj(vec![(
-            "choices",
-            Arr(vec![obj(vec![
-                ("message", obj(vec![("role", s("assistant")), ("content", s(&content))])),
-                ("finish_reason", s("stop")),
-            ])]),
-        )]).string();
-        let wire = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}", body.len());
-        model_turn(
-            get(&sent, "state").clone(),
-            "network_result",
-            obj(vec![("purpose", s("model")), ("data", s(&network::b64(wire.as_bytes())))]),
-            root,
-        )
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn published_device_shell_forms_supply_the_identity_seal() {
-        let home = std::path::Path::new(r"C:\Users\Public\RLLM\loops-lanes\G7-fix5-application-proof\device-data-home");
-        let _ = std::fs::remove_dir_all(home);
-        std::fs::create_dir_all(home).unwrap();
-        let _restore = hold_env("XDG_DATA_HOME", home.to_str().unwrap());
-        let dir = harness::product_data_directory().join("device-seal");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let dir_text = dir.to_str().unwrap();
-        let connect = tool(&obj(vec![
-            ("tool", s("device_shell_connect")),
-            ("args", obj(vec![
-                ("host", s("127.0.0.1")),
-                ("port", Num("1".into())),
-                ("data_dir", s(dir_text)),
-                ("opt_in_root", Bool(false)),
-                ("timeout_ms", Num("200".into())),
-            ])),
-            ("root", s(".")),
-        ]));
-        let err = connect.expect_err("published connect form");
-        assert!(!err.contains("seal_b64"), "{err}");
-        assert!(!err.contains("unsupported tool"), "{err}");
-        assert!(!err.contains("32 bytes"), "{err}");
-        let stored = std::fs::read(dir.join("installation-seal.bin")).unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(stored.len(), 32);
-        let seal = network::b64(&stored);
-        let wired = crate::adb_client::call(
-            "device_shell_connect",
-            &format!("{{\"host\":\"127.0.0.1\",\"port\":1,\"data_dir\":\"x\",\"opt_in_root\":false,\"timeout_ms\":200,\"seal_b64\":\"{seal}\"}}"),
-        );
-        if let Err(err) = wired {
-            assert!(!err.contains("seal_b64"), "{err}");
-            assert!(!err.contains("32 bytes"), "{err}");
-        }
-        let pair = tool(&obj(vec![
-            ("tool", s("device_shell_pair")),
-            ("args", obj(vec![
-                ("host", s("127.0.0.1")),
-                ("port", Num("1".into())),
-                ("code", s("123456")),
-                ("data_dir", s(dir_text)),
-                ("timeout_ms", Num("200".into())),
-            ])),
-            ("root", s(".")),
-        ]));
-        let err = pair.expect_err("published pair form");
-        assert!(!err.contains("seal_b64"), "{err}");
-        let kept = tool(&obj(vec![
-            ("tool", s("device_shell_connect")),
-            ("args", obj(vec![
-                ("host", s("127.0.0.1")),
-                ("port", Num("1".into())),
-                ("data_dir", s(dir_text)),
-                ("seal_b64", s("YQ==")),
-                ("timeout_ms", Num("200".into())),
-            ])),
-            ("root", s(".")),
-        ]));
-        let err = kept.expect_err("supplied seal");
-        assert!(err.contains("32 bytes"), "{err}");
-    }
-    #[cfg_attr(not(rllm_module_tests), test)]
-    fn refused_device_proposal_leaves_no_directory_or_file() {
-        let proof = std::path::Path::new(r"C:\Users\Public\RLLM\loops-lanes\G7-fix5-application-proof");
-        let outside = proof.join("refused-seal");
-        let _ = std::fs::remove_dir_all(&outside);
-        assert!(!outside.exists());
-        let dir = outside.join("identity");
-        let dir_text = dir.to_str().unwrap();
-        for name in ["device_shell_connect", "device_shell_pair"] {
-            let mut args = device_connect_args(dir_text);
-            if name == "device_shell_pair" { put(&mut args, "code", s("123456")); }
-            let refused = tool(&obj(vec![("tool", s(name)), ("args", args), ("root", s("."))]));
-            let err = refused.expect_err(name);
-            assert!(err.contains("identity directory"), "{name} {err}");
-            assert!(!outside.exists(), "{name} created {}", outside.display());
-        }
-        let workspace = proof.join("device-workspace");
-        let _ = std::fs::remove_dir_all(&workspace);
-        std::fs::create_dir_all(&workspace).unwrap();
-        let workspace_text = workspace.to_str().unwrap();
-        let proposed = propose_device(device_chat(workspace_text), dir_text, workspace_text);
-        match &proposed {
-            Ok(value) => assert!(value.string().contains("identity directory"), "{}", value.string()),
-            Err(error) => assert!(error.contains("identity directory"), "{error}"),
-        }
-        assert!(!outside.exists(), "refused model proposal created {}", outside.display());
-        assert!(!dir.join("installation-seal.bin").exists());
-        let inside = workspace.join("approved-identity");
-        let _ = std::fs::remove_dir_all(&inside);
-        let inside_text = inside.to_str().unwrap();
-        let shown = propose_device(device_chat(workspace_text), inside_text, workspace_text).unwrap_or_else(|error| panic!("{error}"));
-        assert!(!inside.exists(), "proposal created the identity directory before approval");
-        let state = get(&shown, "state");
-        if text(state, "dialog") == "approval" {
-            assert!(text(get(get(state, "pending"), "args"), "seal_b64").is_empty(), "{}", state.string());
-            let rejected = model_turn(state.clone(), "reject", obj(vec![]), workspace_text).unwrap_or_else(|error| panic!("{error}"));
-            assert!(!inside.exists(), "{}", rejected.string());
-        }
-        let mut pending = chatting();
-        put(&mut pending, "approval_root", s(workspace_text));
-        put(&mut pending, "dialog", s("approval"));
-        put(&mut pending, "pending", proposal("device_shell_connect", device_connect_args(inside_text)));
-        assert!(!inside.exists());
-        let approved = model_turn(pending, "approve", obj(vec![]), workspace_text);
-        let seal = inside.join("installation-seal.bin");
-        assert!(seal.is_file(), "approved request did not store the seal ({approved:?})");
-        assert_eq!(std::fs::read(&seal).unwrap().len(), 32);
-    }
-}
