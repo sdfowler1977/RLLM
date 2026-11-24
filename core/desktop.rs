@@ -1551,6 +1551,16 @@ impl HwParams {
         params.rmask = 0x000f_ffff;
         params
     }
+
+    /// Playback uses the session rate. Capture keeps the 16 kHz request above.
+    fn playback(rate: u32) -> HwParams {
+        let mut params = HwParams::request();
+        let period = (rate / 50).max(1);
+        let exact = |value: u32| Interval { min: value, max: value, flags: 4 };
+        params.intervals[3] = exact(rate);
+        params.intervals[5] = exact(period);
+        params
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1591,6 +1601,74 @@ impl SwParams {
             tstamp_type: 0,
             reserved: [0; 56],
         }
+    }
+}
+
+/// Kernel playback at the rate the speech session returned. Capture devices stay on the path above.
+#[cfg(target_os = "linux")]
+struct KernelPlayback {
+    file: std::fs::File,
+}
+
+#[cfg(target_os = "linux")]
+impl KernelPlayback {
+    fn open(rate: u32) -> Result<KernelPlayback> {
+        for card in 0..8 {
+            for device in 0..4 {
+                let path = format!("/dev/snd/pcmC{card}D{device}p");
+                if let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(&path) {
+                    if let Ok(playback) = KernelPlayback::configure(file, rate) {
+                        return Ok(playback);
+                    }
+                }
+            }
+        }
+        Err("no speaker is available on this host".into())
+    }
+
+    fn configure(file: std::fs::File, rate: u32) -> Result<KernelPlayback> {
+        use std::os::fd::AsRawFd;
+        let mut hw = HwParams::playback(rate);
+        ioctl_rw(file.as_raw_fd(), b'A', 0x10, &mut hw)?;
+        ioctl_rw(file.as_raw_fd(), b'A', 0x11, &mut hw)?;
+        let period = (rate / 50).max(1) as u64;
+        let mut sw = SwParams::request();
+        sw.avail_min = period;
+        sw.start_threshold = 1;
+        sw.stop_threshold = 1 << 30;
+        ioctl_rw(file.as_raw_fd(), b'A', 0x13, &mut sw)?;
+        ioctl_none(file.as_raw_fd(), b'A', 0x40)?;
+        ioctl_none(file.as_raw_fd(), b'A', 0x42)?;
+        Ok(KernelPlayback { file })
+    }
+
+    fn write(&mut self, pcm: &[u8]) -> Result<()> {
+        use std::os::fd::AsRawFd;
+        let mut rest = pcm;
+        while rest.len() >= 2 {
+            let frames = (rest.len() / 2) as u64;
+            let mut transfer = Xfer { result: 0, data: rest.as_ptr() as *mut u8, frames };
+            let request = ioc(1, b'A' as u32, 0x50, std::mem::size_of::<Xfer>() as u32);
+            let rc = unsafe { ioctl(self.file.as_raw_fd(), request, &mut transfer) };
+            if rc < 0 {
+                return Err(format!("speaker write failed ({})", std::io::Error::last_os_error()));
+            }
+            let got = if transfer.result > 0 { transfer.result as usize } else { rc as usize };
+            if got == 0 {
+                return Err("the speaker accepted no samples".into());
+            }
+            let bytes = got.saturating_mul(2).min(rest.len());
+            rest = &rest[bytes..];
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for KernelPlayback {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        let _ = ioctl_none(self.file.as_raw_fd(), b'A', 0x43);
     }
 }
 
@@ -2310,11 +2388,407 @@ impl Read for QueueInput {
     }
 }
 
-fn microphone(effect: &Json, state: &mut Json, root: &str) -> Result<String> {
+/// System speaker for returned speech. The queue callback releases each buffer after it plays.
+#[cfg(target_os = "macos")]
+struct QueueOutput {
+    queue: usize,
+    started: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl QueueOutput {
+    fn open(rate: u32) -> Result<Box<QueueOutput>> {
+        #[repr(C)]
+        struct AudioFormat {
+            rate: f64,
+            kind: u32,
+            flags: u32,
+            bytes_per_packet: u32,
+            frames_per_packet: u32,
+            bytes_per_frame: u32,
+            channels: u32,
+            bits: u32,
+            reserved: u32,
+        }
+        type Callback = unsafe extern "C" fn(*mut std::ffi::c_void, usize, *mut QueueBuffer);
+        #[link(name = "AudioToolbox", kind = "framework")]
+        unsafe extern "C" {
+            fn AudioQueueNewOutput(format: *const AudioFormat, callback: Callback, user: *mut std::ffi::c_void, runloop: *mut std::ffi::c_void, mode: *const i8, flags: u32, queue: *mut usize) -> i32;
+        }
+        unsafe extern "C" fn played(_user: *mut std::ffi::c_void, queue: usize, buffer: *mut QueueBuffer) {
+            #[link(name = "AudioToolbox", kind = "framework")]
+            unsafe extern "C" {
+                fn AudioQueueFreeBuffer(queue: usize, buffer: *mut QueueBuffer) -> i32;
+            }
+            if !buffer.is_null() {
+                AudioQueueFreeBuffer(queue, buffer);
+            }
+        }
+        let format = AudioFormat {
+            rate: rate as f64,
+            kind: u32::from_be_bytes(*b"lpcm"),
+            flags: 4 | 8,
+            bytes_per_packet: 2,
+            frames_per_packet: 1,
+            bytes_per_frame: 2,
+            channels: 1,
+            bits: 16,
+            reserved: 0,
+        };
+        let mut queue = 0usize;
+        let status = unsafe { AudioQueueNewOutput(&format, played, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null(), 0, &mut queue) };
+        if status != 0 || queue == 0 {
+            return Err(format!("the system speaker could not be opened ({status})"));
+        }
+        Ok(Box::new(QueueOutput { queue, started: false }))
+    }
+
+    fn write(&mut self, pcm: &[u8]) -> Result<()> {
+        #[link(name = "AudioToolbox", kind = "framework")]
+        unsafe extern "C" {
+            fn AudioQueueAllocateBuffer(queue: usize, size: u32, buffer: *mut *mut QueueBuffer) -> i32;
+            fn AudioQueueEnqueueBuffer(queue: usize, buffer: *mut QueueBuffer, packets: u32, desc: *const std::ffi::c_void) -> i32;
+            fn AudioQueueStart(queue: usize, time: *const std::ffi::c_void) -> i32;
+            fn AudioQueueFreeBuffer(queue: usize, buffer: *mut QueueBuffer) -> i32;
+        }
+        if pcm.len() < 2 || pcm.len() % 2 != 0 {
+            return Ok(());
+        }
+        let mut buffer = std::ptr::null_mut();
+        let allocated = unsafe { AudioQueueAllocateBuffer(self.queue, pcm.len() as u32, &mut buffer) };
+        if allocated != 0 || buffer.is_null() {
+            return Err(format!("the system speaker could not be opened ({allocated})"));
+        }
+        unsafe {
+            let dest = std::slice::from_raw_parts_mut((*buffer).audio_data, pcm.len());
+            dest.copy_from_slice(pcm);
+            (*buffer).byte_size = pcm.len() as u32;
+            let queued = AudioQueueEnqueueBuffer(self.queue, buffer, 0, std::ptr::null());
+            if queued != 0 {
+                AudioQueueFreeBuffer(self.queue, buffer);
+                return Err(format!("the system speaker could not be started ({queued})"));
+            }
+            if !self.started {
+                let started = AudioQueueStart(self.queue, std::ptr::null());
+                if started != 0 {
+                    return Err(format!("the system speaker could not be started ({started})"));
+                }
+                self.started = true;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for QueueOutput {
+    fn drop(&mut self) {
+        #[link(name = "AudioToolbox", kind = "framework")]
+        unsafe extern "C" {
+            fn AudioQueueStop(queue: usize, immediate: u8) -> i32;
+            fn AudioQueueDispose(queue: usize, immediate: u8) -> i32;
+        }
+        unsafe {
+            AudioQueueStop(self.queue, 1);
+            AudioQueueDispose(self.queue, 1);
+        }
+    }
+}
+
+/// System wave speaker. Buffers stay owned here so a write can queue without waiting for the previous one to finish.
+#[cfg(windows)]
+struct WaveOutput {
+    handle: usize,
+    buffers: Vec<Vec<u8>>,
+    headers: Vec<WaveHdr>,
+    busy: Vec<bool>,
+}
+
+#[cfg(windows)]
+impl WaveOutput {
+    fn open(rate: u32) -> Result<Box<WaveOutput>> {
+        #[link(name = "winmm")]
+        unsafe extern "system" {
+            fn waveOutGetNumDevs() -> u32;
+            fn waveOutOpen(handle: *mut usize, device: u32, format: *const WaveFormat, callback: usize, instance: usize, flags: u32) -> u32;
+            fn waveOutPrepareHeader(handle: usize, header: *mut WaveHdr, size: u32) -> u32;
+        }
+        #[repr(C)]
+        struct WaveFormat {
+            format: u16,
+            channels: u16,
+            rate: u32,
+            average: u32,
+            align: u16,
+            bits: u16,
+            size: u16,
+        }
+        if unsafe { waveOutGetNumDevs() } == 0 {
+            return Err("no speaker is available on this host".into());
+        }
+        let format = WaveFormat {
+            format: 1,
+            channels: 1,
+            rate,
+            average: rate.saturating_mul(2),
+            align: 2,
+            bits: 16,
+            size: 0,
+        };
+        let mut handle = 0usize;
+        let status = unsafe { waveOutOpen(&mut handle, u32::MAX, &format, 0, 0, 0x00010000) };
+        if status != 0 || handle == 0 {
+            return Err(format!("the speaker could not be opened ({status})"));
+        }
+        let mut output = Box::new(WaveOutput {
+            handle,
+            buffers: (0..8).map(|_| vec![0u8; 131072]).collect(),
+            headers: (0..8).map(|_| WaveHdr {
+                data: std::ptr::null_mut(),
+                length: 131072,
+                recorded: 0,
+                user: 0,
+                flags: 0,
+                loops: 0,
+                next: std::ptr::null_mut(),
+                reserved: 0,
+            }).collect(),
+            busy: vec![false; 8],
+        });
+        let pointers: Vec<*mut u8> = output.buffers.iter_mut().map(|buffer| buffer.as_mut_ptr()).collect();
+        for (index, data) in pointers.into_iter().enumerate() {
+            output.headers[index].data = data;
+            output.headers[index].length = output.buffers[index].len() as u32;
+        }
+        let prepared = unsafe {
+            let mut failed = 0u32;
+            for header in &mut output.headers {
+                let header = header as *mut WaveHdr;
+                let status = waveOutPrepareHeader(output.handle, header, std::mem::size_of::<WaveHdr>() as u32);
+                if status != 0 {
+                    failed = status;
+                    break;
+                }
+            }
+            failed
+        };
+        if prepared != 0 {
+            return Err(format!("the speaker could not be started ({prepared})"));
+        }
+        Ok(output)
+    }
+
+    fn write(&mut self, pcm: &[u8]) -> Result<()> {
+        #[link(name = "winmm")]
+        unsafe extern "system" {
+            fn waveOutWrite(handle: usize, header: *mut WaveHdr, size: u32) -> u32;
+        }
+        let mut offset = 0usize;
+        while offset + 1 < pcm.len() {
+            let mut slot = None;
+            for _ in 0..5 {
+                for index in 0..self.busy.len() {
+                    if self.busy[index] {
+                        let flags = self.headers[index].flags;
+                        if flags & 0x00000001 != 0 && flags & 0x00000010 == 0 {
+                            self.busy[index] = false;
+                        }
+                    }
+                }
+                slot = self.busy.iter().position(|busy| !*busy);
+                if slot.is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let Some(slot) = slot else {
+                // Earlier speech is still queued. Keep the microphone moving.
+                return Ok(());
+            };
+            let room = self.buffers[slot].len() & !1;
+            let n = (pcm.len() - offset).min(room) & !1;
+            if n < 2 {
+                break;
+            }
+            self.buffers[slot][..n].copy_from_slice(&pcm[offset..offset + n]);
+            self.headers[slot].length = n as u32;
+            self.headers[slot].recorded = 0;
+            let status = unsafe { waveOutWrite(self.handle, &mut self.headers[slot], std::mem::size_of::<WaveHdr>() as u32) };
+            if status != 0 {
+                return Err(format!("the speaker could not be started ({status})"));
+            }
+            self.busy[slot] = true;
+            offset += n;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WaveOutput {
+    fn drop(&mut self) {
+        #[link(name = "winmm")]
+        unsafe extern "system" {
+            fn waveOutReset(handle: usize) -> u32;
+            fn waveOutUnprepareHeader(handle: usize, header: *mut WaveHdr, size: u32) -> u32;
+            fn waveOutClose(handle: usize) -> u32;
+        }
+        unsafe {
+            waveOutReset(self.handle);
+            for header in &mut self.headers {
+                waveOutUnprepareHeader(self.handle, header as *mut WaveHdr, std::mem::size_of::<WaveHdr>() as u32);
+            }
+            waveOutClose(self.handle);
+        }
+    }
+}
+
+#[derive(Debug)]
+enum CaptureDone {
+    Utterance(String),
+    SpeechStopped,
+}
+
+trait SpeechOut {
+    fn play(&mut self, rate: u32, pcm: &[u8]) -> Result<()>;
+}
+
+struct LiveSpeaker {
+    rate: u32,
+    #[cfg(windows)]
+    output: Option<Box<WaveOutput>>,
+    #[cfg(target_os = "linux")]
+    output: Option<KernelPlayback>,
+    #[cfg(target_os = "macos")]
+    output: Option<Box<QueueOutput>>,
+}
+
+impl LiveSpeaker {
+    fn new() -> LiveSpeaker {
+        LiveSpeaker {
+            rate: 0,
+            #[cfg(windows)]
+            output: None,
+            #[cfg(target_os = "linux")]
+            output: None,
+            #[cfg(target_os = "macos")]
+            output: None,
+        }
+    }
+}
+
+impl SpeechOut for LiveSpeaker {
+    fn play(&mut self, rate: u32, pcm: &[u8]) -> Result<()> {
+        if pcm.len() < 2 {
+            return Ok(());
+        }
+        if self.rate != rate {
+            #[cfg(windows)]
+            {
+                self.output = None;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                self.output = None;
+            }
+            #[cfg(target_os = "macos")]
+            {
+                self.output = None;
+            }
+            self.rate = rate;
+        }
+        #[cfg(windows)]
+        {
+            if self.output.is_none() {
+                self.output = Some(WaveOutput::open(rate)?);
+            }
+            return self.output.as_mut().expect("speaker").write(pcm);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if self.output.is_none() {
+                self.output = Some(KernelPlayback::open(rate)?);
+            }
+            return self.output.as_mut().expect("speaker").write(pcm);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if self.output.is_none() {
+                self.output = Some(QueueOutput::open(rate)?);
+            }
+            return self.output.as_mut().expect("speaker").write(pcm);
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            let _ = (rate, pcm);
+            Err("no speaker is available on this host".into())
+        }
+    }
+}
+
+/// playback24 is the session rate. playback is the narrower copy and is used only when the wide buffer is absent.
+fn take_playback(value: &Json) -> Option<(u32, Vec<u8>)> {
+    let wide = text(value, "playback24");
+    let narrow = text(value, "playback");
+    let (encoded, rate) = if !wide.is_empty() {
+        let rate = number(value, "speech_rate");
+        (wide, if (8_000..=96_000).contains(&rate) { rate as u32 } else { 24_000 })
+    } else if !narrow.is_empty() {
+        let rate = number(value, "playback_rate");
+        (narrow, if (8_000..=96_000).contains(&rate) { rate as u32 } else { 16_000 })
+    } else {
+        return None;
+    };
+    let pcm = network::unbase64(&encoded).ok()?;
+    if pcm.len() < 2 || pcm.len() % 2 != 0 || pcm.len() > 256 * 1024 {
+        return None;
+    }
+    Some((rate, pcm))
+}
+
+/// Utterance capture still ends on the lease or on ready. Speech keeps the microphone open and plays each returned buffer.
+fn pull_microphone(frame: usize, deadline: std::time::Instant, speech: bool, recorder: &mut Recorder, feed: &mut dyn FnMut(&[u8]) -> Result<Json>, player: &mut dyn SpeechOut) -> Result<CaptureDone> {
+    let mut speech = speech;
+    let fed_before = CAPTURED_FRAMES.load(std::sync::atomic::Ordering::Relaxed);
+    loop {
+        if CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(CANCELLED.into());
+        }
+        if !speech && std::time::Instant::now() >= deadline {
+            return Err("the microphone lease expired before an utterance completed".into());
+        }
+        let read_deadline = if speech { std::time::Instant::now() + std::time::Duration::from_secs(2) } else { deadline };
+        let bytes = recorder.fill(frame, read_deadline)?;
+        if bytes.len() < 2 || bytes.len() % 2 != 0 {
+            return Err(format!(
+                "the microphone source ended after {} frames without an utterance",
+                CAPTURED_FRAMES.load(std::sync::atomic::Ordering::Relaxed) - fed_before
+            ));
+        }
+        CAPTURED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let value = feed(&bytes)?;
+        if speech || boolean(&value, "speech") {
+            speech = true;
+            if let Some((rate, pcm)) = take_playback(&value) {
+                player.play(rate, &pcm)?;
+            }
+            if boolean(&value, "stopped") {
+                return Ok(CaptureDone::SpeechStopped);
+            }
+            continue;
+        }
+        if boolean(&value, "ready") {
+            return Ok(CaptureDone::Utterance(text(&value, "receipt")));
+        }
+    }
+}
+
+fn microphone(effect: &Json, state: &mut Json, root: &str) -> Result<CaptureDone> {
     let ticket = text(effect, "voice_audio_ticket");
     let session = text(effect, "voice_session");
     let frame = number(effect, "frame_bytes").clamp(2, 640) as usize;
     let lease = number(effect, "voice_lease_ms");
+    let speech = boolean(effect, "speech");
     let opening = core_event(
         state,
         root,
@@ -2323,24 +2797,10 @@ fn microphone(effect: &Json, state: &mut Json, root: &str) -> Result<String> {
     )?;
     *state = opening.get("state")?.clone();
     let mut recorder = Recorder::open()?;
-    let fed_before = CAPTURED_FRAMES.load(std::sync::atomic::Ordering::Relaxed);
     let started = std::time::Instant::now();
     let deadline = started + std::time::Duration::from_millis(if lease > 0 { lease as u64 } else { SILENCE_MS as u64 });
-    loop {
-        if CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(CANCELLED.into());
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err("the microphone lease expired before an utterance completed".into());
-        }
-        let bytes = recorder.fill(frame, deadline)?;
-        if bytes.len() < 2 || bytes.len() % 2 != 0 {
-            return Err(format!(
-                "the microphone source ended after {} frames without an utterance",
-                CAPTURED_FRAMES.load(std::sync::atomic::Ordering::Relaxed) - fed_before
-            ));
-        }
-        CAPTURED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut player = LiveSpeaker::new();
+    pull_microphone(frame, deadline, speech, &mut recorder, &mut |bytes| {
         let answer = parse(&envelope(&obj(vec![
             ("op", s("voice_audio_feed")),
             ("voice_audio_ticket", s(&ticket)),
@@ -2351,11 +2811,8 @@ fn microphone(effect: &Json, state: &mut Json, root: &str) -> Result<String> {
         if let Ok(error) = answer.get("error") {
             return Err(error.text().unwrap_or("the core refused the microphone frame").to_string());
         }
-        let value = answer.get("value")?;
-        if boolean(value, "ready") {
-            return Ok(text(value, "receipt"));
-        }
-    }
+        Ok(answer.get("value")?.clone())
+    }, &mut player)
 }
 
 /// The core keeps operation ownership in state and names it on the effect, so the
@@ -2483,17 +2940,29 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
                 }
                 inputs = callback;
             }
+            "media_playback_stop" if boolean(&effect, "voice_only") => {
+                // The speech speaker is closed when the microphone loop returns.
+                return Ok(reply.get("ui")?.clone());
+            }
             "voice_listen" => {
-                // The core segments the utterance; the host only supplies bytes
-                // and replays the receipt it was given.
+                // An utterance returns the receipt the core minted. Speech stays open,
+                // plays each returned buffer, and ends only when that session stops.
                 match microphone(&effect, state, root) {
-                    Ok(receipt) => {
+                    Ok(CaptureDone::Utterance(receipt)) => {
                         action = "voice_audio_result".into();
                         inputs = obj(vec![
                             ("voice_audio_ticket", get(&effect, "voice_audio_ticket").clone()),
                             ("voice_session", get(&effect, "voice_session").clone()),
                             ("receipt", s(&receipt)),
                         ]);
+                    }
+                    Ok(CaptureDone::SpeechStopped) => {
+                        action = "voice_session_stop".into();
+                        inputs = obj(vec![]);
+                    }
+                    Err(error) if boolean(&effect, "speech") && error == CANCELLED => {
+                        action = "voice_session_stop".into();
+                        inputs = obj(vec![]);
                     }
                     Err(error) => {
                         action = "voice_audio_failure".into();
@@ -5614,342 +6083,6 @@ fn prove(root: &str, tool: &str, args: Json) -> Result<String> {
     device_folder_tool(&obj(vec![("tool", s(tool)), ("args", args)]), root).map_err(|error| format!("{tool}: {error}"))
 }
 
-fn refuse_outside(root: &str, tool: &str, path: &str, lines: &mut Vec<String>, label: &str) -> Result<()> {
-    match prove(root, tool, obj(vec![("path", s(path))])) {
-        Err(error) => {
-            if !error.to_ascii_lowercase().contains("selected folder") {
-                return Err(format!("{label} was not confined to the selected folder: {error}"));
-            }
-            lines.push(format!("{label}_error={error}"));
-            Ok(())
-        }
-        Ok(value) => Err(format!("{label} escaped the selected folder: {value}")),
-    }
-}
-
-fn json_u64(value: &Json) -> Result<Option<u64>> {
-    match value {
-        Null => Ok(None),
-        Num(raw) | Str(raw) => raw.parse::<u64>().map(Some).map_err(|_| format!("Invalid number {raw}")),
-        _ => Err("Invalid number".into()),
-    }
-}
-
-fn listed_name(name: &str, want: &str) -> bool {
-    name.eq_ignore_ascii_case(want) || name.eq_ignore_ascii_case(&format!("{want}/"))
-}
-
-fn read_ranges(root: &str, path: &str) -> Result<Vec<u8>> {
-    let mut got = Vec::new();
-    let mut offset = 0u64;
-    loop {
-        let page = prove(root, "phone_read", obj(vec![
-            ("path", s(path)),
-            ("offset", Num(offset.to_string())),
-            ("length", Num("1048576".into())),
-            ("encoding", s("base64")),
-        ]))?;
-        let parsed = parse(&page)?;
-        if text(&parsed, "encoding") != "base64" {
-            return Err(format!("binary range at {offset} was not base64"));
-        }
-        let bytes = network::unbase64(&text(&parsed, "data")).map_err(|error| format!("binary range decode: {error}"))?;
-        let count = json_u64(get(&parsed, "bytes"))?.ok_or("missing byte count")?;
-        if count != bytes.len() as u64 {
-            return Err(format!("range at {offset} declared {count} bytes but decoded {}", bytes.len()));
-        }
-        if bytes.is_empty() {
-            return Err(format!("empty read at offset {offset}"));
-        }
-        got.extend_from_slice(&bytes);
-        if got.len() > 64 * 1024 * 1024 {
-            return Err("binary read exceeded 64 MiB".into());
-        }
-        match json_u64(get(&parsed, "next_offset"))? {
-            Some(next) if next > offset => offset = next,
-            Some(next) => return Err(format!("read offset did not advance ({offset} -> {next})")),
-            None => break,
-        }
-    }
-    Ok(got)
-}
-
-fn long_target(proof_dir: &Path) -> Result<PathBuf> {
-    let piece = "p".repeat(80);
-    let mut dir = proof_dir.to_path_buf();
-    loop {
-        let next = dir.join(&piece);
-        let file = next.join("long-note.txt");
-        let units = file.to_string_lossy().encode_utf16().count();
-        if units > 270 {
-            return Ok(file);
-        }
-        if units > 4000 {
-            return Err("could not build a path longer than 260 UTF-16 units".into());
-        }
-        dir = next;
-    }
-}
-
-#[cfg(windows)]
-fn console_write(text: &str) {
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn AttachConsole(process: u32) -> i32;
-        fn GetStdHandle(kind: u32) -> *mut std::ffi::c_void;
-        fn WriteFile(file: *mut std::ffi::c_void, buffer: *const u8, len: u32, written: *mut u32, overlapped: *mut std::ffi::c_void) -> i32;
-    }
-    unsafe {
-        if AttachConsole(u32::MAX) == 0 {
-            return;
-        }
-        let handle = GetStdHandle(u32::MAX - 10);
-        if handle.is_null() || handle == usize::MAX as *mut std::ffi::c_void {
-            return;
-        }
-        let bytes = text.as_bytes();
-        let mut written = 0u32;
-        let len = bytes.len().min(u32::MAX as usize) as u32;
-        WriteFile(handle, bytes.as_ptr(), len, &mut written, std::ptr::null_mut());
-    }
-}
-
-fn file_proof(root: &str) -> Result<()> {
-    let mut lines = Vec::new();
-    let result = file_proof_steps(root, &mut lines);
-    match &result {
-        Ok(()) => lines.push("file-proof passed".into()),
-        Err(error) => lines.push(format!("FAILED {error}")),
-    }
-    let text = lines.join("\n");
-    let report = Path::new(root).join("output").join("desktop").join("file-proof-report.txt");
-    if let Some(parent) = report.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Err(error) = std::fs::write(&report, &text) {
-        return Err(format!("{text}\nCould not write {}: {error}", report.display()));
-    }
-    #[cfg(windows)]
-    console_write(&format!("{text}\n"));
-    result
-}
-
-fn file_proof_steps(root: &str, lines: &mut Vec<String>) -> Result<()> {
-    let access = device_folder_tool(&obj(vec![("tool", s("phone_process_access"))]), root)?;
-    lines.push(format!("process_access={access}"));
-    #[cfg(windows)]
-    {
-        if !access.contains("integrity (0x") {
-            return Err(format!("process access has no integrity level: {access}"));
-        }
-        match device_folder_tool(&obj(vec![("tool", s("phone_enable_backup"))]), root) {
-            Ok(value) => {
-                if !access.contains("Elevated process") || !value.contains("enabled") {
-                    return Err(format!("backup privilege result does not match the token: {access} / {value}"));
-                }
-                lines.push(format!("backup_privileges={value}"));
-            }
-            Err(error) => {
-                if access.contains("Elevated process") {
-                    return Err(format!("elevated process could not enable backup privileges: {error}"));
-                }
-                if !error.to_ascii_lowercase().contains("elevated") {
-                    return Err(format!("backup refusal was not scoped to elevation: {error}"));
-                }
-                lines.push(format!("backup_privileges_error={error}"));
-            }
-        }
-        lines.push("restart_elevated=wired_to_device_elevation_not_invoked".into());
-        refuse_outside(root, "phone_stat", r"C:\", lines, "outside_drive")?;
-        refuse_outside(root, "phone_list", r"C:\", lines, "outside_list")?;
-        refuse_outside(root, "phone_read", r"C:\Windows\win.ini", lines, "outside_read")?;
-        refuse_outside(root, "phone_stat", "C:/Windows", lines, "outside_slash")?;
-        match prove(root, "phone_stat", obj(vec![("path", s(&format!("C:\\bad{}path", '\n')))])) {
-            Err(error) => lines.push(format!("malformed_path_error={error}")),
-            Ok(value) => return Err(format!("malformed path was accepted: {value}")),
-        }
-        lines.push("tools_after_elevation_check=ok".into());
-    }
-    #[cfg(not(windows))]
-    {
-        if !access.contains("Effective UID") {
-            return Err(format!("process access has no effective uid: {access}"));
-        }
-        if !access.contains("Effective UID 0") && !access.contains("start RLLM as root") && !access.contains("device setting") {
-            return Err(format!("unelevated access did not say how to gain it: {access}"));
-        }
-        match device_folder_tool(&obj(vec![("tool", s("phone_enable_backup"))]), root) {
-            Ok(value) => return Err(format!("backup privilege is only a Windows token operation: {value}")),
-            Err(error) => lines.push(format!("backup_privileges_error={error}")),
-        }
-        refuse_outside(root, "phone_list", "/", lines, "outside_root")?;
-        refuse_outside(root, "phone_read", "/etc/passwd", lines, "outside_read")?;
-    }
-
-    refuse_outside(root, "phone_read", "../outside-the-selected-folder", lines, "parent_escape")?;
-    let selected = prove(root, "phone_list", obj(vec![
-        ("path", s("")),
-        ("offset", Num("0".into())),
-        ("limit", Num("1024".into())),
-    ]))?;
-    let parsed = parse(&selected)?;
-    let Arr(entries) = get(&parsed, "entries") else {
-        return Err(format!("selected folder listing was not a page: {selected}"));
-    };
-    if !entries.iter().any(|item| item.text().ok().is_some_and(|name| listed_name(name, "core"))) {
-        return Err(format!("selected folder listing did not include core: {selected}"));
-    }
-    lines.push(format!("list_selected_entries={}", entries.len()));
-    let folder = parse(&prove(root, "phone_stat", obj(vec![("path", s(""))]))?)?;
-    if text(&folder, "kind") != "directory" {
-        return Err(format!("selected folder stat was not a directory: {}", folder.string()));
-    }
-    lines.push("selected_folder=ok".into());
-
-    let proof_dir = std::path::absolute(Path::new(root).join("output").join("file-proof")).map_err(|error| format!("proof directory: {error}"))?;
-    prove(root, "phone_mkdir", obj(vec![("path", s(&proof_dir.display().to_string())), ("parents", Bool(true))]))?;
-    let long_file = long_target(&proof_dir)?;
-    let units = long_file.to_string_lossy().encode_utf16().count();
-    if units <= 260 {
-        return Err(format!("proof path is {units} UTF-16 units"));
-    }
-    lines.push(format!("long_path_units={units}"));
-    lines.push(format!("long_path={}", long_file.display()));
-    let long_dir = long_file.parent().ok_or("long path has no parent")?;
-    prove(root, "phone_mkdir", obj(vec![("path", s(&long_dir.display().to_string())), ("parents", Bool(true))]))?;
-    let wrote = prove(root, "phone_write", obj(vec![
-        ("path", s(&long_file.display().to_string())),
-        ("content", s("long-path-ok")),
-    ]))?;
-    #[cfg(windows)]
-    if !wrote.contains(r"\\?\") {
-        return Err(format!("long path write did not use an extended prefix: {wrote}"));
-    }
-    lines.push(format!("long_write={wrote}"));
-    let read = prove(root, "phone_read", obj(vec![("path", s(&long_file.display().to_string()))]))?;
-    if read != "long-path-ok" {
-        return Err(format!("long path readback differs: {read}"));
-    }
-    let edited = device_folder_tool(&obj(vec![
-        ("tool", s("phone_read")),
-        ("editor", Bool(true)),
-        ("args", obj(vec![("path", s(&long_file.display().to_string()))])),
-    ]), root).map_err(|error| format!("phone_read: {error}"))?;
-    if edited != "long-path-ok" {
-        return Err(format!("editor readback differs: {edited}"));
-    }
-    let stat = parse(&prove(root, "phone_stat", obj(vec![("path", s(&long_file.display().to_string()))]))?)?;
-    if text(&stat, "kind") != "file" || json_u64(get(&stat, "bytes"))? != Some("long-path-ok".len() as u64) {
-        return Err(format!("long path stat mismatch: {}", stat.string()));
-    }
-    let listed = prove(root, "phone_list", obj(vec![
-        ("path", s(&long_dir.display().to_string())),
-        ("offset", Num("0".into())),
-        ("limit", Num("100".into())),
-    ]))?;
-    if !listed.contains("long-note.txt") {
-        return Err(format!("long directory listing did not include the file: {listed}"));
-    }
-    lines.push("long_path_readback=ok".into());
-
-    let pid = std::process::id();
-    let payload_path = proof_dir.join(format!("payload-{pid}.bin"));
-    let mut payload = vec![0u8; 6 * 1024 * 1024 + 64];
-    let mut state = 0x6a09e667u32;
-    for byte in &mut payload {
-        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
-        *byte = (state >> 24) as u8;
-    }
-    let chunk = 1024 * 1024;
-    let mut offset = 0usize;
-    let mut first = true;
-    while offset < payload.len() {
-        let end = (offset + chunk).min(payload.len());
-        let mut args = vec![
-            ("path", s(&payload_path.display().to_string())),
-            ("data", s(&network::b64(&payload[offset..end]))),
-        ];
-        let name = if first { "phone_create" } else { "phone_write" };
-        if !first {
-            args.push(("offset", Num(offset.to_string())));
-        }
-        prove(root, name, obj(args))?;
-        first = false;
-        offset = end;
-    }
-    let got = read_ranges(root, &payload_path.display().to_string())?;
-    if got != payload {
-        return Err(format!("reassembled binary differs: wrote {} bytes, read {}", payload.len(), got.len()));
-    }
-    let digest = application::workspace_digest(&got);
-    lines.push(format!("payload_path={}", payload_path.display()));
-    lines.push(format!("payload_bytes={}", got.len()));
-    lines.push(format!("payload_sha256={digest}"));
-    let relative = Path::new("output").join("file-proof").join(format!("payload-{pid}.bin")).display().to_string();
-    let relative_stat = parse(&prove(root, "phone_stat", obj(vec![("path", s(&relative))]))?)?;
-    if json_u64(get(&relative_stat, "bytes"))? != Some(got.len() as u64) {
-        return Err(format!("relative stat mismatch: {}", relative_stat.string()));
-    }
-    lines.push(format!("relative_stat={relative}"));
-
-    let found = prove(root, "phone_search", obj(vec![
-        ("path", s(&proof_dir.display().to_string())),
-        ("query", s("long-note.txt")),
-        ("mode", s("name")),
-    ]))?;
-    let parsed = parse(&found)?;
-    let Arr(matches) = get(&parsed, "matches") else {
-        return Err(format!("search did not return matches: {found}"));
-    };
-    if !matches.iter().any(|item| item.text().ok().is_some_and(|value| value.contains("long-note.txt"))) {
-        return Err(format!("search did not find long-note.txt: {found}"));
-    }
-    lines.push(format!("search_matches={}", matches.len()));
-    let copy_path = proof_dir.join(format!("long-note-copy-{pid}.txt"));
-    prove(root, "phone_copy", obj(vec![
-        ("path", s(&long_file.display().to_string())),
-        ("destination", s(&copy_path.display().to_string())),
-    ]))?;
-    if prove(root, "phone_read", obj(vec![("path", s(&copy_path.display().to_string()))]))? != "long-path-ok" {
-        return Err("copied long-path file differs".into());
-    }
-    lines.push("copy_long=ok".into());
-
-    let scratch = proof_dir.join(format!("scratch-{pid}.txt"));
-    let renamed = proof_dir.join(format!("scratch-renamed-{pid}.txt"));
-    prove(root, "phone_write", obj(vec![
-        ("path", s(&scratch.display().to_string())),
-        ("content", s("review-me")),
-    ]))?;
-    let copied = proof_dir.join(format!("scratch-copy-{pid}.txt"));
-    prove(root, "phone_copy", obj(vec![
-        ("path", s(&scratch.display().to_string())),
-        ("destination", s(&copied.display().to_string())),
-    ]))?;
-    prove(root, "phone_move", obj(vec![
-        ("path", s(&copied.display().to_string())),
-        ("destination", s(&renamed.display().to_string())),
-    ]))?;
-    if prove(root, "phone_read", obj(vec![("path", s(&renamed.display().to_string()))]))? != "review-me" {
-        return Err("renamed scratch file differs".into());
-    }
-    let reviewed = prove(root, "phone_delete", obj(vec![("path", s(&scratch.display().to_string()))]))?;
-    let review_key = reviewed.replace('/', "\\").to_ascii_lowercase();
-    if !review_key.contains("\\review\\") {
-        return Err(format!("delete did not move into review: {reviewed}"));
-    }
-    let saved = read_path_limited(Path::new(&reviewed), host_byte_budget()).map_err(|error| format!("review read: {error}"))?;
-    if saved != b"review-me" {
-        return Err("reviewed file contents differ".into());
-    }
-    if scratch.exists() {
-        return Err("scratch file still exists after move to review".into());
-    }
-    lines.push(format!("review_path={reviewed}"));
-    Ok(())
-}
-
-// Windows rejects a byte-range lock on a directory (error 87). Media allocation
 // pins the storage directory with the ordinary file lock, which works on the
 // other hosts. A directory lock is held on a named semaphore instead. A lock
 // on a regular file stays on the system call.
@@ -5965,6 +6098,8 @@ static DIRECTORY_LOCKS: std::sync::Mutex<std::collections::BTreeMap<isize, isize
 static DIRECTORY_LOCK_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(windows)]
+
+
 fn directory_lock_name(handle: *mut std::ffi::c_void) -> Option<String> {
     unsafe extern "system" {
         fn GetFileInformationByHandleEx(handle: *mut std::ffi::c_void, class: i32, info: *mut std::ffi::c_void, size: u32) -> i32;
@@ -6213,23 +6348,6 @@ fn main() {
         return;
     }
     let args = arguments();
-    if has_flag(&args, "--file-proof") {
-        let root = match option_path(&args, "--root") {
-            Ok(Some(path)) => path_text(&path),
-            Ok(None) => std::env::current_dir().map(|path| path_text(&path)).unwrap_or_else(|_| ".".into()),
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(1);
-            }
-        };
-        match file_proof(&root) {
-            Ok(()) => std::process::exit(0),
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(1);
-            }
-        }
-    }
     if has_flag(&args, "--tls-self-check") {
         match tls_client::Client::primitive_self_check() {
             Ok(()) => {
@@ -8397,3 +8515,4 @@ mod desktop_regression {
         println!("g1-regression passed");
     }
 }
+

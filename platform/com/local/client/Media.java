@@ -62,6 +62,8 @@ final class Media {
     private long listenRequested;
     boolean permissionPending(){return pendingListen;}
     private JSONObject playbackOwner;
+    private android.media.AudioTrack speechTrack;
+    private int speechRate;
     private final Runnable playbackDeadline=()->{if(playbackOwner!=null){notice("Speech playback timed out; microphone paused");stopPlayback();}};
     private final ExecutorService microphoneWorker=new java.util.concurrent.ThreadPoolExecutor(1,1,0L,java.util.concurrent.TimeUnit.SECONDS,new java.util.concurrent.ArrayBlockingQueue<Runnable>(1));
     void context(String value){if(!context.equals(value)){context=value;playbackOwner=null;stopPlayback();}}
@@ -145,12 +147,15 @@ final class Media {
                     if(watching&&(!interruptionReady||echo==null||!echo.getEnabled()||audio==null||audio.getMode()!=AudioManager.MODE_IN_COMMUNICATION))throw new IOException("Echo control stopped");
                     JSONObject response=(JSONObject)Core.call(new JSONObject(owner.toString()).put("op","voice_audio_feed").put("data",Base64.encodeToString(java.util.Arrays.copyOf(frame,n),Base64.NO_WRAP)));
                     if(response.has("onset_receipt")){final JSONObject onset=new JSONObject(owner.toString()).put("onset_receipt",response.getString("onset_receipt"));handler.post(()->{if(!closed&&!paused&&version==listenVersion)voiceEvent("voice_watch_onset",onset);});}
-                    if(response.getBoolean("ready")){result=new JSONObject(owner.toString()).put("receipt",response.getString("receipt"));action="voice_audio_result";break;}
+                    if(closed||version!=listenVersion)return;
+                    if(!wasWatch&&response.optBoolean("speech")){playReturnedSpeech(response);if(response.optBoolean("stopped")){result=new JSONObject(owner.toString());action="voice_session_stop";break;}}
+                    else if(response.getBoolean("ready")){result=new JSONObject(owner.toString()).put("receipt",response.getString("receipt"));action="voice_audio_result";break;}
                 }
             }catch(Exception error){result=owner;}
             finally{
                 if(input!=null){try{input.stop();}catch(RuntimeException ignored){}try{input.release();}catch(RuntimeException error){result=owner;action="voice_audio_failure";}if(microphone==input)microphone=null;}
                 if(echo!=null)try{echo.release();}catch(RuntimeException error){result=owner;action="voice_audio_failure";}
+                releaseSpeechTrack();
             }
             final JSONObject delivered=result;final String outcome=action;
             if(delivered!=null)handler.post(()->{if(!closed&&!paused&&version==listenVersion){String event=wasWatch&&watching&&outcome.equals("voice_audio_failure")?"voice_watch_unavailable":outcome;audioTicket="";audioSession="";audioPlayback="";watching=false;voiceEvent(event,delivered);}});
@@ -164,7 +169,30 @@ final class Media {
         synchronized(microphoneLock){if(closed||version!=listenVersion)return false;input.startRecording();if(input.getRecordingState()!=android.media.AudioRecord.RECORDSTATE_RECORDING)throw new IOException("Microphone did not start");return true;}
     }
     private void stopCapture(){synchronized(microphoneLock){listenVersion++;android.media.AudioRecord input=microphone;if(input!=null)try{input.stop();}catch(RuntimeException ignored){}}}
-    private void stopListening(){backgroundEffect=null;backgroundDeadline=0;stopCapture();pendingListen=false;watching=false;audioTicket="";audioSession="";audioPlayback="";}
+    private void stopListening(){backgroundEffect=null;backgroundDeadline=0;stopCapture();releaseSpeechTrack();pendingListen=false;watching=false;audioTicket="";audioSession="";audioPlayback="";}
+    private void releaseSpeechTrack(){synchronized(microphoneLock){android.media.AudioTrack track=speechTrack;speechTrack=null;speechRate=0;if(track!=null){try{track.pause();}catch(RuntimeException ignored){}try{track.flush();}catch(RuntimeException ignored){}try{track.release();}catch(RuntimeException ignored){}}}}
+    private void playReturnedSpeech(JSONObject response)throws IOException{
+        String wide=response.optString("playback24"),narrow=response.optString("playback");
+        boolean wideOpen=!wide.isEmpty();String encoded=wideOpen?wide:narrow;if(encoded.isEmpty())return;
+        int rate=wideOpen?response.optInt("speech_rate",24000):response.optInt("playback_rate",16000);
+        if(rate<8000||rate>96000)rate=wideOpen?24000:16000;
+        byte[] pcm;try{pcm=Base64.decode(encoded,Base64.NO_WRAP);}catch(IllegalArgumentException ignored){return;}
+        if(pcm.length<2||pcm.length%2!=0||pcm.length>256*1024)return;
+        synchronized(microphoneLock){
+            if(speechTrack==null||speechRate!=rate){
+                android.media.AudioTrack previous=speechTrack;speechTrack=null;speechRate=0;
+                if(previous!=null){try{previous.pause();}catch(RuntimeException ignored){}try{previous.flush();}catch(RuntimeException ignored){}try{previous.release();}catch(RuntimeException ignored){}}
+                int minimum=android.media.AudioTrack.getMinBufferSize(rate,android.media.AudioFormat.CHANNEL_OUT_MONO,android.media.AudioFormat.ENCODING_PCM_16BIT);
+                if(minimum<=0)throw new IOException("Speaker format unavailable");
+                int size=Math.max(minimum,rate*2);
+                android.media.AudioTrack opened=new android.media.AudioTrack(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build(),new android.media.AudioFormat.Builder().setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT).setSampleRate(rate).setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO).build(),size,android.media.AudioTrack.MODE_STREAM,AudioManager.AUDIO_SESSION_ID_GENERATE);
+                if(opened.getState()!=android.media.AudioTrack.STATE_INITIALIZED){try{opened.release();}catch(RuntimeException ignored){}throw new IOException("Speaker initialization failed");}
+                opened.play();speechTrack=opened;speechRate=rate;
+            }
+            int wrote=speechTrack.write(pcm,0,pcm.length,android.media.AudioTrack.WRITE_NON_BLOCKING);
+            if(wrote<0)throw new IOException("Speaker write failed");
+        }
+    }
     private void playbackEvent(JSONObject owner,String action,boolean completed){if(owner==null||owner.optString("voice_playback_ticket").isEmpty()||closed)return;try{voiceEvent(action,new JSONObject().put("voice_session",owner.getString("voice_session")).put("voice_playback_ticket",owner.getString("voice_playback_ticket")).put("completed",completed));}catch(JSONException error){notice(error.getMessage());}}
     private void beginRecording(){
         if(closed||ticket.isEmpty())return;
