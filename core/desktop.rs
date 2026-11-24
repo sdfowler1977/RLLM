@@ -547,6 +547,20 @@ struct ExchangeFailure {
     message: String,
     retry: Option<RetryDelay>,
     attempts: u32,
+    received_bytes: usize,
+}
+
+struct ResponseReader<'a> {
+    stream: &'a mut dyn Read,
+    received_bytes: usize,
+}
+
+impl Read for ResponseReader<'_> {
+    fn read(&mut self, chunk: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.stream.read(chunk)?;
+        self.received_bytes = self.received_bytes.saturating_add(read);
+        Ok(read)
+    }
 }
 
 enum RetryDelay {
@@ -556,11 +570,11 @@ enum RetryDelay {
 
 impl ExchangeFailure {
     fn permanent(message: impl Into<String>) -> Self {
-        Self { message: message.into(), retry: None, attempts: 0 }
+        Self { message: message.into(), retry: None, attempts: 0, received_bytes: 0 }
     }
 
     fn transient(message: impl Into<String>) -> Self {
-        Self { message: message.into(), retry: Some(RetryDelay::Backoff), attempts: 0 }
+        Self { message: message.into(), retry: Some(RetryDelay::Backoff), attempts: 0, received_bytes: 0 }
     }
 
     fn upload(message: String) -> Self {
@@ -742,16 +756,21 @@ fn converse<S: Read + Write>(
         return Err(ExchangeFailure::transient(UPLOAD_STALL));
     }
     stream.flush().map_err(|error| ExchangeFailure::transient(format!("peer closed early: {error}")))?;
-    if provider {
+    let mut reader = ResponseReader { stream, received_bytes: 0 };
+    let outcome = if provider {
         // Keep cancellation able to wake a read inside the platform transport.
         // Only the independent silence timer applies to the response.
         guard.begin_response();
-        return read_provider_response(stream, effect, heard);
-    }
-    if boolean(effect, "stream") {
-        return read_stream(stream, effect, heard, deadline).map_err(ExchangeFailure::permanent);
-    }
-    collect_until(stream, response_budget(effect), deadline).map_err(ExchangeFailure::permanent)
+        read_provider_response(&mut reader, effect, heard)
+    } else if boolean(effect, "stream") {
+        read_stream(&mut reader, effect, heard, deadline).map_err(ExchangeFailure::permanent)
+    } else {
+        collect_until(&mut reader, response_budget(effect), deadline).map_err(ExchangeFailure::permanent)
+    };
+    outcome.map_err(|mut failure| {
+        failure.received_bytes = reader.received_bytes;
+        failure
+    })
 }
 
 fn silence_deadline() -> Instant {
@@ -762,7 +781,8 @@ fn read_provider_response(
     stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str, u128),
 ) -> std::result::Result<Vec<u8>, ExchangeFailure> {
     let mut deadline = silence_deadline();
-    let limit = if boolean(effect, "stream") { stream_response_budget(effect) } else { response_budget(effect) };
+    let streaming = boolean(effect, "stream");
+    let limit = response_budget(effect);
     let mut response = Vec::new();
     let mut chunk = [0u8; 8192];
     let mut offset = 0;
@@ -787,6 +807,7 @@ fn read_provider_response(
                         message: format!("HTTP {status}"),
                         retry: Some(retry_after.map_or(RetryDelay::Backoff, RetryDelay::After)),
                         attempts: 0,
+                        received_bytes: 0,
                     });
                 }
                 break status;
@@ -803,12 +824,12 @@ fn read_provider_response(
             return Err(ExchangeFailure::transient("Connection ended before the provider sent a complete response header"));
         }
         deadline = silence_deadline();
-        if read > limit.saturating_sub(response.len()) {
+        if !streaming && read > limit.saturating_sub(response.len()) {
             return Err(ExchangeFailure::permanent("Response exceeds the current memory budget"));
         }
         response.extend_from_slice(&chunk[..read]);
     };
-    if boolean(effect, "stream") {
+    if streaming {
         let mut stream = std::io::Cursor::new(response).chain(stream);
         return read_stream(&mut stream, effect, heard, deadline).map_err(ExchangeFailure::response);
     }
@@ -972,7 +993,7 @@ fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str,
         put(&mut opening, "mcp_control", get(effect, "mcp_control").clone());
     }
     let id = core_call(opening)?;
-    let limit = stream_response_budget(effect);
+    let limit = (!provider).then(|| stream_response_budget(effect));
     let started = std::time::Instant::now();
     let outcome = (|| -> Result<Vec<u8>> {
         let mut said = String::new();
@@ -988,12 +1009,16 @@ fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str,
                 break;
             }
             if provider { deadline = silence_deadline(); }
-            total += read;
-            if total > limit {
-                return Err("Stream exceeds the current response memory budget".into());
+            if let Some(limit) = limit {
+                total += read;
+                if total > limit {
+                    return Err("Stream exceeds the current response memory budget".into());
+                }
             }
             let part = core_call(obj(vec![("op", s("stream_feed")), ("id", id.clone()), ("data", s(&network::b64(&chunk[..read])))]))?;
-            said.push_str(&text(&part, "delta"));
+            let delta = get(&part, "delta").text().unwrap_or("");
+            said.try_reserve(delta.len()).map_err(|_| "Insufficient memory to display the streamed reply")?;
+            said.push_str(delta);
             if get(&part, "error") != &Null {
                 return Err(text(&part, "error"));
             }
@@ -3209,6 +3234,9 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
                     }
                     Err(error) => {
                         let mut callback = callback_inputs(&effect, state, &[], Some(error.message));
+                        if error.received_bytes > 0 {
+                            put(&mut callback, "received_bytes", Num(error.received_bytes.to_string()));
+                        }
                         if error.attempts > 0 {
                             put(&mut callback, "provider_attempts", Num(error.attempts.to_string()));
                         }

@@ -885,6 +885,16 @@ pub(super) fn clear_caller_feedback() {
     CALLER_FEEDBACK.with(|feedback| feedback.set(None));
 }
 
+fn request_operation_feedback(st: &mut Json, index: usize) -> Result<Json> {
+    if CALLER_DRIVES_APPROVAL.with(std::cell::Cell::get) {
+        // Let the caller check cancellation and progress between model turns.
+        CALLER_FEEDBACK.with(|feedback| feedback.set(Some(index)));
+        Ok(Null)
+    } else {
+        model_effect_at(st, index)
+    }
+}
+
 pub(super) fn with_caller_driven_approval<T>(run: impl FnOnce() -> T) -> T {
     CALLER_DRIVES_APPROVAL.with(|mode| {
         let prior = mode.replace(true);
@@ -1540,13 +1550,7 @@ fn operation_failure_followup(st:&mut Json,owner:&Json,tool:&str,reason:&str,out
   if get(&next,"task_run")!=&Null{
    return harness::task_tool_result_at(&mut next,&output,Some(index))?.ok_or("The requesting task has settled".into());
   }
-  if CALLER_DRIVES_APPROVAL.with(std::cell::Cell::get) {
-   // Return to the caller's progress checks before requesting another model
-   // turn. Consecutive rejected proposals need the same boundary as approvals.
-   CALLER_FEEDBACK.with(|feedback| feedback.set(Some(index)));
-   return Ok(Null);
-  }
-  model_effect_at(&mut next,index)
+  request_operation_feedback(&mut next,index)
  })();
  match prepared{
   Ok(effect)=>{put(&mut next,"notice",s("Returning the operation error to the requesting model"));put(&mut next,"notice_error",Bool(true));*st=next;Ok(effect)},
@@ -1590,6 +1594,47 @@ fn text_tool_proposal(reply: &str) -> Option<Result<Json>> {
     if tool.is_some() { return None; }
     let args = fields.get("arguments").or_else(|| fields.get("args")).unwrap_or(&Null);
     Some(super::provider_calls::canonical(name, args))
+}
+
+pub(super) const TASK_NARRATION_FEEDBACK: &str = "Continue the current task from the step you just described. If it requires a tool, make the tool call now. Give a final answer when the work is finished or you have a concrete blocker.";
+
+fn task_narration(reply: &str) -> bool {
+    // Look for a commitment to act in the closing prose. Earlier discussion
+    // can describe planned work even when the reply ends with a result.
+    let Some(line) = reply.trim_end().lines().last() else { return false; };
+    let line = line.to_lowercase().replace('\u{2019}', "'");
+    let prose = line.trim_end_matches(['.', '!', '?']);
+    let sentence = prose.rmatch_indices(['.', '!', '?'])
+        .find_map(|(index, mark)| {
+            let tail = &prose[index + mark.len()..];
+            tail.starts_with(char::is_whitespace).then_some(tail)
+        })
+        .unwrap_or(prose).trim();
+    let sentence = ["now ", "now, ", "next, ", "next ", "then ", "so "]
+        .iter().find_map(|prefix| sentence.strip_prefix(prefix)).unwrap_or(sentence);
+    let Some(action) = ["let me ", "i'll ", "i will ", "i'm going to ", "i am going to ", "i need to ",
+        "i'm ", "i am "].iter().find_map(|prefix| sentence.strip_prefix(prefix)) else { return false; };
+    if line.ends_with('?')
+        || [" if you ", " if needed", " on request", " anything else", " any other questions"]
+            .iter().any(|phrase| action.contains(phrase))
+        || ["wait for you", "wait for your", "wait for confirmation", "check back", "check in", "update you"]
+            .iter().any(|prefix| action.starts_with(prefix))
+    {
+        return false;
+    }
+    let mut words = action.split_whitespace();
+    let Some(mut verb) = words.next() else { return false; };
+    if verb == "now" { verb = words.next().unwrap_or(""); }
+    // A continuation names work to perform. Courtesy offers and promises to
+    // stay available do not identify an operation on the current task.
+    matches!(verb,
+        "apply" | "build" | "change" | "check" | "compare" | "compile" | "confirm" | "continue"
+        | "create" | "debug" | "edit" | "execute" | "fetch" | "find" | "finish" | "fix" | "implement"
+        | "inspect" | "investigate" | "look" | "measure" | "monitor" | "open" | "patch" | "read"
+        | "rebuild" | "remove" | "reproduce" | "rerun" | "retry" | "review" | "run" | "save"
+        | "search" | "trace" | "test" | "try" | "update" | "validate" | "verify" | "wait" | "write"
+        | "building" | "checking" | "compiling" | "editing" | "fixing" | "inspecting" | "reading"
+        | "running" | "searching" | "testing" | "verifying" | "working" | "writing")
 }
 
 fn stage_model_proposal(st: &mut Json, mut proposed: Json, raw: &str) -> Result<Json> {
@@ -2603,6 +2648,7 @@ fn event_inner(v: &Json) -> Result<Json> {
                     && get(&callback_original,"web_answer_binding")==&Null
                     && !boolean(&callback_original,"web_answer_only")
                     && !boolean(inputs, "sent")
+                    && number(inputs, "received_bytes") == 0
                     && number(inputs, "provider_attempts") == 0
                     && boolean(get(&st, "resources"), "fallback")
                 {
@@ -2624,10 +2670,13 @@ fn event_inner(v: &Json) -> Result<Json> {
                 put(&mut st, "busy", Bool(false));
                 if ["connection_test","model"].contains(&text(inputs,"purpose").as_str()) {
                     let error=text(inputs,"error");
+                    if number(inputs, "received_bytes") > 0 {
+                        return Err(error);
+                    }
                     let lower=error.to_ascii_lowercase();
                     let transport=if ["ssl","tls","handshake","wrong version","record header"].iter().any(|x|lower.contains(x)) {
                         "TLS connection failed. Edit the connection URL: use http:// for HTTP or https:// for HTTPS. For HTTPS, check the server certificate and device trust settings."
-                    } else if !boolean(inputs,"sent") && number(inputs,"received_bytes")==0 {
+                    } else if !boolean(inputs,"sent") {
                         "Check the server IP/port, Wi-Fi or VPN route, LAN listener and firewall. localhost means this device."
                     } else {""};
                     return Err(if transport.is_empty(){format!("Server request failed: {error}")}else{format!("Server request failed: {error}. {transport}")});
@@ -3204,10 +3253,24 @@ fn event_inner(v: &Json) -> Result<Json> {
                         }}
                         // A claimed tool result with no tool call in this turn is a scored
                         // misuse: the reason rides into the next proposal.
-                        if !turn_tool_call&&!parse(reply.trim()).is_ok_and(|proposed|get(&proposed,"tool")!=&Null)&&invented_tool_result(&st,&reply){
+                        let prose_reply = !turn_tool_call && !parse(reply.trim()).is_ok_and(|proposed| get(&proposed, "tool") != &Null);
+                        if prose_reply && invented_tool_result(&st,&reply){
                             tool_penalty(&mut st,"tool_misuse","tool_misuse_count","tool_misuse_score_tenths",TOOL_MISUSE_TENTHS,"The reply claimed a tool result that no operation in this turn produced. Nothing was executed on the device.");
                         }
                         harness::finish_attempt(&mut st,inputs,"success");
+                        if CALLER_DRIVES_APPROVAL.with(std::cell::Cell::get)
+                            && boolean(&chat(&st), "desktop_agent_task") && !child_callback
+                            && get(&st, "task_run") == &Null && get(&st, "pending") == &Null
+                            && prose_reply && task_narration(&reply)
+                        {
+                            put(&mut st, "stream_text", Null);
+                            append(&mut st, "assistant", &reply)?;
+                            append(&mut st, "user", TASK_NARRATION_FEEDBACK)?;
+                            let index = number(&st, "request_index");
+                            effect = request_operation_feedback(&mut st, index)?;
+                            put(&mut st, "notice", s("Continuing the task from the model's progress update"));
+                            return Ok(());
+                        }
                         if get(&st,"task_run")==&Null{inquiry::answer(&mut st,&reply);}
                         if let Some(next)=harness::model_reply(&mut st,&reply)? {effect=next;return Ok(());}
                         put(&mut st,"stream_text",Null);

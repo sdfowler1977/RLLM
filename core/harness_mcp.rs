@@ -431,7 +431,12 @@ fn settle_tools(state: &mut Json, root: &str, progress: &mut Progress<'_>) -> Re
         if super::application::caller_feedback_waiting() {
             let messages = active_messages(state);
             let before = messages.len().saturating_sub(1);
-            if let Some(result) = tool_result_since(state, before) {
+            let feedback = tool_result_since(state, before).or_else(|| {
+                messages.last().filter(|message| text(message, "role") == "user"
+                    && text(message, "content") == super::application::TASK_NARRATION_FEEDBACK)
+                    .map(|_| super::application::TASK_NARRATION_FEEDBACK.to_owned())
+            });
+            if let Some(result) = feedback {
                 let proposal = messages[..before].iter().rev()
                     .find(|message| text(message, "role") == "assistant")
                     .map(|message| text(message, "content")).unwrap_or_default();
