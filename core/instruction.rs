@@ -1,6 +1,7 @@
 //! Encoding-derived instruction IR and candidate blocks; never a machine runner.
 use super::control_flow::Branch;
 use std::{collections::{BTreeMap,BTreeSet},fmt::Write as _};
+#[path="instruction_structure.rs"] mod reconstruction;
 const OUTPUT:usize=16384;
 const ROWS:usize=96;
 #[derive(Clone,Copy)]pub(super) enum Instruction{
@@ -242,8 +243,8 @@ fn test_branch(branch:Branch,state:&State)->Option<bool>{match branch{
  Branch::Conditional{condition:code,..}=>condition(state.flags,code),
  Branch::Compare{nonzero,wide,register,..}=>state.read(register,wide,false).full().filter(|v|!v.relative).map(|v|(v.bits!=0)==nonzero),
  Branch::Test{nonzero,bit,register,..}=>{let v=state.read(register,bit>=32,false);(v.known&(1u64<<bit)!=0&&!v.relative).then_some((v.bits&(1u64<<bit)!=0)==nonzero)},_=>None}}
-struct Text{body:String,rows:usize,omitted:usize}
-impl Text{fn line(&mut self,line:String){if self.rows<ROWS&&self.body.len()+line.len()+1<OUTPUT-1800{self.body.push_str(&line);self.body.push('\n');self.rows+=1;}else{self.omitted+=1;}}}
+struct Text{body:String,rows:usize,omitted:usize,limit:usize}
+impl Text{fn line(&mut self,line:String){if self.rows<ROWS&&self.body.len()+line.len()+1<self.limit{self.body.push_str(&line);self.body.push('\n');self.rows+=1;}else{self.omitted+=1;}}}
 fn edge(out:&mut Text,kind:&str,target:Option<Value>,words:&[Word],label:&str){
  let detail=match target{Some(v)=>{let location=if v.relative{if label=="RVA "&&v.bits>u32::MAX as u64{"outside32-bit image RVA width"}else if words.binary_search_by_key(&v.bits,|w|w.1).is_ok(){"captured candidate word; execution unobserved"}else{"outside analyzed word set; no edge invented to unavailable code"}}else{"absolute integer; not reinterpreted as an ELF VA/PE RVA"};format!("{} ({location})",v.describe(label))},None=>"unresolved; register, mapping or arithmetic unavailable".into()};out.line(format!("  Edge {kind}: {detail}."));
 }
@@ -333,7 +334,9 @@ pub(super) fn analyze(words:&[Word],label:&str,cancelled:&dyn Fn()->bool)->Resul
  // Split possible indirect destinations once, then recompute from unknown block
  // entries. Extra conservative splits cannot create register knowledge.
  let mut state=State::new();for(i,w)in words.iter().enumerate(){if i%16==0&&cancelled(){return Err("Inspection cancelled during instruction analysis".into());}if starts.contains(&w.1){state=State::new();}if let Some(Branch::Register{register,..})=w.3{if let Some(v)=state.read(register,true,false).full(){if v.relative&&words.binary_search_by_key(&v.bits,|w|w.1).is_ok(){starts.insert(v.bits);}}}let _=statement(w.4,w.3,w.1,&mut state,label);}
- let mut out=Text{body:String::from("AArch64 instruction IR, candidate blocks and local register data flow\nScope: captured aligned encoding candidates with source offsets, declared coordinates and local register facts. Each candidate block starts with unknown registers/SP/NZCV; separate captured-entry interpretations retain their incoming-edge conditions. Source coordinates retain their declared address namespace. Graph and local facts share at most512 captured words; the report retains16KiB and96 rows.\n"),rows:0,omitted:0};
+ let reconstruction=reconstruction::reconstruct(words,&starts,label,cancelled)?;
+ let limit=OUTPUT.saturating_sub(1800+reconstruction.summary.len()+reconstruction.available_bytes.min(7200));
+ let mut out=Text{body:String::from("AArch64 instruction IR, candidate blocks and local register data flow\nScope: captured aligned encoding candidates with source offsets, declared coordinates and local register facts. Each candidate block starts with unknown registers/SP/NZCV; separate captured-entry interpretations retain their incoming-edge conditions. Source coordinates retain their declared address namespace. Graph and local facts share at most512 captured words; the report retains16KiB and96 rows.\n"),rows:0,omitted:0,limit};
  let mut blocks=0;let mut recognized=0;let mut state=State::new();let mut statements=Vec::with_capacity(words.len());let mut block=0;let mut ends=Vec::new();
  for(i,w)in words.iter().enumerate(){
   if i%16==0&&cancelled(){return Err("Inspection cancelled during instruction analysis".into());}
@@ -345,250 +348,12 @@ pub(super) fn analyze(words:&[Word],label:&str,cancelled:&dyn Fn()->bool)->Resul
  conditional_paths(words,&ends,&mut statements,label,&mut out,cancelled)?;
  let _=writeln!(out.body,"Computed {blocks} candidate blocks over {} captured words; recognized {recognized} supported instruction encodings, {} unclassified; reported {} IR/graph rows, omitted {} rows. Omitted rows are not absent behavior.",words.len(),words.len()-recognized,out.rows,out.omitted);
  out.body.push_str("Supported IR: existing branches, NOP, move-wide immediates, ADR/ADRP, immediate/shifted-register ADD/SUB and register ADC/ADCS/SBC/SBCS with NZCV, immediate/shifted-register logical operations, signed/unsigned bitfield moves, register extraction, conditional selects, integer multiply-add/subtract, signed/unsigned division, variable shifts/rotates, unsigned/unscaled/pre/post-indexed integer loads/stores, integer register pairs, literal integer loads and selected exception encodings. Source-coordinate arithmetic uses checked address bounds; integer arithmetic follows encoded widths.\n");
- let mut reconstruction=String::new();let mut index=0;
- while index<statements.len(){
-  let block=statements[index].block;let mut end=index+1;while end<statements.len()&&statements[end].block==block{end+=1;}
-  let mut next=reconstruction.clone();structured(&mut next,&statements[index..end]);
-  if out.body.len()+next.len()>=OUTPUT{break;}reconstruction=next;index=end;
- }
- if reconstruction.is_empty(){structured(&mut reconstruction,&[]);}
- if out.body.len()+reconstruction.len()<OUTPUT{out.body.push_str(&reconstruction);}
+ reconstruction.write(&mut out.body,OUTPUT);
  Ok(Analysis{text:out.body,statements})
-}
-const RECONSTRUCTED:&str="The instructions were not executed. This is reconstructed text.\n";
-/// Assignment, branch, and return lines for one straight-line block.
-/// Registers are the names already written on each statement. Nothing here is executed.
-fn structured(text:&mut String,statements:&[Statement]){
- if text.ends_with(RECONSTRUCTED){text.truncate(text.len()-RECONSTRUCTED.len());}
- let block=statements.first().map(|statement|statement.block);
- for statement in statements.iter().filter(|statement|Some(statement.block)==block){
-  let mnemonic=statement.mnemonic;
-  let line=if mnemonic=="unclassified"{statement.text.clone()}else{
-   let kind=if mnemonic=="B"||mnemonic=="BL"{"branch"}else if matches!(mnemonic,"RET"|"RETAA"|"RETAB"){"return"}else if matches!(mnemonic,"MOVN"|"MOVZ"|"MOVK"|"SBFM"|"BFM"|"UBFM"|"ADD"|"ADDS"|"ADC"|"ADCS"|"MADD"|"SUB"|"SUBS"|"SBC"|"SBCS"|"MSUB"|"AND"|"BIC"|"ORR"|"ORN"|"EOR"|"EON"|"ANDS"|"BICS"|"LDR"|"LDRB"|"LDRH"|"LDUR"|"LDURB"|"LDURH"|"STR"|"STRB"|"STRH"|"STUR"|"STURB"|"STURH"|"LDP"|"STP"){"assignment"}else{""};
-   if kind.is_empty(){statement.text.clone()}else{
-    let mut registers=String::new();let bytes=statement.text.as_bytes();let mut i=0;
-    while i<bytes.len(){
-     if !statement.text.is_char_boundary(i){i+=1;continue;}
-     if i>0&&bytes[i-1].is_ascii_alphanumeric(){i+=1;continue;}
-     let mut len=0usize;
-     for name in ["WSP","XZR","WZR","SP"]{if statement.text[i..].starts_with(name){let end=i+name.len();if bytes.get(end).is_some_and(|byte|byte.is_ascii_alphanumeric()){continue;}len=name.len();break;}}
-     if len==0&&(bytes[i]==b'X'||bytes[i]==b'W'){let mut end=i+1;if end<bytes.len()&&bytes[end].is_ascii_digit(){while end<bytes.len()&&bytes[end].is_ascii_digit(){end+=1;}if !bytes.get(end).is_some_and(|byte|byte.is_ascii_alphanumeric()){if let Ok(n)=statement.text[i+1..end].parse::<u8>(){if n<=30{len=end-i;}}}}}
-     if len==0{i+=1;continue;}
-     let name=&statement.text[i..i+len];
-     if !registers.split(' ').any(|prior|prior==name){if !registers.is_empty(){registers.push(' ');}registers.push_str(name);}
-     i+=len;
-    }
-    if registers.is_empty(){format!("{kind} {mnemonic}")}else{format!("{kind} {mnemonic} {registers}")}
-   }
-  };
-  text.push_str(&line);text.push('\n');
- }
- if !text.ends_with(RECONSTRUCTED){text.push_str(RECONSTRUCTED);}
 }
 /// Observe the captured encoding candidates and return the instruction IR with
 /// its retained statements. The observation is the captured instruction
 /// analysis itself; this named entry keeps the binary observers readable.
 pub(super) fn observe(words:&[Word],label:&str,cancelled:&dyn Fn()->bool)->Result<Analysis,String>{
  analyze(words,label,cancelled)
-}
-#[cfg(test)]mod tests{
- use super::*;
- fn words(values:&[u32])->Vec<Word>{values.iter().enumerate().map(|(i,&word)|{let branch=super::super::control_flow::decode(word);((i*4)as u64,(i*4)as u64,word,branch,decode(word,branch))}).collect()}
- fn report(values:&[u32])->Analysis{observe(&words(values),"declared VA ",&||false).unwrap()}
- #[test]fn predecessor_alternatives_preserve_unknown_entry(){
-  let a=report(&[0xd28000e0,0x14000002,0xd2800c60,0x91000401,0xd65f03c0]);let line=format!("{}{}",a.statements[3].text,a.statements[3].path_facts);
-  assert!(line.starts_with("ADD X1, X0, #1; X1 <- unknown"));assert!(line.contains("encoded integer 0x8")&&line.contains("encoded integer 0x64"));assert!(line.contains("edge at declared VA 0x4 (jump)")&&line.contains("edge at declared VA 0x8 (sequential continuation)"));assert!(line.contains("Other incoming entries remain unknown"));
- }
- #[test]fn call_unknown_and_exception_never_transfer_state(){
-  for transition in [0x94000002,0xffffffff,0xd4000001,0xd63f0040]{let a=report(&[0xd28000e0,transition,0x91000401,0xd65f03c0]);assert!(!a.statements[2].path_facts.contains("Conditional path"),"{transition:x}");assert!(!a.statements[2].text.contains("integer 0x8"));}
- }
- #[test]fn bitfield_known_bits_cover_each_encoded_mask(){
-  fn concrete(source:u64,old:u64,width:u32,kind:u8,rotate:u32,last:u32)->u64{let end=(last+width-rotate)%width;let mut out=0;for i in 0..width{let input=(i+rotate)%width;let selected=i<=end&&input<=last;let bit=if selected{source>>input}else if kind==1{old>>i}else if kind==0&&i>end{source>>last}else{0};out|=(bit&1)<<i;}out}
-  for wide in [false,true]{let width=if wide{64}else{32};let word=mask(wide);for rotate in 0..width{for last in 0..width{for kind in 0..3{
-   let a=Value{bits:0x8123_4567_89ab_cdec&word,known:!3,relative:false}.width(wide);let b=Value{bits:0xfedc_ba98_7654_3210&!5&word,known:!5,relative:false}.width(wide);let result=bitfield(a,b,wide,kind,rotate as u8,last as u8);
-   for aa in 0..4{for bb in [0,1,4,5]{let exact=concrete(a.bits|aa,b.bits|bb,width,kind,rotate,last);assert_eq!((exact^result.bits)&result.known&word,0,"{wide} {kind} {rotate} {last}");}}
-   let exact=bitfield(Value::integer(a.bits),Value::integer(b.bits),wide,kind,rotate as u8,last as u8);assert_eq!(exact.known,u64::MAX);assert_eq!(exact.bits,concrete(a.bits,b.bits,width,kind,rotate,last));
-  }}}}
-  let v=bitfield(UNKNOWN,UNKNOWN,true,2,8,15);assert_eq!(v.known,0xffff_ffff_ffff_ff00);assert_eq!(logical(v,Value::integer(0xff00),true,0).bits,0);assert_eq!(logical(v,Value::integer(0xff00),true,0).known,u64::MAX);
- }
- #[test]fn extraction_retains_each_selected_known_bit(){
-  for wide in [false,true]{let width=if wide{64}else{32};let word=mask(wide);for amount in 0..width{
-   let a=Value{bits:0x8123_4567_89ab_cdec&word,known:!3,relative:false}.width(wide);let b=Value{bits:0xfedc_ba98_7654_3210&!5&word,known:!5,relative:false}.width(wide);let result=extract(a,b,wide,amount as u8);
-   for aa in 0..4{for bb in [0,1,4,5]{let expected=((((a.bits|aa)as u128)<<width)|((b.bits|bb)as u128))>>amount;assert_eq!((expected as u64^result.bits)&result.known&word,0);}}
-   let exact=extract(Value::integer(a.bits),Value::integer(b.bits),wide,amount as u8);let expected=((((a.bits as u128)<<width)|(b.bits as u128))>>amount)as u64&word;assert_eq!(exact.known,u64::MAX);assert_eq!(exact.bits,expected);
-  }}
-  let v=extract(UNKNOWN,Value::integer(0),true,8);assert_eq!(v.known,0x00ff_ffff_ffff_ffff);assert_eq!(v.bits,0);
- }
- #[test]fn field_transfers_preserve_identity_types_width_and_flags(){
-  let mut state=State::new();state.registers[1]=Value::coordinate(0x1000);state.flags=Some(Flags{n:false,z:true,c:true,v:false,known:15});let flags=state.flags;
-  for kind in 0..3{statement(Instruction::Bitfield{wide:true,kind,d:2,n:1,rotate:0,last:63},None,0,&mut state,"VA ");assert!(state.read(2,true,false).relative);assert_eq!(state.read(2,true,false).bits,0x1000);assert!(state.flags==flags);}
-  statement(Instruction::Bitfield{wide:true,kind:1,d:1,n:1,rotate:0,last:7},None,0,&mut state,"VA ");assert!(state.read(1,true,false).relative);
-  let v=bitfield(Value::coordinate(0x1000),UNKNOWN,true,2,0,7);assert!(!v.relative);assert_eq!(v.known,0xffff_ffff_ffff_ff00);
-  assert!(extract(UNKNOWN,Value::coordinate(0x1000),true,0).relative);let v=extract(Value::coordinate(0x1000),Value::integer(0),true,1);assert!(!v.relative);assert_eq!(v.known,0x7fff_ffff_ffff_ffff);
-  for v in [bitfield(UNKNOWN,UNKNOWN,false,2,4,7),extract(UNKNOWN,UNKNOWN,false,4)]{assert_eq!(v.known>>32,0xffff_ffff);assert_eq!(v.bits>>32,0);}
-  statement(Instruction::Bitfield{wide:true,kind:2,d:31,n:1,rotate:0,last:7},None,0,&mut state,"VA ");assert_eq!(state.read(31,true,false).bits,0);assert!(state.flags==flags);
- }
- #[test]fn partial_flag_conditions_match_every_concrete_completion(){
-  let truth:[u16;16]=[0xf0f0,0x0f0f,0xcccc,0x3333,0xff00,0x00ff,0xaaaa,0x5555,0x0c0c,0xf3f3,0xaa55,0x55aa,0x0a05,0xf5fa,0xffff,0xffff];
-  for known in 0..16{for bits in 0..16{let facts=Flags::from_bits(bits,known);for code in 0..16{let mut outcomes=0;for concrete in 0..16{if concrete&known==bits&known{outcomes|=1u8<<u8::from(truth[code]&(1<<concrete)!=0);}}let expected=match outcomes{1=>Some(false),2=>Some(true),_=>None};assert_eq!(condition(facts,code as u8),expected,"{known} {bits} {code}");}}}
- }
- #[test]fn flag_joins_keep_only_independently_agreeing_facts(){
-  for known_a in 0..16{for bits_a in 0..16{for known_b in 0..16{for bits_b in 0..16{
-   let mut a=State::new();a.flags=Flags::from_bits(bits_a,known_a);let mut b=State::new();b.flags=Flags::from_bits(bits_b,known_b);a.join(&b);let expected=known_a&known_b&!(bits_a^bits_b)&15;assert_eq!(a.flags.map(|f|f.known).unwrap_or(0),expected);if let Some(f)=a.flags{assert_eq!(f.bits()&expected,bits_a&expected);}
-  }}}}
-  let f=logical_flags(UNKNOWN,true).unwrap();assert_eq!((f.known,f.bits()),(3,0));let f=logical_flags(Value{bits:1,known:1,relative:false},true).unwrap();assert_eq!((f.known,f.bits()),(7,0));
-  let(_,f)=arithmetic(Value{bits:0,known:15,relative:false},Value::integer(1),true,false);let f=f.unwrap();assert_eq!(f.get(4),Some(false));
- }
- #[test]fn partial_flags_drive_transfers_without_guessing_unknown_conditions(){
-  let mut state=State::new();state.registers[4]=Value::integer(42);state.registers[5]=Value::integer(7);
-  statement(Instruction::LogicalImmediate{wide:true,kind:3,d:31,n:0,value:255},None,0,&mut state,"VA ");let flags=state.flags.unwrap();assert_eq!((flags.known,flags.bits()),(11,0));
-  statement(Instruction::Carry{wide:true,subtract:false,flags:false,d:1,n:31,m:31},None,4,&mut state,"VA ");assert_eq!(state.read(1,true,false).full().unwrap().bits,0);
-  statement(Instruction::Carry{wide:true,subtract:true,flags:false,d:2,n:31,m:31},None,8,&mut state,"VA ");assert_eq!(state.read(2,true,false).full().unwrap().bits,u64::MAX);
-  for code in [3,5,7,9]{statement(Instruction::Select{wide:true,kind:0,d:3,n:4,m:5,condition:code},None,12,&mut state,"VA ");assert_eq!(state.read(3,true,false).full().unwrap().bits,42);}
-  statement(Instruction::Select{wide:true,kind:0,d:3,n:4,m:5,condition:0},None,16,&mut state,"VA ");assert!(state.read(3,true,false).full().is_none());assert!(state.flags==Some(flags));
- }
- #[test]fn product_bits_cover_concrete_wrapping_operands(){
-  fn variants(mask:u64)->Vec<u64>{let mut out=vec![0];for i in 0..64{if mask&(1u64<<i)!=0{let prior=out.clone();out.extend(prior.into_iter().map(|v|v|(1u64<<i)));}}out}
-  for wide in [false,true]{let word=mask(wide);for base_a in [0,1,0x1234,word,word-15,1u64<<if wide{63}else{31}]{for base_b in [0,1,2,3,0xabcd,word]{for unknown_a in [0,1,3,5,1u64<<if wide{63}else{31}]{for unknown_b in [0,1,3,5]{
-   let a=Value{bits:base_a&!unknown_a&word,known:!unknown_a,relative:false}.width(wide);let b=Value{bits:base_b&!unknown_b&word,known:!unknown_b,relative:false}.width(wide);let value=product(a,b,wide);
-   for aa in variants(unknown_a&word){for bb in variants(unknown_b&word){let exact=(a.bits|aa).wrapping_mul(b.bits|bb)&word;assert_eq!((exact^value.bits)&value.known&word,0);}}
-   if unknown_a==0&&unknown_b==0{assert_eq!(value.known,u64::MAX);assert_eq!(value.bits,a.bits.wrapping_mul(b.bits)&word);}
-  }}}}}
-  let a=Value{bits:0x1234,known:0xffff,relative:false};let value=product(a,Value::integer(2),true);assert_eq!((value.bits,value.known),(0x2468,0x1ffff));let value=product(a,Value{bits:0xabcd,known:0xffff,relative:false},true);assert_eq!((value.bits,value.known),(0x1234u64.wrapping_mul(0xabcd)&0xffff,0xffff));
-  let multiple=Value{bits:0,known:0xffff_ffff,relative:false};assert_eq!(product(multiple,multiple,true).full().unwrap().bits,0);
- }
- #[test]fn product_identities_preserve_types_registers_and_flags(){
-  let mut state=State::new();state.flags=logical_flags(UNKNOWN,true);let flags=state.flags;state.registers[2]=Value::integer(0);state.registers[3]=Value::integer(42);state.registers[31]=Value::integer(0xdeadbeef);
-  for subtract in [false,true]{statement(Instruction::Product{wide:true,subtract,d:4,n:0,m:2,a:3},None,0,&mut state,"VA ");assert_eq!(state.read(4,true,false).full().unwrap().bits,42);assert!(state.flags==flags);}
-  state.registers[2]=Value::integer(1);statement(Instruction::Product{wide:true,subtract:true,d:4,n:0,m:2,a:0},None,0,&mut state,"VA ");assert_eq!(state.read(4,true,false).full().unwrap().bits,0);
-  state.registers[0]=Value::coordinate(0x1000);statement(Instruction::Product{wide:true,subtract:false,d:4,n:0,m:2,a:31},None,0,&mut state,"VA ");assert!(state.read(4,true,false).relative);assert_eq!(state.read(4,true,false).bits,0x1000);
-  assert_eq!(product(Value::coordinate(0x1000),Value::integer(0),true).full().unwrap().bits,0);let shifted=product(Value::coordinate(0x1000),Value::integer(2),true);assert!(!shifted.relative);assert_eq!((shifted.bits,shifted.known),(0,1));
-  statement(Instruction::Product{wide:true,subtract:false,d:31,n:0,m:2,a:31},None,0,&mut state,"VA ");assert_eq!(state.registers[31].bits,0xdeadbeef);assert!(state.flags==flags);
-  let narrowed=product(UNKNOWN,Value::integer(2),false);assert_eq!(narrowed.known>>32,0xffff_ffff);assert_eq!(narrowed.bits>>32,0);
- }
- #[test]fn product_accumulation_retains_partial_addend_facts(){
-  let mut state=State::new();state.registers[0]=Value::integer(2);state.registers[1]=Value::integer(3);state.registers[2]=Value{bits:0x1000,known:0xffff,relative:false};
-  for(subtract,expected)in[(false,0x1006),(true,0xffa)]{statement(Instruction::Product{wide:true,subtract,d:3,n:0,m:1,a:2},None,0,&mut state,"VA ");let value=state.read(3,true,false);assert_eq!(value.bits&0xffff,expected);assert_eq!(value.known&0xffff,0xffff);}
-  state.registers[0]=UNKNOWN;state.registers[1]=Value::integer(0);state.registers[2]=Value{bits:1<<63,known:(1<<63)|1,relative:false};statement(Instruction::Product{wide:true,subtract:false,d:3,n:0,m:1,a:2},None,0,&mut state,"VA ");assert_eq!(state.read(3,true,false).known,(1<<63)|1);assert_eq!(state.read(3,true,false).bits,1<<63);
- }
- #[test]fn arithmetic_known_bits_cover_concrete_operands_and_flags(){
-  for wide in [false,true]{let word=mask(wide);let sign=1u64<<if wide{63}else{31};
-   for subtract in [false,true]{for(base_a,base_b)in [(0,0),(0,word),(sign-8,4),(sign,word-3),(word-7,1)]{for unknown_a in [1u64,3,5]{for unknown_b in [1u64,3,5]{
-    let a=Value{bits:base_a&!unknown_a,known:!unknown_a,relative:false}.width(wide);let b=Value{bits:base_b&!unknown_b,known:!unknown_b,relative:false}.width(wide);let(result,flags)=arithmetic(a,b,wide,subtract);
-    for aa in 0..8{if aa&!unknown_a!=0{continue;}for bb in 0..8{if bb&!unknown_b!=0{continue;}let(exact,exact_flags)=arithmetic(Value::integer(a.bits|aa),Value::integer(b.bits|bb),wide,subtract);assert_eq!(exact.bits&result.known,result.bits&result.known);if let Some(f)=flags{let g=exact_flags.unwrap();assert_eq!((f.bits()^g.bits())&f.known,0);}}}
-   }}}}
-  }
-  let(value,flags)=arithmetic(Value{bits:0x10,known:!1,relative:false},Value::integer(1),true,false);assert!(value.full().is_none());let f=flags.unwrap();assert!(!f.n&&!f.z&&!f.c&&!f.v);
-  assert_eq!(arithmetic(Value::coordinate(0x1000),Value{bits:0,known:!1,relative:false},true,false).0.known,0);
- }
- #[test]fn carry_results_and_flags_match_integer_oracle(){
-  for wide in [false,true]{let word=mask(wide);let width=if wide{64}else{32};let sign=1u64<<(width-1);let signed=|x:u64|if x&sign!=0{x as i128-(1i128<<width)}else{x as i128};
-   for subtract in [false,true]{for a in [0,1,word,word-1,sign,sign-1]{for b in [0,1,word,word-1,sign,sign-1]{for carry in [Some(false),Some(true),None]{
-    let(value,flags)=carry_arithmetic(Value::integer(a),Value::integer(b),wide,subtract,carry);
-    for c in [false,true]{if carry.is_some_and(|wanted|wanted!=c){continue;}let addend=if subtract{(!b)&word}else{b};let total=a as u128+addend as u128+u128::from(c);let bits=total as u64&word;let signed_total=if subtract{signed(a)-signed(b)-i128::from(!c)}else{signed(a)+signed(b)+i128::from(c)};let expected=Flags{n:bits&sign!=0,z:bits==0,c:total>word as u128,v:signed_total< -(1i128<<(width-1))||signed_total>=(1i128<<(width-1)),known:15};assert_eq!((bits^value.bits)&value.known,0);if carry.is_some(){assert_eq!(value.known,u64::MAX);assert!(flags==Some(expected));}else if let Some(actual)=flags{assert_eq!((actual.bits()^expected.bits())&actual.known,0);}
-    }
-   }}}}
-  }
- }
- #[test]fn partial_carry_results_cover_concrete_operands(){
-  for wide in [false,true]{let word=mask(wide);let sign=1u64<<if wide{63}else{31};for subtract in [false,true]{for carry in [Some(false),Some(true),None]{for(base_a,base_b)in [(0,0),(sign-4,1),(word-3,word-7)]{for unknown_a in [1u64,3,5]{for unknown_b in [1u64,3,5]{
-   let a=Value{bits:base_a&!unknown_a,known:!unknown_a,relative:false}.width(wide);let b=Value{bits:base_b&!unknown_b,known:!unknown_b,relative:false}.width(wide);let(value,flags)=carry_arithmetic(a,b,wide,subtract,carry);
-   for aa in 0..8{if aa&!unknown_a!=0{continue;}for bb in 0..8{if bb&!unknown_b!=0{continue;}for c in [false,true]{if carry.is_some_and(|wanted|wanted!=c){continue;}let(exact,exact_flags)=carry_arithmetic(Value::integer(a.bits|aa),Value::integer(b.bits|bb),wide,subtract,Some(c));assert_eq!((exact.bits^value.bits)&value.known,0);if let Some(actual)=flags{let exact=exact_flags.unwrap();assert_eq!((actual.bits()^exact.bits())&actual.known,0);}}}}
-  }}}}}}
- }
- #[test]fn carry_registers_flags_and_coordinate_types_are_preserved(){
-  let mut state=State::new();state.registers[2]=Value::integer(41);state.registers[31]=Value::integer(0xdeadbeef);state.flags=Some(Flags{n:false,z:true,c:true,v:false,known:15});let saved=state.flags;
-  let inst=decode(0x9a1f0043,None);assert_eq!(mnemonic(inst,None),"ADC");statement(inst,None,0,&mut state,"RVA ");assert_eq!(state.read(3,true,false).full().unwrap().bits,42);assert!(state.flags==saved);assert_eq!(state.registers[31].bits,0xdeadbeef);
-  statement(decode(0xba1f03ff,None),None,4,&mut state,"RVA ");assert!(state.flags==Some(Flags{n:false,z:false,c:false,v:false,known:15}));assert_eq!(state.registers[31].bits,0xdeadbeef);
-  for subtract in [false,true]{for c in [false,true]{let(value,flags)=carry_arithmetic(Value::coordinate(0x1000),Value::integer(4),true,subtract,Some(c));assert!(value.relative&&flags.is_none());assert_eq!(value.bits,if subtract{0x1000-4-u64::from(!c)}else{0x1000+4+u64::from(c)});}}
-  assert_eq!(carry_arithmetic(Value::coordinate(0x1000),Value::integer(0),true,false,None).0.known,0);assert_eq!(carry_arithmetic(Value::integer(u64::MAX),Value::integer(0),false,false,Some(true)).0.bits,0);
- }
- #[test]fn identical_register_operands_retain_algebraic_identities(){
-  for wide in [false,true]{for initial in [UNKNOWN,Value::coordinate(0x1000),Value::integer(0x1234)]{
-   let mut state=State::new();state.registers[1]=initial;
-   statement(Instruction::Arithmetic{wide,subtract:true,flags:true,d:2,n:1,m:1,shift:1,amount:0},None,0,&mut state,"RVA ");assert_eq!(state.read(2,wide,false).full().unwrap().bits,0);assert!(state.flags==Some(Flags{n:false,z:true,c:true,v:false,known:15}));
-   for c in [false,true]{state.flags=Some(Flags{n:false,z:false,c,v:false,known:15});statement(Instruction::Carry{wide,subtract:true,flags:true,d:3,n:1,m:1},None,0,&mut state,"RVA ");assert_eq!(state.read(3,wide,false).full().unwrap().bits,if c{0}else{mask(wide)});assert!(state.flags==Some(Flags{n:!c,z:c,c,v:false,known:15}));}
-   for kind in 0..4{for invert in [false,true]{state.registers[1]=initial;statement(Instruction::Logical{wide,kind,invert,d:4,n:1,m:1,shift:3,amount:0},None,0,&mut state,"RVA ");let value=state.read(4,wide,false);match(kind,invert){(0|1|3,false)=>{let expected=initial.width(wide);assert_eq!((value.bits,value.known,value.relative),(expected.bits,expected.known,expected.relative));},(2,false)|(0|3,true)=>{assert_eq!(value.full().unwrap().bits,0);if kind==3{assert!(state.flags==Some(Flags{n:false,z:true,c:false,v:false,known:15}));}},_=>assert_eq!(value.full().unwrap().bits,mask(wide)),}}}
-  }}
-  let mut state=State::new();statement(Instruction::Arithmetic{wide:true,subtract:true,flags:true,d:2,n:0,m:1,shift:0,amount:0},None,0,&mut state,"RVA ");assert_eq!(state.read(2,true,false).known,0);assert!(state.flags.is_none());
- }
- #[test]fn conditional_selection_retains_only_common_value_bits(){
-  for wide in [false,true]{for kind in 0..4{
-   let mut state=State::new();state.registers[1]=Value::integer(41);state.registers[2]=Value::integer(43);
-   let _=statement(Instruction::Select{wide,kind,d:3,n:1,m:2,condition:0},None,0,&mut state,"RVA ");let value=state.read(3,wide,false);let other=match kind{0=>43,1=>44,2=>!43u64,_=>43u64.wrapping_neg()}&mask(wide);assert_eq!(value.bits&value.known,41&value.known);assert_eq!(value.bits&value.known,other&value.known);
-   if kind==0{let _=statement(Instruction::LogicalImmediate{wide,kind:0,d:4,n:3,value:mask(wide)&!2},None,4,&mut state,"RVA ");assert_eq!(state.read(4,wide,false).full().unwrap().bits,41);}
-   state.flags=Some(Flags{n:false,z:true,c:false,v:false,known:15});let _=statement(Instruction::Select{wide,kind,d:3,n:1,m:2,condition:0},None,0,&mut state,"RVA ");assert_eq!(state.read(3,wide,false).full().unwrap().bits,41);
-  }}
-  let mut state=State::new();state.registers[1]=Value::coordinate(0x1000);state.registers[2]=Value::coordinate(0x1000);let _=statement(Instruction::Select{wide:true,kind:0,d:3,n:1,m:2,condition:0},None,0,&mut state,"RVA ");assert!(state.read(3,true,false).full().unwrap().relative);state.registers[2]=Value::integer(0x1000);let _=statement(Instruction::Select{wide:true,kind:0,d:3,n:1,m:2,condition:0},None,0,&mut state,"RVA ");assert_eq!(state.read(3,true,false).known,0);
- }
- #[test]fn logical_known_bits_cover_concrete_operands(){
-  for ak in 0u64..16{for av in 0u64..16{if av&!ak!=0{continue;}for bk in 0u64..16{for bv in 0u64..16{if bv&!bk!=0{continue;}for kind in 0..3{let a=Value{bits:av,known:ak|!15,relative:false};let b=Value{bits:bv,known:bk|!15,relative:false};let result=logical(a,b,true,kind);for x in 0u64..16{if x&ak!=av{continue;}for y in 0u64..16{if y&bk!=bv{continue;}let actual=match kind{0=>x&y,1=>x|y,_=>x^y};assert_eq!((actual^result.bits)&result.known,0);}}}}}}}
- }
- #[test]fn shifted_known_bits_cover_concrete_operands(){
-  for wide in [false,true]{let word=mask(wide);for negative in [false,true]{let prefix=if negative{word&!15}else{0};let abstract_value=Value{bits:prefix,known:!15,relative:false};for amount in [0,1,7,15,31]{for kind in 0..4{let result=shifted(abstract_value,wide,kind,amount);for low in 0..16{let x=prefix|low;let actual=match kind{0=>x.wrapping_shl(amount as u32)&word,1=>x>>amount,2=>if wide{((x as i64)>>amount)as u64}else{((x as u32 as i32)>>amount)as u32 as u64},_=>if wide{x.rotate_right(amount as u32)}else{(x as u32).rotate_right(amount as u32)as u64}};assert_eq!((actual^result.bits)&result.known,0);}}}}}
-  assert_eq!(shifted(UNKNOWN,true,2,1).known,0);assert_eq!(shifted(UNKNOWN,false,2,1).known,!0xffff_ffff);
- }
- #[test]fn logical_coordinates_and_partial_flags_preserve_meaning(){
-  let coordinate=Value::coordinate(0x1000);assert!(logical(coordinate,Value::integer(0),true,2).relative);assert_eq!(logical(coordinate,Value::integer(0),true,0).full().unwrap().bits,0);assert_eq!(logical(coordinate,Value::integer(1),true,2).known,0);
-  let partial=Value{bits:1,known:(1<<63)|1,relative:false};let flags=logical_flags(partial,true).unwrap();assert!(!flags.n&&!flags.z&&!flags.c&&!flags.v);let coordinate_flags=logical_flags(coordinate,true).unwrap();assert_eq!(coordinate_flags.known,3);assert_eq!(coordinate_flags.bits(),0);
- }
- #[test]fn captured_entry_join_preserves_bits_coordinates_and_unknowns(){
-  let v=Value::integer(0x29).join(Value::integer(0x63));assert_eq!(v.bits,0x21);assert_eq!(v.known,0xffffffffffffffb5);assert!(v.full().is_none());
-  assert_eq!(Value::coordinate(0x1000).join(Value::integer(0x1000)).known,0);assert!(Value::coordinate(0x1000).join(Value::coordinate(0x1000)).relative);assert_eq!(Value::coordinate(0x1000).join(Value::coordinate(0x1004)).known,0);assert_eq!(UNKNOWN.join(Value::integer(0)).known,0);
-  let mut left=State::new();left.registers[4]=Value::integer(0x29);left.flags=Some(Flags{n:false,z:true,c:true,v:false,known:15});let mut right=left.clone();right.registers[4]=Value::integer(0x63);left.join(&right);assert_eq!(left.registers[4].known,0xffffffffffffffb5);assert!(left.flags.is_some());left.join(&State::new());assert_eq!(left.registers[4].known,0);assert!(left.flags.is_none());
- }
- #[test]fn captured_entry_common_facts_feed_successor_instructions(){
-  let a=report(&[0xd2800524,0x14000002,0xd2800c64,0x92400086,0x910004c7,0xd65f03c0]);
-  assert!(!a.statements[3].text.contains("X6 <- encoded integer 0x1"));assert!(a.statements[4].text.contains("X7 <- partial integer bits0x0, known mask0xfffffffffffffffc"));
-  assert!(a.statements[3].path_facts.contains("Captured-entry interpretation")&&a.statements[3].path_facts.contains("X6 <- encoded integer 0x1"));
-  assert!(a.statements[4].path_facts.contains("Captured-entry interpretation")&&a.statements[4].path_facts.contains("X7 <- encoded integer 0x2"));
-  assert!(a.statements[3].path_facts.contains("Conditional path")&&a.statements[3].path_facts.contains("Captured-entry join"));
-  assert!(a.text.contains("same-block words interpreted from common captured-entry facts"));
- }
- #[test]fn captured_entry_annotations_keep_priority_under_shared_budget(){
-  let mut w=words(&[0xd2800524,0x14000002,0xd2800c64,0x92400086,0x910004c7,0xd65f03c0].repeat(16));for word in &mut w{word.1+=0x20411c;}
-  let a=observe(&w,"declared VA ",&||false).unwrap();
-  assert!(a.statements.iter().filter(|s|s.path_facts.contains("Captured-entry join for block")).count()>=10);
-  assert!(a.statements.iter().map(|s|s.path_facts.len()).sum::<usize>()<=24*1024);assert!(a.statements.iter().all(|s|s.text.len()+s.path_facts.len()<=1600));
- }
- #[test]fn authenticated_targets_require_runtime_context(){
-  let words:Vec<Word>=[0x10000043,0xd71f0864,0x91000465,0xd65f03c0].iter().enumerate().map(|(i,&word)|{let b=super::super::control_flow::decode_version(word,3);((i*4)as u64,(i*4)as u64,word,b,decode(word,b))}).collect();
-  let result=observe(&words,"declared VA ",&||false).unwrap();assert!(result.text.contains("authenticated indirect jump candidate: unresolved"));assert!(result.statements[2].text.contains("X5 <- unknown"));assert!(!result.statements[2].path_facts.contains("Conditional path"));
- }
- #[test]fn locally_known_condition_selects_only_its_successor(){
-  let a=report(&[0xd2800000,0xb4000040,0x91000401,0x91000802,0xd65f03c0]);assert!(!a.statements[2].path_facts.contains("edge at declared VA 0x4"));assert!(a.statements[3].path_facts.contains("edge at declared VA 0x4 (taken alternative)")&&a.statements[3].path_facts.contains("encoded integer 0x2"));
- }
- #[test]fn source_coordinates_remain_distinct_from_integer_values(){
-  let a=observe(&words(&[0x10000040,0x14000002,0xd503201f,0x91000401,0xd65f03c0]),"RVA ",&||false).unwrap();let line=format!("{}{}",a.statements[3].text,a.statements[3].path_facts);assert!(line.contains("encoded source coordinate RVA 0x9"));assert!(!line.contains("encoded integer 0x9"));
- }
- #[test]fn no_iterative_loop_or_unavailable_target_is_invented(){
-  let a=report(&[0xd28000e0,0x17ffffff]);assert!(a.text.contains("1 captured edges examined"));let a=report(&[0xd28000e0,0x14000400]);assert!(a.text.contains("0 captured edges examined"));
- }
- #[test]fn path_work_and_annotation_storage_are_bounded(){
-  let mut data=vec![0x14000001;512];data[0]=0xd28000e0;let a=report(&data);assert!(a.text.contains("64 captured edges examined"));assert!(a.text.len()<OUTPUT);assert!(a.statements.iter().all(|s|s.text.len()+s.path_facts.len()<=1600));assert!(a.statements.iter().map(|s|s.path_facts.len()).sum::<usize>()<=24*1024);assert!(observe(&words(&vec![0xd503201f;513]),"RVA ",&||false).is_err());
- }
- #[test]fn conditional_path_cancellation_is_cooperative(){
-  let w=words(&[0xd28000e0,0x14000001,0x91000401]);let mut a=report(&[0xd28000e0,0x14000001,0x91000401]);let mut state=State::new();let _=statement(w[0].4,w[0].3,0,&mut state,"RVA ");let mut out=Text{body:String::new(),rows:0,omitted:0};assert!(conditional_paths(&w,&[(1,0,state)],&mut a.statements,"RVA ",&mut out,&||true).unwrap_err().contains("cancelled"));
- }
- #[test]fn one_assignment_line_uses_the_mnemonic_and_registers(){
-  let analysis=report(&[0x91000401]);let mut text=String::new();structured(&mut text,&analysis.statements);
-  assert_eq!(text,"assignment ADD X1 X0\nThe instructions were not executed. This is reconstructed text.\n");
-  assert!(analysis.text.ends_with("The instructions were not executed. This is reconstructed text.\n"));
- }
- #[test]fn one_direct_branch_is_one_branch_line(){
-  let analysis=report(&[0x14000002]);let mut text=String::new();structured(&mut text,&analysis.statements);
-  assert_eq!(text,"branch B\nThe instructions were not executed. This is reconstructed text.\n");
-  assert!(analysis.text.ends_with("The instructions were not executed. This is reconstructed text.\n"));
- }
- #[test]fn one_return_mnemonic_is_one_return_line(){
-  let analysis=report(&[0xd65f03c0]);let mut text=String::new();structured(&mut text,&analysis.statements);
-  assert_eq!(text,"return RET X30\nThe instructions were not executed. This is reconstructed text.\n");
-  assert!(analysis.text.ends_with("The instructions were not executed. This is reconstructed text.\n"));
- }
- #[test]fn one_unclassified_word_keeps_the_existing_line(){
-  let analysis=report(&[0xffffffff]);let mut text=String::new();structured(&mut text,&analysis.statements);
-  assert_eq!(analysis.statements[0].text,"unclassified/reserved/unsupported word; candidate block and register/flag knowledge end here");
-  assert_eq!(text,"unclassified/reserved/unsupported word; candidate block and register/flag knowledge end here\nThe instructions were not executed. This is reconstructed text.\n");
-  assert!(analysis.text.ends_with("The instructions were not executed. This is reconstructed text.\n"));
- }
 }
