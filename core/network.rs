@@ -420,7 +420,7 @@ pub fn tls_identity(effect: &mut Json, name: &str) -> Result<()> {
     Ok(())
 }
 pub fn decoded_bytes(bytes: &[u8]) -> Result<(u16, Vec<u8>)> {
-    decoded_bytes_with_interim(bytes, 0, 0, false)
+    decoded_bytes_with_interim(bytes, 0, 0, false, false)
 }
 pub(super) fn response_status(line: &str) -> Result<u16> {
     let bytes = line.as_bytes();
@@ -592,8 +592,8 @@ fn scan_response_head(bytes: &[u8]) -> Result<(ResponseHead, usize)> {
     }
     Ok((ResponseHead { code, length, chunked, coding }, end + 4))
 }
-fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allowed_error: u16, coded:bool) -> Result<(u16, Vec<u8>)> {
-    if bytes.len() > 8 * 1024 * 1024 {
+fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allowed_error: u16, coded:bool, provider_stream: bool) -> Result<(u16, Vec<u8>)> {
+    if !provider_stream && bytes.len() > 8 * 1024 * 1024 {
         return Err("Response exceeds 8 MiB".into());
     }
     let (head, body_at) = scan_response_head(bytes)?;
@@ -618,7 +618,7 @@ fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allowed_error: u1
         if code == 101 || chunked || length.unwrap_or(0) != 0 {
             return Err("Unsupported informational response".into());
         }
-        return decoded_bytes_with_interim(&bytes[body_at..], interim_count + 1, allowed_error, coded);
+        return decoded_bytes_with_interim(&bytes[body_at..], interim_count + 1, allowed_error, coded, provider_stream);
     }
     let data = &bytes[body_at..];
     let out = if code == 204 || code == 304 {
@@ -651,14 +651,16 @@ fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allowed_error: u1
                 }
                 break;
             }
-            if n > 8 * 1024 * 1024 || p.checked_add(n + 2).filter(|e| *e <= data.len()).is_none() {
-                return Err("Incomplete chunk data".into());
-            }
-            if &data[p + n..p + n + 2] != b"\r\n" {
+            let next = p.checked_add(n).and_then(|end| end.checked_add(2))
+                .filter(|end| *end <= data.len()).ok_or("Incomplete chunk data")?;
+            if &data[next - 2..next] != b"\r\n" {
                 return Err("Invalid chunk terminator".into());
             }
-            out.extend_from_slice(&data[p..p + n]);
-            p += n + 2;
+            if provider_stream {
+                out.try_reserve(n).map_err(|_| "Insufficient memory to decode the provider stream")?;
+            }
+            out.extend_from_slice(&data[p..next - 2]);
+            p = next;
         }
         out
     } else {
@@ -667,7 +669,12 @@ fn decoded_bytes_with_interim(bytes: &[u8], interim_count: u8, allowed_error: u1
                 return Err("Incomplete or oversized response body".into());
             }
         }
-        data.to_vec()
+        let mut out = Vec::new();
+        if provider_stream {
+            out.try_reserve_exact(data.len()).map_err(|_| "Insufficient memory to decode the provider stream")?;
+        }
+        out.extend_from_slice(data);
+        out
     };
     if code == 304 {
         return Err("HTTP 304: server returned representation metadata.".into());
@@ -691,10 +698,14 @@ pub fn decoded(bytes: &[u8]) -> Result<(u16, String)> {
         String::from_utf8(data).map_err(|_| "File or response is not UTF-8 text")?,
     ))
 }
+pub(super) fn decoded_provider_stream(bytes: &[u8]) -> Result<(u16, String)> {
+    let (code, data) = decoded_bytes_with_interim(bytes, 0, 0, false, true)?;
+    Ok((code, String::from_utf8(data).map_err(|_| "File or response is not UTF-8 text")?))
+}
 /// A recoverable create may inspect a framed 404 before a conditional PUT.
 /// Redirects, auth failures, malformed framing and all other errors stay errors.
 pub fn decoded_optional_file(bytes:&[u8])->Result<(u16,String)>{
-    let (code,data)=decoded_bytes_with_interim(bytes,0,404,false)?;
+    let (code,data)=decoded_bytes_with_interim(bytes,0,404,false,false)?;
     Ok((code,String::from_utf8(data).map_err(|_|"File or response is not UTF-8 text")?))
 }
 pub fn strong_etag(bytes: &[u8]) -> Result<String> {
@@ -767,10 +778,10 @@ pub fn wire_binary(
     Ok(effect)
 }
 
-pub fn decoded_optional_bytes(bytes:&[u8])->Result<(u16,Vec<u8>)>{decoded_bytes_with_interim(bytes,0,404,false)}
+pub fn decoded_optional_bytes(bytes:&[u8])->Result<(u16,Vec<u8>)>{decoded_bytes_with_interim(bytes,0,404,false,false)}
 
 /// Explicit page/resource transport only. Default transport remains identity.
-pub fn decoded_coded_bytes(bytes:&[u8])->Result<(u16,Vec<u8>)>{decoded_bytes_with_interim(bytes,0,0,true)}
+pub fn decoded_coded_bytes(bytes:&[u8])->Result<(u16,Vec<u8>)>{decoded_bytes_with_interim(bytes,0,0,true,false)}
 pub fn page_wire(address:&str,plain:bool,headers:Vec<(&str,String)>)->Result<Json>{let mut effect=wire(address,plain,"GET","",headers)?;let w=effect.get("wire")?.text()?.replacen("Accept-Encoding: identity\r\n","Accept-Encoding: gzip, identity\r\n",1);if let Obj(ref mut fields)=effect{fields.insert("wire".into(),s(&w));}Ok(effect)}
 
 const FRAME_CHUNK:usize=65536;
@@ -845,6 +856,6 @@ pub(super) fn frame(v:&Json)->Result<Json>{
 /// Device authorization alone needs the protocol's framed HTTP 400 responses.
 /// Other HTTP errors and all existing callers retain their strict status policy.
 pub fn decoded_authorization(bytes: &[u8]) -> Result<(u16, String)> {
-    let (status, data) = decoded_bytes_with_interim(bytes, 0, 400, false)?;
+    let (status, data) = decoded_bytes_with_interim(bytes, 0, 400, false, false)?;
     Ok((status, String::from_utf8(data).map_err(|_| "Authorization response is not UTF-8")?))
 }

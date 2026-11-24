@@ -1,8 +1,9 @@
 use super::*;
 use std::sync::{Mutex, OnceLock};
 
-const LIMIT: usize = 2 * 1024 * 1024;
-const TEXT_LIMIT: usize = 1024 * 1024;
+const MCP_WIRE_LIMIT: usize = 2 * 1024 * 1024;
+const MCP_TEXT_LIMIT: usize = 1024 * 1024;
+const STREAM_MEMORY: &str = "Insufficient memory to decode the provider stream";
 const CHUNK_HEADER_TOO_LONG: &str = "Stream chunk header exceeds limit";
 
 /// Incremental text is provisional. A completed reply is returned only after
@@ -339,7 +340,7 @@ impl Transfer {
         self.cursor_event();Ok(())
     }
     fn append(&mut self, content: &str) -> Result<()> {
-        if self.text.len().saturating_add(content.len()) > TEXT_LIMIT { return Err("Streamed reply exceeds 1 MiB".into()); }
+        self.text.try_reserve(content.len()).map_err(|_| STREAM_MEMORY)?;
         self.text.push_str(content); Ok(())
     }
     fn event(&mut self) -> Result<()> {
@@ -436,7 +437,12 @@ impl Transfer {
         }
         if name == "data" {
             let value = value.strip_prefix(' ').unwrap_or(value);
-            if self.event.len().saturating_add(value.len()).saturating_add(1)>TEXT_LIMIT {return Err("Stream event exceeds 1 MiB".into());}
+            if self.mcp {
+                if self.event.len().saturating_add(value.len()).saturating_add(1)>MCP_TEXT_LIMIT {return Err("Stream event exceeds 1 MiB".into());}
+            } else {
+                let extra = value.len().checked_add(1).ok_or(STREAM_MEMORY)?;
+                self.event.try_reserve(extra).map_err(|_| STREAM_MEMORY)?;
+            }
             self.event.push_str(value);self.event.push('\n');
         }
         Ok(())
@@ -470,12 +476,19 @@ impl Transfer {
             for byte in bytes {
                 if self.carriage {self.carriage=false;if *byte==b'\n' {continue;}}
                 if *byte==b'\r' || *byte==b'\n' {self.event_line()?;self.carriage=*byte==b'\r';}
-                else {if self.line.len()>=TEXT_LIMIT {return Err("Stream line exceeds 1 MiB".into());}self.line.push(*byte);}
+                else {
+                    if self.mcp {
+                        if self.line.len()>=MCP_TEXT_LIMIT {return Err("Stream line exceeds 1 MiB".into());}
+                    } else {
+                        self.line.try_reserve(1).map_err(|_| STREAM_MEMORY)?;
+                    }
+                    self.line.push(*byte);
+                }
             }
             return Ok(());
         }
         for part in bytes.split_inclusive(|b| *b == b'\n') {
-            if self.line.len().saturating_add(part.len()) > TEXT_LIMIT { return Err("Stream record exceeds 1 MiB".into()); }
+            self.line.try_reserve(part.len()).map_err(|_| STREAM_MEMORY)?;
             self.line.extend_from_slice(part);
             if part.last() == Some(&b'\n') { let line = std::mem::take(&mut self.line); self.record(&line)?; }
         }
@@ -536,7 +549,11 @@ impl Transfer {
         super::mcp_lifecycle::mcp_refusal(super::mcp_lifecycle::mcp_credential_sent(&context),code,challenge.as_deref(),if self.server_stream{"listen"}else{"connect"})
     }
     fn feed(&mut self, bytes: &[u8]) -> Result<()> {
-        if self.raw.len().saturating_add(bytes.len()) > LIMIT { return Err("Stream response exceeds 2 MiB".into()); }
+        if self.mcp {
+            if self.raw.len().saturating_add(bytes.len()) > MCP_WIRE_LIMIT { return Err("Stream response exceeds 2 MiB".into()); }
+        } else {
+            self.raw.try_reserve(bytes.len()).map_err(|_| STREAM_MEMORY)?;
+        }
         self.raw.extend_from_slice(bytes);
         while !self.headers {
             let Some(relative_end)=network::response_head_end(&self.raw[self.offset..]).map_err(|_|"HTTP headers exceed limit")? else {return Ok(());};
@@ -645,7 +662,10 @@ impl Transfer {
         }
         loop {
             if !self.chunked {
-                let data = self.raw[self.offset..].to_vec(); self.offset = self.raw.len(); self.body(&data)?; break;
+                let start = self.offset;
+                self.offset = self.raw.len();
+                self.feed_body(start, self.offset)?;
+                break;
             }
             if self.trailers {
                 self.feed_trailers()?;
@@ -656,23 +676,31 @@ impl Transfer {
                 let Some(size_end)=network::chunk_line_end(pending).map_err(|_|CHUNK_HEADER_TOO_LONG)? else {break;};
                 let line = &pending[..size_end];
                 self.remaining = usize::try_from(network::chunk_size(line)?)
-                    .map_err(|_| "Stream chunk exceeds response limit")?;
-                if self.remaining > LIMIT { return Err("Stream chunk exceeds response limit".into()); }
+                    .map_err(|_| "Stream chunk length is not representable")?;
+                if self.mcp && self.remaining > MCP_WIRE_LIMIT { return Err("Stream chunk exceeds response limit".into()); }
                 self.offset += size_end + 2;
                 if self.remaining == 0 { self.trailers = true; continue; }
             }
             // A chunk's text or controls can be published as soon as it is decoded.
-            let end = self.offset + self.remaining;
-            if self.raw.len() < end + 2 { break; }
-            if &self.raw[end..end+2] != b"\r\n" {
+            let start = self.offset;
+            let next = start.checked_add(self.remaining).and_then(|end| end.checked_add(2))
+                .ok_or("Stream chunk length overflow")?;
+            if self.raw.len() < next { break; }
+            let end = next - 2;
+            if &self.raw[end..next] != b"\r\n" {
                 return Err("Invalid stream chunk terminator".into());
             }
-            let data = self.raw[self.offset..end].to_vec();
-            self.offset = end + 2;
+            self.offset = next;
             self.remaining = 0;
-            self.body(&data)?;
+            self.feed_body(start, end)?;
         }
         Ok(())
+    }
+    fn feed_body(&mut self, start: usize, end: usize) -> Result<()> {
+        let raw = std::mem::take(&mut self.raw);
+        let result = self.body(&raw[start..end]);
+        self.raw = raw;
+        result
     }
     fn framed(&self) -> bool {
         if !self.headers {return false;}
@@ -715,7 +743,7 @@ impl Transfer {
             if let Some(result)=self.terminal.take(){return Ok(result.string());}
             return Ok(self.json_terminal()?.string());
         }
-        let (_, body) = network::decoded(&self.raw)?;
+        let (_, body) = network::decoded_provider_stream(&self.raw)?;
         if self.json || !self.headers || (self.chat && self.text.is_empty() && self.terminal.is_none() && body.trim_start().starts_with('{')) {
             // A compatible server may ignore stream=true and return one JSON reply.
             let protocol = if self.content {"content"} else if self.messages {"messages"} else if self.chat {"chat"} else {"local"};
@@ -1353,7 +1381,7 @@ pub(super) fn batch_result_for(records:Vec<Json>,expected:&Json)->Result<Option<
     }Ok(terminal)
 }
 pub(super) fn json_batch_media(mut raw:&[u8],body_len:usize)->Result<()>{
-    if raw.len()>LIMIT||body_len>TEXT_LIMIT{return Err("MCP JSON batch exceeds bounded response bytes".into());}
+    if raw.len()>MCP_WIRE_LIMIT||body_len>MCP_TEXT_LIMIT{return Err("MCP JSON batch exceeds bounded response bytes".into());}
     for _ in 0..=4 {
         let end=raw.windows(4).position(|v|v==b"\r\n\r\n").ok_or("Incomplete MCP JSON batch headers")?;if end>65536{return Err("MCP JSON batch headers exceed limit".into());}
         let header=std::str::from_utf8(&raw[..end]).map_err(|_|"Invalid MCP JSON batch header text")?;let mut lines=header.split("\r\n");let mut status=lines.next().unwrap_or("").split_whitespace();let version=status.next().unwrap_or("");let code=status.next().unwrap_or("");
