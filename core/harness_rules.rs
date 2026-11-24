@@ -315,3 +315,9 @@ pub(super) fn sha256(bytes:&[u8])->String{
  for block in 0..blocks{let mut data=[0u8;64];for(i,v)in data.iter_mut().enumerate(){let index=block*64+i;*v=if index<bytes.len(){bytes[index]}else if index==bytes.len(){0x80}else if index>=blocks*64-8{((bytes.len()as u64*8)>>((blocks*64-1-index)*8))as u8}else{0};}let mut w=[0u32;64];for i in 0..16{w[i]=u32::from_be_bytes(data[i*4..i*4+4].try_into().unwrap());}for i in 16..64{let s0=w[i-15].rotate_right(7)^w[i-15].rotate_right(18)^(w[i-15]>>3);let s1=w[i-2].rotate_right(17)^w[i-2].rotate_right(19)^(w[i-2]>>10);w[i]=w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1);}let[mut a,mut b,mut c,mut d,mut e,mut f,mut g,mut x]=h;for i in 0..64{let t1=x.wrapping_add(e.rotate_right(6)^e.rotate_right(11)^e.rotate_right(25)).wrapping_add((e&f)^(!e&g)).wrapping_add(K[i]).wrapping_add(w[i]);let t2=(a.rotate_right(2)^a.rotate_right(13)^a.rotate_right(22)).wrapping_add((a&b)^(a&c)^(b&c));x=g;g=f;f=e;e=d.wrapping_add(t1);d=c;c=b;b=a;a=t1.wrapping_add(t2);}for(i,v)in[a,b,c,d,e,f,g,x].iter().enumerate(){h[i]=h[i].wrapping_add(*v);}}
  h.iter().map(|v|format!("{v:08x}")).collect()
 }
+
+// Public worker entry uses the live user policy; no caller-supplied policy is trusted.
+pub(super) fn worker_policy(v:&Json)->Result<Json>{let global=gateway_current(&Null)?;gateway_check(&global,&text(v,"tool"),get(v,"args"))?;Ok(global)}
+pub(super) fn worker_review_required(global:&Json,v:&Json)->bool{let state=obj(vec![("harness_policy",global.clone())]);review_required(&state,v)}
+
+pub(super) fn storage_tool(method:&str,purpose:&str)->&'static str{match method{"GET"|"HEAD"=>"drive_read","PROPFIND"=>"drive_list","MKCOL"=>"drive_folder",_=>if purpose.contains("update"){"drive_update"}else{"drive_create"}}}
