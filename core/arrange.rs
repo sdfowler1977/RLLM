@@ -259,6 +259,10 @@ impl Pen<'_> {
     }
 
     fn button(&mut self, area: [i32; 4], label: &str, action: &str, style: Style, enabled: bool) {
+        self.control(area, label, action, style, enabled, 10);
+    }
+
+    fn control(&mut self, area: [i32; 4], label: &str, action: &str, style: Style, enabled: bool, radius: i32) {
         let pal = self.pal;
         let (fill, ink) = match style {
             Style::Primary => (pal.accent, pal.surface),
@@ -266,7 +270,6 @@ impl Pen<'_> {
             Style::Ghost => (0, pal.accent),
             Style::Quiet => (0, pal.muted),
         };
-        let radius = 10;
         self.fill(area, radius, fill);
         if style == Style::Tonal {
             self.edge(area, radius, pal.border);
@@ -543,6 +546,7 @@ fn dialog_body(pen: &mut Pen, modal: &Json, buttons: &[Json], x: i32, top: i32, 
         }
     }
     let list = text(modal, "presentation") == "list";
+    let pills = text(modal, "presentation") == "pills";
     if buttons.is_empty() && y == top {
         // A list with nothing in it says so instead of showing an empty frame.
         pen.text([x, y, width, body], BODY, pal.muted, "Nothing here yet.", 0);
@@ -553,12 +557,13 @@ fn dialog_body(pen: &mut Pen, modal: &Json, buttons: &[Json], x: i32, top: i32, 
     let paired = !list && buttons.len() > MANY && width >= pen.d(520);
     if paired {
         let (gap, tall) = (pen.d(10), pen.d(44));
+        let radius = if pills { 22 } else { 10 };
         let half = (width - gap) / 2;
         for (index, button) in buttons.iter().enumerate() {
             let enabled = get(button, "enabled") == &Null || boolean(button, "enabled");
             let (column, row) = ((index % 2) as i32, (index / 2) as i32);
             let area = [x + column * (half + gap), y + row * (tall + gap), half, tall];
-            pen.button(area, &text(button, "label"), &text(button, "event"), Style::Tonal, enabled);
+            pen.control(area, &text(button, "label"), &text(button, "event"), Style::Tonal, enabled, radius);
         }
         let lines = ((buttons.len() + 1) / 2) as i32;
         return y + lines * (tall + gap) - top;
@@ -582,7 +587,8 @@ fn dialog_body(pen: &mut Pen, modal: &Json, buttons: &[Json], x: i32, top: i32, 
             y += tall;
         } else {
             let tall = pen.d(42);
-            pen.button([x, y, width, tall], &label, &event, Style::Tonal, enabled);
+            let radius = if pills { 21 } else { 10 };
+            pen.control([x, y, width, tall], &label, &event, Style::Tonal, enabled, radius);
             y += tall + pen.d(8);
         }
     }

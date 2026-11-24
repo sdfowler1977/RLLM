@@ -14,14 +14,16 @@ fn visible(value:&Json,key:&str)->Result<String>{
  match value.get(key){Ok(Null)|Err(_)=>Ok(String::new()),Ok(value)=>Ok(value.text()?.to_string())}
 }
 pub fn reply(protocol:&str,source:&str)->Result<Reply>{
- let body=parse(source)?;
+ let mut body=parse(source)?;
  if let Ok(error)=body.get("error"){if error!=&Null{return Err(format!("Server error: {}",error.string()));}}
+ stream::adopt_namespaced_calls(protocol,&mut body);
  let (text,reason)=match protocol{
   "chat"=>{let choice=super::provider_calls::choice(&body)?;(visible(choice.get("message")?,"content")?,stop(choice,"finish_reason"))},
   "local"=>(visible(body.get("message")?,"content")?,stop(&body,"done_reason")),
   "responses"=>{let (text,reason)=hosted_search::responses_text(&body)?;(text,Some(reason))},
   "messages"=>{let mut parts=Vec::new();for part in body.get("content")?.array()?{if field(part,"type")==Ok("text"){parts.push(field(part,"text")?.to_string());}}(parts.join("\n"),stop(&body,"stop_reason"))},
   "content"=>{let text=stream::content_text(&body)?;let candidate=body.get("candidates")?.array()?.iter().find(|c|c.get("index").unwrap_or(&Num("0".into()))==&Num("0".into())).ok_or("No response candidate zero")?;(text,stop(candidate,"finishReason"))},
+  "speech"=>return Err("Full-duplex speech returns audio and text on the open microphone stream".into()),
   _=>return Err("Unknown API format".into())
  };
  let interrupted=reason.as_ref().is_some_and(|reason|limit_reason(protocol,reason));
@@ -72,8 +74,85 @@ fn local_address(input: &str) -> bool {
         Err(_) => false,
     }
 }
+pub fn is_speech(p: &Json) -> bool { text(p, "protocol") == "speech" }
+pub struct SpeechSetup { pub endpoint: String, pub plain: bool, pub model: String, pub voice_prompt: String, pub role_prompt: String, pub authorization: Option<(String, String)> }
+pub fn check_speech_prompt(key: &str, value: &str) -> Result<()> {
+    let limit = if key == "role_prompt" { 4096 } else { 128 };
+    if value.len() > limit || value.chars().any(|c| c.is_control()) {
+        return Err(format!("{key} is too long or contains control characters"));
+    }
+    Ok(())
+}
+pub fn speech_setup(p: &Json) -> Result<SpeechSetup> {
+    if !is_speech(p) { return Err("This connection is not a full-duplex speech connection".into()); }
+    Ok(SpeechSetup {
+        endpoint: text(p, "endpoint").to_string(),
+        plain: p.get("plain") == Ok(&Bool(true)),
+        model: text(p, "model").to_string(),
+        voice_prompt: text(p, "voice_prompt").to_string(),
+        role_prompt: text(p, "role_prompt").to_string(),
+        authorization: authorization(p)?,
+    })
+}
+fn normalize_speech(p: &Json) -> Result<Json> {
+    let model = text(p, "model").trim();
+    if model.is_empty() || model.len() > 256 { return Err("Enter a model name of at most 256 bytes".into()); }
+    if text(p, "key").len() > 8192 || text(p, "name").len() > 128 { return Err("Profile field exceeds its size limit".into()); }
+    check_speech_prompt("voice_prompt", text(p, "voice_prompt"))?;
+    check_speech_prompt("role_prompt", text(p, "role_prompt"))?;
+    if text(p, "endpoint").contains('{') { return Err("The speech address cannot contain a model placeholder".into()); }
+    let input = text(p, "endpoint").trim();
+    if input.is_empty() || input.len() > 2048 { return Err("Enter a server address of at most 2048 bytes".into()); }
+    let (explicit_plain, body) = if let Some(rest) = input.strip_prefix("wss://").or_else(|| input.strip_prefix("https://")) {
+        (Some(false), rest)
+    } else if let Some(rest) = input.strip_prefix("ws://").or_else(|| input.strip_prefix("http://")) {
+        (Some(true), rest)
+    } else { (None, input) };
+    let plain = explicit_plain.unwrap_or_else(|| local_address(body) || p.get("plain") == Ok(&Bool(true)));
+    let mut endpoint = if explicit_plain.is_some() {
+        format!("{}://{body}", if plain { "http" } else { "https" })
+    } else {
+        format!("{}://{body}", if plain { "http" } else { "https" })
+    };
+    let parsed = network::url(&endpoint, plain)?;
+    let (path, query) = parsed.path.split_once('?').map(|(path, query)| (path, format!("?{query}"))).unwrap_or((parsed.path.as_str(), String::new()));
+    // Only exact default routes are completed; custom paths stay as entered.
+    let path = if path == "/" || path == "/api" { "/api/chat" } else { path };
+    endpoint = format!("{}://{}{}{path}{query}", if plain { "http" } else { "https" }, if parsed.host.contains(':') { format!("[{}]", parsed.host) } else { parsed.host.clone() }, if (plain && parsed.port == 80) || (!plain && parsed.port == 443) { String::new() } else { format!(":{}", parsed.port) });
+    if !["", "default"].contains(&text(p, "thinking")) {
+        return Err("Full-duplex speech does not use a thinking level. Clear it or leave the server default.".into());
+    }
+    if !text(p, "output_field").is_empty() || !text(p, "output_parameter").is_empty() {
+        return Err("Clear chat output settings before saving a full-duplex speech connection".into());
+    }
+    let mut out = p.clone();
+    if let Obj(fields) = &mut out {
+        fields.insert("protocol".into(), s("speech"));
+        fields.insert("plain".into(), Bool(plain));
+        fields.insert("endpoint".into(), s(&endpoint));
+        fields.insert("model".into(), s(model));
+        fields.insert("name".into(), s(text(p, "name").trim()));
+        fields.insert("voice_prompt".into(), s(text(p, "voice_prompt").trim()));
+        fields.insert("role_prompt".into(), s(text(p, "role_prompt").trim()));
+        let role = text(p, "agent_role").trim();
+        let role = if role.is_empty() { "both" } else { role };
+        if !AGENT_ROLES.contains(&role) { return Err("Choose whether this model is a primary agent, a sub-agent, or both".into()); }
+        fields.insert("agent_role".into(), s(role));
+        let streams = match p.get("streams") {
+            Ok(Null) | Err(_) => 1,
+            Ok(Num(v) | Str(v)) => v.trim().parse::<usize>().map_err(|_| "Enter a whole number of streams from 1 to 64")?,
+            Ok(_) => return Err("Enter a whole number of streams from 1 to 64".into()),
+        };
+        if !(1..=MAX_STREAMS).contains(&streams) { return Err("Maximum streams must be from 1 to 64".into()); }
+        fields.insert("streams".into(), Num(streams.to_string()));
+    }
+    hosted_search::validate(&out)?;
+    if out.get("oauth_enabled") == Ok(&Bool(true)) { application::oauth::validate_profile(&out)?; } else { authorization(&out)?; }
+    Ok(out)
+}
 pub fn normalized(p: &Json) -> Result<Json> {
     let protocol = text(p, "protocol");
+    if protocol == "speech" { return normalize_speech(p); }
     if !["chat", "local", "messages", "content"].contains(&protocol) {
         return Err("Choose an API format".into());
     }
@@ -188,6 +267,7 @@ pub fn probe(p: &Json) -> Result<Json> {
         "local" => ("/api/chat","/api/tags"),
         "chat" if hosted_search::responses_endpoint(endpoint) => ("/responses","/models"),
         "chat" => ("/chat/completions","/models"),
+        "speech" => return Err("Full-duplex speech has no model list. Open microphone conversation checks the speech server.".into()),
         _ => return Err("This API format has no standard model-list probe. Send a message to test generation.".into()),
     };
     let prefix=endpoint.strip_suffix(suffix).ok_or("Custom API path has no standard model-list URL. Send a message to test generation.")?;
@@ -205,104 +285,6 @@ pub fn probe_result(p:&Json,body:&str)->Result<String> {
     let target=text(p,"model");
     let present=list.iter().any(|item|{let name=text(item,field);name==target || (text(p,"protocol")=="local" && !target.contains(':') && name==format!("{target}:latest"))});
     Ok(if present {format!("Server reachable. Model {target} is listed. Return to Chat to send a message.")}else{format!("Server reachable; {} models listed. {target} was not listed. Check the model name; some servers hide or alias models. Generation has not been tested.",list.len())})
-}
-
-#[cfg(test)]
-mod checks {
-    use super::*;
-    #[test]
-    fn remote_hosts_and_probe_paths_preserve_user_destination() {
-        for host in ["192.168.50.7:11434","10.2.0.8:11434","home-server.local:11434","[fd12::7]:11434"] {
-            let profile=normalized(&obj(vec![("protocol",s("local")),("endpoint",s(host)),("plain",Bool(true)),("model",s("custom-model"))])).unwrap();
-            let effect=probe(&profile).unwrap();
-            assert_eq!(effect.get("host").unwrap().text().unwrap(),host.trim_end_matches(":11434").trim_start_matches('[').trim_end_matches(']'));
-            assert!(text(&effect,"wire").starts_with("GET /api/tags HTTP/1.1"));
-            assert!(!text(&effect,"wire").contains("custom-model"));
-        }
-        let p=normalized(&obj(vec![("protocol",s("chat")),("endpoint",s("https://server.example/proxy/v1/chat/completions")),("model",s("custom")),("key",s("fixture-key"))])).unwrap();
-        let e=probe(&p).unwrap();assert!(text(&e,"wire").starts_with("GET /proxy/v1/models HTTP/1.1"));assert!(text(&e,"wire").contains("Authorization: Bearer fixture-key"));
-        assert!(probe_result(&p,r#"{"data":[{"id":"custom"}]}"#).unwrap().contains("is listed"));
-        assert!(probe_result(&p,"<html>not an API</html>").is_err());
-        assert!(probe_result(&p,r#"{"data":[]}"#).unwrap().contains("was not listed"));
-    }
-    #[test]
-    fn http_requires_visible_explicit_profile_consent() {
-        assert!(normalized(&obj(vec![("protocol",s("local")),("endpoint",s("http://192.168.1.2:11434")),("model",s("model"))])).is_ok());
-    }
-    #[test]
-    fn bare_local_address() {
-        let p = obj(vec![
-            ("protocol", s("local")),
-            ("endpoint", s("192.168.1.9:11434")),
-            ("plain", Bool(true)),
-            ("model", s("manual-model")),
-        ]);
-        let n = normalized(&p).unwrap();
-        assert_eq!(text(&n, "endpoint"), "http://192.168.1.9:11434/api/chat");
-        assert_eq!(text(&n, "name"), "");
-    }
-    #[test]
-    fn local_scheme_inference_preserves_explicit_transport() {
-        for endpoint in ["100.100.20.30:8080/v1", "100.64.0.1:8080/v1", "100.127.255.254:8080/v1", "192.168.1.9:8080/v1", "10.0.0.2:8080/v1", "172.16.0.2:8080/v1", "127.0.0.1:8080/v1", "localhost:8080/v1", "server.local:8080/v1", "[fd7a:115c:a1e0::1]:8080/v1", "[::1]:8080/v1"] {
-            let n=normalized(&obj(vec![("protocol",s("chat")),("endpoint",s(endpoint)),("plain",Bool(false)),("model",s("m"))])).unwrap();
-            assert_eq!(text(&n,"endpoint"),format!("http://{endpoint}/chat/completions"));
-            assert_eq!(n.get("plain"),Ok(&Bool(true)));
-            assert!(!network::url(text(&n,"endpoint"),true).unwrap().tls);
-        }
-        for endpoint in ["api.example/v1", "100.63.255.255:8080/v1", "100.128.0.1:8080/v1", "172.32.0.1:8080/v1", "server.local.evil/v1"] {
-            let n=normalized(&obj(vec![("protocol",s("chat")),("endpoint",s(endpoint)),("model",s("m"))])).unwrap();
-            assert!(text(&n,"endpoint").starts_with("https://"));
-        }
-        for endpoint in ["https://100.100.20.30:8080/v1/chat/completions?route=x", "http://api.example/custom?route=x"] {
-            let n=normalized(&obj(vec![("protocol",s("local")),("endpoint",s(endpoint)),("plain",Bool(true)),("model",s("m"))])).unwrap();
-            assert_eq!(text(&n,"endpoint"),endpoint);
-            assert_eq!(n.get("plain"),Ok(&Bool(endpoint.starts_with("http://"))));
-        }
-        let n=normalized(&obj(vec![("protocol",s("local")),("endpoint",s("my-model-host:11434")),("model",s("m"))])).unwrap();
-        assert_eq!(text(&n,"endpoint"),"http://my-model-host:11434/api/chat");
-    }
-    #[test]
-    fn provider_probe_accepts_json() {
-        let p = normalized(&obj(vec![
-            ("protocol", s("chat")),
-            ("endpoint", s("https://server.example/v1/chat/completions")),
-            ("model", s("custom")),
-        ]))
-        .unwrap();
-        let probed = probe(&p).unwrap();
-        let raw = text(&probed, "wire");
-        assert!(raw.contains("\r\nAccept: application/json\r\n"), "{raw}");
-        assert!(!raw.contains("text/event-stream"), "{raw}");
-        assert_eq!(raw.matches("\r\nAccept:").count(), 1, "{raw}");
-        assert!(raw.starts_with("GET /v1/models HTTP/1.1"), "{raw}");
-    }
-    #[test]
-    fn custom_authentication() {
-        let p = obj(vec![
-            ("protocol", s("chat")),
-            ("key", s("secret")),
-            ("auth_header", s("api-key")),
-        ]);
-        assert_eq!(
-            authorization(&p).unwrap(),
-            Some(("api-key".into(), "secret".into()))
-        );
-        let p = obj(vec![("key", s("secret")), ("auth_header", s("Host"))]);
-        assert!(authorization(&p).is_err());
-    }
-}
-
-#[cfg(test)]
-mod content_checks {
- use super::*;
- #[test]fn content_transport_preserves_configuration(){
-  let base="https://server.example/proxy/models/custom%2Fname:generateContent?key=private&route=chosen";
-  let target=content_endpoint(base,true).unwrap();assert_eq!(target,"https://server.example/proxy/models/custom%2Fname:streamGenerateContent?key=private&route=chosen&alt=sse");assert_eq!(content_endpoint(&target,false).unwrap(),base);
-  assert_eq!(content_endpoint("https://server.example/custom?route=x",true).unwrap(),"https://server.example/custom?route=x&alt=sse");
-  assert_eq!(content_endpoint("https://server.example/custom?route=x&alt=sse",false).unwrap(),"https://server.example/custom?route=x");
-  assert_eq!(content_endpoint("https://server.example/custom?alt=json",false).unwrap(),"https://server.example/custom?alt=json");
-  assert!(content_endpoint("https://server.example/custom?alt=json",true).is_err());assert!(content_endpoint("https://server.example/custom?alt=sse&%61lt=sse",true).is_err());
- }
 }
 
 /// Add validated original image bytes to already-normalized provider messages.

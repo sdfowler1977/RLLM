@@ -107,5 +107,5 @@ pub(super) fn modal_for(st:&Json)->Json{
   let apps=array(st,"apps_catalog");let offset=number(st,"apps_page").max(0) as usize;for e in apps.iter().skip(offset).take(20){let p=text(e,"package");buttons.push(button(&format!("{}\n{}{}",label(&text(e,"label")),p,if excluded(st,&p){" · observations excluded"}else{""}),&format!("app_pick:{p}")));}
   if offset>=20{buttons.push(button("Previous apps",&format!("apps_page:{}",offset-20)));}if offset+20<apps.len(){buttons.push(button("More apps",&format!("apps_page:{}",offset+20)));}
  }
- let mut value=modal("App inspection",fields,buttons);put(&mut value,"presentation",s("list"));value
+ let mut value=modal("App inspection",fields,buttons);put(&mut value,"presentation",s("pills"));value
 }

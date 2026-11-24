@@ -1,7 +1,42 @@
 //! Explicit, expiring voice turns; platform service ownership permits optional background audio.
 use super::*;
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex,OnceLock};
 use std::time::{Instant,Duration};
+struct SpeechTls{client:tls_client::Client,write:std::net::TcpStream,logged:AtomicU64}
+impl SpeechTls{
+ fn new(client:tls_client::Client,write:std::net::TcpStream)->Self{Self{client,write,logged:AtomicU64::new(u64::MAX)}}
+}
+impl Read for SpeechTls{
+ fn read(&mut self,buf:&mut [u8])->std::io::Result<usize>{self.client.read(buf)}
+}
+impl Write for SpeechTls{
+ fn write(&mut self,buf:&[u8])->std::io::Result<usize>{self.client.write(buf)}
+ fn flush(&mut self)->std::io::Result<()>{self.client.flush()}
+}
+impl websocket::ByteStream for SpeechTls{
+ fn set_pause(&self,timeout:Option<Duration>){
+  self.client.set_read_timeout(timeout);
+  match self.write.set_write_timeout(timeout){
+   Ok(())=>{
+    let mark=timeout.map(|value|value.as_millis() as u64).unwrap_or(u64::MAX-1);
+    if self.logged.swap(mark,Ordering::Relaxed)!=mark{
+     match timeout{Some(value)=>eprintln!("speech stream write timeout {} ms",value.as_millis()),None=>eprintln!("speech stream write timeout none")}
+    }
+   }
+   Err(error)=>eprintln!("speech stream write timeout was not set: {error}"),
+  }
+ }
+}
+#[path="opus.rs"]
+pub(super) mod opus;
+#[path="websocket.rs"]
+mod websocket;
+#[path="duplex_speech.rs"]
+pub(super) mod duplex_speech;
+#[path="tls_client.rs"]
+mod tls_client;
 static CONSENTS:OnceLock<Mutex<BTreeMap<String,(String,Instant)>>>=OnceLock::new();
 static PLAYBACKS:OnceLock<Mutex<BTreeMap<String,(String,Instant)>>>=OnceLock::new();
 fn playbacks()->&'static Mutex<BTreeMap<String,(String,Instant)>>{PLAYBACKS.get_or_init(||Mutex::new(BTreeMap::new()))}
@@ -11,6 +46,7 @@ fn settings_input(st:&Json)->Result<Json>{
  let mut config=settings(st);let edit=get(st,"edit");
  for key in ["silence_ms","threshold","max_seconds"]{let field=format!("voice_{key}");let value=match get(edit,&field){Null=>continue,Str(v)|Num(v)=>v,_=>return Err("Voice settings require whole numbers".into())};let n=value.parse::<usize>().map_err(|_|"Voice settings require whole numbers")?;put(&mut config,key,Num(n.to_string()));}
  for (field,key) in [("voice_background","background"),("voice_interruption","interruption")]{if get(edit,field)!=&Null{let Bool(value)=get(edit,field)else{return Err("Choose each microphone preference using its toggle".into());};put(&mut config,key,Bool(*value));}}
+ for key in ["voice_prompt","role_prompt"]{if get(edit,key)!=&Null{let value=text(edit,key);crate::provider::check_speech_prompt(key,&value)?;put(&mut config,key,s(&value));}}
  voice_audio::validate(&config)?;Ok(config)
 }
 fn settings_dialog(st:&Json)->Json{
@@ -24,7 +60,9 @@ fn settings_dialog(st:&Json)->Json{
   field_ui("voice_threshold","Microphone activity threshold (100–5000; lower is more sensitive)",&number(&cfg,"threshold").to_string(),"number"),
   field_ui("voice_max_seconds","Maximum utterance length (5–30 seconds)",&number(&cfg,"max_seconds").to_string(),"number"),
   field_ui("voice_background","Offer background voice in the next session review",if boolean(&cfg,"background"){"true"}else{"false"},"check"),
-  field_ui("voice_interruption","Offer spoken interruption in the next session review (requires echo control)",if boolean(&cfg,"interruption"){"true"}else{"false"},"check")
+  field_ui("voice_interruption","Offer spoken interruption in the next session review (requires echo control)",if boolean(&cfg,"interruption"){"true"}else{"false"},"check"),
+  field_ui("voice_prompt","Voice prompt for a full-duplex speech connection (optional)",&text(&cfg,"voice_prompt"),"text"),
+  field_ui("role_prompt","Role prompt for a full-duplex speech connection (optional)",&text(&cfg,"role_prompt"),"multiline")
  ],vec![button("Save microphone preferences","voice_settings_save"),button("Review open microphone conversation","voice_open_review"),button("Review manual voice conversation","voice_review"),button("Configure speech connections","service_connections"),button("App microphone permissions","voice_permissions"),button("Close","close")])
 }
 fn cancel_watch(st:&mut Json){let watch=get(st,"voice_watch_expected");voice_audio::cancel_capture(&text(watch,"ticket"),&text(watch,"session"));put(st,"voice_watch_expected",Null);put(st,"voice_interruption_status",Null);}
@@ -44,12 +82,50 @@ fn spoken_interrupt(st:&mut Json,input:&Json)->Result<Json>{
 fn set_phase(st:&mut Json,value:&str){put(st,"voice_status",s(value));}
 pub(super) fn open(st:&Json)->bool{boolean(st,"voice_open")&&authorized(st)}
 fn retire_playback(st:&mut Json){cancel_watch(st);let session=text(st,"voice_consent");if let Ok(mut held)=playbacks().lock(){held.retain(|_,(owner,_)|*owner!=session);}put(st,"voice_playback_expected",Null);}
-fn pause(st:&mut Json,reason:&str){let session=text(st,"voice_consent");voice_audio::cancel_session(&session);if let Ok(mut held)=playbacks().lock(){held.retain(|_,(s,_)|*s!=session);}put(st,"voice_audio_expected",Null);put(st,"voice_watch_expected",Null);put(st,"voice_interruption_status",Null);put(st,"voice_playback_expected",Null);put(st,"voice_turn",Bool(false));if boolean(st,"voice_open"){set_phase(st,"paused");}put(st,"notice",s(reason));}
+fn pause(st:&mut Json,reason:&str){end_speech_capture(st);let session=text(st,"voice_consent");if let Ok(mut held)=playbacks().lock(){held.retain(|_,(s,_)|*s!=session);}put(st,"voice_audio_expected",Null);put(st,"voice_watch_expected",Null);put(st,"voice_interruption_status",Null);put(st,"voice_playback_expected",Null);put(st,"voice_turn",Bool(false));if boolean(st,"voice_open"){set_phase(st,"paused");}put(st,"notice",s(reason));}
 fn operation_pending(st:&Json)->bool{boolean(st,"busy")||get(st,"pending")!=&Null||get(st,"task_run")!=&Null}
 fn listen_block(st:&Json)->Option<&'static str>{
  if !open(st){Some("Review and enable microphone conversation first")}else if operation_pending(st){Some("Finish the current operation before resuming the microphone")}else if !text(st,"draft").trim().is_empty(){Some("Send or clear the existing draft before starting the microphone")}else{None}
 }
-fn listen(st:&mut Json)->Result<Json>{if let Some(reason)=listen_block(st){return Err(reason.into());}let session=text(st,"voice_consent");retire_playback(st);voice_audio::cancel_session(&session);let ticket=voice_audio::open(&session,&settings(st))?;put(st,"voice_audio_expected",obj(vec![("ticket",s(&ticket)),("session",s(&session))]));set_phase(st,"microphone_pending");put(st,"page",s("chat"));put(st,"dialog",Null);Ok(obj(vec![("kind",s("voice_listen")),("voice_session",s(&session)),("voice_audio_ticket",s(&ticket)),("sample_rate",Num("16000".into())),("frame_bytes",Num("640".into())),("voice_background",Bool(boolean(&settings(st),"background"))),("voice_lease_ms",Num(remaining(st).to_string()))]))}
+fn listen(st:&mut Json)->Result<Json>{if speech_selected(st){return listen_speech(st);}if let Some(reason)=listen_block(st){return Err(reason.into());}let session=text(st,"voice_consent");retire_playback(st);end_speech_capture(st);let ticket=voice_audio::open(&session,&settings(st))?;put(st,"voice_audio_expected",obj(vec![("ticket",s(&ticket)),("session",s(&session))]));set_phase(st,"microphone_pending");put(st,"page",s("chat"));put(st,"dialog",Null);Ok(listen_effect(st,&session,&ticket,false))}
+fn speech_selected(st:&Json)->bool{profile(st).ok().is_some_and(|p|crate::provider::is_speech(&p))}
+fn chosen_prompt<'a>(prefs:&'a Json,saved:&'a str,key:&str)->String{let local=text(prefs,key);if local.trim().is_empty(){saved.to_string()}else{local}}
+fn custom_speech_path(endpoint:&str)->Option<String>{
+ let rest=endpoint.strip_prefix("https://").or_else(||endpoint.strip_prefix("http://")).or_else(||endpoint.strip_prefix("wss://")).or_else(||endpoint.strip_prefix("ws://"))?;
+ let cut=rest.find(['/','?']).unwrap_or(rest.len());
+ if cut>=rest.len(){return None;}
+ let tail=&rest[cut..];
+ let (only,query)=tail.split_once('?').map(|(only,query)|(only,format!("?{query}"))).unwrap_or((tail,String::new()));
+ if only=="/"||only=="/api"{return None;}
+ let only=if only.starts_with('/'){only.to_string()}else{format!("/{only}")};
+ Some(format!("{only}{query}"))
+}
+fn connect_speech(setup:&crate::provider::SpeechSetup,voice_prompt:&str,role_prompt:&str)->Result<duplex_speech::Session>{
+ let mut location=duplex_speech::locate(&setup.endpoint,setup.plain)?;
+ if let Some(path)=custom_speech_path(&setup.endpoint){location.path=path;}
+ let address=duplex_speech::resolve(&location)?;
+ let tcp=std::net::TcpStream::connect_timeout(&address,Duration::from_secs(10)).map_err(|error|format!("Speech server did not connect: {error}"))?;
+ tcp.set_nodelay(true).ok();
+ let auth=setup.authorization.as_ref().map(|(name,value)|(name.as_str(),value.as_str()));
+ let io:Box<dyn websocket::ByteStream>=if location.tls{
+  tcp.set_write_timeout(Some(Duration::from_secs(10))).map_err(|error|format!("Speech stream write timeout was not set: {error}"))?;
+  let write=tcp.try_clone().map_err(|error|format!("Speech stream could not share its socket: {error}"))?;
+  Box::new(SpeechTls::new(tls_client::Client::open(tcp,&location.host)?,write))
+ }else{Box::new(tcp)};
+ eprintln!("speech request line: GET {} HTTP/1.1",location.path);
+ duplex_speech::Session::open(io,&location,voice_prompt,role_prompt,&setup.model,auth)
+}
+fn listen_speech(st:&mut Json)->Result<Json>{
+ if let Some(reason)=listen_block(st){return Err(reason.into());}
+ let session=text(st,"voice_consent");retire_playback(st);end_speech_capture(st);
+ let setup=crate::provider::speech_setup(&profile(st)?)?;let prefs=settings(st);
+ let linked=connect_speech(&setup,&chosen_prompt(&prefs,&setup.voice_prompt,"voice_prompt"),&chosen_prompt(&prefs,&setup.role_prompt,"role_prompt"))?;
+ let ticket=voice_audio::open_speech(&session,&prefs,linked)?;
+ put(st,"voice_audio_expected",obj(vec![("ticket",s(&ticket)),("session",s(&session))]));set_phase(st,"microphone_pending");put(st,"page",s("chat"));put(st,"dialog",Null);Ok(listen_effect(st,&session,&ticket,true))
+}
+fn listen_effect(st:&Json,session:&str,ticket:&str,speech:bool)->Json{obj(vec![("kind",s("voice_listen")),("voice_session",s(session)),("voice_audio_ticket",s(ticket)),("sample_rate",Num("16000".into())),("frame_bytes",Num("640".into())),("speech_rate",Num("24000".into())),("speech",Bool(speech)),("voice_background",Bool(boolean(&settings(st),"background"))),("voice_lease_ms",Num(remaining(st).to_string()))])}
+fn commit_speech(st:&mut Json){if chat(st)==Null{return;}let session=text(st,"voice_consent");let said=voice_audio::take_speech_text(&session);let said=said.trim();if said.is_empty(){return;}let mut current=chat(st);let mut messages=array(&current,"messages");messages.push(obj(vec![("role",s("assistant")),("content",s(said)),("speech",Bool(true))]));put(&mut current,"messages",Arr(messages));replace_chat(st,current);}
+fn end_speech_capture(st:&mut Json){commit_speech(st);voice_audio::cancel_session(&text(st,"voice_consent"));}
 pub(super) fn callback(a:&str)->bool{matches!(a,"voice_session_stop"|"voice_route_lost"|"voice_audio_start"|"voice_audio_result"|"voice_audio_failure"|"voice_playback_start"|"voice_playback_result"|"voice_interrupt"|"voice_watch_start"|"voice_watch_onset"|"voice_watch_unavailable")}
 pub(super) fn consume(st:&Json,a:&str,input:&Json)->bool{let session=text(input,"voice_session");if session.is_empty()||session!=text(st,"voice_consent")||!consents().lock().ok().is_some_and(|held|held.get(&session).is_some_and(|(b,_)|*b==binding(st))){return false;}if matches!(a,"voice_route_lost"|"voice_session_stop"){return boolean(st,"voice_open");}
  if a.starts_with("voice_watch_"){
@@ -79,13 +155,20 @@ pub(super) fn request_interrupted(st:&mut Json,expected:&Json){
     put(st,"voice_phase",Null);
     if open(st){pause(st,"Voice request stopped; microphone paused until you resume it");}
 }
-pub(super) fn interrupt(st:&mut Json){let session=text(st,"voice_consent");voice_audio::cancel_session(&session);if let Ok(mut held)=playbacks().lock(){held.retain(|_,(s,_)|*s!=session);}if let Ok(mut held)=consents().lock(){held.remove(&session);}put(st,"voice_consent",Null);put(st,"voice_open",Bool(false));put(st,"voice_audio_expected",Null);put(st,"voice_watch_expected",Null);put(st,"voice_interruption_status",Null);put(st,"voice_playback_expected",Null);set_phase(st,"off");put(st,"voice_turn",Bool(false));put(st,"voice_phase",Null);}
+pub(super) fn interrupt(st:&mut Json){end_speech_capture(st);let session=text(st,"voice_consent");if let Ok(mut held)=playbacks().lock(){held.retain(|_,(s,_)|*s!=session);}if let Ok(mut held)=consents().lock(){held.remove(&session);}put(st,"voice_consent",Null);put(st,"voice_open",Bool(false));put(st,"voice_audio_expected",Null);put(st,"voice_watch_expected",Null);put(st,"voice_interruption_status",Null);put(st,"voice_playback_expected",Null);set_phase(st,"off");put(st,"voice_turn",Bool(false));put(st,"voice_phase",Null);}
 fn destinations(st:&Json,capability:&str)->Result<String>{
     let args=obj(vec![("capability",s(capability)),("input",obj(vec![]))]);let mut p=obj(vec![("tool",s("service")),("args",args)]);services::prepare(&mut st.clone(),&mut p)?;Ok(text(&p,"destination"))
 }
 fn audio_mapping(v:&Json,depth:usize)->bool{if depth>24{return false;}match v{Obj(m)if m.len()==1&&m.contains_key("$file")=>["base64","data_url"].contains(&text(v,"$file").as_str()),Obj(m)=>m.values().any(|v|audio_mapping(v,depth+1)),Arr(a)=>a.iter().any(|v|audio_mapping(v,depth+1)),_=>false}}
 fn ready(st:&Json)->Result<String>{
-    profile(st).map_err(|_|"Choose a conversation model in LLM connections first")?;let cfg=get(st,"service_connections");
+    let chosen=profile(st).map_err(|_|"Choose a conversation model in LLM connections first")?;
+    if crate::provider::is_speech(&chosen){
+     if !boolean(st,"voice_review_open"){return Err("This connection is full-duplex speech. Review open microphone conversation to keep the microphone open while speech returns.".into());}
+     let setup=crate::provider::speech_setup(&chosen)?;let prefs=settings(st);
+     let voice=chosen_prompt(&prefs,&setup.voice_prompt,"voice_prompt");let role=chosen_prompt(&prefs,&setup.role_prompt,"role_prompt");
+     return Ok(format!("Full-duplex speech:\n{}\n\nVoice prompt:\n{}\n\nRole prompt:\n{}\n\nOpen microphone streams 24 kHz audio in both directions on /api/chat. The microphone stays open while speech and text come back. Text already received is kept with the conversation when the capture ends. Manual recording still uses a separate recognition connection.",endpoint_summary(&setup.endpoint),if voice.is_empty(){"(none)"}else{&voice},if role.is_empty(){"(none)"}else{&role}));
+    }
+    let cfg=get(st,"service_connections");
     let recognition=destinations(st,"speech_recognition").map_err(|e|format!("Speech recognition connection is not ready: {e}. Configure the speech_recognition default in Service connections."))?;
     for id in services::capability_routes(st,"speech_recognition")?{let r=array(cfg,"routes").into_iter().find(|r|text(r,"id")==id).ok_or("Recognition route is absent")?;if !["json","text"].contains(&text(&r,"response").as_str()){return Err("Recognition routes must return text or a JSON pointer selecting text".into());}if text(&r,"method")=="GET"||(!["binary","multipart"].contains(&text(&r,"request_format").as_str())&&!audio_mapping(get(&r,"request"),0)){return Err("Recognition routes must send the actual recording using binary, multipart or a base64/data_url file mapping".into());}}
     let routes=services::capability_routes(st,"speech_synthesis").map_err(|e|format!("Speech output connection is not ready: {e}. Configure the speech_synthesis default in Service connections."))?;
@@ -95,7 +178,7 @@ fn ready(st:&Json)->Result<String>{
 fn request(st:&mut Json,capability:&str,file:bool,input:Json,phase:&str,automatic:bool)->Result<Json>{
     if automatic&&!authorized(st){return Err("Voice consent expired or changed; text and files remain available".into());}
     let mut p=obj(vec![("tool",s("service")),("args",obj(vec![("capability",s(capability)),("file",Bool(file)),("input",input)])),("voice_phase",s(phase))]);
-    services::prepare(st,&mut p)?;if open(st){retire_playback(st);voice_audio::cancel_session(&text(st,"voice_consent"));put(st,"voice_audio_expected",Null);}put(st,"voice_phase",s(phase));if open(st){set_phase(st,if phase=="recognition"{"recognizing"}else{"synthesizing"});}put(st,"agent_pending",Bool(false));put(st,"agent_running",Bool(false));
+    services::prepare(st,&mut p)?;if open(st){retire_playback(st);end_speech_capture(st);put(st,"voice_audio_expected",Null);}put(st,"voice_phase",s(phase));if open(st){set_phase(st,if phase=="recognition"{"recognizing"}else{"synthesizing"});}put(st,"agent_pending",Bool(false));put(st,"agent_running",Bool(false));
     if !automatic||services::network_review(st,&p)||harness_rules::review_required(st,&p){if open(st){set_phase(st,"review");}put(st,"pending",p);put(st,"dialog",s("approval"));return Ok(Null);}
     let effect=services::start(st,&p)?;put(st,"pending",Null);put(st,"dialog",Null);Ok(effect)
 }
@@ -144,7 +227,7 @@ pub(super) fn event(st:&mut Json,a:&str,input:&Json)->Result<Json>{
         return Ok(obj(vec![("kind",s(if service||capture{"cancel"}else{"media_playback_stop"})),("voice_only",Bool(a=="voice_session_stop"))]));
     }
     if callback(a){if !authorized(st){interrupt(st);return Ok(obj(vec![("kind",s("media_playback_stop"))]));}match a{
-      "voice_audio_start"=>{set_phase(st,"listening");return Ok(Null);},
+      "voice_audio_start"=>{set_phase(st,if voice_audio::is_speech(&text(get(st,"voice_audio_expected"),"ticket")){"duplex"}else{"listening"});return Ok(Null);},
       "voice_audio_result"=>{if operation_pending(st){pause(st,"Microphone paused while another operation is pending; resume it when finished");return Ok(Null);}let bytes=voice_audio::take(&text(input,"voice_audio_ticket"),&text(input,"voice_session"),&text(input,"receipt"))?;put(st,"voice_audio_expected",Null);let record=media::store(st,&bytes,"recording.wav","audio","input")?;put(st,"media_input",record);return recorded(st);},
       "voice_audio_failure"=>{pause(st,"Microphone unavailable or stopped; text conversation remains available");return Ok(Null);},
       "voice_interrupt"=>return listen(st),
@@ -162,11 +245,11 @@ pub(super) fn event(st:&mut Json,a:&str,input:&Json)->Result<Json>{
             let ticket=format!("voice:{}",now());let mut held=consents().lock().map_err(|_|"Voice consent unavailable")?;held.retain(|_,(_,t)|t.elapsed()<Duration::from_secs(600));if held.len()>=4{return Err("Too many active voice sessions".into());}held.insert(ticket.clone(),(binding(st),Instant::now()));drop(held);put(st,"voice_consent",s(&ticket));put(st,"voice_open",Bool(microphone));put(st,"dialog",s("media_menu"));put(st,"notice",s("Voice conversation enabled for ten minutes"));if microphone{return listen(st);}
         },
         "voice_listen"=>return listen(st),
-        "voice_record"=>{if open(st){retire_playback(st);voice_audio::cancel_session(&text(st,"voice_consent"));put(st,"voice_audio_expected",Null);put(st,"voice_open",Bool(false));set_phase(st,"off");}return media::event(st,"media_record",&obj(vec![]));},
+        "voice_record"=>{if open(st){retire_playback(st);end_speech_capture(st);put(st,"voice_audio_expected",Null);put(st,"voice_open",Bool(false));set_phase(st,"off");}return media::event(st,"media_record",&obj(vec![]));},
         "voice_transcribe"=>return request(st,"speech_recognition",true,obj(vec![]),"transcript",false),
         "voice_speak"=>{let answer=array(&chat(st),"messages").iter().rev().find(|m|text(m,"role")=="assistant").map(|m|text(m,"content")).ok_or("No assistant reply is available")?;return request(st,"speech_synthesis",false,obj(vec![("text",s(&answer))]),if open(st){"synthesis"}else{"manual_synthesis"},false);},
         _=>return Err("Unknown voice action".into())}
     Ok(Null)
 }
-pub(super) fn status(st:&Json)->Json{if !boolean(st,"voice_open"){return Null;}obj(vec![("phase",get(st,"voice_status").clone()),("label",s(match text(st,"voice_status").as_str(){"microphone_pending"=>"Starting microphone","listening"=>"Listening","review"=>"Waiting for voice request approval","recognizing"=>"Transcribing","thinking"=>"Preparing reply","synthesizing"=>"Preparing speech","playback_pending"=>"Starting playback","speaking"=>match text(st,"voice_interruption_status").as_str(){"listening"=>"Speaking · interruption microphone on","pending"=>"Speaking · starting interruption microphone",_=>"Speaking"},_=>"Paused"})),("active",Bool(open(st))),("background",Bool(boolean(&settings(st),"background"))),("remaining_ms",Num(remaining(st).to_string())),("resume_available",Bool(listen_block(st).is_none()))] )}
-pub(super) fn dialog(st:&Json)->Option<Json>{if text(st,"dialog")=="voice_settings"{return Some(settings_dialog(st));}if text(st,"dialog")!="voice_review"{return None;}let cfg=settings_input(st).unwrap_or_else(|_|settings(st));Some(modal("Voice conversation",vec![field_ui("voice_destinations","Review destinations and behavior",&ready(st).unwrap_or_else(|e|e),"readonly"),field_ui("voice_open","Keep listening between replies",if boolean(st,"voice_review_open"){"true"}else{"false"},"check"),field_ui("voice_background","Continue voice outside the app for this ten-minute session (notification and Stop control)",if boolean(&cfg,"background"){"true"}else{"false"},"check"),field_ui("voice_interruption","Interrupt replies by speaking (microphone and echo control)",if boolean(&cfg,"interruption"){"true"}else{"false"},"check"),field_ui("voice_silence_ms","Pause before sending speech (300–3000 milliseconds)",&number(&cfg,"silence_ms").to_string(),"number"),field_ui("voice_threshold","Microphone activity threshold (100–5000; lower is more sensitive)",&number(&cfg,"threshold").to_string(),"number"),field_ui("voice_max_seconds","Maximum utterance length (5–30 seconds)",&number(&cfg,"max_seconds").to_string(),"number")],vec![button("Enable voice conversation","voice_consent"),button("Configure speech connections","service_connections"),button("Cancel","close")]))}
+pub(super) fn status(st:&Json)->Json{if !boolean(st,"voice_open"){return Null;}let speech_text=voice_audio::speech_caption(&text(st,"voice_consent"));obj(vec![("phase",get(st,"voice_status").clone()),("label",s(match text(st,"voice_status").as_str(){"microphone_pending"=>"Starting microphone","listening"=>"Listening","duplex"=>"Microphone open · two-way speech","review"=>"Waiting for voice request approval","recognizing"=>"Transcribing","thinking"=>"Preparing reply","synthesizing"=>"Preparing speech","playback_pending"=>"Starting playback","speaking"=>match text(st,"voice_interruption_status").as_str(){"listening"=>"Speaking · interruption microphone on","pending"=>"Speaking · starting interruption microphone",_=>"Speaking"},_=>"Paused"})),("speech_text",if speech_text.is_empty(){Null}else{s(&speech_text)}),("active",Bool(open(st))),("background",Bool(boolean(&settings(st),"background"))),("remaining_ms",Num(remaining(st).to_string())),("resume_available",Bool(listen_block(st).is_none()))] )}
+pub(super) fn dialog(st:&Json)->Option<Json>{if text(st,"dialog")=="voice_settings"{return Some(settings_dialog(st));}if text(st,"dialog")!="voice_review"{return None;}let cfg=settings_input(st).unwrap_or_else(|_|settings(st));Some(modal("Voice conversation",vec![field_ui("voice_destinations","Review destinations and behavior",&ready(st).unwrap_or_else(|e|e),"readonly"),field_ui("voice_open","Keep listening between replies",if boolean(st,"voice_review_open"){"true"}else{"false"},"check"),field_ui("voice_background","Continue voice outside the app for this ten-minute session (notification and Stop control)",if boolean(&cfg,"background"){"true"}else{"false"},"check"),field_ui("voice_interruption","Interrupt replies by speaking (microphone and echo control)",if boolean(&cfg,"interruption"){"true"}else{"false"},"check"),field_ui("voice_silence_ms","Pause before sending speech (300–3000 milliseconds)",&number(&cfg,"silence_ms").to_string(),"number"),field_ui("voice_threshold","Microphone activity threshold (100–5000; lower is more sensitive)",&number(&cfg,"threshold").to_string(),"number"),field_ui("voice_max_seconds","Maximum utterance length (5–30 seconds)",&number(&cfg,"max_seconds").to_string(),"number"),field_ui("voice_prompt","Voice prompt (optional; used by a full-duplex speech connection)",&text(&cfg,"voice_prompt"),"text"),field_ui("role_prompt","Role prompt (optional; used by a full-duplex speech connection)",&text(&cfg,"role_prompt"),"multiline")],vec![button("Enable voice conversation","voice_consent"),button("Configure speech connections","service_connections"),button("Cancel","close")]))}
