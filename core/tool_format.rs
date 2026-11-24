@@ -12,7 +12,7 @@ fn envelope(value: &Json) -> bool {
 // neither this scanner nor reply ingestion dispatches recovered arguments.
 fn object_end(b:&[u8], start:usize)->usize {
     let mut stack=Vec::new();let mut quoted=false;let mut escaped=false;
-    for i in start..b.len().min(start.saturating_add(65536)) {
+    for i in start..b.len() {
         let c=b[i];
         if quoted {if escaped {escaped=false;}else if c==b'\\'{escaped=true;}else if c==b'"'{quoted=false;}continue;}
         match c {
@@ -31,7 +31,7 @@ fn request_prefix(text:&str)->bool{
     !fields.is_empty()&&["\"tool\"","\"args\""].iter().any(|key|key.starts_with(fields)||fields.strip_prefix(key).is_some_and(|rest|rest.trim_start().starts_with(':')))
 }
 fn scan(reply:&str,preview:bool)->(Vec<std::ops::Range<usize>>,Option<Json>) {
-    if reply.len()>1024*1024 || (!preview&&parse(reply.trim()).is_ok()){return(Vec::new(),None);}
+    if !preview&&parse(reply.trim()).is_ok(){return(Vec::new(),None);}
     let mut ranges=Vec::new();let mut single=None;
     let projection=reasoning_text::project(reply,false);if projection.pending{return(Vec::new(),None);}
     let b=reply.as_bytes();let mut i=if projection.hidden{reply.len()-projection.text.len()}else{0};let mut candidates=0;let mut fenced:Option<(u8,usize)>=None;
@@ -52,7 +52,7 @@ fn scan(reply:&str,preview:bool)->(Vec<std::ops::Range<usize>>,Option<Json>) {
             let end_quote=if reply[i..].starts_with('“'){'”'}else{'’'};i+=3;
             i=reply[i..].find(end_quote).map(|p|i+p+3).unwrap_or(b.len());continue;
         }
-        if matches!(b[i],b'{'|b'['){let end=object_end(b,i);candidates+=1;if candidates>32{return(ranges,None);}if end-i<=65536&&reply.is_char_boundary(end){let item=&reply[i..end];match parse(item){
+        if matches!(b[i],b'{'|b'['){let end=object_end(b,i);candidates+=1;if candidates>32{return(ranges,None);}if reply.is_char_boundary(end){let item=&reply[i..end];match parse(item){
             Ok(value) if envelope(&value)=>{single=if ranges.is_empty(){Some(value)}else{None};ranges.push(i..end);}
             Err(_) if preview&&end==b.len()&&request_prefix(item)=>ranges.push(i..end),
             _=>{}

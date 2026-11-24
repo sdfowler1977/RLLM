@@ -412,13 +412,33 @@ const UPLOAD_STALL: &str = "the upload did not finish within two minutes";
 
 struct WriteDeadline {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    deadline_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    phase: std::sync::Arc<std::sync::Mutex<ExchangeDeadline>>,
     worker: Option<std::thread::JoinHandle<()>>,
+}
+
+enum ExchangeDeadline {
+    Upload(Instant),
+    Reading(Instant),
+    Expired,
 }
 
 impl WriteDeadline {
     fn begin_response(&self) {
-        self.deadline_active.store(false, std::sync::atomic::Ordering::Relaxed);
+        let mut phase = self.phase.lock().unwrap();
+        if matches!(*phase, ExchangeDeadline::Upload(_)) {
+            *phase = ExchangeDeadline::Reading(silence_deadline());
+        }
+    }
+
+    fn received_response_bytes(&self) {
+        let mut phase = self.phase.lock().unwrap();
+        if let ExchangeDeadline::Reading(ref mut deadline) = *phase {
+            *deadline = silence_deadline();
+        }
+    }
+
+    fn expired(&self) -> bool {
+        matches!(*self.phase.lock().unwrap(), ExchangeDeadline::Expired)
     }
 }
 
@@ -442,22 +462,27 @@ fn arm_write_deadline(stream: &TcpStream, deadline: std::time::Instant) -> Write
     let _ = stream.set_write_timeout(Some(wait));
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flag = std::sync::Arc::clone(&stop);
-    let deadline_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let deadline_flag = std::sync::Arc::clone(&deadline_active);
+    let phase = std::sync::Arc::new(std::sync::Mutex::new(ExchangeDeadline::Upload(deadline)));
+    let worker_phase = std::sync::Arc::clone(&phase);
     let worker = stream.try_clone().ok().map(|poke| {
         std::thread::spawn(move || {
             while !flag.load(std::sync::atomic::Ordering::Relaxed) {
-                let upload_expired = std::time::Instant::now() >= deadline
-                    && deadline_flag.load(std::sync::atomic::Ordering::Relaxed);
-                if CANCEL.load(std::sync::atomic::Ordering::Relaxed) || upload_expired {
+                let mut phase = worker_phase.lock().unwrap();
+                let expired = match *phase {
+                    ExchangeDeadline::Upload(until) | ExchangeDeadline::Reading(until) => Instant::now() >= until,
+                    ExchangeDeadline::Expired => true,
+                };
+                if expired || transport_cancelled() {
+                    if expired { *phase = ExchangeDeadline::Expired; }
                     let _ = poke.shutdown(std::net::Shutdown::Both);
                     return;
                 }
+                drop(phase);
                 std::thread::park_timeout(std::time::Duration::from_millis(20));
             }
         })
     });
-    WriteDeadline { stop, deadline_active, worker }
+    WriteDeadline { stop, phase, worker }
 }
 
 fn connect_within(host: &str, port: u16, deadline: std::time::Instant) -> Result<TcpStream> {
@@ -554,12 +579,16 @@ struct ExchangeFailure {
 struct ResponseReader<'a> {
     stream: &'a mut dyn Read,
     received_bytes: usize,
+    deadline: Option<&'a WriteDeadline>,
 }
 
 impl Read for ResponseReader<'_> {
     fn read(&mut self, chunk: &mut [u8]) -> std::io::Result<usize> {
         let read = self.stream.read(chunk)?;
         self.received_bytes = self.received_bytes.saturating_add(read);
+        if read > 0 {
+            if let Some(deadline) = self.deadline { deadline.received_response_bytes(); }
+        }
         Ok(read)
     }
 }
@@ -622,7 +651,7 @@ const PROVIDER_ATTEMPTS: u32 = 10;
 enum ExchangeProgress<'a> {
     Preview(&'a str, u128),
     TaskText(&'a str),
-    Retry { failed: u32, delay: Duration },
+    Retry { failed: u32, delay: Duration, idle: bool },
 }
 
 fn exchange(
@@ -653,7 +682,8 @@ fn exchange(
                 _ => 300,
             }),
             None if attempt == 1 => return Err(failure),
-            None if provider_calls::rejection(&failure.message).is_some() => {
+            None if provider_calls::rejection(&failure.message).is_some()
+                || failure.message == network::MODEL_RESPONSE_ALLOWANCE => {
                 failure.attempts = attempt;
                 return Err(failure);
             }
@@ -668,7 +698,7 @@ fn exchange(
             failure.attempts = attempt;
             return Err(failure);
         }
-        progress(ExchangeProgress::Retry { failed: attempt, delay });
+        progress(ExchangeProgress::Retry { failed: attempt, delay, idle: failure.message == RESPONSE_SILENCE });
         wait_for_provider(delay).map_err(ExchangeFailure::permanent)?;
     }
     unreachable!("provider attempts are bounded and nonzero")
@@ -758,12 +788,12 @@ fn converse<S: Read + Write>(
         return Err(ExchangeFailure::transient(UPLOAD_STALL));
     }
     stream.flush().map_err(|error| ExchangeFailure::transient(format!("peer closed early: {error}")))?;
-    let mut reader = ResponseReader { stream, received_bytes: 0 };
+    let mut reader = ResponseReader { stream, received_bytes: 0, deadline: provider.then_some(&guard) };
     let outcome = if provider {
-        // Keep cancellation able to wake a read inside the platform transport.
-        // Only the independent silence timer applies to the response.
+        // Wake even a read inside TLS, where the HTTP polling loop cannot run.
         guard.begin_response();
-        read_provider_response(&mut reader, effect, heard)
+        let response = read_provider_response(&mut reader, effect, heard);
+        if guard.expired() { Err(ExchangeFailure::transient(RESPONSE_SILENCE)) } else { response }
     } else if boolean(effect, "stream") {
         read_stream(&mut reader, effect, heard, deadline).map_err(ExchangeFailure::permanent)
     } else {
@@ -827,7 +857,7 @@ fn read_provider_response(
         }
         deadline = silence_deadline();
         if !streaming && read > limit.saturating_sub(response.len()) {
-            return Err(ExchangeFailure::permanent("Response exceeds the current memory budget"));
+            return Err(ExchangeFailure::permanent(network::MODEL_RESPONSE_ALLOWANCE));
         }
         response.extend_from_slice(&chunk[..read]);
     };
@@ -848,7 +878,7 @@ fn read_provider_response(
         }
         deadline = silence_deadline();
         if read > limit.saturating_sub(response.len()) {
-            return Err(ExchangeFailure::permanent("Response exceeds the current memory budget"));
+            return Err(ExchangeFailure::permanent(network::MODEL_RESPONSE_ALLOWANCE));
         }
         framing.feed(&chunk[..read]).map_err(ExchangeFailure::response)?;
         response.extend_from_slice(&chunk[..read]);
@@ -1042,11 +1072,15 @@ fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(Excha
             }
         }
         if provider {
-            let result = provider_stream_completion(&id, ended);
+            let result = provider_stream_completion(&id, ended)?;
+            // Count the assembled response, since SSE event overhead is not model output.
+            if boolean(effect, "desktop_task_text") && result.len() > response_budget(effect) {
+                return Err(network::MODEL_RESPONSE_ALLOWANCE.into());
+            }
             if boolean(effect, "desktop_task_text") && !said.is_empty() {
                 heard(ExchangeProgress::TaskText(&said));
             }
-            return result;
+            return Ok(result);
         }
         let finished = core_call(obj(vec![("op", s("stream_finish")), ("id", id.clone()), ("eof", Bool(ended))]))?;
         network::unbase64(&text(&finished, "data"))
@@ -3217,10 +3251,11 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
                             put(&mut progress, "stream_text", s(said));
                             put(&mut progress, "elapsed_ms", Num(elapsed.to_string()));
                         }
-                        ExchangeProgress::Retry { failed, delay } => {
+                        ExchangeProgress::Retry { failed, delay, idle } => {
                             task_text = None;
+                            let reason = if idle { " after two minutes without response bytes" } else { "" };
                             put(&mut progress, "retrying", s(&format!(
-                                "Provider attempt {failed} of {PROVIDER_ATTEMPTS} failed. Retrying in {} seconds.", delay.as_secs()
+                                "Provider attempt {failed} of {PROVIDER_ATTEMPTS} failed{reason}. Retrying in {} seconds.", delay.as_secs()
                             )));
                         }
                     }

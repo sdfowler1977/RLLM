@@ -1,21 +1,18 @@
 //! Provider tool proposals are data. The application still validates and reviews
 //! each proposed operation through its existing permission boundary.
 use super::*;
-use std::collections::BTreeMap;
-const LIMIT: usize = 65536;
+use std::collections::{BTreeMap, BTreeSet};
 fn value<'a>(v: &'a Json, k: &str) -> &'a Json { v.get(k).unwrap_or(&Null) }
-fn bounded(v: &Json) -> Result<()> {
-    if v.string().len() > LIMIT { return Err("Tool proposal exceeds 64 KiB".into()); }
-    Ok(())
-}
 const REJECTED_PROPOSAL: &str = "Rejected tool proposal: ";
 
 pub(super) fn rejection(error: &str) -> Option<&str> {
-    error.strip_prefix(REJECTED_PROPOSAL)
+    error.strip_prefix(REJECTED_PROPOSAL).or_else(|| {
+        (error == "Tool proposal has no completed provider turn").then_some(error)
+    })
 }
 
 // Provider decoders use string errors across the network callback boundary.
-fn rejected(error: String) -> String {
+pub(super) fn rejected(error: String) -> String {
     if rejection(&error).is_some() { error } else { format!("{REJECTED_PROPOSAL}{error}") }
 }
 
@@ -28,7 +25,6 @@ fn canonical_proposal(name: &str, args: &Json) -> Result<Json> {
         return Err("Invalid tool proposal name".into());
     }
     if !matches!(args, Obj(_)) { return Err("Tool proposal arguments must be an object".into()); }
-    bounded(args)?;
     if name=="workspace" {
         let Obj(fields)=args else{unreachable!()};
         if fields.len()!=2||!fields.contains_key("tool")||!fields.contains_key("arguments_json"){return Err("Workspace proposal requires tool and arguments_json only".into());}
@@ -38,8 +34,7 @@ fn canonical_proposal(name: &str, args: &Json) -> Result<Json> {
     Ok(obj(vec![("tool", s(name)), ("args", args.clone())]))
 }
 fn args(v: &Json, encoded: bool) -> Result<Json> {
-    if encoded { let text=v.text()?; if text.len()>LIMIT{return Err("Tool arguments exceed 64 KiB".into());} parse(text) }
-    else { bounded(v)?; Ok(v.clone()) }
+    if encoded { parse(v.text()?) } else { Ok(v.clone()) }
 }
 fn push(out: &mut Vec<Json>, name: &str, input: &Json) -> Result<()> {
     out.push(canonical(name,input)?);
@@ -76,7 +71,6 @@ fn proposals(protocol: &str, body: &Json) -> Result<Vec<Json>> {
             if value(message,"function_call")!=&Null {return Err("Legacy function_call is not a supported tool proposal".into());}
             if let Ok(calls)=message.get("tool_calls") {
                 if calls!=&Null {for call in calls.array()? {
-                    bounded(call)?;
                     if protocol=="chat" && field(call,"type")?!="function" {return Err("Unsupported tool proposal type".into());}
                     let f=call.get("function")?;
                     push(&mut out,field(f,"name")?,&args(f.get("arguments")?,protocol=="chat")?)?;
@@ -85,13 +79,13 @@ fn proposals(protocol: &str, body: &Json) -> Result<Vec<Json>> {
         },
         "messages" => for part in body.get("content")?.array()? {
             match field(part,"type")? {
-                "tool_use" => {bounded(part)?;let id=field(part,"id")?;if id.is_empty()||id.len()>256||id.chars().any(char::is_control){return Err("Invalid tool proposal identity".into());}push(&mut out,field(part,"name")?,part.get("input")?)?;},
+                "tool_use" => {let id=field(part,"id")?;if id.is_empty()||id.len()>256||id.chars().any(char::is_control){return Err("Invalid tool proposal identity".into());}push(&mut out,field(part,"name")?,part.get("input")?)?;},
                 "server_tool_use"|"tool_result" => return Err("Provider-hosted tool blocks require their configured hosted workflow".into()),
                 _=>{}
             }
         },
         "content" => if let Ok(content)=candidate(body)?.get("content") {for part in content.get("parts")?.array()? {
-            if let Ok(call)=part.get("functionCall") {bounded(call)?;push(&mut out,field(call,"name")?,call.get("args")?)?;}
+            if let Ok(call)=part.get("functionCall") {push(&mut out,field(call,"name")?,call.get("args")?)?;}
         }},
         _=>return Err("Unknown tool proposal format".into())
     }
@@ -179,7 +173,7 @@ pub(super) fn bind_task_chat(proposal: Option<Json>, body: &str, connection: &st
                 let mut assistant = vec![("role", s("assistant")), ("content", value(message, "content").clone())];
                 for key in ["reasoning_content", "reasoning_details"] {
                     if let Ok(detail) = message.get(key) {
-                        if detail != &Null && bounded(detail).is_ok() {
+                        if detail != &Null && detail.string().len() <= 65536 {
                             assistant.push((key, detail.clone()));
                         }
                     }
@@ -252,12 +246,17 @@ pub(super) fn project_task_chat(body: &mut Json, source: &[Json], request_connec
     Ok(())
 }
 
-/// Bounded aggregation of streamed Chat functions in provider index order.
+/// Aggregate streamed Chat functions in provider index order.
 #[derive(Default)]
 pub(super) struct Fragments(BTreeMap<usize, Fragment>);
 
 #[derive(Default)]
-struct Fragment { name: String, input: String, id: String }
+struct Fragment {
+    name: String,
+    input: String,
+    id: String,
+    numeric_id: Option<String>,
+}
 
 impl Fragments {
     pub(super) fn append(&mut self, calls: &Json) -> Result<()> {
@@ -267,30 +266,52 @@ impl Fragments {
     fn append_calls(&mut self, calls: &Json) -> Result<()> {
         if calls==&Null{return Ok(());}
         for call in calls.array()? {
-            bounded(call)?;
             let Num(index) = call.get("index")? else { return Err("Invalid streamed tool index".into()); };
             let index = index.parse::<usize>().map_err(|_| "Invalid streamed tool index")?;
             let fragment = self.0.entry(index).or_default();
             if let Ok(kind)=call.get("type") {if kind!=&Null&&kind!=&s("function"){return Err("Unsupported streamed tool type".into());}}
-            if let Ok(id)=call.get("id") {if id!=&Null {fragment.id.push_str(id.text()?);}}
+            match value(call, "id") {
+                Null => {},
+                Num(id) => fragment.numeric_id = Some(id.clone()),
+                id => fragment.id.push_str(id.text()?.trim_matches(|c: char| c.is_whitespace() || c.is_control())),
+            }
             if let Ok(f)=call.get("function") {
                 if let Ok(name)=f.get("name") {if name!=&Null{fragment.name.push_str(name.text()?);}}
                 if let Ok(input)=f.get("arguments") {if input!=&Null{fragment.input.push_str(input.text()?);}}
             }
-            if fragment.name.len()>64||fragment.id.len()>256||fragment.input.len()>LIMIT {return Err("Streamed tool proposal exceeds its bounds".into());}
+            if fragment.name.len()>64 {return Err("Invalid streamed tool name".into());}
+            if fragment.provider_id().is_some_and(|id| id.len() > 256) {
+                return Err("Invalid streamed tool identity".into());
+            }
         }
         Ok(())
     }
 
     pub(super) fn complete(&self)->Result<Vec<Json>> {
-        self.0.values().map(|fragment| fragment.complete().map_err(rejected)).collect()
+        let provider_ids: BTreeSet<_> = self.0.values().filter_map(Fragment::provider_id).collect();
+        self.0.iter().map(|(index, fragment)| {
+            let mut synthetic;
+            let id = if let Some(id) = fragment.provider_id() {
+                id
+            } else {
+                // Indexes are stable within the completed provider turn.
+                synthetic = format!("call_stream_{index}");
+                while provider_ids.contains(synthetic.as_str()) { synthetic.push('_'); }
+                &synthetic
+            };
+            fragment.complete(id).map_err(rejected)
+        }).collect()
     }
 }
 
 impl Fragment {
-    fn complete(&self)->Result<Json> {
+    fn provider_id(&self) -> Option<&str> {
+        if self.id.is_empty() { self.numeric_id.as_deref() } else { Some(&self.id) }
+    }
+
+    fn complete(&self, id: &str)->Result<Json> {
         canonical(&self.name,&parse(&self.input)?)?;
-        if self.id.is_empty()||self.id.chars().any(char::is_control){return Err("Invalid streamed tool identity".into());}
-        Ok(obj(vec![("id",s(&self.id)),("type",s("function")),("function",obj(vec![("name",s(&self.name)),("arguments",s(&self.input))]))]))
+        if id.chars().any(char::is_control) {return Err("Invalid streamed tool identity".into());}
+        Ok(obj(vec![("id",s(id)),("type",s("function")),("function",obj(vec![("name",s(&self.name)),("arguments",s(&self.input))]))]))
     }
 }

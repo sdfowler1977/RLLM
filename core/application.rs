@@ -1411,7 +1411,7 @@ fn completed_tool_with_source(st:&mut Json,output:&str,index:Option<usize>,sourc
             put(&mut current,"messages",Arr(messages));
             replace_chat(st,current);
         }
-        if let Some(answer)=local_answer.filter(|_| !has_proposal_batch(st)){
+        if let Some(answer)=local_answer.filter(|_| !has_proposal_batch(st) && !desktop_task_feedback(st)){
             put(st,"hosted_received",Null);put(st,"request_model",s("RLLM"));put(st,"request_agent_name",Null);
             put(st,"telemetry",Null);put(st,"agent_running",Bool(false));put(st,"agent_pending",Bool(false));put(st,"busy",Bool(false));
             append(st,"assistant",answer)?;
@@ -1573,6 +1573,21 @@ fn rejected_provider_proposal(st: &mut Json, inputs: &Json, reason: &str) -> Res
     let owner = st.clone();
     put(st, "stream_text", Null);
     operation_failure_followup(st, &owner, "tool_request", reason, "rejected_before_start")
+}
+
+fn desktop_task_feedback(st: &Json) -> bool {
+    CALLER_DRIVES_APPROVAL.with(std::cell::Cell::get)
+        && boolean(&chat(st), "desktop_agent_task")
+        && get(st, "task_run") == &Null && get(st, "pending") == &Null
+}
+
+fn return_task_format_error(st: &mut Json, inputs: &Json, reply: &str) -> Result<Json> {
+    put(st, "stream_text", Null);
+    append(st, "assistant", reply)?;
+    annotate_chat_tail(st, "tool_format_error", Bool(true));
+    harness::finish_attempt(st, inputs, "error");
+    let owner = st.clone();
+    operation_failure_followup(st, &owner, "tool_request", tool_format::FEEDBACK, "rejected_before_start")
 }
 
 fn proposal_failure(st:&mut Json,proposal:&Json,reason:&str,raw:&str)->Result<Json>{
@@ -1786,23 +1801,30 @@ fn text_tool_proposal(reply: &str) -> Option<Result<Json>> {
     Some(super::provider_calls::canonical(name, args))
 }
 
-pub(super) const TASK_NARRATION_FEEDBACK: &str = "Continue the current task from the step you just described. If it requires a tool, make the tool call now. Give a final answer when the work is finished or you have a concrete blocker.";
+pub(super) const TASK_NARRATION_FEEDBACK: &str = "The previous reply made no tool call. If work remains, call the appropriate tool now and wait for its result. If the work is finished or you have a concrete blocker, give your final report.";
+
+pub(super) fn task_visible_reply(raw: &str) -> &str {
+    reasoning_text::project(raw, false).text
+}
 
 fn task_narration(reply: &str) -> bool {
     // Look for a commitment to act in the closing prose. Earlier discussion
     // can describe planned work even when the reply ends with a result.
+    let reply = task_visible_reply(reply);
+    if reply.trim().is_empty() { return true; }
     let Some(line) = reply.trim_end().lines().last() else { return false; };
     let line = line.to_lowercase().replace('\u{2019}', "'");
-    let prose = line.trim_end_matches(['.', '!', '?']);
+    let prose = line.trim().trim_end_matches(['*', '_']).trim_end_matches(['.', '!', '?', ':', '…']);
     let sentence = prose.rmatch_indices(['.', '!', '?'])
         .find_map(|(index, mark)| {
             let tail = &prose[index + mark.len()..];
             tail.starts_with(char::is_whitespace).then_some(tail)
         })
         .unwrap_or(prose).trim();
-    let sentence = ["now ", "now, ", "next, ", "next ", "then ", "so "]
+    let sentence = sentence.trim_start_matches(['*', '-', '>']).trim_start();
+    let sentence = ["now, ", "now ", "next, ", "next ", "then ", "first, ", "first ", "so "]
         .iter().find_map(|prefix| sentence.strip_prefix(prefix)).unwrap_or(sentence);
-    let Some(action) = ["let me ", "i'll ", "i will ", "i'm going to ", "i am going to ", "i need to ",
+    let Some(action) = ["let me ", "let's ", "i'll ", "i will ", "i'm going to ", "i am going to ", "i need to ",
         "i'm ", "i am "].iter().find_map(|prefix| sentence.strip_prefix(prefix)) else { return false; };
     if line.ends_with('?')
         || [" if you ", " if needed", " on request", " anything else", " any other questions"]
@@ -1812,17 +1834,17 @@ fn task_narration(reply: &str) -> bool {
     {
         return false;
     }
-    let mut words = action.split_whitespace();
-    let Some(mut verb) = words.next() else { return false; };
-    if verb == "now" { verb = words.next().unwrap_or(""); }
+    let verb = action.split_whitespace()
+        .find(|word| !matches!(*word, "now" | "first" | "next" | "just" | "quickly"))
+        .unwrap_or("");
     // A continuation names work to perform. Courtesy offers and promises to
     // stay available do not identify an operation on the current task.
     matches!(verb,
-        "add" | "apply" | "build" | "change" | "check" | "compare" | "compile" | "confirm" | "correct" | "continue"
+        "add" | "apply" | "build" | "call" | "change" | "check" | "compare" | "compile" | "confirm" | "correct" | "continue"
         | "create" | "debug" | "diagnose" | "edit" | "execute" | "fetch" | "find" | "finish" | "fix" | "implement"
         | "inspect" | "investigate" | "look" | "measure" | "monitor" | "open" | "patch" | "read"
         | "rebuild" | "remove" | "replace" | "reproduce" | "rerun" | "retry" | "review" | "run" | "save"
-        | "search" | "trace" | "test" | "try" | "update" | "validate" | "verify" | "wait" | "write"
+        | "search" | "split" | "trace" | "test" | "try" | "update" | "use" | "validate" | "verify" | "wait" | "write"
         | "adding" | "building" | "checking" | "compiling" | "correcting" | "diagnosing" | "editing" | "fixing" | "inspecting" | "reading"
         | "replacing" | "running" | "searching" | "testing" | "verifying" | "working" | "writing")
 }
@@ -2860,7 +2882,16 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
             }
             "failure" => {
                 if text(inputs, "purpose") == "model" && tool_format::proposal_phase(&st) {
-                    if let Some(reason) = super::provider_calls::rejection(&text(inputs, "error")) {
+                    let error = text(inputs, "error");
+                    if error == network::MODEL_RESPONSE_ALLOWANCE && desktop_task_feedback(&st) {
+                        harness::finish_attempt(&mut st, inputs, "error");
+                        put(&mut st, "stream_text", Null);
+                        let owner = st.clone();
+                        let detail = format!("{error}. No tool ran from that response. Split the work into smaller edits and make one smaller call at a time.");
+                        effect = operation_failure_followup(&mut st, &owner, "tool_request", &detail, "response_allowance")?;
+                        return Ok(());
+                    }
+                    if let Some(reason) = super::provider_calls::rejection(&error) {
                         effect = rejected_provider_proposal(&mut st, inputs, reason)?;
                         return Ok(());
                     }
@@ -3439,6 +3470,12 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
                             let reason=received.stop_reason.as_deref().unwrap_or("output_limit");
                             retain_interruption(&mut st,&reply,reason)?;
                             harness::finish_attempt(&mut st,inputs,"interrupted");
+                            if desktop_task_feedback(&st) && !child_callback {
+                                let owner = st.clone();
+                                let detail = format!("The provider stopped this response ({reason}) before it finished. Continue from the last completed operation. Split a large call into smaller edits. If the context cannot fit more work, report the concrete blocker.");
+                                effect = operation_failure_followup(&mut st, &owner, "model_response", &detail, "interrupted_response")?;
+                                return Ok(());
+                            }
                             if !array(&st,"delegation_stack").is_empty(){return Err(format!("Subagent response interrupted by provider limit ({reason}); no final answer or tool proposal was accepted. Partial text is saved in the conversation."));}
                             harness::reset_task(&mut st);put(&mut st,"pending",Null);put(&mut st,"agent_pending",Bool(false));put(&mut st,"dialog",Null);
                             put(&mut st,"notice",s("Provider output/context limit reached. Partial text is saved as interrupted; no tool proposal, final answer, compaction or refinement was accepted. Retry requires a new explicit request."));
@@ -3530,6 +3567,10 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
                             return Ok(());
                         }
                         if tool_format::proposal_phase(&st)&&tool_format::embedded(&reply){
+                            if desktop_task_feedback(&st) && !child_callback {
+                                effect = return_task_format_error(&mut st, inputs, &reply)?;
+                                return Ok(());
+                            }
                             format_error_received=true;
                             tool_penalty(&mut st,"tool_misuse","tool_misuse_count","tool_misuse_score_tenths",TOOL_MISUSE_TENTHS,"A tool request was written inside the answer text instead of a bare JSON proposal. Nothing was executed on the device.");
                             tool_format::record(&mut st,&reply,inputs)?;
@@ -3539,6 +3580,10 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
                         }
                         put(&mut st,"format_pending",Null);put(&mut st,"format_retry_request",Bool(false));
                         if unsupported_tool_markup(&reply){
+                            if desktop_task_feedback(&st) && !child_callback && tool_format::proposal_phase(&st) {
+                                effect = return_task_format_error(&mut st, inputs, &reply)?;
+                                return Ok(());
+                            }
                             put(&mut st,"stream_text",Null);append(&mut st,"assistant",&reply)?;
                             let mut current=chat(&st);let mut messages=array(&current,"messages");if let Some(last)=messages.last_mut(){put(last,"tool_format_error",Bool(true));}
                             put(&mut current,"messages",Arr(messages));replace_chat(&mut st,current);
@@ -3573,9 +3618,7 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
                             tool_penalty(&mut st,"tool_misuse","tool_misuse_count","tool_misuse_score_tenths",TOOL_MISUSE_TENTHS,"The reply claimed a tool result that no operation in this turn produced. Nothing was executed on the device.");
                         }
                         harness::finish_attempt(&mut st,inputs,"success");
-                        if CALLER_DRIVES_APPROVAL.with(std::cell::Cell::get)
-                            && boolean(&chat(&st), "desktop_agent_task") && !child_callback
-                            && get(&st, "task_run") == &Null && get(&st, "pending") == &Null
+                        if desktop_task_feedback(&st) && !child_callback
                             && prose_reply && task_narration(&reply)
                         {
                             put(&mut st, "stream_text", Null);

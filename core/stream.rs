@@ -123,8 +123,6 @@ impl Transfer {
                 let block=record.get("content_block")?;let block_kind=field(block,"type")?;
                 if block_kind=="server_tool_use" {return Err("Provider-hosted tool blocks require their configured hosted workflow".into());}
                 if block_kind=="tool_use" {
-                    super::provider_calls::canonical(field(block,"name")?,block.get("input")?)?;
-                    let id=field(block,"id")?;if id.is_empty()||id.len()>256||id.chars().any(char::is_control){return Err("Invalid streamed tool identity".into());}
                     self.open_call=Some(block.clone());self.call_input.clear();self.call_block=Some(index);
                 }
                 let text=block_kind=="text";
@@ -144,7 +142,7 @@ impl Transfer {
                 else if kind=="input_json_delta" {
                     if is_text||self.call_block!=Some(index){return Err("Tool input delta does not belong to a tool block".into());}
                     let fragment=field(delta,"partial_json")?;
-                    if self.call_input.len().saturating_add(fragment.len())>65536{return Err("Streamed tool arguments exceed 64 KiB".into());}
+                    self.call_input.try_reserve(fragment.len()).map_err(|_| STREAM_MEMORY)?;
                     self.call_input.push_str(fragment);
                 }
                 else if is_text && ["thinking_delta","signature_delta"].contains(&kind) {return Err("Non-text delta does not belong to a text block".into());}
@@ -160,7 +158,7 @@ impl Transfer {
                 if self.call_block==Some(index){
                     let mut call=self.open_call.take().ok_or("Messages stop has no open tool call")?;
                     if !self.call_input.is_empty(){
-                        if call.get("input")!=Ok(&obj(vec![])){return Err("Streamed tool input supplied both initial fields and JSON deltas".into());}
+                        if call.get("input")!=Ok(&obj(vec![])){return Err(super::provider_calls::rejected("Streamed tool input supplied both initial fields and JSON deltas".into()));}
                         let input=parse(&self.call_input).unwrap_or_else(|_|s(&self.call_input));
                         if let Obj(fields)=&mut call{fields.insert("input".into(),input);}
                         self.call_input.clear();
@@ -407,7 +405,7 @@ impl Transfer {
                 continue;
             }
             if let Ok(content) = delta.get("content") {if content != &Null {self.append(content.text()?)?;}}
-            if delta.get("function_call").is_ok(){return Err("Legacy streamed function_call is not a supported proposal".into());}
+            if delta.get("function_call").is_ok_and(|call| call != &Null){return Err(super::provider_calls::rejected("Legacy streamed function_call is not a supported proposal".into()));}
             if let Ok(calls)=delta.get("tool_calls"){self.call_fragments.append(calls)?;}
             if let Ok(reason) = choice.get("finish_reason") {if reason != &Null {self.finish_reason=Some(reason.text()?.to_string());}}
         }
@@ -464,7 +462,6 @@ impl Transfer {
                 self.append(content)?;
             }
             if let Ok(calls)=message.get("tool_calls") {if calls!=&Null {for call in calls.array()? {
-                if call.string().len()>65536{return Err("Streamed tool proposal exceeds 64 KiB".into());}
                 self.native_calls.push(call.clone());
             }}}
         }
@@ -785,7 +782,8 @@ impl Transfer {
             fields.insert("message".into(),message);
         }}
         if let Err(error)=super::provider::stream_reply(protocol,&mut complete){
-            if reason.is_empty() || error == DOCUMENT_MEMORY || error == STREAM_MEMORY {return Err(error);}
+            if reason.is_empty() || error == DOCUMENT_MEMORY || error == STREAM_MEMORY
+                || super::provider_calls::rejection(&error).is_some() {return Err(error);}
             return Err(format!("{error}: {reason}"));
         }
         serialize_stream_document(&complete)
@@ -1095,7 +1093,7 @@ fn balanced_object(text: &str, start: usize) -> Option<(usize, Json)> {
     let mut depth = 0i32;
     let mut quoted = false;
     let mut escaped = false;
-    while index < bytes.len() && index - start <= 65536 {
+    while index < bytes.len() {
         let byte = bytes[index];
         if quoted {
             if escaped { escaped = false; }

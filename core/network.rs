@@ -698,6 +698,8 @@ pub fn decoded(bytes: &[u8]) -> Result<(u16, String)> {
         String::from_utf8(data).map_err(|_| "File or response is not UTF-8 text")?,
     ))
 }
+pub(super) const MODEL_RESPONSE_ALLOWANCE: &str = "Model response exceeds the current device response allowance";
+
 pub(super) fn decoded_provider_stream(bytes: &[u8]) -> Result<(u16, String)> {
     let (code, data) = decoded_bytes_with_interim(bytes, 0, 0, false, true)?;
     Ok((code, String::from_utf8(data).map_err(|_| "File or response is not UTF-8 text")?))
