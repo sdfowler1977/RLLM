@@ -117,7 +117,10 @@ public final class Activity extends android.app.Activity {
     private volatile boolean phoneStorageAccess=true,networkStorageAccess=true,cloudStorageAccess=true,mcpStorageAccess=true;
     private volatile boolean deviceRootEnabled;
     private String deviceRootStatus="unchecked";
+    private String deviceRootDetail="";
     private int deviceRootRequest;
+    private boolean pendingDeviceBrowse;
+    private boolean skipNextDeviceRootResumeRefresh;
     private volatile String activeStorageProvider="";
     private String cloudTicket="";
     private volatile String cloudOwner="";
@@ -310,15 +313,20 @@ public final class Activity extends android.app.Activity {
                 try{startActivityForResult(new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),48);}
                 catch(android.content.ActivityNotFoundException|SecurityException problem){
                     deviceNotice("Device all-files Settings is unavailable");
-                    dispatch("phone_access_status");
+                    finishPhoneAccessRequest();
                 }
             }
         }else if(android.os.Build.VERSION.SDK_INT==29&&!android.os.Environment.isExternalStorageLegacy()){
             deviceNotice("Direct device paths are unavailable on this Android version. Selected-folder access remains available.");
-            dispatch("phone_access_status");
+            finishPhoneAccessRequest();
         }else requestPermissions(new String[]{android.Manifest.permission.READ_EXTERNAL_STORAGE,android.Manifest.permission.WRITE_EXTERNAL_STORAGE},48);
     }
-    @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){super.onRequestPermissionsResult(code,permissions,grants);media.permission(code,grants);if(code==48){refreshDeviceRoot();dispatch("phone_access_status");}if(code==56)deliverPendingAnnouncement();}
+    private void finishPhoneAccessRequest(){
+        if(pendingDeviceBrowse){if(deviceRootEnabled)refreshDeviceRoot();dispatch("phone_access_status");openPendingDeviceBrowse();}
+        else{refreshDeviceRoot();dispatch("phone_access_status");}
+        if(ratePaused)skipNextDeviceRootResumeRefresh=true;
+    }
+    @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] grants){super.onRequestPermissionsResult(code,permissions,grants);media.permission(code,grants);if(code==48)finishPhoneAccessRequest();if(code==56)deliverPendingAnnouncement();}
     private Object phoneReadOrDocument(JSONObject command,int token)throws Exception {
         if(!phoneStorageAccess)throw new IOException("Device storage access is off in Setup");
         JSONObject requested=command.getJSONObject("args");
@@ -438,10 +446,12 @@ public final class Activity extends android.app.Activity {
     private void rootAccess(boolean enable){
         int request=++deviceRootRequest;
         deviceRootEnabled=false;
-        if(!enable){deviceRootStatus="disabled";dispatch("phone_access_status");return;}
-        if(!phoneStorageAccess){deviceRootStatus="disabled";dispatch("phone_access_status");deviceNotice("Device storage access is off in Setup");return;}
+        if(!enable){deviceRootStatus="disabled";deviceRootDetail="Disabled for this session.";dispatch("phone_access_status");deviceNotice(deviceRootLabel());return;}
+        if(!phoneStorageAccess){deviceRootStatus="disabled";deviceRootDetail="Device storage access is off in Setup.";dispatch("phone_access_status");deviceNotice(deviceRootLabel());return;}
         deviceRootStatus="checking";
+        deviceRootDetail="Checking PATH and known Android root locations; running su -c id.";
         dispatch("phone_access_status");
+        deviceNotice("Checking Device root. Android may ask you to approve the root request.");
         scheduleRootVerification(request);
     }
     private void refreshDeviceRoot(){
@@ -453,36 +463,41 @@ public final class Activity extends android.app.Activity {
     }
     private void scheduleRootVerification(int request){
         DocumentAccess.prepareHolding(this);
-        workers.execute(()->{
-            String status;
+        try{workers.execute(()->{
+            String status,detail;
             android.os.CancellationSignal signal=new android.os.CancellationSignal();documentSignals.add(signal);
             try{
                 File su=DocumentAccess.findSu();
-                if(su==null)status="absent";
-                else{
-                    new DocumentAccess.Root(su,deadlines,signal).verify();
-                    status="granted";
-                }
-            }catch(Exception problem){status="denied_or_unavailable";}
+                if(su==null){status="absent";detail="Checked PATH and the known Android root-manager locations.";}
+                else{String identity=new DocumentAccess.Root(su,deadlines,signal).verify();status="granted";detail=su.getPath()+" returned "+identity.trim()+".";}
+            }catch(Exception problem){status="denied_or_unavailable";detail=safe(problem);}
             finally{documentSignals.remove(signal);}
-            String result=status;
+            String result=status,message=detail;
             runOnUiThread(()->{
                 if(closed||request!=deviceRootRequest)return;
                 boolean allowed=phoneStorageAccess;
                 deviceRootStatus=allowed?result:"disabled";
+                deviceRootDetail=allowed?message:"Device storage access was turned off during the root request.";
                 deviceRootEnabled=result.equals("granted")&&allowed;
                 dispatch("phone_access_status");
+                deviceNotice(deviceRootLabel());
+                openPendingDeviceBrowse();
             });
-        });
+        });}catch(RejectedExecutionException problem){
+            if(closed||request!=deviceRootRequest)return;
+            deviceRootStatus="denied_or_unavailable";deviceRootDetail=safe(problem);deviceRootEnabled=false;
+            dispatch("phone_access_status");deviceNotice(deviceRootLabel());
+            openPendingDeviceBrowse();
+        }
     }
 
     private String deviceRootLabel(){
         switch(deviceRootStatus){
-            case "checking":return "Checking Device root";
-            case "absent":return "Device root executable not found";
-            case "denied_or_unavailable":return "Device root permission was denied or unavailable";
-            case "granted":return deviceRootEnabled?"Device root enabled for this session":"Device root disabled";
-            default:return "Device root disabled";
+            case "checking":return "Checking Device root; the system may ask for a grant.";
+            case "absent":return "Device root executable not found. "+deviceRootDetail;
+            case "denied_or_unavailable":return "Device root permission was denied or unavailable. "+deviceRootDetail;
+            case "granted":return deviceRootEnabled?"Device root enabled for this session. "+deviceRootDetail:"Device root disabled. "+deviceRootDetail;
+            default:return deviceRootDetail.isEmpty()?"Device root disabled":"Device root disabled. "+deviceRootDetail;
         }
     }
 
@@ -554,6 +569,137 @@ public final class Activity extends android.app.Activity {
         });
     }
 
+    private void browseDeviceFiles(){
+        if(closed||state==null)return;
+        if(!phoneStorageAccess||state.optString("phone_access_mode").equals("off")){
+            deviceNotice("Device file tools are off in Setup");return;
+        }
+        if(!phoneAccessGranted()){
+            pendingDeviceBrowse=true;
+            deviceNotice("Open Android all-files Settings and grant access to browse shared storage. The selected folder remains available if broad access is not granted.");
+            requestPhoneAccess();return;
+        }
+        openDeviceBrowser();
+    }
+
+    private void openDeviceBrowser(){
+        if(closed||state==null)return;
+        if(!phoneStorageAccess||state.optString("phone_access_mode").equals("off")){deviceNotice("Device file tools are off in Setup");return;}
+        if(deviceRootStatus.equals("checking")){pendingDeviceBrowse=true;return;}
+        try{DeviceBrowser browser=new DeviceBrowser();browser.show(browser.initialPath);}
+        catch(Exception problem){deviceNotice("Device files could not be opened: "+safe(problem));}
+    }
+
+    private void openPendingDeviceBrowse(){
+        if(!pendingDeviceBrowse||deviceRootStatus.equals("checking"))return;
+        pendingDeviceBrowse=false;openDeviceBrowser();
+    }
+
+    private final class DeviceBrowser {
+        private final int token=generation;
+        private final String selected=state.optString("phone_uri");
+        private final boolean limited=state.optString("phone_access_mode").equals("limited");
+        private final boolean rootMode=deviceRootEnabled;
+        private final boolean useTree=!rootMode&&(limited||!phoneAccessGranted())&&!selected.isEmpty();
+        private final Uri treeUri=useTree?Uri.parse(selected):null;
+        private final File base;
+        private final String initialPath;
+        private AlertDialog current;
+        private android.os.CancellationSignal activeSignal;
+        private int loadSerial;
+
+        DeviceBrowser()throws IOException{
+            if(rootMode){base=null;initialPath="/";}
+            else if(useTree){base=null;initialPath="";}
+            else if(limited){throw new IOException("Choose a selected device folder before browsing in selected-folder scope");}
+            else if(phoneAccessGranted()){base=DocumentAccess.primary();initialPath="";}
+            else{throw new IOException("Broad access was not granted and no selected device folder is available");}
+        }
+
+        void show(String path){
+            if(closed||token!=generation)return;
+            if(current!=null&&current.isShowing())current.dismiss();
+            final String folder=path;
+            final long serial=++loadSerial;
+            LinearLayout body=column();body.setPadding(dp(16),dp(8),dp(16),dp(8));body.setBackgroundColor(surface);
+            TextView location=label(location(folder),12);location.setTextIsSelectable(true);body.addView(location);
+            ListView listing=new ListView(Activity.this);ArrayAdapter<String> rows=new ArrayAdapter<>(Activity.this,android.R.layout.simple_list_item_1,new ArrayList<>());listing.setAdapter(rows);
+            listing.setDivider(new android.graphics.drawable.ColorDrawable(border));listing.setDividerHeight(dp(1));
+            body.addView(listing,new LinearLayout.LayoutParams(-1,dp(360)));
+            AlertDialog popup=new AlertDialog.Builder(Activity.this).setTitle(rootMode?"Device files · system":"Device files")
+                .setView(body).setNegativeButton("Up",null).setPositiveButton("Close",null).create();
+            current=popup;
+            popup.setOnDismissListener(d->{android.os.CancellationSignal signal=activeSignal;if(signal!=null)signal.cancel();});
+            popup.show();
+            Button up=popup.getButton(AlertDialog.BUTTON_NEGATIVE);String parent=parent(folder);up.setEnabled(parent!=null);up.setAlpha(parent==null?.45f:1f);
+            up.setOnClickListener(v->{if(parent!=null)show(parent);});
+            rows.add("Loading folder…");
+            load(folder,serial,popup,listing,rows);
+        }
+
+        private String location(String path){
+            if(rootMode)return path;
+            if(useTree)return path.isEmpty()?"Selected device folder":"Selected device folder / "+path;
+            String root=base.getAbsolutePath();return path.isEmpty()?root:new File(base,path).getAbsolutePath();
+        }
+
+        private String parent(String path){
+            if(rootMode){if(path.equals("/"))return null;int split=path.lastIndexOf('/');return split<=0?"/":path.substring(0,split);}
+            if(path.isEmpty())return null;int split=path.lastIndexOf('/');return split<0?"":path.substring(0,split);
+        }
+
+        private String child(String path,String name){
+            if(rootMode)return path.equals("/")?"/"+name:path+"/"+name;
+            return path.isEmpty()?name:path+"/"+name;
+        }
+
+        private JSONArray list(String path,android.os.CancellationSignal signal)throws Exception{
+            if(rootMode){
+                deviceActive(token,signal,false,true);File su=DocumentAccess.findSu();
+                if(su==null){deviceRootLost("absent");throw new IOException("Device root executable not found");}
+                DocumentAccess.Root root=new DocumentAccess.Root(su,deadlines,signal);
+                try{root.verify();JSONArray rows=root.list(DocumentAccess.absolute(path),()->deviceActive(token,signal,false,true));deviceActive(token,signal,false,true);return rows;}
+                catch(Exception problem){if(!signal.isCanceled())deviceRootLost("denied_or_unavailable");throw problem;}
+            }
+            if(useTree){
+                DocumentAccess.Check check=()->{deviceActive(token,signal,false,false);documentSourceAccess(treeUri);};check.run();
+                DocumentAccess.Tree tree=new DocumentAccess.Tree(getContentResolver(),treeUri,false,signal,check);
+                JSONArray rows=tree.list(tree.resolve(path));check.run();return rows;
+            }
+            DocumentAccess.Check check=()->deviceActive(token,signal,true,false);check.run();
+            File folder=path.isEmpty()?base:DocumentAccess.within(base,path);
+            JSONArray rows=DocumentAccess.list(folder,check,5000);check.run();return rows;
+        }
+
+        private void load(String path,long serial,AlertDialog popup,ListView listing,ArrayAdapter<String> adapter){
+            android.os.CancellationSignal previous=activeSignal;if(previous!=null)previous.cancel();
+            android.os.CancellationSignal signal=new android.os.CancellationSignal();activeSignal=signal;documentSignals.add(signal);
+            try{workers.execute(()->{
+                JSONArray listed=null;String failure="";
+                try{listed=list(path,signal);}catch(Exception problem){failure=safe(problem);}
+                finally{documentSignals.remove(signal);}
+                final JSONArray result=listed;final String error=failure;
+                runOnUiThread(()->{
+                    if(closed||token!=generation||serial!=loadSerial||!popup.isShowing())return;
+                    adapter.clear();
+                    if(!error.isEmpty()){adapter.add("Unable to browse this folder: "+error);listing.setOnItemClickListener(null);return;}
+                    List<JSONObject> entries=new ArrayList<>();
+                    for(int i=0;i<result.length();i++){JSONObject row=result.optJSONObject(i);if(row==null)continue;String name=row.optString("name");if(name.isEmpty()||name.equals(".")||name.equals(".."))continue;entries.add(row);}
+                    Collections.sort(entries,(left,right)->{boolean a=left.optBoolean("directory"),b=right.optBoolean("directory");if(a!=b)return a?-1:1;return left.optString("name").compareToIgnoreCase(right.optString("name"));});
+                    if(entries.isEmpty())adapter.add("This folder is empty");
+                    for(JSONObject entry:entries)adapter.add((entry.optBoolean("directory")?"▸  ":"     ")+entry.optString("name"));
+                    listing.setOnItemClickListener((parent,view,position,id)->{
+                        if(position<0||position>=entries.size())return;JSONObject entry=entries.get(position);String name=entry.optString("name"),selectedPath=child(path,name);
+                        if(entry.optBoolean("directory"))show(selectedPath);
+                        else new AlertDialog.Builder(Activity.this).setTitle("Device file").setMessage(location(selectedPath)).setPositiveButton("Close",null).show();
+                    });
+                });
+            });}catch(RejectedExecutionException problem){
+                documentSignals.remove(signal);adapter.clear();adapter.add("Unable to browse this folder: "+safe(problem));listing.setOnItemClickListener(null);
+            }
+        }
+    }
+
     private static byte[] deviceWriteBytes(String content)throws IOException {
         if(content.length()>1024*1024||content.indexOf('\0')>=0)throw new IOException("Device text file must be UTF-8 and at most 1 MiB");
         byte[] bytes=content.getBytes(StandardCharsets.UTF_8);
@@ -590,7 +736,7 @@ public final class Activity extends android.app.Activity {
         int request=deviceRootRequest;
         runOnUiThread(()->{
             if(closed||request!=deviceRootRequest||!deviceRootStatus.equals("granted"))return;
-            deviceRootEnabled=false;deviceRootStatus=status;dispatch("phone_access_status");
+            deviceRootEnabled=false;deviceRootStatus=status;deviceRootDetail="The root grant was lost or the su request failed during this operation.";dispatch("phone_access_status");
         });
     }
 
@@ -1118,14 +1264,14 @@ public final class Activity extends android.app.Activity {
             else{TextView fieldLabel=label(f.optString("label"),12);content.addView(fieldLabel);if(kind.equals("readonly")){TextView t=label(value,13);t.setTextIsSelectable(true);t.setTypeface(proseFont);content.addView(t);}
                 else{EditText e=new EditText(this);e.setId(View.generateViewId());fieldLabel.setLabelFor(e.getId());e.setHint(f.optString("label"));e.setMinHeight(dp(48));e.setTextSize(15*textScale);e.setTypeface(proseFont);e.setTextColor(ink);e.setText(value);if(name.equals("endpoint"))e.setHint("Local IP → http://; explicit https:// is kept");e.setHintTextColor(muted);e.setBackgroundTintList(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_focused},new int[]{}},new int[]{accent,muted}));e.setSingleLine(!kind.equals("multiline"));if(kind.equals("secret")){e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);e.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);}else if(kind.equals("uri"))e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);else if(kind.equals("number"))e.setInputType(InputType.TYPE_CLASS_NUMBER);else if(kind.equals("multiline")){e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);e.setMinLines(5);e.setGravity(Gravity.TOP);}content.addView(e,new LinearLayout.LayoutParams(-1,-2));fields.put(name,e);}}
         }
-        boolean profileForm=state!=null&&state.optString("dialog").equals("profile");JSONArray actions=model.optJSONArray("buttons");if(actions!=null)for(int i=0;i<actions.length();i++){JSONObject b=actions.getJSONObject(i);String event=b.getString("event");if(profileForm&&event.equals("profile_save"))continue;Button control=button(b.getString("label"),()->{if(event.equals("conversation_export"))export();else dispatch(event);});control.setEnabled(b.optBoolean("enabled",true));control.setAlpha(control.isEnabled()?1f:.45f);if(submenuPills(model)){control.setBackground(submenuPillFace());control.setGravity(Gravity.CENTER);control.setTextColor(accent);control.setSingleLine(false);control.setPadding(dp(16),dp(8),dp(16),dp(8));control.setMinHeight(dp(48));control.setMinimumHeight(dp(48));LinearLayout.LayoutParams actionBounds=new LinearLayout.LayoutParams(-1,-2);actionBounds.setMargins(0,dp(4),0,dp(4));content.addView(control,actionBounds);}else if(model.optString("presentation").equals("list")){control.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);control.setTextColor(ink);control.setPadding(dp(12),dp(8),dp(12),dp(8));control.setMinHeight(dp(48));control.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf((accent&0x00ffffff)|0x33000000),new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT),null));content.addView(control,new LinearLayout.LayoutParams(-1,-2));View line=new View(this);line.setBackgroundColor(border);content.addView(line,new LinearLayout.LayoutParams(-1,dp(1)));}else{control.setPadding(dp(12),dp(8),dp(12),dp(8));LinearLayout.LayoutParams actionBounds=new LinearLayout.LayoutParams(-1,-2);actionBounds.setMargins(0,dp(4),0,dp(4));content.addView(control,actionBounds);}}
+        boolean profileForm=state!=null&&state.optString("dialog").equals("profile");JSONArray actions=model.optJSONArray("buttons");if(actions!=null)for(int i=0;i<actions.length();i++){JSONObject b=actions.getJSONObject(i);String event=b.getString("event");if(profileForm&&event.equals("profile_save"))continue;Button control=button(b.getString("label"),()->{if(event.equals("conversation_export"))export();else if(event.equals("phone_files"))browseDeviceFiles();else dispatch(event);});control.setEnabled(b.optBoolean("enabled",true));control.setAlpha(control.isEnabled()?1f:.45f);if(submenuPills(model)){control.setBackground(submenuPillFace());control.setGravity(Gravity.CENTER);control.setTextColor(accent);control.setSingleLine(false);control.setPadding(dp(16),dp(8),dp(16),dp(8));control.setMinHeight(dp(48));control.setMinimumHeight(dp(48));LinearLayout.LayoutParams actionBounds=new LinearLayout.LayoutParams(-1,-2);actionBounds.setMargins(0,dp(4),0,dp(4));content.addView(control,actionBounds);}else if(model.optString("presentation").equals("list")){control.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);control.setTextColor(ink);control.setPadding(dp(12),dp(8),dp(12),dp(8));control.setMinHeight(dp(48));control.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf((accent&0x00ffffff)|0x33000000),new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT),null));content.addView(control,new LinearLayout.LayoutParams(-1,-2));View line=new View(this);line.setBackgroundColor(border);content.addView(line,new LinearLayout.LayoutParams(-1,dp(1)));}else{control.setPadding(dp(12),dp(8),dp(12),dp(8));LinearLayout.LayoutParams actionBounds=new LinearLayout.LayoutParams(-1,-2);actionBounds.setMargins(0,dp(4),0,dp(4));content.addView(control,actionBounds);}}
         String screen=state==null?"":state.optString("dialog");
         if(screen.equals("phone_access")||screen.equals("phone_locations")){
             content.addView(button("Device files",this::deviceFiles));
             content.addView(label(deviceRootLabel(),13));
             boolean pending=deviceRootStatus.equals("checking");
-            content.addView(button(deviceRootEnabled||pending?"Disable Device root":"Enable Device root",
-                ()->rootAccess(!deviceRootEnabled&&!pending)));
+            Button rootControl=button(pending?"Checking Device root":deviceRootEnabled?"Disable Device root":"Enable Device root",
+                ()->rootAccess(!deviceRootEnabled));rootControl.setEnabled(!pending);rootControl.setAlpha(pending?.55f:1f);content.addView(rootControl);
         }
         ScrollView scroll=new ScrollView(this);scroll.addView(content);
         TextView title=label(model.optString("title"),20);title.setTypeface(proseFont,Typeface.BOLD);title.setBackgroundColor(surface);title.setPadding(dp(24),dp(20),dp(24),dp(12));
@@ -1767,7 +1913,7 @@ public final class Activity extends android.app.Activity {
             return;
         }
         if(media.result(request,result,data))return;
-        if(request==48){refreshDeviceRoot();dispatch("phone_access_status");return;}
+        if(request==48){finishPhoneAccessRequest();return;}
         if(request==49){cloudSelection(result,data);return;}
 
         if(request==42||request==44){finishSavedExport(result,data);return;}
@@ -2138,7 +2284,7 @@ public final class Activity extends android.app.Activity {
     @Override public boolean onKeyDown(int keyCode,android.view.KeyEvent event){if(android.os.Build.VERSION.SDK_INT<33&&keyCode==android.view.KeyEvent.KEYCODE_BACK&&canNavigateBack){dispatch("back");return true;}return super.onKeyDown(keyCode,event);}
     @Override protected void onPause(){PackageInstall.pause(this);ratePaused=true;boolean background=state!=null&&VoiceSession.owns(this,state.optString("voice_consent"));if(state!=null&&state.optBoolean("voice_open")&&!background&&!media.permissionPending())dispatch("voice_suspend");media.pause(background);preserveInputs();flushPendingSave();uiStale=true;super.onPause();}
     @Override protected void onStop(){flushPendingSave();super.onStop();}
-    @Override protected void onResume(){ratePaused=false;media.resume();super.onResume();if(!loopArmed){loopArmed=true;rateHandler.postDelayed(loopTick,15000);}if(state!=null&&!closed){refreshDeviceRoot();deliverPendingAnnouncement();announcePendingProtectionLoss();dispatch("phone_access_status");refreshRateClock();openRequestedConversation();}}
+    @Override protected void onResume(){boolean skipRootRefresh=skipNextDeviceRootResumeRefresh;skipNextDeviceRootResumeRefresh=false;ratePaused=false;media.resume();super.onResume();if(!loopArmed){loopArmed=true;rateHandler.postDelayed(loopTick,15000);}if(state!=null&&!closed){if(!skipRootRefresh)refreshDeviceRoot();deliverPendingAnnouncement();announcePendingProtectionLoss();dispatch("phone_access_status");refreshRateClock();openRequestedConversation();}}
     @Override public void onConfigurationChanged(android.content.res.Configuration configuration){super.onConfigurationChanged(configuration);viewportWidth=0;viewportHeight=0;queueViewport();}
     @Override protected void onDestroy(){releasePlatformBack();VoiceSession.release(this);TurnService.detach(this);media.close();closed=true;pageDeadline.clear();resolution.close();try{JSONObject expected=state==null?null:state.optJSONObject("web_expected");if(expected!=null&&!expected.optString("capture_token").isEmpty())Core.call(new JSONObject().put("op","capture_document_cancel").put("ticket",expected.getString("capture_token")));}catch(Exception ignored){}try{if(state!=null){Core.call(new JSONObject().put("op","stream_owner_cancel").put("owner",state.optString("mcp_client_expected")));}}catch(Exception ignored){}try{if(state!=null&&state.has("mcp_client_resume_token")&&!state.isNull("mcp_client_resume_token"))Core.call(new JSONObject().put("op","stream_resume_close").put("token",state.get("mcp_client_resume_token")));}catch(Exception ignored){}cleanupWorkers.shutdownNow();for(Socket socket:cleanupConnections)try{socket.close();}catch(IOException ignored){}rateHandler.removeCallbacksAndMessages(null);stopExecution();generation++;cancelDocuments();for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}try{Core.call(new JSONObject().put("op","cancel_tool"));}catch(Throwable ignored){}deadlines.shutdownNow();workers.shutdownNow();super.onDestroy();}
 }

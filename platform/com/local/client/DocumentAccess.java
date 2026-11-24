@@ -2685,10 +2685,11 @@ final class DocumentAccess {
 
     static File findSu() {
         LinkedHashSet<String> directories=new LinkedHashSet<>();
-        for(String directory:new String[]{"/system/bin","/system/xbin","/sbin","/su/bin","/debug_ramdisk","/vendor/bin","/vendor/xbin","/product/bin","/odm/bin"})
-            directories.add(directory);
         String path=System.getenv("PATH");
         if(path!=null)for(String directory:path.split(":"))if(directory.startsWith("/"))directories.add(directory);
+        for(String directory:new String[]{"/data/adb/ksu/bin","/data/adb/ap/bin","/debug_ramdisk","/system_ext/bin",
+            "/system/bin","/system/xbin","/sbin","/su/bin","/data/adb/magisk","/data/adb/magisk/bin","/data/adb/su",
+            "/vendor/bin","/vendor/xbin","/product/bin","/odm/bin"})directories.add(directory);
         for(String directory:directories){
             File candidate=new File(directory,"su");
             if(candidate.isFile()&&candidate.canExecute())return candidate;
@@ -2793,8 +2794,34 @@ final class DocumentAccess {
             }
         }
 
-        void verify()throws Exception {
-            run("exit 0",null,in->null);
+        String verify()throws Exception {
+            signal.throwIfCanceled();
+            Process process=new ProcessBuilder(su.getPath(),"-c","id").redirectErrorStream(true).start();
+            java.util.concurrent.atomic.AtomicBoolean timedOut=new java.util.concurrent.atomic.AtomicBoolean();
+            ScheduledFuture<?> deadline=deadlines.schedule(()->{timedOut.set(true);process.destroyForcibly();},120,TimeUnit.SECONDS);
+            signal.setOnCancelListener(()->process.destroyForcibly());
+            try{
+                try(OutputStream stdin=process.getOutputStream()){}
+                ByteArrayOutputStream output=new ByteArrayOutputStream();byte[] buffer=new byte[1024];int count;
+                try(InputStream input=process.getInputStream()){
+                    while((count=input.read(buffer))>=0){
+                        signal.throwIfCanceled();
+                        if(output.size()+count>4096)throw new IOException("su -c id returned an oversized result");
+                        output.write(buffer,0,count);
+                    }
+                }
+                int code=process.waitFor();signal.throwIfCanceled();
+                if(timedOut.get())throw new IOException("su -c id timed out while waiting for the root grant");
+                String identity=output.toString(StandardCharsets.UTF_8.name()).trim();
+                if(code!=0)throw new IOException("su -c id failed with exit "+code+(identity.isEmpty()?"":": "+identity));
+                if(!(identity.startsWith("uid=0(")||identity.equals("uid=0")||identity.startsWith("uid=0 ")))
+                    throw new IOException("Device root permission was denied; su -c id returned "+(identity.isEmpty()?"no identity":identity));
+                return identity;
+            }catch(InterruptedException problem){
+                Thread.currentThread().interrupt();throw new IOException("su -c id was interrupted",problem);
+            }finally{
+                process.destroyForcibly();deadline.cancel(false);signal.setOnCancelListener(null);
+            }
         }
 
         File resolve(File file)throws Exception {
