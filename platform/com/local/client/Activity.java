@@ -169,7 +169,10 @@ public final class Activity extends android.app.Activity {
     private void paintSystemBarsBeforeContrast(int color){getWindow().setStatusBarColor(color);getWindow().setNavigationBarColor(color);}
     private void showSystemBarAppearance(boolean dark){
         if(android.os.Build.VERSION.SDK_INT>=30){
-            WindowInsetsController controller=getWindow().getInsetsController();
+            android.view.Window window=getWindow();
+            // PhoneWindow reads its decor directly, including before setContentView.
+            window.getDecorView();
+            WindowInsetsController controller=window.getInsetsController();
             if(controller!=null){int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;controller.setSystemBarsAppearance(dark?0:appearance,appearance);}
         }else showSystemBarAppearanceBeforeController(dark);
     }
