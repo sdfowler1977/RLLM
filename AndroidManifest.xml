@@ -4,6 +4,7 @@
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
   <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
   <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -17,6 +18,7 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <application android:requestLegacyExternalStorage="true" android:label="RLLM" android:icon="@drawable/icon" android:allowBackup="false" android:usesCleartextTraffic="true" android:networkSecurityConfig="@xml/network" android:supportsRtl="true" android:theme="@style/AppTheme" android:extractNativeLibs="true">
+    <receiver android:name=".PackageInstall$ResultReceiver" android:exported="false" />
     <service android:name=".VoiceSession" android:exported="false" android:foregroundServiceType="microphone|mediaPlayback" />
     <service android:name=".TurnService" android:exported="false" android:foregroundServiceType="dataSync" />
     <service android:name=".Execution" android:exported="false" android:isolatedProcess="true" android:process=":execution" />

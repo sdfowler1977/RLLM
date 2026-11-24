@@ -538,9 +538,13 @@ fn ui(st: &Json) -> Json {
     let mut pop=if let Some(value)=oauth::dialog(st){value}else if let Some(value)=voice::dialog(st){value}else if let Some(value)=jobs::dialog(st){value}else if let Some(value)=mcp_history::dialog(st){value}else if let Some(value)=mcp_image::dialog(st){value}else if let Some(value)=media::dialog(st){value}else if let Some(value)=services::dialog(st){value}else if let Some(value)=workspace::modal_for(st){value}else{match dialog.as_str(){
  "chat_actions"=>modal("Conversation actions",vec![],{
     let mut actions=vec![button("New conversation","new"),button("Main agent profile","chat_agents"),button(&format!("Answer mode · {}",answer_mode::label(st)),"answer_modes"),button(&format!("Permission mode · {}",permissions::label(st)),"permission_modes"),button("Agent task / compact context","task"),button("Attach image or text file","phone_file"),button("Generation jobs","jobs_menu"),button("Voice and media","media_menu"),button("Voice and microphone settings","voice_settings"),button("Service request","service_request"),button("Save conversation to default storage","save_drive"),button("Export conversation","conversation_export"),button(if get(st,"pending")!=&Null {"Review proposed operation"}else{"Retry last request"},if get(st,"pending")!=&Null {"review"}else{"retry"})];
+    if cfg!(target_os="android"){actions.push(button("Install APK","apk_install_open"));}
     if let Some(review)=mcp_image::review_button(st){actions.push(review);}
     if array(&current,"messages").last().map(|m|text(m,"role")=="assistant").unwrap_or(false){actions.push(button("Regenerate reply in new branch","regenerate"));}if boolean(get(st,"hosted_request"),"paused"){actions.push(button("Continue hosted search","hosted_continue"));}if !array(&current,"hosted_responses").is_empty(){actions.push(button("Inspect hosted search responses","hosted_details"));}if tool_format::review_available(st){actions.push(button("Review proposed request","format_review"));}if tool_format::available(st){actions.push(button("Request format correction","format_correction"));}actions
  }),
+ "apk_install" if cfg!(target_os="android")=>modal("Install APK",
+    vec![field_ui("apk_path","APK path relative to the current workspace",&text(edit,"apk_path"),"text")],
+    vec![button("Install workspace APK","apk_install_workspace"),button("Choose APK file","apk_install_pick")]),
  "answer_modes"=>answer_mode::dialog(st),
  "permission_modes"=>permissions::dialog(st),
  "permissions"=>permissions::settings(st),
@@ -2253,6 +2257,34 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
     let observation_format=boolean(get(&st,"operation_expected"),"observation_format");
     approval_rules::namespace(&mut st,&text(v,"root"));harness_rules::identity_refresh(&mut st);
     let requested_action = field(v, "action")?;
+    if cfg!(target_os="android") && requested_action=="apk_install_result" {
+        // This can arrive while the user is in another chat or a turn is running.
+        let mut captured=obj(vec![]);
+        if get(inputs,"draft")!=&Null {put(&mut captured,"draft",get(inputs,"draft").clone());}
+        let form=ui(&st);
+        for field in array(get(&form,"modal"),"fields") {
+            let key=text(&field,"key");
+            if text(&field,"kind")!="readonly" && get(inputs,&key)!=&Null {
+                put(&mut captured,&key,get(inputs,&key).clone());
+            }
+        }
+        capture(&mut st,&captured);
+        let id=text(inputs,"apk_chat");
+        let message=field(inputs,"apk_message")?;
+        let mut chats=array(&st,"chats");
+        if let Some(owner)=chats.iter_mut().find(|chat| text(chat,"id")==id) {
+            let mut messages=array(owner,"messages");
+            messages.push(obj(vec![("role",s("user")),("content",s(message)),("harness_outcome",Bool(true))]));
+            put(owner,"messages",Arr(messages));
+            put(&mut st,"chats",Arr(chats));
+        }
+        if !boolean(&st,"busy") && id==text(&st,"active") {
+            put(&mut st,"notice",s(message));
+            put(&mut st,"notice_error",Bool(boolean(inputs,"apk_failed")));
+        }
+        let display=ui(&st);
+        return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));
+    }
     if requested_action=="turn_protection"{put(&mut st,"notice",s("Background protection was lost. The turn still runs."));put(&mut st,"notice_error",Bool(true));let display=ui(&st);return Ok(obj(vec![("state",st),("ui",display),("effect",Null)]));}
     let action = if matches!(requested_action,"back"|"close")&&get(&st,"media_expected")!=&Null{"cancel"}else if matches!(requested_action,"approve_session"|"approve_always"|"approve_matching_rule"){"approve"}else{requested_action};
     let voice_callback=voice::callback(action);
@@ -3728,6 +3760,22 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
                 put(&mut st, "busy", Bool(true));
                 put(&mut st, "agent_running", Bool(false));
             }
+            "apk_install_open" if cfg!(target_os="android") => {
+                put(&mut st,"edit",obj(vec![]));
+                put(&mut st,"dialog",s("apk_install"));
+            },
+            "apk_install_workspace" | "apk_install_pick" if cfg!(target_os="android") => {
+                let mut fields=vec![("kind",s("apk_install"))];
+                if action=="apk_install_workspace" {
+                    let path=text(inputs,"apk_path");
+                    if path.trim().is_empty(){return Err("Enter the APK path relative to the current workspace".into());}
+                    fields.push(("path",s(&path)));
+                }
+                if chat(&st)==Null {new_chat(&mut st)?;}
+                fields.push(("chat",s(&text(&st,"active"))));
+                put(&mut st,"dialog",Null);
+                effect=obj(fields);
+            },
             "phone_file" => {
                 if chat(&st)==Null {new_chat(&mut st)?;}
                 let ticket=now();let expected=obj(vec![("ticket",s(&ticket)),("chat",s(&text(&st,"active"))),("agent",harness::active_agent(&st)),("profile",profile(&st).unwrap_or(Null))]);

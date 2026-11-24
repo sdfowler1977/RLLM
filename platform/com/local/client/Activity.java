@@ -41,6 +41,8 @@ import org.json.*;
 
 /** Android platform bindings. Product state, protocols and workspace operations reside in Rust. */
 public final class Activity extends android.app.Activity {
+    private static final int PICK_APK = 57;
+    private String apkPickerChat = "";
     private String documentTicket="";
     private int documentGeneration;
     private JSONObject state;
@@ -213,6 +215,10 @@ public final class Activity extends android.app.Activity {
         platformBackRegistered=false;
     }
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);authorizationReturn(intent);requestConversation(intent);}
+    @Override protected void onPostResume(){
+        super.onPostResume();
+        PackageInstall.resume(this);
+    }
     private void authorizationReturn(Intent intent){
         Uri uri=intent==null?null:intent.getData();if(uri==null)return;
         if(!(getPackageName()+".oauth").equals(uri.getScheme())||!"/callback".equals(uri.getPath())||uri.getAuthority()!=null||uri.getFragment()!=null||uri.toString().length()>16384)return;
@@ -821,6 +827,7 @@ public final class Activity extends android.app.Activity {
             // A conversation asked for by a reply notification is opened as soon as the app
             // is idle, so a tap that arrived while a turn was still running is not lost.
             openRequestedConversation();
+            if(action.equals("resume"))PackageInstall.deliver(this);
         }catch(Throwable e){if(!effectStarted&&plannedEffect!=null){if(plannedEffect.optString("kind").equals("tool")){
                 try{Core.call(new JSONObject(plannedEffect.toString()).put("op","local_tool_cancel").put("root",root()));}catch(Exception ignored){}
                 if(stateCommitted&&!closed)try{dispatch("failure",localResult(plannedEffect,new JSONObject()).put("error","Local operation could not finish starting: "+safe(e)));}catch(Exception ignored){}
@@ -1137,9 +1144,64 @@ public final class Activity extends android.app.Activity {
         String host=command.getString("host");int port=command.getInt("port");Socket raw=new Socket();raw.connect(new InetSocketAddress(host,port),15000);raw.setSoTimeout(120000);Socket connection=raw;
         try{if(command.optBoolean("tls")){SSLSocket tls=(SSLSocket)((SSLSocketFactory)SSLSocketFactory.getDefault()).createSocket(raw,command.optString("tls_host",host),port,true);SSLParameters params=tls.getSSLParameters();params.setEndpointIdentificationAlgorithm("HTTPS");if(command.has("tls_host"))params.setServerNames(Collections.singletonList(new SNIHostName(command.getString("tls_host"))));tls.setSSLParameters(params);tls.startHandshake();connection=tls;}connection.getOutputStream().write(command.getString("wire").getBytes(StandardCharsets.ISO_8859_1));connection.getOutputStream().flush();ByteArrayOutputStream got=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;while((n=connection.getInputStream().read(buffer))!=-1){if(got.size()+n>8*1024*1024)throw new IOException("Parallel reply exceeds 8 MiB");got.write(buffer,0,n);}return got.toByteArray();}finally{try{connection.close();}catch(IOException ignored){}}
     }
+    private void installApk(String chat, Uri document, String workspace, String path){
+        try{
+            workers.execute(()->{
+                boolean committed=false;
+                try(InputStream input=document!=null?getContentResolver().openInputStream(document):workspaceApk(workspace,path)){
+                    if(input==null)throw new IOException("Could not open the selected APK");
+                    PackageInstall.install(this,input,null,chat);
+                    committed=true;
+                }catch(Exception failure){
+                    if(!committed)runOnUiThread(()->apkInstallFailed(chat,failure));
+                }
+            });
+        }catch(java.util.concurrent.RejectedExecutionException failure){apkInstallFailed(chat,failure);}
+    }
+
+    private InputStream workspaceApk(String workspace,String path)throws IOException{
+        File directory=new File(workspace).getCanonicalFile();
+        File file=new File(directory,path).getCanonicalFile();
+        if(new File(path).isAbsolute()||!file.toPath().startsWith(directory.toPath())||file.equals(directory)){
+            throw new IOException("Enter the APK path relative to the current workspace");
+        }
+        return new java.io.FileInputStream(file);
+    }
+
+    void apkInstallFailed(String chat,Exception failure){
+        apkInstallResult(chat,"APK installation failed: "+safe(failure),true);
+    }
+
+    boolean apkResultsReady(){return state!=null&&!closed;}
+
+    void apkInstallResult(String chat,String message,boolean failed){
+        try{
+            dispatch("apk_install_result",new JSONObject().put("apk_chat",chat).put("apk_message",message).put("apk_failed",failed));
+        }catch(JSONException invalid){
+            Toast.makeText(this,message,Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void effect(JSONObject e) throws Exception {
         if(media.handle(e))return;
         String kind=e.getString("kind");
+        if(kind.equals("apk_install")){
+            String chat=e.getString("chat");
+            if(e.has("path")){
+                installApk(chat,null,root(),e.getString("path"));
+            }else{
+                apkPickerChat=chat;
+                try{
+                    Intent picker=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/vnd.android.package-archive")
+                        .addCategory(Intent.CATEGORY_OPENABLE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivityForResult(picker,PICK_APK);
+                }catch(RuntimeException failure){
+                    apkPickerChat="";
+                    apkInstallFailed(chat,failure);
+                }
+            }
+            return;
+        }
         if(kind.equals("parallel")){final JSONObject job=new JSONObject(e.toString());final int token=++generation;workers.execute(()->{JSONArray results=new JSONArray();try{JSONArray requests=job.getJSONArray("requests");if(requests.length()>8)throw new IOException("Too many parallel requests");for(int i=0;i<requests.length()&&alive(token);i++){try{results.put(new JSONObject().put("ok",true).put("data",Base64.encodeToString(exchangeWire(requests.getJSONObject(i)),Base64.NO_WRAP)));}catch(Exception problem){results.put(new JSONObject().put("ok",false).put("error",safe(problem)));}}JSONObject extra=new JSONObject().put("purpose","parallel").put("consult",job.optString("consult")).put("results",results);runOnUiThread(()->{if(!closed)dispatch("parallel_result",extra);});}catch(Exception problem){runOnUiThread(()->{if(!closed)try{dispatch("failure",new JSONObject().put("purpose","parallel").put("error",safe(problem)));}catch(Exception ignored){}});}});return;}
         if(kind.equals("storage_policy")){if(!sourceAllowed(activeStorageProvider)){for(Socket socket:activeConnections)try{socket.close();}catch(IOException ignored){}for(android.os.CancellationSignal signal:documentSignals)signal.cancel();}return;}
         if(kind.equals("workspace_selected")){stopService(new Intent(this,Gateway.class));return;}
@@ -1694,6 +1756,16 @@ public final class Activity extends android.app.Activity {
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
+        if(request==PICK_APK){
+            String chat=apkPickerChat;
+            apkPickerChat="";
+            if(!chat.isEmpty()){
+                Uri document=data==null?null:data.getData();
+                if(result==RESULT_OK&&document!=null)installApk(chat,document,null,null);
+                else apkInstallResult(chat,"APK selection canceled",false);
+            }
+            return;
+        }
         if(media.result(request,result,data))return;
         if(request==48){refreshDeviceRoot();dispatch("phone_access_status");return;}
         if(request==49){cloudSelection(result,data);return;}
@@ -1745,7 +1817,11 @@ public final class Activity extends android.app.Activity {
             exportActive(ticket,signal);
         }catch(Exception error){throw new IOException("Selected document may remain incomplete or unverified. "+safe(error),error);}finally{exportSignals.remove(signal);}
     }
-    @Override protected void onSaveInstanceState(Bundle bundle){super.onSaveInstanceState(bundle);if(pendingExportTicket!=null)bundle.putString("export_ticket",pendingExportTicket);}
+    @Override protected void onSaveInstanceState(Bundle bundle){super.onSaveInstanceState(bundle);if(pendingExportTicket!=null)bundle.putString("export_ticket",pendingExportTicket);if(!apkPickerChat.isEmpty())bundle.putString("apk_picker_chat",apkPickerChat);}
+    @Override protected void onRestoreInstanceState(Bundle bundle){
+        super.onRestoreInstanceState(bundle);
+        apkPickerChat=bundle.getString("apk_picker_chat","");
+    }
     private void stopExecution(){if(executionMessenger!=null){try{executionMessenger.send(Message.obtain(null,2));}catch(Exception ignored){}executionMessenger=null;}if(executionConnection!=null){try{unbindService(executionConnection);}catch(Exception ignored){}executionConnection=null;}}
     // Platform callbacks echo Rust's captured owner; they never create authority.
     private JSONObject localResult(JSONObject command,JSONObject result)throws JSONException{
@@ -2060,7 +2136,7 @@ public final class Activity extends android.app.Activity {
     void voiceSessionReady(String session){if(!closed)media.backgroundReady(session);}
     void voiceSessionStopped(String session){if(closed||state==null||!state.optString("voice_consent").equals(session))return;media.stopVoice();try{dispatch("voice_session_stop",new JSONObject().put("voice_session",session));}catch(Exception failure){Toast.makeText(this,"Voice stopped",Toast.LENGTH_LONG).show();}}
     @Override public boolean onKeyDown(int keyCode,android.view.KeyEvent event){if(android.os.Build.VERSION.SDK_INT<33&&keyCode==android.view.KeyEvent.KEYCODE_BACK&&canNavigateBack){dispatch("back");return true;}return super.onKeyDown(keyCode,event);}
-    @Override protected void onPause(){ratePaused=true;boolean background=state!=null&&VoiceSession.owns(this,state.optString("voice_consent"));if(state!=null&&state.optBoolean("voice_open")&&!background&&!media.permissionPending())dispatch("voice_suspend");media.pause(background);preserveInputs();flushPendingSave();uiStale=true;super.onPause();}
+    @Override protected void onPause(){PackageInstall.pause(this);ratePaused=true;boolean background=state!=null&&VoiceSession.owns(this,state.optString("voice_consent"));if(state!=null&&state.optBoolean("voice_open")&&!background&&!media.permissionPending())dispatch("voice_suspend");media.pause(background);preserveInputs();flushPendingSave();uiStale=true;super.onPause();}
     @Override protected void onStop(){flushPendingSave();super.onStop();}
     @Override protected void onResume(){ratePaused=false;media.resume();super.onResume();if(!loopArmed){loopArmed=true;rateHandler.postDelayed(loopTick,15000);}if(state!=null&&!closed){refreshDeviceRoot();deliverPendingAnnouncement();announcePendingProtectionLoss();dispatch("phone_access_status");refreshRateClock();openRequestedConversation();}}
     @Override public void onConfigurationChanged(android.content.res.Configuration configuration){super.onConfigurationChanged(configuration);viewportWidth=0;viewportHeight=0;queueViewport();}
