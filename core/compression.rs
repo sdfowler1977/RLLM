@@ -95,8 +95,16 @@ fn tables(bits: &mut Bits<'_>) -> Result<(Codes, Codes)> {
 // RFC 1951 raw blocks. The caller supplies the already bounded directory size;
 // output never grows past it, including overlapping back-references.
 pub fn inflate(bytes: &[u8], expected: usize) -> Result<Vec<u8>> {
-    if expected > 1024 * 1024 || bytes.len() > 5 * 1024 * 1024 {
-        return Err("Compressed member exceeds resource limit".into());
+    // The expansion is the memory this operation adds. It is refused only when
+    // the member cannot fit in this machine's resident budget, which is half of
+    // the installed memory (R16). That is a current condition of this machine,
+    // measured when the call is made, and it stays inside this one operation:
+    // the next member, and every other workflow, run unchanged. A package
+    // member of any ordinary size is expanded, including the multi-megabyte
+    // members of a real package.
+    let needed = (expected as u64).saturating_add(bytes.len() as u64);
+    if needed > super::archive::project_budget() {
+        return Err("Compressed member exceeds the memory budget".into());
     }
     let mut bits = Bits { bytes, at: 0 };
     let mut out = Vec::new();
