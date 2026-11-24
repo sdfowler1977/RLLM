@@ -426,6 +426,7 @@ impl Drop for WriteDeadline {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(worker) = self.worker.take() {
+            worker.thread().unpark();
             let _ = worker.join();
         }
     }
@@ -452,7 +453,7 @@ fn arm_write_deadline(stream: &TcpStream, deadline: std::time::Instant) -> Write
                     let _ = poke.shutdown(std::net::Shutdown::Both);
                     return;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(20));
+                std::thread::park_timeout(std::time::Duration::from_millis(20));
             }
         })
     });
@@ -620,6 +621,7 @@ const PROVIDER_ATTEMPTS: u32 = 10;
 
 enum ExchangeProgress<'a> {
     Preview(&'a str, u128),
+    TaskText(&'a str),
     Retry { failed: u32, delay: Duration },
 }
 
@@ -631,7 +633,7 @@ fn exchange(
         if transport_cancelled() {
             return Err(ExchangeFailure::permanent(CANCELLED));
         }
-        let outcome = exchange_once(effect, &mut |said, elapsed| progress(ExchangeProgress::Preview(said, elapsed)), provider);
+        let outcome = exchange_once(effect, progress, provider);
         if transport_cancelled() {
             return Err(ExchangeFailure::permanent(CANCELLED));
         }
@@ -715,7 +717,7 @@ fn connect_provider(host: String, port: u16, deadline: Instant) -> Result<TcpStr
 
 /// HTTP to the address the core named. The platform validates TLS identity
 /// and the core validates the response framing and content.
-fn exchange_once(effect: &Json, heard: &mut dyn FnMut(&str, u128), provider: bool) -> std::result::Result<Vec<u8>, ExchangeFailure> {
+fn exchange_once(effect: &Json, heard: &mut dyn FnMut(ExchangeProgress<'_>), provider: bool) -> std::result::Result<Vec<u8>, ExchangeFailure> {
     let host = text(effect, "host");
     let port = number(effect, "port");
     if host.is_empty() || port == 0 || port > 65535 {
@@ -748,7 +750,7 @@ fn exchange_once(effect: &Json, heard: &mut dyn FnMut(&str, u128), provider: boo
 }
 
 fn converse<S: Read + Write>(
-    stream: &mut S, effect: &Json, heard: &mut dyn FnMut(&str, u128),
+    stream: &mut S, effect: &Json, heard: &mut dyn FnMut(ExchangeProgress<'_>),
     deadline: Instant, guard: WriteDeadline, provider: bool,
 ) -> std::result::Result<Vec<u8>, ExchangeFailure> {
     write_request(stream, effect, deadline).map_err(ExchangeFailure::upload)?;
@@ -778,7 +780,7 @@ fn silence_deadline() -> Instant {
 }
 
 fn read_provider_response(
-    stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str, u128),
+    stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(ExchangeProgress<'_>),
 ) -> std::result::Result<Vec<u8>, ExchangeFailure> {
     let mut deadline = silence_deadline();
     let streaming = boolean(effect, "stream");
@@ -985,7 +987,7 @@ fn stream_response_budget(effect: &Json) -> usize {
 /// An incremental reply. The core owns the framing and the event format, as it
 /// does on Android: the host hands it the bytes as they arrive and reports the
 /// text decoded so far.
-fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str, u128), mut deadline: Instant) -> Result<Vec<u8>> {
+fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(ExchangeProgress<'_>), mut deadline: Instant) -> Result<Vec<u8>> {
     let provider = text(effect, "purpose") == "model";
     let protocol = if text(effect, "stream_protocol").is_empty() { "local".to_string() } else { text(effect, "stream_protocol") };
     let mut opening = obj(vec![("op", s("stream_open")), ("protocol", s(&protocol))]);
@@ -1031,7 +1033,7 @@ fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str,
                 }
             }
             if said.len() != published && previous.elapsed().as_millis() >= 120 {
-                heard(&said, started.elapsed().as_millis());
+                heard(ExchangeProgress::Preview(&said, started.elapsed().as_millis()));
                 published = said.len();
                 previous = std::time::Instant::now();
             }
@@ -1040,7 +1042,11 @@ fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str,
             }
         }
         if provider {
-            return provider_stream_completion(&id, ended);
+            let result = provider_stream_completion(&id, ended);
+            if boolean(effect, "desktop_task_text") && !said.is_empty() {
+                heard(ExchangeProgress::TaskText(&said));
+            }
+            return result;
         }
         let finished = core_call(obj(vec![("op", s("stream_finish")), ("id", id.clone()), ("eof", Bool(ended))]))?;
         network::unbase64(&text(&finished, "data"))
@@ -3157,20 +3163,15 @@ fn callback_inputs(effect: &Json, state: &Json) -> Json {
     inputs
 }
 
-/// One core call: the same envelope the Android JNI bridge carries over C.
+/// Desktop events already have typed inputs and use the same application entry
+/// point as transport callers, without encoding history on every progress tick.
 fn core_event(state: &Json, root: &str, action: &str, inputs: &Json) -> Result<Json> {
-    let answer = parse(&envelope(&obj(vec![
-        ("op", s("event")),
+    application::event(&obj(vec![
         ("state", state.clone()),
         ("action", s(action)),
         ("inputs", inputs.clone()),
         ("root", s(root)),
-    ])
-    .string()))?;
-    if let Ok(error) = answer.get("error") {
-        return Err(error.text().unwrap_or("the core rejected the request").into());
-    }
-    Ok(answer.get("value")?.clone())
+    ]))
 }
 
 /// Drive one user action to rest, executing each effect the core returns.
@@ -3201,17 +3202,23 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
             "network" => {
                 let ticket = text(&effect, "model_ticket");
                 let started = std::time::Instant::now();
+                let mut task_text = None;
                 let outcome = exchange(&effect, &mut |update| {
                     if ticket.is_empty() {
                         return;
                     }
                     let mut progress = obj(vec![("model_ticket", s(&ticket))]);
                     match update {
+                        ExchangeProgress::TaskText(said) => {
+                            task_text = Some(s(said));
+                            return;
+                        }
                         ExchangeProgress::Preview(said, elapsed) => {
                             put(&mut progress, "stream_text", s(said));
                             put(&mut progress, "elapsed_ms", Num(elapsed.to_string()));
                         }
                         ExchangeProgress::Retry { failed, delay } => {
+                            task_text = None;
                             put(&mut progress, "retrying", s(&format!(
                                 "Provider attempt {failed} of {PROVIDER_ATTEMPTS} failed. Retrying in {} seconds.", delay.as_secs()
                             )));
@@ -3233,6 +3240,7 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
                 let (next, callback) = match outcome {
                     Ok(response) => {
                         let mut callback = callback_inputs(&effect, state);
+                        if let Some(task_text) = task_text { put(&mut callback, "desktop_task_text", task_text); }
                         if text(&effect, "purpose") == "model" && boolean(&effect, "stream") {
                             provider_bytes = Some(response);
                         } else {
@@ -8205,7 +8213,7 @@ mod desktop_regression {
                 ("resumable", Bool(false)),
             ])),
         ]);
-        let bytes = read_stream(&mut stream, &effect, &mut |_, _| {}, std::time::Instant::now() + std::time::Duration::from_secs(8)).expect("control request closed the stream");
+        let bytes = read_stream(&mut stream, &effect, &mut |_| {}, std::time::Instant::now() + std::time::Duration::from_secs(8)).expect("control request closed the stream");
         let text = String::from_utf8(bytes).expect("stream result");
         assert!(text.contains("\"requests\":1"), "{text}");
         assert!(text.contains("\"notifications\":1"), "{text}");
