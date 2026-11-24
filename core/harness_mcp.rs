@@ -1,36 +1,109 @@
 //! On-demand MCP for saved connections, agent tasks, and package operations.
 use super::*;
-use std::io::{BufRead, Write};
+use std::io::Write;
+use std::sync::{mpsc, Arc, Mutex};
+
+#[derive(Default)]
+struct TaskRequests {
+    queued: Vec<(Json, bool)>,
+    active: Option<Json>,
+}
+
+fn task_request_id(request: &Json) -> Option<&Json> {
+    let id = get(request, "id");
+    (id != &Null && text(request, "method") == "tools/call"
+        && text(get(request, "params"), "name") == "agent_task").then_some(id)
+}
 
 pub(super) fn serve(state: &mut Json, vault: &Vault, root: &str) -> Result<()> {
-    let mut reader = std::io::BufReader::new(std::io::stdin());
     let mut writer = std::io::BufWriter::new(std::io::stdout());
     let mut initialized = false;
     let mut ready = false;
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let read = reader.read_line(&mut line).map_err(|error| format!("MCP input: {error}"))?;
-        if read == 0 {
-            return Ok(());
+    let tasks = Arc::new(Mutex::new(TaskRequests::default()));
+    let reading = Arc::clone(&tasks);
+    let (send, receive) = mpsc::sync_channel(8);
+    // Keep reading cancellation notifications while a provider request is in flight.
+    std::thread::Builder::new().spawn(move || {
+        let stdin = std::io::stdin();
+        let mut reader = stdin.lock();
+        loop {
+            let line = match next_line_bounded(&mut reader, 8 * 1024 * 1024) {
+                Ok(Some(line)) => line,
+                Ok(None) => break,
+                Err(error) => {
+                    let _ = send.send(Err(error));
+                    break;
+                }
+            };
+            if line.trim().is_empty() { continue; }
+            let request = parse(line.trim());
+            if let Ok(request) = &request {
+                if get(request, "id") == &Null && text(request, "method") == "notifications/cancelled" {
+                    let request_id = get(get(request, "params"), "requestId");
+                    let mut tasks = reading.lock().unwrap();
+                    if tasks.active.as_ref() == Some(request_id) {
+                        CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
+                    } else if let Some((_, cancelled)) = tasks.queued.iter_mut().find(|(id, _)| id == request_id) {
+                        *cancelled = true;
+                    }
+                    continue;
+                }
+                if let Some(id) = task_request_id(request) {
+                    reading.lock().unwrap().queued.push((id.clone(), false));
+                }
+            }
+            if send.send(Ok(request)).is_err() { break; }
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let response = match parse(trimmed) {
-            Ok(request) => handle(state, vault, root, &request, &mut initialized, &mut ready),
+    }).map_err(|error| format!("MCP input: {error}"))?;
+    for item in receive {
+        let response = match item? {
+            Ok(request) => {
+                let params = get(&request, "params");
+                let tracking = task_request_id(&request).is_some_and(|id| {
+                    let mut tasks = tasks.lock().unwrap();
+                    let cancelled = tasks.queued.iter().position(|(queued, _)| queued == id)
+                        .is_some_and(|index| tasks.queued.remove(index).1);
+                    if ready {
+                        tasks.active = Some(id.clone());
+                        CANCEL.store(cancelled, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    ready
+                });
+                let token = get(get(params, "_meta"), "progressToken");
+                let mut progress = 0u64;
+                let mut progress_error = None;
+                let response = handle(state, vault, root, &request, &mut initialized, &mut ready, &mut |message| {
+                    if !matches!(token, Str(_) | Num(_)) || progress_error.is_some() { return; }
+                    progress += 1;
+                    let update = obj(vec![
+                        ("jsonrpc", s("2.0")),
+                        ("method", s("notifications/progress")),
+                        ("params", obj(vec![("progressToken", token.clone()),
+                            ("progress", Num(progress.to_string())), ("message", s(message))])),
+                    ]);
+                    progress_error = write_message(&mut writer, &update).err();
+                });
+                if tracking {
+                    let mut tasks = tasks.lock().unwrap();
+                    tasks.active = None;
+                    CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+                response
+            }
             Err(error) => Some(rpc_error(&Null, -32700, &format!("Parse error: {error}"))),
         };
         if let Some(response) = response {
-            writer.write_all(response.string().as_bytes()).map_err(|error| error.to_string())?;
-            writer.write_all(b"\n").map_err(|error| error.to_string())?;
-            writer.flush().map_err(|error| error.to_string())?;
+            write_message(&mut writer, &response)?;
         }
     }
+    Ok(())
 }
 
-fn handle(state: &mut Json, vault: &Vault, root: &str, request: &Json, initialized: &mut bool, ready: &mut bool) -> Option<Json> {
+fn write_message(writer: &mut impl Write, message: &Json) -> Result<()> {
+    writeln!(writer, "{}", message.string()).and_then(|_| writer.flush()).map_err(|error| error.to_string())
+}
+
+fn handle(state: &mut Json, vault: &Vault, root: &str, request: &Json, initialized: &mut bool, ready: &mut bool, report: &mut dyn FnMut(&str)) -> Option<Json> {
     let method = text(request, "method");
     let id = get(request, "id");
     if id == &Null {
@@ -53,7 +126,7 @@ fn handle(state: &mut Json, vault: &Vault, root: &str, request: &Json, initializ
         match method.as_str() {
             "ping" => Ok(obj(vec![])),
             "tools/list" => Ok(obj(vec![("tools", Arr(tool_definitions()))])),
-            "tools/call" => call(state, vault, root, get(request, "params")),
+            "tools/call" => call(state, vault, root, get(request, "params"), report),
             _ => Err(format!("Method {method} is not supported")),
         }
     };
@@ -129,7 +202,7 @@ fn tool(name: &str, description: &str, fields: &[(&'static str, &str)], mut prop
     ])
 }
 
-fn call(state: &mut Json, vault: &Vault, root: &str, params: &Json) -> Result<Json> {
+fn call(state: &mut Json, vault: &Vault, root: &str, params: &Json, report: &mut dyn FnMut(&str)) -> Result<Json> {
     let name = text(params, "name");
     let args = get(params, "arguments");
     if super::apk_build::TOOLS.contains(&name.as_str()) {
@@ -147,7 +220,13 @@ fn call(state: &mut Json, vault: &Vault, root: &str, params: &Json) -> Result<Js
     let content = match name.as_str() {
         "connections" => vec![text_content(&connections(state))],
         "agent_task" => {
-            let (answer, transcript) = agent_task(state, vault, root, args)?;
+            let (answer, transcript) = match agent_task(state, vault, root, args, report) {
+                Ok(result) => result,
+                Err(error) => return Ok(obj(vec![
+                    ("content", Arr(vec![text_content(&error)])),
+                    ("isError", Bool(true)),
+                ])),
+            };
             let mut content = vec![text_content(&answer)];
             if let Some(transcript) = transcript { content.push(text_content(&transcript)); }
             content
@@ -180,7 +259,10 @@ fn connections(state: &Json) -> String {
 
 const MODES: [&str; 3] = ["review", "limited", "yolo"];
 
-fn agent_task(state: &mut Json, vault: &Vault, root: &str, args: &Json) -> Result<(String, Option<String>)> {
+fn agent_task(state: &mut Json, vault: &Vault, root: &str, args: &Json, report: &mut dyn FnMut(&str)) -> Result<(String, Option<String>)> {
+    if transport_cancelled() {
+        return Ok(("Task cancelled before starting.".into(), None));
+    }
     let name = text(args, "name");
     let task = text(args, "task");
     if name.is_empty() || task.is_empty() {
@@ -211,10 +293,11 @@ fn agent_task(state: &mut Json, vault: &Vault, root: &str, args: &Json) -> Resul
     if get(active_chat(&next), "primary_connection") != &Num(index.to_string()) {
         return Err(stop_reason(&next));
     }
+    super::application::mark_agent_task(&mut next);
     *state = next;
     let permissions = mode.map(|mode| SavedPermissions::override_for_task(state, index, mode));
     let default_limit = apply_default_operation_limit(state);
-    let mut progress = Progress::new(state);
+    let mut progress = Progress::new(state, report);
     let sent = advance_tracking(state, root, "send", obj(vec![("draft", s(&task))]), &mut progress);
     let outcome = sent.and_then(|_| settle_tools(state, root, &mut progress));
     super::application::clear_caller_feedback();
@@ -281,20 +364,25 @@ impl SavedPermissions {
 #[derive(Clone, Copy)]
 enum TaskStop { Complete, Review, Stalled, Cancelled }
 
-struct Progress {
+struct Progress<'a> {
+    report: &'a mut dyn FnMut(&str),
     last_output: std::time::Instant,
     last_message: Option<(usize, String)>,
 }
 
-impl Progress {
-    fn new(state: &Json) -> Progress {
-        let mut progress = Progress { last_output: std::time::Instant::now(), last_message: None };
+impl<'a> Progress<'a> {
+    fn new(state: &Json, report: &'a mut dyn FnMut(&str)) -> Self {
+        let mut progress = Progress { report, last_output: std::time::Instant::now(), last_message: None };
         progress.observe_state(state);
         progress.last_output = std::time::Instant::now();
         progress
     }
 
     fn observe_ui(&mut self, ui: &Json) {
+        if let Ok(message) = ui.get("provider_retry").and_then(Json::text) {
+            (self.report)(message);
+            self.last_output = std::time::Instant::now();
+        }
         let Ok(messages) = get(ui, "messages").array() else { return };
         if let Some((index, message)) = messages.iter().enumerate().rev().find(|(_, message)| boolean(message, "streaming") && text(message, "role") == "assistant") {
             self.observe(index, text(message, "content"));
@@ -320,7 +408,7 @@ impl Progress {
     }
 }
 
-fn advance_tracking(state: &mut Json, root: &str, action: &str, inputs: Json, progress: &mut Progress) -> Result<Json> {
+fn advance_tracking(state: &mut Json, root: &str, action: &str, inputs: Json, progress: &mut Progress<'_>) -> Result<Json> {
     // Yield at every proposal so a long task does not exhaust one host action's
     // effect budget. The ordinary approval event still decides what can run.
     let ui = super::application::with_caller_driven_approval(|| {
@@ -330,11 +418,15 @@ fn advance_tracking(state: &mut Json, root: &str, action: &str, inputs: Json, pr
     Ok(ui)
 }
 
-fn settle_tools(state: &mut Json, root: &str, progress: &mut Progress) -> Result<TaskStop> {
+fn settle_tools(state: &mut Json, root: &str, progress: &mut Progress<'_>) -> Result<TaskStop> {
     let mut last_signature = String::new();
     let mut repeated = 0usize;
     loop {
         progress.observe_state(state);
+        if transport_cancelled() {
+            advance_tracking(state, root, "cancel", Null, progress)?;
+            return Ok(TaskStop::Cancelled);
+        }
         if cancelled(state) { return Ok(TaskStop::Cancelled); }
         if super::application::caller_feedback_waiting() {
             let messages = active_messages(state);
@@ -364,6 +456,10 @@ fn settle_tools(state: &mut Json, root: &str, progress: &mut Progress) -> Result
         // The application owns permission decisions, including standing approvals.
         advance_tracking(state, root, "approve_matching_rule", Null, progress)?;
         progress.observe_state(state);
+        if transport_cancelled() {
+            advance_tracking(state, root, "cancel", Null, progress)?;
+            return Ok(TaskStop::Cancelled);
+        }
         if cancelled(state) { return Ok(TaskStop::Cancelled); }
         if get(state, "pending") == &pending && active_messages(state).len() == before {
             return Ok(TaskStop::Review);

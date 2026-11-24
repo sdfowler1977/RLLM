@@ -8,6 +8,7 @@ mod archive;
 mod compression;
 mod layout;
 mod execution;
+mod workspace_command;
 mod gateway;
 mod a2a;
 mod network;

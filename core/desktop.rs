@@ -412,7 +412,14 @@ const UPLOAD_STALL: &str = "the upload did not finish within two minutes";
 
 struct WriteDeadline {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    deadline_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl WriteDeadline {
+    fn begin_response(&self) {
+        self.deadline_active.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl Drop for WriteDeadline {
@@ -434,10 +441,14 @@ fn arm_write_deadline(stream: &TcpStream, deadline: std::time::Instant) -> Write
     let _ = stream.set_write_timeout(Some(wait));
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flag = std::sync::Arc::clone(&stop);
+    let deadline_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let deadline_flag = std::sync::Arc::clone(&deadline_active);
     let worker = stream.try_clone().ok().map(|poke| {
         std::thread::spawn(move || {
             while !flag.load(std::sync::atomic::Ordering::Relaxed) {
-                if CANCEL.load(std::sync::atomic::Ordering::Relaxed) || std::time::Instant::now() >= deadline {
+                let upload_expired = std::time::Instant::now() >= deadline
+                    && deadline_flag.load(std::sync::atomic::Ordering::Relaxed);
+                if CANCEL.load(std::sync::atomic::Ordering::Relaxed) || upload_expired {
                     let _ = poke.shutdown(std::net::Shutdown::Both);
                     return;
                 }
@@ -445,7 +456,7 @@ fn arm_write_deadline(stream: &TcpStream, deadline: std::time::Instant) -> Write
             }
         })
     });
-    WriteDeadline { stop, worker }
+    WriteDeadline { stop, deadline_active, worker }
 }
 
 fn connect_within(host: &str, port: u16, deadline: std::time::Instant) -> Result<TcpStream> {
@@ -530,67 +541,343 @@ fn write_request(sink: &mut impl Write, effect: &Json, deadline: std::time::Inst
     }
 }
 
-/// HTTP to the address the core named. TLS is handed to
-/// the operating system's crypto stack, exactly as the Android layer hands it to
-/// the platform's own HTTPS client; the core still validates every response byte.
-fn exchange(effect: &Json, heard: &mut dyn FnMut(&str, u128)) -> Result<Vec<u8>> {
+use std::time::{Duration, Instant};
+
+struct ExchangeFailure {
+    message: String,
+    retry: Option<RetryDelay>,
+    attempts: u32,
+}
+
+enum RetryDelay {
+    Backoff,
+    After(Duration),
+}
+
+impl ExchangeFailure {
+    fn permanent(message: impl Into<String>) -> Self {
+        Self { message: message.into(), retry: None, attempts: 0 }
+    }
+
+    fn transient(message: impl Into<String>) -> Self {
+        Self { message: message.into(), retry: Some(RetryDelay::Backoff), attempts: 0 }
+    }
+
+    fn upload(message: String) -> Self {
+        if matches!(message.as_str(), UPLOAD_STALL | "peer closed early") {
+            return Self::transient(message);
+        }
+        Self::permanent(message)
+    }
+
+    fn transport(message: String) -> Self {
+        if matches!(message.as_str(), CANCELLED | "Network effect has no usable destination") {
+            return Self::permanent(message);
+        }
+        Self::transient(message)
+    }
+
+    fn handshake(message: String) -> Self {
+        if ["handshake could not be sent", "handshake was interrupted", "closed the connection during the TLS handshake",
+            "TLS peer closed during the handshake", "TLS handshake timed out", "TLS read:"]
+            .iter().any(|detail| message.contains(detail))
+        {
+            return Self::transient(message);
+        }
+        Self::permanent(message)
+    }
+
+    fn response(message: String) -> Self {
+        let reason = message.split_once(": ").map_or(message.as_str(), |(reason, _)| reason);
+        if matches!(reason, RESPONSE_SILENCE | "peer closed before finishing"
+            | "Incomplete HTTP headers" | "Incomplete chunk header" | "Incomplete chunk trailers"
+            | "Incomplete chunk data" | "Incomplete or oversized response body" | "HTTP response framing is incomplete"
+            | "Connection ended before the model completed its reply"
+            | "Connection ended before the Content candidate completed"
+            | "Stream ended without a completed choice" | provider::EMPTY_REPLY)
+        {
+            return Self::transient(message);
+        }
+        Self::permanent(message)
+    }
+}
+
+const PROVIDER_ATTEMPTS: u32 = 10;
+
+enum ExchangeProgress<'a> {
+    Preview(&'a str, u128),
+    Retry { failed: u32, delay: Duration },
+}
+
+fn exchange(
+    effect: &Json, progress: &mut dyn FnMut(ExchangeProgress<'_>),
+) -> std::result::Result<Vec<u8>, ExchangeFailure> {
+    let provider = text(effect, "purpose") == "model";
+    for attempt in 1..=PROVIDER_ATTEMPTS {
+        if transport_cancelled() {
+            return Err(ExchangeFailure::permanent(CANCELLED));
+        }
+        let outcome = exchange_once(effect, &mut |said, elapsed| progress(ExchangeProgress::Preview(said, elapsed)), provider);
+        if transport_cancelled() {
+            return Err(ExchangeFailure::permanent(CANCELLED));
+        }
+        let mut failure = match outcome {
+            Ok(response) => return Ok(response),
+            Err(failure) => failure,
+        };
+        if !provider {
+            return Err(failure);
+        }
+        let delay = match failure.retry {
+            Some(RetryDelay::After(delay)) => delay,
+            Some(RetryDelay::Backoff) => Duration::from_secs(match attempt {
+                1 => 60,
+                2 => 120,
+                3 => 240,
+                _ => 300,
+            }),
+            None if attempt == 1 => return Err(failure),
+            None if provider_calls::rejection(&failure.message).is_some() => {
+                failure.attempts = attempt;
+                return Err(failure);
+            }
+            None => {
+                failure.message = format!("Provider request failed after {attempt} attempts: {}", failure.message);
+                failure.attempts = attempt;
+                return Err(failure);
+            }
+        };
+        if attempt == PROVIDER_ATTEMPTS {
+            failure.message = format!("Provider request failed after {attempt} attempts: {}", failure.message);
+            failure.attempts = attempt;
+            return Err(failure);
+        }
+        progress(ExchangeProgress::Retry { failed: attempt, delay });
+        wait_for_provider(delay).map_err(ExchangeFailure::permanent)?;
+    }
+    unreachable!("provider attempts are bounded and nonzero")
+}
+
+fn wait_for_provider(delay: Duration) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        if transport_cancelled() {
+            return Err(CANCELLED.into());
+        }
+        let remaining = delay.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
+}
+
+fn transport_cancelled() -> bool {
+    CANCEL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+// System name resolution and socket connect can block. The caller can stop
+// waiting for this attempt even if the operating system has not returned yet.
+fn connect_provider(host: String, port: u16, deadline: Instant) -> Result<TcpStream> {
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new().spawn(move || {
+        let _ = send.send(connect_within(&host, port, deadline));
+    }).map_err(|error| format!("Could not start provider connection: {error}"))?;
+    loop {
+        if transport_cancelled() {
+            return Err(CANCELLED.into());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("Provider connection timed out".into());
+        }
+        match receive.recv_timeout(remaining.min(Duration::from_millis(100))) {
+            Ok(connection) => return connection,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err("Provider connection did not finish".into()),
+        }
+    }
+}
+
+/// HTTP to the address the core named. The platform validates TLS identity
+/// and the core validates the response framing and content.
+fn exchange_once(effect: &Json, heard: &mut dyn FnMut(&str, u128), provider: bool) -> std::result::Result<Vec<u8>, ExchangeFailure> {
     let host = text(effect, "host");
     let port = number(effect, "port");
     if host.is_empty() || port == 0 || port > 65535 {
-        return Err("Network effect has no usable destination".into());
+        return Err(ExchangeFailure::permanent("Network effect has no usable destination"));
     }
-    // A numeric literal from the core carries no zone id; drop one if it appears.
     let connect = host.replace('%', "");
     let display = if connect.contains(':') { format!("[{connect}]") } else { connect.clone() };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(SILENCE_MS as u64);
+    let deadline = silence_deadline();
+    let mut raw = if provider {
+        connect_provider(display, port as u16, deadline)
+    } else {
+        connect_within(&display, port as u16, deadline)
+    }.map_err(ExchangeFailure::transport)?;
+    let guard = arm_write_deadline(&raw, deadline);
+    let poll = Some(Duration::from_millis(200));
     if boolean(effect, "tls") {
-        // The certificate is checked against the name the person entered,
-        // as the Android layer does with tls_host.
-        let named = if text(effect, "tls_host").is_empty() { connect.clone() } else { text(effect, "tls_host") };
-        let named = named.trim_start_matches('[').trim_end_matches(']').to_string();
-        let raw = connect_within(display.as_str(), port as u16, deadline)?;
-        let _deadline = arm_write_deadline(&raw, deadline);
-        raw.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
+        let named = effect.get("tls_host").and_then(Json::text).ok().filter(|s| !s.is_empty()).unwrap_or(&connect);
+        let named = named.trim_start_matches('[').trim_end_matches(']');
+        raw.set_read_timeout(Some(Duration::from_secs(30))).ok();
         #[cfg(windows)]
-        {
-            let mut link = secure::Secure::open(raw, &named)?;
-            link.set_read_timeout(Some(std::time::Duration::from_millis(200)));
-            return converse(&mut link, effect, heard, deadline);
-        }
+        let mut link = secure::Secure::open(raw, named).map_err(ExchangeFailure::handshake)?;
         #[cfg(not(windows))]
-        {
-            let mut link = tls_client::Client::open(raw, &named)?;
-            link.set_read_timeout(Some(std::time::Duration::from_millis(200)));
-            return converse(&mut link, effect, heard, deadline);
-        }
+        let mut link = tls_client::Client::open(raw, named).map_err(ExchangeFailure::handshake)?;
+        link.set_read_timeout(poll);
+        return converse(&mut link, effect, heard, deadline, guard, provider);
     }
-    let mut stream = connect_within(display.as_str(), port as u16, deadline)?;
-    let _deadline = arm_write_deadline(&stream, deadline);
-    // Short waits keep a cancellation responsive; the silence budget is counted
-    // across them, so a slow model is not cut off between tokens.
-    stream.set_read_timeout(Some(std::time::Duration::from_millis(200))).ok();
-    stream.set_write_timeout(Some(std::time::Duration::from_millis(200))).ok();
-    converse(&mut stream, effect, heard, deadline)
+    raw.set_read_timeout(poll).ok();
+    raw.set_write_timeout(poll).ok();
+    converse(&mut raw, effect, heard, deadline, guard, provider)
 }
 
-/// Sends the request the core built and collects the reply, whole or streamed.
-/// The deadline started before the request bytes were written.
-fn converse<S: Read + Write>(stream: &mut S, effect: &Json, heard: &mut dyn FnMut(&str, u128), deadline: std::time::Instant) -> Result<Vec<u8>> {
-    write_request(stream, effect, deadline)?;
-    if std::time::Instant::now() >= deadline {
-        return Err(UPLOAD_STALL.into());
+fn converse<S: Read + Write>(
+    stream: &mut S, effect: &Json, heard: &mut dyn FnMut(&str, u128),
+    deadline: Instant, guard: WriteDeadline, provider: bool,
+) -> std::result::Result<Vec<u8>, ExchangeFailure> {
+    write_request(stream, effect, deadline).map_err(ExchangeFailure::upload)?;
+    if Instant::now() >= deadline {
+        return Err(ExchangeFailure::transient(UPLOAD_STALL));
     }
-    if let Err(error) = stream.flush() {
-        if std::time::Instant::now() >= deadline {
-            return Err(UPLOAD_STALL.into());
-        }
-        return Err(format!("peer closed early: {error}"));
+    stream.flush().map_err(|error| ExchangeFailure::transient(format!("peer closed early: {error}")))?;
+    if provider {
+        // Keep cancellation able to wake a read inside the platform transport.
+        // Only the independent silence timer applies to the response.
+        guard.begin_response();
+        return read_provider_response(stream, effect, heard);
     }
     if boolean(effect, "stream") {
-        return read_stream(stream, effect, heard, deadline);
+        return read_stream(stream, effect, heard, deadline).map_err(ExchangeFailure::permanent);
     }
-    collect_until(stream, response_budget(effect), deadline)
+    collect_until(stream, response_budget(effect), deadline).map_err(ExchangeFailure::permanent)
 }
+
+fn silence_deadline() -> Instant {
+    Instant::now() + Duration::from_millis(SILENCE_MS as u64)
+}
+
+fn read_provider_response(
+    stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str, u128),
+) -> std::result::Result<Vec<u8>, ExchangeFailure> {
+    let mut deadline = silence_deadline();
+    let limit = if boolean(effect, "stream") { stream_response_budget(effect) } else { response_budget(effect) };
+    let mut response = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let mut offset = 0;
+    let mut interim = 0;
+    let status = loop {
+        if let Some(end) = network::response_head_end(&response[offset..]).map_err(ExchangeFailure::permanent)? {
+            let end = offset + end;
+            let head = std::str::from_utf8(&response[offset..end])
+                .map_err(|_| ExchangeFailure::permanent("Invalid response headers"))?;
+            let mut lines = head.split("\r\n");
+            let status = network::response_status(lines.next().unwrap_or_default()).map_err(ExchangeFailure::permanent)?;
+            if status >= 200 {
+                if status == 429 || status >= 500 {
+                    let mut retry_after = None;
+                    for line in lines {
+                        let (name, value) = network::response_field(line).map_err(ExchangeFailure::permanent)?;
+                        if name.eq_ignore_ascii_case("retry-after") {
+                            retry_after = retry_after.max(provider_retry_after(value));
+                        }
+                    }
+                    return Err(ExchangeFailure {
+                        message: format!("HTTP {status}"),
+                        retry: Some(retry_after.map_or(RetryDelay::Backoff, RetryDelay::After)),
+                        attempts: 0,
+                    });
+                }
+                break status;
+            }
+            interim += 1;
+            if interim > 4 || status == 101 {
+                return Err(ExchangeFailure::permanent("Unsupported informational response"));
+            }
+            offset = end + 4;
+            continue;
+        }
+        let read = wait_until(stream, &mut chunk, deadline).map_err(ExchangeFailure::response)?;
+        if read == 0 {
+            return Err(ExchangeFailure::transient("Connection ended before the provider sent a complete response header"));
+        }
+        deadline = silence_deadline();
+        if read > limit.saturating_sub(response.len()) {
+            return Err(ExchangeFailure::permanent("Response exceeds the current memory budget"));
+        }
+        response.extend_from_slice(&chunk[..read]);
+    };
+    if boolean(effect, "stream") {
+        let mut stream = std::io::Cursor::new(response).chain(stream);
+        return read_stream(&mut stream, effect, heard, deadline).map_err(ExchangeFailure::response);
+    }
+
+    let mut framing = network::ResponseFrame::default();
+    for part in response.chunks(chunk.len()) {
+        framing.feed(part).map_err(ExchangeFailure::response)?;
+    }
+    while !framing.done {
+        let read = wait_until(stream, &mut chunk, deadline).map_err(ExchangeFailure::response)?;
+        if read == 0 {
+            framing.finish().map_err(ExchangeFailure::response)?;
+            break;
+        }
+        deadline = silence_deadline();
+        if read > limit.saturating_sub(response.len()) {
+            return Err(ExchangeFailure::permanent("Response exceeds the current memory budget"));
+        }
+        framing.feed(&chunk[..read]).map_err(ExchangeFailure::response)?;
+        response.extend_from_slice(&chunk[..read]);
+    }
+    if (200..300).contains(&status) && network::decoded_bytes(&response).is_ok_and(|(_, body)| body.is_empty()) {
+        return Err(ExchangeFailure::transient(provider::EMPTY_REPLY));
+    }
+    Ok(response)
+}
+
+fn provider_retry_after(value: &str) -> Option<Duration> {
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return value.parse().ok().map(Duration::from_secs);
+    }
+    // HTTP dates use GMT. Also accept the two legacy HTTP date shapes.
+    let fields: Vec<_> = value.split_ascii_whitespace().collect();
+    let (day, month, year, time) = match fields.as_slice() {
+        [weekday, day, month, year, time, "GMT"] if weekday.ends_with(',') => (*day, *month, year.parse::<i64>().ok()?, *time),
+        [weekday, date, time, "GMT"] if weekday.ends_with(',') => {
+            let mut date = date.split('-');
+            let (day, month, year) = (date.next()?, date.next()?, date.next()?);
+            if year.len() != 2 || date.next().is_some() { return None; }
+            let year = year.parse::<i64>().ok()?;
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
+            let current_year = (now / 86400 + 719468) * 400 / 146097;
+            let proposed = current_year / 100 * 100 + year;
+            (day, month, if proposed > current_year + 50 { proposed - 100 } else { proposed }, *time)
+        }
+        [_, month, day, time, year] => (*day, *month, year.parse::<i64>().ok()?, *time),
+        _ => return None,
+    };
+    let month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        .iter().position(|name| *name == month)? as i64 + 1;
+    let day = day.parse::<i64>().ok()?;
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if !(1601..=9999).contains(&year) || !(1..=month_days[month as usize - 1]).contains(&day) {
+        return None;
+    }
+    let mut time = time.split(':').map(str::parse::<i64>);
+    let (hour, minute, second) = (time.next()?.ok()?, time.next()?.ok()?, time.next()?.ok()?);
+    if time.next().is_some() || !(0..=23).contains(&hour) || !(0..=59).contains(&minute) || !(0..=60).contains(&second) {
+        return None;
+    }
+    let year = year - i64::from(month <= 2);
+    let month = if month > 2 { month - 3 } else { month + 9 };
+    let days = 365 * year + year / 4 - year / 100 + year / 400 + (153 * month + 2) / 5 + day - 1 - 719468;
+    let target = days * 86400 + hour * 3600 + minute * 60 + second;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
+    Some(Duration::from_secs((target - now).max(0) as u64))
+}
+
 
 /// One deadline for the whole body. Bytes that arrive later do not move it.
 fn collect_until(stream: &mut dyn Read, limit: usize, deadline: std::time::Instant) -> Result<Vec<u8>> {
@@ -630,6 +917,7 @@ fn response_budget(effect: &Json) -> usize {
 static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const CANCELLED: &str = "Cancelled";
 const SILENCE_MS: u128 = 120_000;
+const RESPONSE_SILENCE: &str = "the response was silent for two minutes";
 
 fn operation_stopped(started: std::time::Instant) -> Option<&'static str> {
     if CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
@@ -641,19 +929,19 @@ fn operation_stopped(started: std::time::Instant) -> Option<&'static str> {
     None
 }
 
-/// One deadline for a whole body or stream. A slow drip cannot restart it.
+/// Wait for the next read. The caller owns the current deadline.
 fn wait_until(stream: &mut dyn Read, chunk: &mut [u8], deadline: std::time::Instant) -> Result<usize> {
     loop {
         if CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(CANCELLED.into());
         }
         if std::time::Instant::now() >= deadline {
-            return Err("the response did not finish within two minutes".into());
+            return Err(RESPONSE_SILENCE.into());
         }
         match stream.read(chunk) {
             Ok(read) => return Ok(read),
             Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted) => {}
-            Err(_) => return Err("peer closed before finishing".into()),
+            Err(error) => return Err(format!("peer closed before finishing: {error}")),
         }
     }
 }
@@ -666,20 +954,25 @@ fn core_call(request: Json) -> Result<Json> {
     Ok(answer.get("value")?.clone())
 }
 
+fn stream_response_budget(effect: &Json) -> usize {
+    match number(effect, "limit") {
+        value if value > 0 => (value as usize).min(2 * 1024 * 1024),
+        _ => 1024 * 1024,
+    }
+}
+
 /// An incremental reply. The core owns the framing and the event format, as it
 /// does on Android: the host hands it the bytes as they arrive and reports the
 /// text decoded so far.
-fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str, u128), deadline: std::time::Instant) -> Result<Vec<u8>> {
+fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str, u128), mut deadline: Instant) -> Result<Vec<u8>> {
+    let provider = text(effect, "purpose") == "model";
     let protocol = if text(effect, "stream_protocol").is_empty() { "local".to_string() } else { text(effect, "stream_protocol") };
     let mut opening = obj(vec![("op", s("stream_open")), ("protocol", s(&protocol))]);
     if get(effect, "mcp_control") != &Null {
         put(&mut opening, "mcp_control", get(effect, "mcp_control").clone());
     }
     let id = core_call(opening)?;
-    let limit = match number(effect, "limit") {
-        value if value > 0 => (value as usize).min(2 * 1024 * 1024),
-        _ => 1024 * 1024,
-    };
+    let limit = stream_response_budget(effect);
     let started = std::time::Instant::now();
     let outcome = (|| -> Result<Vec<u8>> {
         let mut said = String::new();
@@ -694,6 +987,7 @@ fn read_stream(stream: &mut dyn Read, effect: &Json, heard: &mut dyn FnMut(&str,
                 ended = true;
                 break;
             }
+            if provider { deadline = silence_deadline(); }
             total += read;
             if total > limit {
                 return Err("Stream exceeds the current response memory budget".into());
@@ -2878,31 +3172,65 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
             "network" => {
                 let ticket = text(&effect, "model_ticket");
                 let started = std::time::Instant::now();
-                let outcome = exchange(&effect, &mut |said, elapsed| {
+                let outcome = exchange(&effect, &mut |update| {
                     if ticket.is_empty() {
                         return;
                     }
-                    let progress = obj(vec![("stream_text", s(said)), ("elapsed_ms", Num(elapsed.to_string())), ("model_ticket", s(&ticket))]);
+                    let mut progress = obj(vec![("model_ticket", s(&ticket))]);
+                    match update {
+                        ExchangeProgress::Preview(said, elapsed) => {
+                            put(&mut progress, "stream_text", s(said));
+                            put(&mut progress, "elapsed_ms", Num(elapsed.to_string()));
+                        }
+                        ExchangeProgress::Retry { failed, delay } => {
+                            put(&mut progress, "retrying", s(&format!(
+                                "Provider attempt {failed} of {PROVIDER_ATTEMPTS} failed. Retrying in {} seconds.", delay.as_secs()
+                            )));
+                        }
+                    }
                     if let Ok(reply) = core_event(state, root, "model_progress", &progress) {
                         if let (Ok(next), Ok(ui)) = (reply.get("state"), reply.get("ui")) {
                             *state = next.clone();
-                            shown(ui);
+                            if let Ok(retry) = progress.get("retrying") {
+                                let mut display = ui.clone();
+                                put(&mut display, "provider_retry", retry.clone());
+                                shown(&display);
+                            } else {
+                                shown(ui);
+                            }
                         }
                     }
                 });
                 let (next, callback) = match outcome {
                     Ok(response) => ("network_result", callback_inputs(&effect, state, &response, None)),
-                    Err(error) if error == CANCELLED => {
+                    Err(error) if error.message == CANCELLED => {
                         CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
                         ("cancel", obj(vec![("elapsed_ms", Num(started.elapsed().as_millis().to_string()))]))
                     }
-                    Err(error) => ("failure", callback_inputs(&effect, state, &[], Some(error))),
+                    Err(error) => {
+                        let mut callback = callback_inputs(&effect, state, &[], Some(error.message));
+                        if error.attempts > 0 {
+                            put(&mut callback, "provider_attempts", Num(error.attempts.to_string()));
+                        }
+                        ("failure", callback)
+                    }
                 };
                 action = next.into();
                 inputs = callback;
             }
             "tool" => {
-                let output = if text(&effect, "tool").starts_with("phone_") {
+                let output = if text(&effect, "tool") == workspace_command::TOOL {
+                    let mut request = effect.clone();
+                    put(&mut request, "root", s(root));
+                    EXECUTED_TOOLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let output = application::shell_tool(&request, transport_cancelled);
+                    if transport_cancelled() {
+                        action = "cancel".into();
+                        inputs = Null;
+                        continue;
+                    }
+                    output
+                } else if text(&effect, "tool").starts_with("phone_") {
                     device_folder_tool(&effect, root).map(|listed| s(&listed))
                 } else {
                     let mut request = effect.clone();
@@ -3140,7 +3468,7 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
                         }
                         let mut handles = Vec::new();
                         for (index, request) in wave {
-                            handles.push((index, std::thread::spawn(move || exchange(&request, &mut |_, _| {}))));
+                            handles.push((index, std::thread::spawn(move || exchange(&request, &mut |_| {}))));
                         }
                         for (index, handle) in handles {
                             match handle.join() {
@@ -3148,7 +3476,7 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
                                     results[index] = obj(vec![("ok", Bool(true)), ("data", s(&network::b64(&bytes)))]);
                                 }
                                 Ok(Err(error)) => {
-                                    results[index] = obj(vec![("ok", Bool(false)), ("error", s(&error))]);
+                                    results[index] = obj(vec![("ok", Bool(false)), ("error", s(&error.message))]);
                                 }
                                 Err(_) => {
                                     results[index] = obj(vec![("ok", Bool(false)), ("error", s("The request did not finish"))]);
