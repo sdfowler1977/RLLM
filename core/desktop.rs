@@ -574,6 +574,7 @@ struct ExchangeFailure {
     retry: Option<RetryDelay>,
     attempts: u32,
     received_bytes: usize,
+    server_failure: bool,
 }
 
 struct ResponseReader<'a> {
@@ -593,18 +594,24 @@ impl Read for ResponseReader<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
 enum RetryDelay {
     Backoff,
     After(Duration),
+    ServerFailure,
 }
 
 impl ExchangeFailure {
     fn permanent(message: impl Into<String>) -> Self {
-        Self { message: message.into(), retry: None, attempts: 0, received_bytes: 0 }
+        Self { message: message.into(), retry: None, attempts: 0, received_bytes: 0, server_failure: false }
     }
 
     fn transient(message: impl Into<String>) -> Self {
-        Self { message: message.into(), retry: Some(RetryDelay::Backoff), attempts: 0, received_bytes: 0 }
+        Self { message: message.into(), retry: Some(RetryDelay::Backoff), attempts: 0, received_bytes: 0, server_failure: false }
+    }
+
+    fn provider_failure(message: impl Into<String>) -> Self {
+        Self { message: message.into(), retry: Some(RetryDelay::ServerFailure), attempts: 0, received_bytes: 0, server_failure: true }
     }
 
     fn upload(message: String) -> Self {
@@ -632,6 +639,9 @@ impl ExchangeFailure {
     }
 
     fn response(message: String) -> Self {
+        if network::provider_error_message(&message).is_some() {
+            return Self::provider_failure(message);
+        }
         let reason = message.split_once(": ").map_or(message.as_str(), |(reason, _)| reason);
         if matches!(reason, RESPONSE_SILENCE | "peer closed before finishing"
             | "Incomplete HTTP headers" | "Incomplete chunk header" | "Incomplete chunk trailers"
@@ -647,18 +657,27 @@ impl ExchangeFailure {
 }
 
 const PROVIDER_ATTEMPTS: u32 = 10;
+const PROVIDER_SERVER_ERROR_ATTEMPTS: u32 = 3;
 
 enum ExchangeProgress<'a> {
     Preview(&'a str, u128),
     TaskText(&'a str),
-    Retry { failed: u32, delay: Duration, idle: bool },
+    Retry { failed: u32, limit: u32, delay: Duration, idle: bool },
 }
 
 fn exchange(
     effect: &Json, progress: &mut dyn FnMut(ExchangeProgress<'_>),
 ) -> std::result::Result<Vec<u8>, ExchangeFailure> {
     let provider = text(effect, "purpose") == "model";
-    for attempt in 1..=PROVIDER_ATTEMPTS {
+    let mut server_failure_seen = false;
+    let mut server_attempts = 0;
+    let mut attempt = 0;
+    let mut attempt_limit = PROVIDER_ATTEMPTS;
+    loop {
+        if attempt >= attempt_limit {
+            unreachable!("provider attempts are bounded and nonzero")
+        }
+        attempt += 1;
         if transport_cancelled() {
             return Err(ExchangeFailure::permanent(CANCELLED));
         }
@@ -673,8 +692,21 @@ fn exchange(
         if !provider {
             return Err(failure);
         }
+        if server_failure_seen {
+            server_attempts += 1;
+        } else if failure.server_failure {
+            server_failure_seen = true;
+            server_attempts = 1;
+        }
+        let progress_attempt = if server_failure_seen { server_attempts } else { attempt };
+        let progress_limit = if server_failure_seen { PROVIDER_SERVER_ERROR_ATTEMPTS } else { PROVIDER_ATTEMPTS };
+        if server_failure_seen {
+            attempt_limit = attempt + (PROVIDER_SERVER_ERROR_ATTEMPTS - server_attempts);
+        }
         let delay = match failure.retry {
             Some(RetryDelay::After(delay)) => delay,
+            Some(RetryDelay::ServerFailure) => Duration::from_millis(if progress_attempt == 1 { 250 } else { 500 }),
+            Some(RetryDelay::Backoff) if server_failure_seen => Duration::from_millis(if progress_attempt == 1 { 250 } else { 500 }),
             Some(RetryDelay::Backoff) => Duration::from_secs(match attempt {
                 1 => 60,
                 2 => 120,
@@ -693,15 +725,14 @@ fn exchange(
                 return Err(failure);
             }
         };
-        if attempt == PROVIDER_ATTEMPTS {
+        if attempt == attempt_limit {
             failure.message = format!("Provider request failed after {attempt} attempts: {}", failure.message);
             failure.attempts = attempt;
             return Err(failure);
         }
-        progress(ExchangeProgress::Retry { failed: attempt, delay, idle: failure.message == RESPONSE_SILENCE });
+        progress(ExchangeProgress::Retry { failed: progress_attempt, limit: progress_limit, delay, idle: failure.message == RESPONSE_SILENCE });
         wait_for_provider(delay).map_err(ExchangeFailure::permanent)?;
     }
-    unreachable!("provider attempts are bounded and nonzero")
 }
 
 fn wait_for_provider(delay: Duration) -> Result<()> {
@@ -837,9 +868,14 @@ fn read_provider_response(
                     }
                     return Err(ExchangeFailure {
                         message: format!("HTTP {status}"),
-                        retry: Some(retry_after.map_or(RetryDelay::Backoff, RetryDelay::After)),
+                        retry: Some(match retry_after {
+                            Some(delay) => RetryDelay::After(delay),
+                            None if status >= 500 => RetryDelay::ServerFailure,
+                            None => RetryDelay::Backoff,
+                        }),
                         attempts: 0,
                         received_bytes: 0,
+                        server_failure: status >= 500,
                     });
                 }
                 break status;
@@ -883,7 +919,11 @@ fn read_provider_response(
         framing.feed(&chunk[..read]).map_err(ExchangeFailure::response)?;
         response.extend_from_slice(&chunk[..read]);
     }
-    if (200..300).contains(&status) && network::decoded_bytes(&response).is_ok_and(|(_, body)| body.is_empty()) {
+    let (_, body) = network::decoded_bytes(&response).map_err(ExchangeFailure::response)?;
+    if let Some(message) = network::provider_error_body(&body) {
+        return Err(ExchangeFailure::provider_failure(message));
+    }
+    if (200..300).contains(&status) && body.is_empty() {
         return Err(ExchangeFailure::transient(provider::EMPTY_REPLY));
     }
     Ok(response)
@@ -3251,11 +3291,16 @@ fn advance_shown(state: &mut Json, root: &str, action: &str, inputs: Json, shown
                             put(&mut progress, "stream_text", s(said));
                             put(&mut progress, "elapsed_ms", Num(elapsed.to_string()));
                         }
-                        ExchangeProgress::Retry { failed, delay, idle } => {
+                        ExchangeProgress::Retry { failed, limit, delay, idle } => {
                             task_text = None;
                             let reason = if idle { " after two minutes without response bytes" } else { "" };
+                            let delay = if delay < Duration::from_secs(1) {
+                                format!("{} ms", delay.as_millis())
+                            } else {
+                                format!("{} seconds", delay.as_secs())
+                            };
                             put(&mut progress, "retrying", s(&format!(
-                                "Provider attempt {failed} of {PROVIDER_ATTEMPTS} failed{reason}. Retrying in {} seconds.", delay.as_secs()
+                                "Provider attempt {failed} of {limit} failed{reason}. Retrying in {delay}."
                             )));
                         }
                     }

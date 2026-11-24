@@ -704,6 +704,35 @@ pub(super) fn decoded_provider_stream(bytes: &[u8]) -> Result<(u16, String)> {
     let (code, data) = decoded_bytes_with_interim(bytes, 0, 0, false, true)?;
     Ok((code, String::from_utf8(data).map_err(|_| "File or response is not UTF-8 text")?))
 }
+pub(super) fn provider_error_message(message: &str) -> Option<String> {
+    let payload = message.strip_prefix("Server error: ").unwrap_or(message);
+    let value = parse(payload).ok()?;
+    retryable_provider_error(&value).map(|error| format!("Server error: {}", error.string()))
+}
+pub(super) fn provider_error_body(body: &[u8]) -> Option<String> {
+    if !body.windows(b"internal_error".len()).any(|part| part == b"internal_error")
+        && !body.windows(b"http_code".len()).any(|part| part == b"http_code")
+    {
+        return None;
+    }
+    let payload = std::str::from_utf8(body).ok()?;
+    let value = parse(payload).ok()?;
+    retryable_provider_error(&value).map(|error| format!("Server error: {}", error.string()))
+}
+fn retryable_provider_error(value: &Json) -> Option<&Json> {
+    let error = value.get("error").ok().filter(|error| *error != &Null).unwrap_or(value);
+    let text = |key: &str| match error.get(key) {
+        Ok(Str(value)) => Some(value.as_str()),
+        Ok(Num(value)) => Some(value.as_str()),
+        _ => None,
+    };
+    let internal = matches!(error, Str(value) if value == "internal_error")
+        || text("code") == Some("internal_error")
+        || text("type") == Some("internal_error");
+    let server_status = text("http_code").and_then(|status| status.parse::<u16>().ok())
+        .is_some_and(|status| (500..600).contains(&status));
+    (internal || server_status).then_some(error)
+}
 /// A recoverable create may inspect a framed 404 before a conditional PUT.
 /// Redirects, auth failures, malformed framing and all other errors stay errors.
 pub fn decoded_optional_file(bytes:&[u8])->Result<(u16,String)>{
