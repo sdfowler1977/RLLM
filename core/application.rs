@@ -1633,12 +1633,12 @@ fn task_narration(reply: &str) -> bool {
     // stay available do not identify an operation on the current task.
     matches!(verb,
         "apply" | "build" | "change" | "check" | "compare" | "compile" | "confirm" | "continue"
-        | "create" | "debug" | "edit" | "execute" | "fetch" | "find" | "finish" | "fix" | "implement"
+        | "create" | "debug" | "diagnose" | "edit" | "execute" | "fetch" | "find" | "finish" | "fix" | "implement"
         | "inspect" | "investigate" | "look" | "measure" | "monitor" | "open" | "patch" | "read"
-        | "rebuild" | "remove" | "reproduce" | "rerun" | "retry" | "review" | "run" | "save"
+        | "rebuild" | "remove" | "replace" | "reproduce" | "rerun" | "retry" | "review" | "run" | "save"
         | "search" | "trace" | "test" | "try" | "update" | "validate" | "verify" | "wait" | "write"
-        | "building" | "checking" | "compiling" | "editing" | "fixing" | "inspecting" | "reading"
-        | "running" | "searching" | "testing" | "verifying" | "working" | "writing")
+        | "building" | "checking" | "compiling" | "diagnosing" | "editing" | "fixing" | "inspecting" | "reading"
+        | "replacing" | "running" | "searching" | "testing" | "verifying" | "working" | "writing")
 }
 
 fn stage_model_proposal(st: &mut Json, mut proposed: Json, raw: &str) -> Result<Json> {
