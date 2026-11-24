@@ -1818,12 +1818,12 @@ fn task_narration(reply: &str) -> bool {
     // A continuation names work to perform. Courtesy offers and promises to
     // stay available do not identify an operation on the current task.
     matches!(verb,
-        "add" | "apply" | "build" | "change" | "check" | "compare" | "compile" | "confirm" | "continue"
+        "add" | "apply" | "build" | "change" | "check" | "compare" | "compile" | "confirm" | "correct" | "continue"
         | "create" | "debug" | "diagnose" | "edit" | "execute" | "fetch" | "find" | "finish" | "fix" | "implement"
         | "inspect" | "investigate" | "look" | "measure" | "monitor" | "open" | "patch" | "read"
         | "rebuild" | "remove" | "replace" | "reproduce" | "rerun" | "retry" | "review" | "run" | "save"
         | "search" | "trace" | "test" | "try" | "update" | "validate" | "verify" | "wait" | "write"
-        | "adding" | "building" | "checking" | "compiling" | "diagnosing" | "editing" | "fixing" | "inspecting" | "reading"
+        | "adding" | "building" | "checking" | "compiling" | "correcting" | "diagnosing" | "editing" | "fixing" | "inspecting" | "reading"
         | "replacing" | "running" | "searching" | "testing" | "verifying" | "working" | "writing")
 }
 
