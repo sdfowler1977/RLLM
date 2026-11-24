@@ -296,13 +296,11 @@ fn agent_task(state: &mut Json, vault: &Vault, root: &str, args: &Json, report: 
     super::application::mark_agent_task(&mut next);
     *state = next;
     let permissions = mode.map(|mode| SavedPermissions::override_for_task(state, index, mode));
-    let default_limit = apply_default_operation_limit(state);
     let mut progress = Progress::new(state, report);
     let sent = advance_tracking(state, root, "send", obj(vec![("draft", s(&task))]), &mut progress);
     let outcome = sent.and_then(|_| settle_tools(state, root, &mut progress));
     super::application::clear_caller_feedback();
     if let Some(permissions) = permissions { permissions.restore(state); }
-    if let Some(orchestrator) = default_limit { put(state, "orchestrator", orchestrator); }
     vault.save(state)?;
     let outcome = outcome?;
     if text(state, "active") != active || !active_messages(state).first().is_some_and(|message| text(message, "role") == "user" && text(message, "content") == task) {
@@ -315,22 +313,6 @@ fn agent_task(state: &mut Json, vault: &Vault, root: &str, args: &Json, report: 
         TaskStop::Cancelled => "Task cancelled. Work so far was saved.",
     };
     Ok((task_report(state, status), None))
-}
-
-const DEFAULT_TASK_OPERATIONS: usize = 256;
-
-fn apply_default_operation_limit(state: &mut Json) -> Option<Json> {
-    let saved = get(state, "orchestrator").clone();
-    if matches!(get(&saved, "operation_limit"), Num(limit) if limit.parse::<usize>().is_ok()) {
-        return None;
-    }
-    let mut orchestrator = match &saved {
-        Obj(_) => saved.clone(),
-        _ => obj(vec![]),
-    };
-    put(&mut orchestrator, "operation_limit", Num(DEFAULT_TASK_OPERATIONS.to_string()));
-    put(state, "orchestrator", orchestrator);
-    Some(saved)
 }
 
 const NAMESPACE_MARK: &str = "]<]minimax[>[";
