@@ -1,4 +1,5 @@
 use super::*;
+use super::provider::{copy_document_text, parse_stream_document, serialize_stream_document, DOCUMENT_MEMORY};
 use std::sync::{Mutex, OnceLock};
 
 const MCP_WIRE_LIMIT: usize = 2 * 1024 * 1024;
@@ -152,7 +153,8 @@ impl Transfer {
                 let (index,is_text)=self.block.ok_or("Messages stop has no open block")?;
                 if index!=message_index(record)? {return Err("Messages stop has the wrong block index".into());}
                 if is_text {
-                    self.native_calls.push(obj(vec![("type", s("text")), ("text", s(&self.text[self.text_part_start..]))]));
+                    let text = copy_document_text(&self.text[self.text_part_start..])?;
+                    self.native_calls.push(obj(vec![("type", s("text")), ("text", Str(text))]));
                 }
                 if self.call_block==Some(index){
                     let mut call=self.open_call.take().ok_or("Messages stop has no open tool call")?;
@@ -233,7 +235,7 @@ impl Transfer {
                 for part in parts {
                     if let Some(text)=content_part(part)? {self.append(text)?;}
                     if part.get("functionCall").is_ok() {
-                        self.flush_content_text();
+                        self.flush_content_text()?;
                         self.native_calls.push(part.clone());
                     }
                 }
@@ -248,11 +250,13 @@ impl Transfer {
         }
         Ok(())
     }
-    fn flush_content_text(&mut self) {
+    fn flush_content_text(&mut self) -> Result<()> {
         if self.text_part_start < self.text.len() {
-            self.native_calls.push(obj(vec![("text", s(&self.text[self.text_part_start..]))]));
+            let text = copy_document_text(&self.text[self.text_part_start..])?;
+            self.native_calls.push(obj(vec![("text", Str(text))]));
             self.text_part_start = self.text.len();
         }
+        Ok(())
     }
     fn control_reply(record:&Json,version:&str)->Result<Option<(String,Json)>> {
         if record.get("jsonrpc")!=Ok(&s("2.0"))||record.get("result").is_ok()||record.get("error").is_ok(){return Err("Invalid MCP server request envelope".into());}
@@ -374,7 +378,7 @@ impl Transfer {
         if self.messages {return self.message_event(&parse(data)?, &event_name);}
         if data == "[DONE]" {
             let reason = self.finish_reason.as_ref().ok_or("Stream ended without a completed choice")?;
-            let mut message=obj(vec![("role",s("assistant")),("content",s(&self.text))]);
+            let mut message=obj(vec![("role",s("assistant")),("content",Str(copy_document_text(&self.text)?))]);
             if !super::provider::limit_reason("chat",reason){
                 let calls=self.call_fragments.complete()?;
                 if !calls.is_empty(){if let Obj(fields)=&mut message{fields.insert("tool_calls".into(),Arr(calls));}}
@@ -744,47 +748,74 @@ impl Transfer {
             return Ok(self.json_terminal()?.string());
         }
         let (_, body) = network::decoded_provider_stream(&self.raw)?;
+        self.raw = Vec::new();
         if self.json || !self.headers || (self.chat && self.text.is_empty() && self.terminal.is_none() && body.trim_start().starts_with('{')) {
             // A compatible server may ignore stream=true and return one JSON reply.
             let protocol = if self.content {"content"} else if self.messages {"messages"} else if self.chat {"chat"} else {"local"};
-            let body = if namespaced_markup(&body) { presented(protocol, &body) } else { body };
-            super::provider::reply(protocol,&body)?;
-            if parse(&body)?.get("done")==Ok(&Bool(false)){return Err("Connection ended before the model completed its reply".into());}
+            let mut document = parse_stream_document(&body)?;
+            let changed = namespaced_markup(&body) && adopt_namespaced_calls(protocol, &mut document);
+            super::provider::stream_reply(protocol, &mut document)?;
+            if document.get("done")==Ok(&Bool(false)){return Err("Connection ended before the model completed its reply".into());}
+            if changed { return serialize_stream_document(&document); }
             return Ok(body);
         }
+        drop(body);
         // SSE discards an event that lacks a final blank line; NDJSON allows
         // a final complete record without a trailing newline.
         if !self.chat {let line = std::mem::take(&mut self.line); self.record(&line)?;}
         if self.content {
             let reason=self.finish_reason.clone().ok_or("Connection ended before the Content candidate completed")?;
             if self.text.trim().is_empty()&&self.native_calls.is_empty()&&!super::provider::limit_reason("content",&reason){return Err("Server returned no text response".into());}
-            self.flush_content_text();
+            self.flush_content_text()?;
             let parts = std::mem::take(&mut self.native_calls);
             let mut fields=vec![("candidates",Arr(vec![obj(vec![("index",Num("0".into())),("content",obj(vec![("role",s("model")),("parts",Arr(parts))])),("finishReason",s(&reason))])]))];
             if let Some(usage)=&self.usage {fields.push(("usageMetadata",usage.clone()));}
             let mut built=obj(fields);
-            adopt_namespaced_calls("content",&mut built);
-            let body=built.string();super::provider::reply("content",&body)?;return Ok(body);
+            super::provider::stream_reply("content", &mut built)?;
+            return serialize_stream_document(&built);
         }
         let mut complete = self.terminal.take().ok_or("Connection ended before the model completed its reply")?;
         let protocol=if self.messages{"messages"}else if self.chat{"chat"}else{"local"};
         // A refused completion never returns this terminal, so the provider stop reason has to ride on the error.
         let reason=if protocol=="chat"{complete.get("choices").ok().and_then(|v|v.array().ok()).and_then(|v|v.first()).and_then(|v|v.get("finish_reason").ok()).and_then(|v|v.text().ok()).unwrap_or("").to_string()}else{complete.get(if protocol=="messages"{"stop_reason"}else{"done_reason"}).ok().and_then(|v|v.text().ok()).unwrap_or("").to_string()};
         if protocol=="local" {if let Obj(fields) = &mut complete {
-            let mut message=obj(vec![("role",s("assistant")),("content",s(&self.text))]);
+            let mut message=obj(vec![("role",s("assistant")),("content",Str(std::mem::take(&mut self.text)))]);
             if !self.native_calls.is_empty(){if let Obj(fields)=&mut message{fields.insert("tool_calls".into(),Arr(std::mem::take(&mut self.native_calls)));}}
             fields.insert("message".into(),message);
         }}
-        adopt_namespaced_calls(protocol,&mut complete);
-        if let Err(error)=super::provider::reply(protocol,&complete.string()){
-            if reason.is_empty(){return Err(error);}
+        if let Err(error)=super::provider::stream_reply(protocol,&mut complete){
+            if reason.is_empty() || error == DOCUMENT_MEMORY || error == STREAM_MEMORY {return Err(error);}
             return Err(format!("{error}: {reason}"));
         }
-        Ok(complete.string())
+        serialize_stream_document(&complete)
     }
 }
 
 const NAMESPACE_MARK: &str = "]<]minimax[>[";
+
+fn provider_completion_data(header: &str, body: &str) -> Result<String> {
+    let mut wire = String::new();
+    let length = header.len().checked_add(body.len()).ok_or(DOCUMENT_MEMORY)?;
+    wire.try_reserve_exact(length).map_err(|_| DOCUMENT_MEMORY)?;
+    wire.push_str(header);
+    wire.push_str(body);
+
+    let groups = length / 3 + usize::from(length % 3 != 0);
+    let mut data = String::new();
+    data.try_reserve_exact(groups.checked_mul(4).ok_or(DOCUMENT_MEMORY)?)
+        .map_err(|_| DOCUMENT_MEMORY)?;
+    const DIGITS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for chunk in wire.as_bytes().chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        data.push(char::from(DIGITS[usize::from(first >> 2)]));
+        data.push(char::from(DIGITS[usize::from((first & 3) << 4 | second >> 4)]));
+        data.push(if chunk.len() >= 2 { char::from(DIGITS[usize::from((second & 15) << 2 | third >> 6)]) } else { '=' });
+        data.push(if chunk.len() == 3 { char::from(DIGITS[usize::from(third & 63)]) } else { '=' });
+    }
+    Ok(data)
+}
 
 fn namespaced_markup(text: &str) -> bool {
     text.contains(NAMESPACE_MARK)
@@ -792,11 +823,6 @@ fn namespaced_markup(text: &str) -> bool {
         || text.contains("<tool_calls>")
         || text.contains("<invoke")
         || !json_call_spans(text).is_empty()
-}
-
-fn presented(protocol: &str, body: &str) -> String {
-    let Ok(mut value) = parse(body) else { return body.to_string() };
-    if adopt_namespaced_calls(protocol, &mut value) { value.string() } else { body.to_string() }
 }
 
 struct Rewrite { changed: bool, inserted: bool }
@@ -912,11 +938,11 @@ fn rewrite_text_part(part: &mut Json, changed: &mut bool) -> Vec<Json> {
 
 fn rewrite_message(message: &mut Json, protocol: &str, limited: bool) -> Rewrite {
     let Obj(fields) = message else { return Rewrite { changed: false, inserted: false } };
-    let Some(original) = fields.get("content").and_then(|value| value.text().ok()).map(|value| value.to_string()) else { return Rewrite { changed: false, inserted: false } };
+    let Some(original) = fields.get("content").and_then(|value| value.text().ok()) else { return Rewrite { changed: false, inserted: false } };
     if !namespaced_markup(&original) { return Rewrite { changed: false, inserted: false } };
     let (clean, calls) = namespaced_tool_calls(&original);
     let changed = clean != original;
-    if changed { fields.insert("content".into(), s(&clean)); }
+    if changed { fields.insert("content".into(), Str(clean)); }
     if !limited && !calls.is_empty() {
         let mut wires = match fields.get("tool_calls") {
             Some(Arr(items)) => items.clone(),
@@ -1251,7 +1277,7 @@ fn xml_text(text: &str) -> String {
     out.trim().to_string()
 }
 
-fn plain_number(text: &str) -> bool {
+pub(super) fn plain_number(text: &str) -> bool {
     let bytes = text.as_bytes();
     if bytes.is_empty() { return false; }
     let mut index = 0;
@@ -1316,10 +1342,17 @@ pub(super) fn content_text(body:&Json)->Result<String> {
     // Streamed replies are normalized to one aggregate part at completion.
     for candidate in body.get("candidates")?.array()? {
         if candidate.get("index").unwrap_or(&Num("0".into()))!=&Num("0".into()) {continue;}
-        let mut parts=Vec::new();
+        let mut joined=String::new();
+        let mut first=true;
         let content=match candidate.get("content"){Ok(content)=>content,Err(_)=>return Ok(String::new())};
-        for part in content.get("parts")?.array()? {if let Some(text)=content_part(part)? {parts.push(text);}}
-        return Ok(parts.join("\n"));
+        for part in content.get("parts")?.array()? {
+            if let Some(text)=content_part(part)? {
+                if !first {super::provider::append_document_text(&mut joined,"\n")?;}
+                super::provider::append_document_text(&mut joined,text)?;
+                first=false;
+            }
+        }
+        return Ok(joined);
     }
     Err("No response candidate zero; content may have been blocked".into())
 }
@@ -1540,8 +1573,14 @@ pub fn operation(v: &Json) -> Result<Json> {
             if transfer.server_stream&&!transfer.framed()&&v.get("eof")!=Ok(&Bool(true)){return Err("Close-delimited MCP server stream requires observed EOF".into());}
             let body = transfer.finish()?;
             let session=if transfer.mcp_session.is_empty(){String::new()}else{format!("Mcp-Session-Id: {}\r\n",transfer.mcp_session)};
-            let wire = format!("HTTP/1.1 200 OK\r\n{session}Content-Length: {}\r\n\r\n{}",body.len(),body);
-            let mut completion=vec![("data",s(&network::b64(wire.as_bytes())))];
+            let header = format!("HTTP/1.1 200 OK\r\n{session}Content-Length: {}\r\n\r\n",body.len());
+            let data = if transfer.mcp {
+                let wire = header + &body;
+                network::b64(wire.as_bytes())
+            } else {
+                provider_completion_data(&header, &body)?
+            };
+            let mut completion=vec![("data",Str(data))];
             if !transfer.server_stream && transfer.tool_changes>0 {
                 completion.push(("mcp_catalog_changed",Bool(true)));
             }

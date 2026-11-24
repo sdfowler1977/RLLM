@@ -108,16 +108,20 @@ fn number(j: &Json, k: &str) -> usize {
         _ => 0,
     }
 }
-fn reply_telemetry(protocol: &str, body: &str, reply: &str, elapsed_ms: usize) -> Json {
+fn reply_telemetry(protocol: &str, body: &str, document: Option<&Json>, reply: &str, elapsed_ms: usize) -> Json {
     if elapsed_ms == 0 || elapsed_ms > 3_600_000 {
         return Null;
     }
-    let response = parse(body).unwrap_or(Null);
+    let parsed;
+    let response = if let Some(document) = document { document } else {
+        parsed = parse(body).unwrap_or(Null);
+        &parsed
+    };
     let tokens = match protocol {
-        "local" => number(&response, "eval_count"),
-        "chat" => number(get(&response, "usage"), "completion_tokens"),
-        "messages" | "responses" => number(get(&response, "usage"), "output_tokens"),
-        "content" => number(get(&response, "usageMetadata"), "candidatesTokenCount"),
+        "local" => number(response, "eval_count"),
+        "chat" => number(get(response, "usage"), "completion_tokens"),
+        "messages" | "responses" => number(get(response, "usage"), "output_tokens"),
+        "content" => number(get(response, "usageMetadata"), "candidatesTokenCount"),
         _ => 0,
     };
     let characters = reply.chars().count();
@@ -2654,6 +2658,10 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
                 let failed_snapshot=text(&st,"active_tool")=="phone_snapshot";
                 put(&mut st,"active_tool",Null);
                 put(&mut st, "active_import", Bool(false));
+                if text(inputs, "purpose") == "model" && text(inputs, "error") == super::provider::DOCUMENT_MEMORY {
+                    put(&mut st, "busy", Bool(false));
+                    return Err(super::provider::DOCUMENT_MEMORY.into());
+                }
                 if ["drive_update_write", "drive_update_confirm"]
                     .contains(&text(inputs, "purpose").as_str())
                 {
@@ -3076,6 +3084,8 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
                         );
                     }
                     "model" => {
+                        let protocol = text(&st, "request_protocol");
+                        let mut document = None;
                         let received=if boolean(&st,"request_hosted_search") {
                             if get(get(&st,"hosted_request"),"owner")!=&hosted_owner(&st){return Err("Hosted response owner changed; nothing was applied".into());}
                             let snapshot=get(&st,"hosted_request");
@@ -3096,7 +3106,15 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
                             if !interrupted&&reasoning_text::project(&received.visible,false).text.trim().is_empty(){return Err(super::provider::EMPTY_REPLY.into());}
                             super::provider::Reply{text:received.visible,stop_reason:Some(received.stop),interrupted,proposal:None}
                         } else {
-                            match super::provider::reply(&text(&st, "request_protocol"), &body) {
+                            let result = if provider_bytes.is_some() {
+                                let mut parsed = super::provider::parse_stream_document(&body)?;
+                                let result = super::provider::stream_reply(&protocol, &mut parsed);
+                                document = Some(parsed);
+                                result
+                            } else {
+                                super::provider::reply(&protocol, &body)
+                            };
+                            match result {
                                 Ok(reply) => reply,
                                 Err(error) => {
                                     if tool_format::proposal_phase(&st) {
@@ -3110,9 +3128,18 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
                             }
                         };
                         let mut reply=received.text;
-                        let proposal = if boolean(&st, "request_native_task_tools") && received.proposal.is_some() {
-                            super::provider_calls::bind_task_chat(received.proposal, &body, &text(&st, "request_index"), &text(inputs, "model_ticket"))?
-                        } else { received.proposal };
+                        let proposal = match received.proposal {
+                            Some(proposal) if boolean(&st, "request_native_task_tools") => {
+                                let connection = text(&st, "request_index");
+                                let ticket = text(inputs, "model_ticket");
+                                if let Some(document) = &document {
+                                    Some(super::provider::bind_stream_task_chat(proposal, document, &connection, &ticket)?)
+                                } else {
+                                    super::provider_calls::bind_task_chat(Some(proposal), &body, &connection, &ticket)?
+                                }
+                            }
+                            proposal => proposal,
+                        };
                         let (first_proposal, remaining_proposals) = match proposal {
                             Some(Arr(calls)) => {
                                 let mut calls = calls.into_iter();
@@ -3129,11 +3156,13 @@ fn event_inner_with_completion(v: &Json, provider_bytes: Option<&[u8]>) -> Resul
                             return Err("Search evidence is saved. The model proposed another operation during the answer recovery.".into());
                         }
                         let measured = reply_telemetry(
-                            &text(&st, "request_protocol"),
+                            &protocol,
                             &body,
+                            document.as_ref(),
                             &reply,
                             number(inputs, "elapsed_ms"),
                         );
+                        drop(document);
                         put(&mut st, "telemetry", measured);
                         throughput::observe(&mut st,inputs,Some(&reply));
                         if improvement::evaluating(&st) {

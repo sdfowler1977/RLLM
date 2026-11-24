@@ -1,6 +1,184 @@
 use super::*;
 /// Provider metadata describes interruption; generated prose cannot set it.
 pub const EMPTY_REPLY:&str="Server returned no text response";
+pub(super) const DOCUMENT_MEMORY: &str = "Insufficient memory to complete the provider document";
+
+pub(super) fn append_document_text(out: &mut String, text: &str) -> Result<()> {
+    out.try_reserve(text.len()).map_err(|_| DOCUMENT_MEMORY)?;
+    out.push_str(text);
+    Ok(())
+}
+
+pub(super) fn copy_document_text(text: &str) -> Result<String> {
+    let mut out = String::new();
+    append_document_text(&mut out, text)?;
+    Ok(out)
+}
+
+/// The completion document is separate from the bounded request and wire parsers.
+pub(super) fn parse_stream_document(source: &str) -> Result<Json> {
+    let mut parser = Parser { b: source.as_bytes(), i: 0 };
+    let value = stream_value(&mut parser, 0)?;
+    parser.ws();
+    if parser.i != parser.b.len() { return Err("Trailing JSON data".into()); }
+    Ok(value)
+}
+
+fn stream_string(parser: &mut Parser<'_>) -> Result<String> {
+    if !parser.take(b'"') { return Err("Expected quoted text".into()); }
+    let mut out = String::new();
+    loop {
+        let start = parser.i;
+        while matches!(parser.b.get(parser.i), Some(32..=255)) &&
+            !matches!(parser.b[parser.i], b'"' | b'\\') {
+            parser.i += 1;
+        }
+        let run = std::str::from_utf8(&parser.b[start..parser.i]).map_err(|_| "Invalid UTF-8")?;
+        append_document_text(&mut out, run)?;
+        let next = *parser.b.get(parser.i).ok_or("Unterminated text")?;
+        parser.i += 1;
+        match next {
+            b'"' => return Ok(out),
+            b'\\' => {}
+            _ => return Err("Unescaped control character".into()),
+        }
+        let escape = *parser.b.get(parser.i).ok_or("Missing escape")?;
+        parser.i += 1;
+        let scalar = match escape {
+            b'"' | b'\\' | b'/' => char::from(escape),
+            b'b' => '\x08',
+            b'f' => '\x0c',
+            b'n' => '\n',
+            b'r' => '\r',
+            b't' => '\t',
+            b'u' => {
+                let mut scalar = parser.hex()?;
+                if (0xd800..=0xdbff).contains(&scalar) {
+                    if parser.b.get(parser.i..parser.i + 2) != Some(b"\\u") {
+                        return Err("Missing surrogate".into());
+                    }
+                    parser.i += 2;
+                    let low = parser.hex()?;
+                    if !(0xdc00..=0xdfff).contains(&low) { return Err("Invalid surrogate".into()); }
+                    scalar = 0x10000 + ((scalar - 0xd800) << 10) + (low - 0xdc00);
+                }
+                char::from_u32(scalar).ok_or("Invalid unicode scalar")?
+            }
+            _ => return Err("Invalid escape".into()),
+        };
+        append_document_text(&mut out, scalar.encode_utf8(&mut [0; 4]))?;
+    }
+}
+
+fn stream_value(parser: &mut Parser<'_>, depth: usize) -> Result<Json> {
+    if depth > 64 { return Err("JSON nesting limit exceeded".into()); }
+    parser.ws();
+    match parser.b.get(parser.i) {
+        Some(b'"') => Ok(Str(stream_string(parser)?)),
+        Some(b'{') => {
+            parser.i += 1;
+            let mut fields = BTreeMap::new();
+            if !parser.take(b'}') {
+                loop {
+                    let key = stream_string(parser)?;
+                    if !parser.take(b':') { return Err("Missing colon".into()); }
+                    let value = stream_value(parser, depth + 1)?;
+                    if fields.insert(key, value).is_some() { return Err("Duplicate JSON field".into()); }
+                    if parser.take(b'}') { break; }
+                    if !parser.take(b',') { return Err("Missing comma".into()); }
+                }
+            }
+            Ok(Obj(fields))
+        }
+        Some(b'[') => {
+            parser.i += 1;
+            let mut items = Vec::new();
+            if !parser.take(b']') {
+                loop {
+                    let value = stream_value(parser, depth + 1)?;
+                    items.try_reserve(1).map_err(|_| DOCUMENT_MEMORY)?;
+                    items.push(value);
+                    if parser.take(b']') { break; }
+                    if !parser.take(b',') { return Err("Missing comma".into()); }
+                }
+            }
+            Ok(Arr(items))
+        }
+        Some(b't') => parser.literal(b"true", Bool(true)),
+        Some(b'f') => parser.literal(b"false", Bool(false)),
+        Some(b'n') => parser.literal(b"null", Null),
+        Some(b'-' | b'0'..=b'9') => {
+            let start = parser.i;
+            while matches!(parser.b.get(parser.i), Some(b'-' | b'+' | b'.' | b'0'..=b'9' | b'e' | b'E')) {
+                parser.i += 1;
+            }
+            let token = std::str::from_utf8(&parser.b[start..parser.i]).map_err(|_| "Invalid number")?;
+            if !stream::plain_number(token) { return Err("Invalid number".into()); }
+            Ok(Num(copy_document_text(token)?))
+        }
+        _ => Err("Invalid JSON value".into()),
+    }
+}
+
+pub(super) fn serialize_stream_document(value: &Json) -> Result<String> {
+    let mut out = String::new();
+    write_stream_value(&mut out, value)?;
+    Ok(out)
+}
+
+fn write_stream_string(out: &mut String, text: &str) -> Result<()> {
+    append_document_text(out, "\"")?;
+    let mut start = 0;
+    for (index, byte) in text.bytes().enumerate() {
+        let mut hex = *b"\\u0000";
+        let escaped = match byte {
+            b'"' => "\\\"",
+            b'\\' => "\\\\",
+            b'\n' => "\\n",
+            b'\r' => "\\r",
+            b'\t' => "\\t",
+            0..=31 => {
+                const DIGITS: &[u8] = b"0123456789abcdef";
+                hex[4] = DIGITS[usize::from(byte >> 4)];
+                hex[5] = DIGITS[usize::from(byte & 15)];
+                std::str::from_utf8(&hex).expect("ASCII escape")
+            }
+            _ => continue,
+        };
+        append_document_text(out, &text[start..index])?;
+        append_document_text(out, escaped)?;
+        start = index + 1;
+    }
+    append_document_text(out, &text[start..])?;
+    append_document_text(out, "\"")
+}
+
+fn write_stream_value(out: &mut String, value: &Json) -> Result<()> {
+    match value {
+        Null => append_document_text(out, "null"),
+        Bool(value) => append_document_text(out, if *value { "true" } else { "false" }),
+        Num(value) => append_document_text(out, value),
+        Str(value) => write_stream_string(out, value),
+        Arr(items) => {
+            append_document_text(out, "[")?;
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 { append_document_text(out, ",")?; }
+                write_stream_value(out, item)?;
+            }
+            append_document_text(out, "]")
+        }
+        Obj(fields) => {
+            append_document_text(out, "{")?;
+            for (index, (key, value)) in fields.iter().enumerate() {
+                if index > 0 { append_document_text(out, ",")?; }
+                write_stream_string(out, key)?;
+                append_document_text(out, ":")?;
+                write_stream_value(out, value)?;
+            }
+            append_document_text(out, "}")
+        }
+    }
+}
 pub struct Reply {pub text:String,pub stop_reason:Option<String>,pub interrupted:bool,pub proposal:Option<Json>}
 pub(super) fn limit_reason(protocol:&str,reason:&str)->bool{
  match protocol{"chat"|"local"=>reason=="length","messages"=>matches!(reason,"max_tokens"|"model_context_window_exceeded"),"content"=>reason=="MAX_TOKENS","responses"=>reason=="max_tokens",_=>false}
@@ -11,26 +189,86 @@ fn stop(value:&Json,key:&str)->Option<String>{
  match value.get(key){Ok(Str(reason))if reason.len()<=128&&!reason.chars().any(char::is_control)=>Some(reason.clone()),_=>None}
 }
 fn visible(value:&Json,key:&str)->Result<String>{
- match value.get(key){Ok(Null)|Err(_)=>Ok(String::new()),Ok(value)=>Ok(value.text()?.to_string())}
+ match value.get(key){Ok(Null)|Err(_)=>Ok(String::new()),Ok(value)=>copy_document_text(value.text()?)}
 }
 pub fn reply(protocol:&str,source:&str)->Result<Reply>{
  let mut body=parse(source)?;
- if let Ok(error)=body.get("error"){if error!=&Null{return Err(format!("Server error: {}",error.string()));}}
- stream::adopt_namespaced_calls(protocol,&mut body);
+ stream_reply(protocol, &mut body)
+}
+
+pub(super) fn stream_reply(protocol: &str, body: &mut Json) -> Result<Reply> {
+ if let Ok(error)=body.get("error"){if error!=&Null{
+     let mut message=String::from("Server error: ");
+     write_stream_value(&mut message,error)?;
+     return Err(message);
+ }}
+ stream::adopt_namespaced_calls(protocol,body);
  let (text,reason)=match protocol{
-  "chat"=>{let choice=super::provider_calls::choice(&body)?;(visible(choice.get("message")?,"content")?,stop(choice,"finish_reason"))},
-  "local"=>(visible(body.get("message")?,"content")?,stop(&body,"done_reason")),
-  "responses"=>{let (text,reason)=hosted_search::responses_text(&body)?;(text,Some(reason))},
-  "messages"=>{let mut parts=Vec::new();for part in body.get("content")?.array()?{if field(part,"type")==Ok("text"){parts.push(field(part,"text")?.to_string());}}(parts.join("\n"),stop(&body,"stop_reason"))},
-  "content"=>{let text=stream::content_text(&body)?;let candidate=body.get("candidates")?.array()?.iter().find(|c|c.get("index").unwrap_or(&Num("0".into()))==&Num("0".into())).ok_or("No response candidate zero")?;(text,stop(candidate,"finishReason"))},
+  "chat"=>{let choice=super::provider_calls::choice(body)?;(visible(choice.get("message")?,"content")?,stop(choice,"finish_reason"))},
+  "local"=>(visible(body.get("message")?,"content")?,stop(body,"done_reason")),
+  "responses"=>{let (text,reason)=hosted_search::responses_text(body)?;(text,Some(reason))},
+  "messages"=>{
+      let mut text=String::new();
+      for (index, part) in body.get("content")?.array()?.iter().filter(|part| field(part,"type")==Ok("text")).enumerate() {
+          if index > 0 { append_document_text(&mut text,"\n")?; }
+          append_document_text(&mut text,field(part,"text")?)?;
+      }
+      (text,stop(body,"stop_reason"))
+  },
+  "content"=>{let text=stream::content_text(body)?;let candidate=body.get("candidates")?.array()?.iter().find(|c|c.get("index").unwrap_or(&Num("0".into()))==&Num("0".into())).ok_or("No response candidate zero")?;(text,stop(candidate,"finishReason"))},
   "speech"=>return Err("Full-duplex speech returns audio and text on the open microphone stream".into()),
   _=>return Err("Unknown API format".into())
  };
  let interrupted=reason.as_ref().is_some_and(|reason|limit_reason(protocol,reason));
- let proposal=if interrupted||protocol=="responses"{None}else{super::provider_calls::proposal(protocol,&body)?};
+ let proposal=if interrupted||protocol=="responses"{None}else{super::provider_calls::proposal(protocol,body)?};
  if text.trim().is_empty()&&!interrupted&&proposal.is_none(){return Err(EMPTY_REPLY.into());}
  if proposal.is_some() && match protocol{"chat"=>reason.as_deref()!=Some("tool_calls"),"messages"=>reason.as_deref()!=Some("tool_use"),"content"=>reason.as_deref()!=Some("STOP"),"local"=>body.get("done")!=Ok(&Bool(true)),_=>false}{return Err("Tool proposal has no completed provider turn".into());}
  Ok(Reply{text,stop_reason:reason,interrupted,proposal})
+}
+
+/// Bind the validated calls directly to the streamed turn. The conversation
+/// retains the provider wire fields for the next request.
+pub(super) fn bind_stream_task_chat(proposal: Json, response: &Json, connection: &str, turn: &str) -> Result<Json> {
+    let message = super::provider_calls::choice(response)?.get("message")?;
+    let calls = message.get("tool_calls")?.array()?;
+    let count = calls.len();
+    let mut proposals = proposal;
+    let entries = match &mut proposals {
+        Arr(entries) => entries.as_mut_slice(),
+        single => std::slice::from_mut(single),
+    };
+    if count != entries.len() { return Err("Chat tool calls differ from their proposals".into()); }
+    let mut ids = std::collections::BTreeSet::new();
+    for call in calls {
+        let Ok(id) = field(call, "id") else { return Ok(proposals); };
+        if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) || !ids.insert(id) {
+            return Ok(proposals);
+        }
+    }
+    for (index, (call, proposed)) in calls.iter().zip(entries).enumerate() {
+        let Obj(fields) = proposed else { continue; };
+        let mut exchange = vec![
+            ("connection", s(connection)), ("turn", s(turn)),
+            ("count", Num(count.to_string())), ("wire", call.clone()),
+        ];
+        if index == 0 {
+            let content = match message.get("content").unwrap_or(&Null) {
+                Str(text) => Str(copy_document_text(text)?),
+                value => value.clone(),
+            };
+            let mut assistant = vec![("role", s("assistant")), ("content", content)];
+            for key in ["reasoning_content", "reasoning_details"] {
+                if let Ok(detail) = message.get(key) {
+                    if detail != &Null && serialize_stream_document(detail)?.len() <= 65536 {
+                        assistant.push((key, detail.clone()));
+                    }
+                }
+            }
+            exchange.push(("assistant", obj(assistant)));
+        }
+        fields.insert("task_chat_call".into(), obj(exchange));
+    }
+    Ok(proposals)
 }
 impl Reply{pub fn details(&self)->Json{obj(vec![("version",Num("1".into())),("text",s(&self.text)),("stop_reason",self.stop_reason.as_ref().map(|r|s(r)).unwrap_or(Null)),("interrupted",Bool(self.interrupted)),("proposal",self.proposal.clone().unwrap_or(Null))])}}
 fn text<'a>(p: &'a Json, k: &str) -> &'a str {
