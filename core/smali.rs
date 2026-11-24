@@ -345,34 +345,57 @@ fn parse(dex: &[u8]) -> Result<Dex> {
             methods: Vec::new(),
         };
         if data_off != 0 {
-            read_class_data(dex, data_off, &mut class, &methods)?;
+            read_class_data(dex, data_off, &mut class, &fields, &methods)?;
         }
         classes.push(class);
     }
     Ok(Dex { strings, types, protos, fields, methods, classes })
 }
 
-fn read_class_data(dex: &[u8], mut at: usize, class: &mut Class, methods: &[(usize, usize, usize)]) -> Result<()> {
+fn read_class_data(
+    dex: &[u8],
+    mut at: usize,
+    class: &mut Class,
+    fields: &[(usize, usize, usize)],
+    methods: &[(usize, usize, usize)],
+) -> Result<()> {
     let static_fields = uleb(dex, &mut at)?;
     let instance_fields = uleb(dex, &mut at)?;
     let direct = uleb(dex, &mut at)?;
     let virtuals = uleb(dex, &mut at)?;
-    let mut field_idx = 0u32;
-    for _ in 0..static_fields + instance_fields {
-        field_idx = field_idx.checked_add(uleb(dex, &mut at)?).ok_or("Field index overflow")?;
-        let access = uleb(dex, &mut at)?;
-        class.fields.push(Member { idx: field_idx as usize, access });
-    }
-    let mut method_idx = 0u32;
-    for _ in 0..direct + virtuals {
-        method_idx = method_idx.checked_add(uleb(dex, &mut at)?).ok_or("Method index overflow")?;
-        let access = uleb(dex, &mut at)?;
-        let code_off = uleb(dex, &mut at)? as usize;
-        let code = if code_off == 0 { None } else { Some(read_code(dex, code_off)?) };
-        if method_idx as usize >= methods.len() {
-            return Err("Method index is outside the method table".into());
+    // The static and the instance field lists are separate encoded lists.
+    // Each list carries its own running field index: the first entry of a list
+    // states its index outright and every later entry states the distance from
+    // the entry before it. The index restarts with each list, so one running
+    // index cannot span both of them.
+    for group in [static_fields, instance_fields] {
+        let mut field_idx = 0u32;
+        for _ in 0..group {
+            field_idx = field_idx.checked_add(uleb(dex, &mut at)?).ok_or("Field index overflow")?;
+            if field_idx as usize >= fields.len() {
+                return Err("Field index is outside the field table".into());
+            }
+            let access = uleb(dex, &mut at)?;
+            class.fields.push(Member { idx: field_idx as usize, access });
         }
-        class.methods.push(Method { idx: method_idx as usize, access, code });
+    }
+    // The direct and the virtual method lists are separate encoded lists with
+    // the same rule: each list has its own running method index and the index
+    // restarts with each list. The direct list holds the static, private and
+    // constructor methods, the virtual list holds the rest. Reading both as
+    // one list overstates the index and leaves the method table.
+    for group in [direct, virtuals] {
+        let mut method_idx = 0u32;
+        for _ in 0..group {
+            method_idx = method_idx.checked_add(uleb(dex, &mut at)?).ok_or("Method index overflow")?;
+            let access = uleb(dex, &mut at)?;
+            let code_off = uleb(dex, &mut at)? as usize;
+            let code = if code_off == 0 { None } else { Some(read_code(dex, code_off)?) };
+            if method_idx as usize >= methods.len() {
+                return Err("Method index is outside the method table".into());
+            }
+            class.methods.push(Method { idx: method_idx as usize, access, code });
+        }
     }
     Ok(())
 }
