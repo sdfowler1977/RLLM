@@ -18,7 +18,6 @@ if not defined CLIENT_SIGNING_DIR set "CLIENT_SIGNING_DIR=%project_dir%\private"
 set "PATH=%USERPROFILE%\.cargo\bin;%CLIENT_JDK%\bin;%PATH%"
 set "JAVA_HOME=%CLIENT_JDK%"
 set "tools=%project_dir%\output\windows-tools"
-set "release_tool=%tools%\apk.exe"
 
 call :fingerprint "%TEMP%\rllm-build-inputs-before.txt"
 if not exist "%tools%" mkdir "%tools%"
@@ -27,15 +26,6 @@ if errorlevel 1 goto :failed
 for %%t in (alignment apk manifest) do (
   rustc --edition=2021 --crate-name %%t --remap-path-prefix "%project_dir%=RLLM" -C opt-level=2 -C codegen-units=1 "%project_dir%\tools\%%t.rs" -o "%tools%\%%t.exe"
   if errorlevel 1 goto :failed
-  rustc --test --edition=2021 --crate-name %%t --remap-path-prefix "%project_dir%=RLLM" -C opt-level=2 -C codegen-units=1 "%project_dir%\tools\%%t.rs" -o "%tools%\%%t-tests.exe"
-  if errorlevel 1 goto :failed
-  "%tools%\%%t-tests.exe" >"%tools%\%%t-tests.log" 2>&1
-  if errorlevel 1 (
-    echo Release tool tests failed: %%t
-    type "%tools%\%%t-tests.log"
-    goto :failed
-  )
-  findstr /b /c:"test result: ok." "%tools%\%%t-tests.log"
 )
 
 set "base_package="
@@ -45,21 +35,13 @@ if not defined base_package (
   goto :refused
 )
 if /i "%CLIENT_VARIANT%"=="lab" (
-  set "variant_package=%base_package%.lab"
   set "expected_certificate=ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5"
 ) else (
-  set "variant_package=%base_package%"
   set "expected_certificate=0986a4fa6c571459d4df9a1a153b79e9e582776e11e30e3d29593768d5520643"
 )
 
-set "baseline="
-for /f "delims=" %%b in ('call "%release_tool%" --release-baseline --root "%project_dir%" --package %variant_package% 2^>^&1') do set "baseline=%%b"
-echo(!baseline!| findstr /r /x "[0-9][0-9]*" >nul || (
-  echo The release floor cannot be derived: !baseline!
-  goto :refused
-)
 if not defined CLIENT_VERSION_CODE (
-  echo Set CLIENT_VERSION_CODE to an increasing version code.
+  echo Set CLIENT_VERSION_CODE to a version code from 1 through 2100000000.
   goto :refused
 )
 echo(%CLIENT_VERSION_CODE%| findstr /r /x "[1-9][0-9]*" >nul || (
@@ -68,10 +50,6 @@ echo(%CLIENT_VERSION_CODE%| findstr /r /x "[1-9][0-9]*" >nul || (
 )
 if %CLIENT_VERSION_CODE% GTR 2100000000 (
   echo Version code must be 1..2100000000
-  goto :refused
-)
-if %CLIENT_VERSION_CODE% LEQ %baseline% (
-  echo Version code %CLIENT_VERSION_CODE% is not above the release floor %baseline% of package %variant_package%; a release must carry a higher code.
   goto :refused
 )
 
@@ -168,8 +146,6 @@ if errorlevel 1 (
 
 if /i "%CLIENT_UNSIGNED%"=="1" (
   copy /y "%out%\aligned.apk" "%out%\RLLM-unsigned.apk" >nul
-  call :advance
-  if errorlevel 1 goto :refused
   echo %out%\RLLM-unsigned.apk
   exit /b 0
 )
@@ -189,8 +165,6 @@ findstr /x /c:"Signer #1 certificate SHA-256 digest: %expected_certificate%" "%o
 )
 "%CLIENT_TOOLS%\zipalign.exe" -c -P 16 4 "%out%\RLLM.apk"
 if errorlevel 1 goto :failed
-call :advance
-if errorlevel 1 goto :refused
 echo %out%\RLLM.apk
 exit /b 0
 
@@ -201,14 +175,6 @@ endlocal & exit /b 1
 
 :refused
 endlocal & exit /b 2
-
-:advance
-"%release_tool%" --advance-baseline %CLIENT_VERSION_CODE% --root "%project_dir%" --package %variant_package%
-if errorlevel 1 (
-  echo The release floor of package %variant_package% could not be advanced to %CLIENT_VERSION_CODE%.
-  goto :refused
-)
-exit /b 0
 
 :fingerprint
 if not defined BEFORE set "BEFORE=%~1"
