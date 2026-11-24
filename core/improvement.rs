@@ -643,6 +643,14 @@ pub(super) fn evaluation_context(st: &Json) -> Json {
     s(&harness_rules::digest(&scope))
 }
 
+/// The held-out leg's check count. The split scorer measures that count for the leg and
+/// the run carries it, so a reading of the held-out score keeps its denominator. The
+/// retained score carries the same count when the split did not record one.
+fn held_out_total(run: &Json, score: &Json) -> usize {
+    let measured = number(run, "held_out_total");
+    if measured > 0 { measured } else { number(score, "total") }
+}
+
 pub(super) fn refinement_summary(run: &Json) -> String {
     let mut rows = Vec::new();
     for (key, name) in [("baseline_score", "Baseline"), ("probe_score", "Candidate"), ("replay_score", "Revised instructions")] {
@@ -667,12 +675,16 @@ pub(super) fn refinement_summary(run: &Json) -> String {
     if let Ok(note)=field(run,"round_note"){rows.push(note.into());}
     if text(run, "phase") == "review" {
         let (_, selected) = comparison(run);
+        let held = get(get(run, "evaluation_first"), "retained");
         let ood = get(run, "evaluation_candidate_score");
         if selected != &Null && get(run, "evaluation_first") != &Null {
-            let held_out = if ood == &Null { "unavailable".to_string() } else {
+            let held_out = if held == &Null { "unavailable".to_string() } else {
+                format!("{}/{}", number(held, "passed"), held_out_total(run, held))
+            };
+            let out_of_distribution = if ood == &Null { "unavailable".to_string() } else {
                 format!("{}/{}", number(ood, "passed"), number(ood, "total"))
             };
-            rows.push(format!("Retained instructions: tuning {}/{}, out-of-distribution {held_out}.",
+            rows.push(format!("Retained instructions: tuning {}/{}, held-out {held_out}, out-of-distribution {out_of_distribution}.",
                 number(selected, "passed"), number(selected, "total")));
         }
     }
@@ -1028,6 +1040,7 @@ pub(super) fn score_split(
     if let Some(cases) = held_out {
         let score = leg_score(st, cases)?;
         put(&mut out, "held_out_passed", get(&score, "passed").clone());
+        put(&mut out, "held_out_total", get(&score, "total").clone());
         put(&mut out, "held_out_task_key", get(&score, "task_key").clone());
         put(&mut out, "held_out_verifier", get(&score, "verifier").clone());
     }

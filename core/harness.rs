@@ -1493,7 +1493,7 @@ fn install_split(run:&mut Json,scored:&Json){
  }
  put(run,"held_out_known",get(scored,"held_out_known").clone());
  put(run,"ood_known",get(scored,"ood_known").clone());
- if boolean(scored,"held_out_known"){put(run,"held_out_passed",get(scored,"held_out_passed").clone());}
+ if boolean(scored,"held_out_known"){put(run,"held_out_passed",get(scored,"held_out_passed").clone());put(run,"held_out_total",get(scored,"held_out_total").clone());}
  if boolean(scored,"ood_known"){put(run,"ood_passed",get(scored,"ood_passed").clone());}
 }
 // `index` is the round that just closed. first_refinement may be set here, so the
