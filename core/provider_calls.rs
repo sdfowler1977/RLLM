@@ -1,5 +1,5 @@
 //! Provider tool proposals are data. The application still validates and reviews
-//! the single proposed operation through its existing permission boundary.
+//! each proposed operation through its existing permission boundary.
 use super::*;
 const LIMIT: usize = 65536;
 fn value<'a>(v: &'a Json, k: &str) -> &'a Json { v.get(k).unwrap_or(&Null) }
@@ -25,9 +25,9 @@ fn args(v: &Json, encoded: bool) -> Result<Json> {
     if encoded { let text=v.text()?; if text.len()>LIMIT{return Err("Tool arguments exceed 64 KiB".into());} parse(text) }
     else { bounded(v)?; Ok(v.clone()) }
 }
-fn push(out: &mut Option<Json>, name: &str, input: &Json) -> Result<()> {
-    if out.is_some() { return Err("Multiple tool proposals require separate reviewed turns; none was executed".into()); }
-    *out=Some(canonical(name,input)?); Ok(())
+fn push(out: &mut Vec<Json>, name: &str, input: &Json) -> Result<()> {
+    out.push(canonical(name,input)?);
+    Ok(())
 }
 pub(super) fn candidate(body: &Json) -> Result<&Json> {
     let rows=body.get("candidates")?.array()?; let mut selected=None;
@@ -48,7 +48,12 @@ pub(super) fn choice(body: &Json) -> Result<&Json> {
     selected.ok_or("No response choice zero".into())
 }
 pub(super) fn proposal(protocol: &str, body: &Json) -> Result<Option<Json>> {
-    let mut out=None;
+    let mut calls = proposals(protocol, body)?;
+    Ok(if calls.len() > 1 { Some(Arr(calls)) } else { calls.pop() })
+}
+
+fn proposals(protocol: &str, body: &Json) -> Result<Vec<Json>> {
+    let mut out=Vec::new();
     match protocol {
         "chat"|"local" => {
             let message=if protocol=="chat"{choice(body)?.get("message")?}else{body.get("message")?};
@@ -84,7 +89,7 @@ pub(super) fn declare(body:&mut Json,protocol:&str,tools:&[String])->Result<()> 
         ("tool",obj(vec![("type",s("string")),("enum",Arr(tools.iter().map(|t|s(t)).collect()))])),
         ("arguments_json",obj(vec![("type",s("string")),("description",s("One JSON object containing the exact arguments of the selected operation, as documented in the system instructions. Not code or a sequence of operations."))]))
     ])),("required",Arr(vec![s("tool"),s("arguments_json")]))]);
-    let description="Propose one permitted workspace operation for user review. This declaration grants no permissions and does not execute anything. Use the actual result in a later turn. Never combine multiple operations.";
+    let description="Propose a permitted workspace operation. Use a separate call for each operation, in execution order. Wait for actual results before answering or making a call that needs those results.";
     let function=obj(vec![("name",s("workspace")),("description",s(description)),("parameters",parameters.clone())]);
     let declaration=match protocol {
         "chat"|"local"=>obj(vec![("type",s("function")),("function",function)]),
@@ -93,34 +98,42 @@ pub(super) fn declare(body:&mut Json,protocol:&str,tools:&[String])->Result<()> 
         _=>return Err("Unknown structured proposal format".into())
     };
     if let Obj(fields)=body {fields.insert("tools".into(),Arr(vec![declaration]));}else{return Err("Invalid request body".into());}
-    if protocol=="chat" {if let Obj(fields)=body{fields.insert("parallel_tool_calls".into(),Bool(false));}}
     Ok(())
 }
 
-/// Bounded aggregation of a single streamed Chat function. A second index is
-/// refused before any completed proposal can reach the application.
+/// Bounded aggregation of streamed Chat functions in provider index order.
 #[derive(Default)]
-pub(super) struct Fragments { pub present: bool, name: String, input: String, id: String }
+pub(super) struct Fragments(BTreeMap<usize, Fragment>);
+
+#[derive(Default)]
+struct Fragment { name: String, input: String, id: String }
+
 impl Fragments {
     pub(super) fn append(&mut self, calls:&Json)->Result<()> {
         if calls==&Null{return Ok(());}
-        if calls.array()?.len()>1{return Err("Multiple streamed tool proposals require separate reviewed turns".into());}
         for call in calls.array()? {
             bounded(call)?;
-            if call.get("index")!=Ok(&Num("0".into())) {return Err("Only one reviewed streamed tool proposal is supported".into());}
-            self.present=true;
+            let Num(index) = call.get("index")? else { return Err("Invalid streamed tool index".into()); };
+            let index = index.parse::<usize>().map_err(|_| "Invalid streamed tool index")?;
+            let fragment = self.0.entry(index).or_default();
             if let Ok(kind)=call.get("type") {if kind!=&Null&&kind!=&s("function"){return Err("Unsupported streamed tool type".into());}}
-            if let Ok(id)=call.get("id") {if id!=&Null {self.id.push_str(id.text()?);}}
+            if let Ok(id)=call.get("id") {if id!=&Null {fragment.id.push_str(id.text()?);}}
             if let Ok(f)=call.get("function") {
-                if let Ok(name)=f.get("name") {if name!=&Null{self.name.push_str(name.text()?);}}
-                if let Ok(input)=f.get("arguments") {if input!=&Null{self.input.push_str(input.text()?);}}
+                if let Ok(name)=f.get("name") {if name!=&Null{fragment.name.push_str(name.text()?);}}
+                if let Ok(input)=f.get("arguments") {if input!=&Null{fragment.input.push_str(input.text()?);}}
             }
-            if self.name.len()>64||self.id.len()>256||self.input.len()>LIMIT {return Err("Streamed tool proposal exceeds its bounds".into());}
+            if fragment.name.len()>64||fragment.id.len()>256||fragment.input.len()>LIMIT {return Err("Streamed tool proposal exceeds its bounds".into());}
         }
         Ok(())
     }
-    pub(super) fn complete(&self)->Result<Json> {
-        if !self.present{return Err("No streamed tool proposal".into());}
+
+    pub(super) fn complete(&self)->Result<Vec<Json>> {
+        self.0.values().map(Fragment::complete).collect()
+    }
+}
+
+impl Fragment {
+    fn complete(&self)->Result<Json> {
         canonical(&self.name,&parse(&self.input)?)?;
         if self.id.is_empty()||self.id.chars().any(char::is_control){return Err("Invalid streamed tool identity".into());}
         Ok(obj(vec![("id",s(&self.id)),("type",s("function")),("function",obj(vec![("name",s(&self.name)),("arguments",s(&self.input))]))]))

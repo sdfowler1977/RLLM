@@ -61,7 +61,9 @@ struct Transfer {
     finish_reason: Option<String>,
     usage: Option<Json>,
     call_fragments: super::provider_calls::Fragments,
-    native_call: Option<Json>,
+    native_calls: Vec<Json>,
+    text_part_start: usize,
+    open_call: Option<Json>,
     call_input: String,
     call_block: Option<usize>,
 }
@@ -118,13 +120,17 @@ impl Transfer {
                 let block=record.get("content_block")?;let block_kind=field(block,"type")?;
                 if block_kind=="server_tool_use" {return Err("Provider-hosted tool blocks require their configured hosted workflow".into());}
                 if block_kind=="tool_use" {
-                    if self.native_call.is_some(){return Err("Multiple streamed tool proposals require separate reviewed turns".into());}
                     super::provider_calls::canonical(field(block,"name")?,block.get("input")?)?;
                     let id=field(block,"id")?;if id.is_empty()||id.len()>256||id.chars().any(char::is_control){return Err("Invalid streamed tool identity".into());}
-                    self.native_call=Some(block.clone());self.call_input.clear();self.call_block=Some(index);
+                    self.open_call=Some(block.clone());self.call_input.clear();self.call_block=Some(index);
                 }
                 let text=block_kind=="text";
-                if text {if self.text_blocks>0 {self.append("\n")?;}self.text_blocks+=1;self.append(field(block,"text")?)?;}
+                if text {
+                    if self.text_blocks > 0 { self.append("\n")?; }
+                    self.text_blocks += 1;
+                    self.text_part_start = self.text.len();
+                    self.append(field(block, "text")?)?;
+                }
                 self.block=Some((index,text));self.blocks+=1;
             },
             "content_block_delta" => {
@@ -142,16 +148,22 @@ impl Transfer {
                 // Other typed deltas are not promoted to generated text or tools.
             },
             "content_block_stop" => {
-                let (index,_)=self.block.ok_or("Messages stop has no open block")?;
+                let (index,is_text)=self.block.ok_or("Messages stop has no open block")?;
                 if index!=message_index(record)? {return Err("Messages stop has the wrong block index".into());}
-                if self.call_block==Some(index){if let Some(call)=self.native_call.as_mut(){
+                if is_text {
+                    self.native_calls.push(obj(vec![("type", s("text")), ("text", s(&self.text[self.text_part_start..]))]));
+                }
+                if self.call_block==Some(index){
+                    let mut call=self.open_call.take().ok_or("Messages stop has no open tool call")?;
                     if !self.call_input.is_empty(){
                         if call.get("input")!=Ok(&obj(vec![])){return Err("Streamed tool input supplied both initial fields and JSON deltas".into());}
                         let input=parse(&self.call_input).unwrap_or_else(|_|s(&self.call_input));
-                        if let Obj(fields)=call{fields.insert("input".into(),input);}
+                        if let Obj(fields)=&mut call{fields.insert("input".into(),input);}
                         self.call_input.clear();
                     }
-                }self.call_block=None;}
+                    self.native_calls.push(call);
+                    self.call_block=None;
+                }
                 self.block=None;
             },
             "message_delta" => {
@@ -167,9 +179,7 @@ impl Transfer {
                 if reason=="pause_turn" {return Err("Messages reply requires its configured hosted continuation".into());}
                 let mut message=self.message.take().ok_or("Messages stream has no start")?;
                 if let Obj(fields)=&mut message {
-                    let mut parts=vec![obj(vec![("type",s("text")),("text",s(&self.text))])];
-                    if let Some(call)=&self.native_call{parts.push(call.clone());}
-                    fields.insert("content".into(),Arr(parts));
+                    fields.insert("content".into(),Arr(std::mem::take(&mut self.native_calls)));
                     fields.insert("stop_reason".into(),s(reason));
                     if let Some(usage)=&self.usage {fields.insert("usage".into(),usage.clone());}
                 }
@@ -220,11 +230,11 @@ impl Transfer {
                 self.content_parts=self.content_parts.checked_add(parts.len()).ok_or("Content part count overflow")?;
                 if self.content_parts>4096 {return Err("Content reply exceeds 4096 parts".into());}
                 for part in parts {
-                    if part.get("functionCall").is_ok(){
-                        if self.native_call.is_some(){return Err("Multiple streamed tool proposals require separate reviewed turns".into());}
-                        self.native_call=Some(part.clone());
-                    }
                     if let Some(text)=content_part(part)? {self.append(text)?;}
+                    if part.get("functionCall").is_ok() {
+                        self.flush_content_text();
+                        self.native_calls.push(part.clone());
+                    }
                 }
             }
             if let Ok(reason)=candidate.get("finishReason") {
@@ -236,6 +246,12 @@ impl Transfer {
             }
         }
         Ok(())
+    }
+    fn flush_content_text(&mut self) {
+        if self.text_part_start < self.text.len() {
+            self.native_calls.push(obj(vec![("text", s(&self.text[self.text_part_start..]))]));
+            self.text_part_start = self.text.len();
+        }
     }
     fn control_reply(record:&Json,version:&str)->Result<Option<(String,Json)>> {
         if record.get("jsonrpc")!=Ok(&s("2.0"))||record.get("result").is_ok()||record.get("error").is_ok(){return Err("Invalid MCP server request envelope".into());}
@@ -358,7 +374,10 @@ impl Transfer {
         if data == "[DONE]" {
             let reason = self.finish_reason.as_ref().ok_or("Stream ended without a completed choice")?;
             let mut message=obj(vec![("role",s("assistant")),("content",s(&self.text))]);
-            if self.call_fragments.present&&!super::provider::limit_reason("chat",reason){if let Obj(fields)=&mut message{fields.insert("tool_calls".into(),Arr(vec![self.call_fragments.complete()?]));}}
+            if !super::provider::limit_reason("chat",reason){
+                let calls=self.call_fragments.complete()?;
+                if !calls.is_empty(){if let Obj(fields)=&mut message{fields.insert("tool_calls".into(),Arr(calls));}}
+            }
             let mut fields = vec![("choices",Arr(vec![obj(vec![("index",Num("0".into())),("message",message),("finish_reason",s(reason))])]))];
             if let Some(usage) = &self.usage {fields.push(("usage",usage.clone()));}
             self.terminal = Some(obj(fields)); return Ok(());
@@ -434,9 +453,8 @@ impl Transfer {
                 self.append(content)?;
             }
             if let Ok(calls)=message.get("tool_calls") {if calls!=&Null {for call in calls.array()? {
-                if self.native_call.is_some(){return Err("Multiple streamed tool proposals require separate reviewed turns".into());}
                 if call.string().len()>65536{return Err("Streamed tool proposal exceeds 64 KiB".into());}
-                self.native_call=Some(call.clone());
+                self.native_calls.push(call.clone());
             }}}
         }
         match record.get("done") {
@@ -700,7 +718,9 @@ impl Transfer {
         let (_, body) = network::decoded(&self.raw)?;
         if self.json || !self.headers || (self.chat && self.text.is_empty() && self.terminal.is_none() && body.trim_start().starts_with('{')) {
             // A compatible server may ignore stream=true and return one JSON reply.
-            super::provider::reply(if self.content {"content"} else if self.messages {"messages"} else if self.chat {"chat"} else {"local"},&body)?;
+            let protocol = if self.content {"content"} else if self.messages {"messages"} else if self.chat {"chat"} else {"local"};
+            let body = if namespaced_markup(&body) { presented(protocol, &body) } else { body };
+            super::provider::reply(protocol,&body)?;
             if parse(&body)?.get("done")==Ok(&Bool(false)){return Err("Connection ended before the model completed its reply".into());}
             return Ok(body);
         }
@@ -708,12 +728,15 @@ impl Transfer {
         // a final complete record without a trailing newline.
         if !self.chat {let line = std::mem::take(&mut self.line); self.record(&line)?;}
         if self.content {
-            let reason=self.finish_reason.as_ref().ok_or("Connection ended before the Content candidate completed")?;
-            if self.text.trim().is_empty()&&self.native_call.is_none()&&!super::provider::limit_reason("content",reason){return Err("Server returned no text response".into());}
-            let mut parts=vec![obj(vec![("text",s(&self.text))])];if let Some(call)=&self.native_call{parts.push(call.clone());}
-            let mut fields=vec![("candidates",Arr(vec![obj(vec![("index",Num("0".into())),("content",obj(vec![("role",s("model")),("parts",Arr(parts))])),("finishReason",s(reason))])]))];
+            let reason=self.finish_reason.clone().ok_or("Connection ended before the Content candidate completed")?;
+            if self.text.trim().is_empty()&&self.native_calls.is_empty()&&!super::provider::limit_reason("content",&reason){return Err("Server returned no text response".into());}
+            self.flush_content_text();
+            let parts = std::mem::take(&mut self.native_calls);
+            let mut fields=vec![("candidates",Arr(vec![obj(vec![("index",Num("0".into())),("content",obj(vec![("role",s("model")),("parts",Arr(parts))])),("finishReason",s(&reason))])]))];
             if let Some(usage)=&self.usage {fields.push(("usageMetadata",usage.clone()));}
-            let body=obj(fields).string();super::provider::reply("content",&body)?;return Ok(body);
+            let mut built=obj(fields);
+            adopt_namespaced_calls("content",&mut built);
+            let body=built.string();super::provider::reply("content",&body)?;return Ok(body);
         }
         let mut complete = self.terminal.take().ok_or("Connection ended before the model completed its reply")?;
         let protocol=if self.messages{"messages"}else if self.chat{"chat"}else{"local"};
@@ -721,15 +744,531 @@ impl Transfer {
         let reason=if protocol=="chat"{complete.get("choices").ok().and_then(|v|v.array().ok()).and_then(|v|v.first()).and_then(|v|v.get("finish_reason").ok()).and_then(|v|v.text().ok()).unwrap_or("").to_string()}else{complete.get(if protocol=="messages"{"stop_reason"}else{"done_reason"}).ok().and_then(|v|v.text().ok()).unwrap_or("").to_string()};
         if protocol=="local" {if let Obj(fields) = &mut complete {
             let mut message=obj(vec![("role",s("assistant")),("content",s(&self.text))]);
-            if let Some(call)=&self.native_call{if let Obj(fields)=&mut message{fields.insert("tool_calls".into(),Arr(vec![call.clone()]));}}
+            if !self.native_calls.is_empty(){if let Obj(fields)=&mut message{fields.insert("tool_calls".into(),Arr(std::mem::take(&mut self.native_calls)));}}
             fields.insert("message".into(),message);
         }}
+        adopt_namespaced_calls(protocol,&mut complete);
         if let Err(error)=super::provider::reply(protocol,&complete.string()){
             if reason.is_empty(){return Err(error);}
             return Err(format!("{error}: {reason}"));
         }
         Ok(complete.string())
     }
+}
+
+const NAMESPACE_MARK: &str = "]<]minimax[>[";
+
+fn namespaced_markup(text: &str) -> bool {
+    text.contains(NAMESPACE_MARK)
+        || text.contains("<tool_call>")
+        || text.contains("<tool_calls>")
+        || text.contains("<invoke")
+        || !json_call_spans(text).is_empty()
+}
+
+fn presented(protocol: &str, body: &str) -> String {
+    let Ok(mut value) = parse(body) else { return body.to_string() };
+    if adopt_namespaced_calls(protocol, &mut value) { value.string() } else { body.to_string() }
+}
+
+struct Rewrite { changed: bool, inserted: bool }
+
+pub(super) fn adopt_namespaced_calls(protocol: &str, body: &mut Json) -> bool {
+    match protocol {
+        "chat" => adopt_chat(body),
+        "local" => adopt_local(body),
+        "messages" => adopt_messages(body),
+        "content" => adopt_content(body),
+        _ => false,
+    }
+}
+
+fn adopt_chat(body: &mut Json) -> bool {
+    let Obj(fields) = body else { return false };
+    let Some(Arr(choices)) = fields.get_mut("choices") else { return false };
+    let Some(choice) = choices.iter_mut().find(|choice| match choice.get("index") {
+        Ok(value) => value == &Null || value == &Num("0".into()),
+        Err(_) => true,
+    }) else { return false };
+    let Obj(choice_fields) = choice else { return false };
+    let reason = choice_fields.get("finish_reason").and_then(|value| value.text().ok()).unwrap_or("").to_string();
+    let limited = super::provider::limit_reason("chat", &reason);
+    let rewrite = {
+        let Some(message) = choice_fields.get_mut("message") else { return false };
+        rewrite_message(message, "chat", limited)
+    };
+    if rewrite.inserted { choice_fields.insert("finish_reason".into(), s("tool_calls")); }
+    rewrite.changed || rewrite.inserted
+}
+
+fn adopt_local(body: &mut Json) -> bool {
+    let Obj(fields) = body else { return false };
+    let reason = fields.get("done_reason").and_then(|value| value.text().ok()).unwrap_or("").to_string();
+    let done = fields.get("done") == Some(&Bool(true));
+    let limited = super::provider::limit_reason("local", &reason) || !done;
+    let Some(message) = fields.get_mut("message") else { return false };
+    let rewrite = rewrite_message(message, "local", limited);
+    rewrite.changed || rewrite.inserted
+}
+
+fn adopt_messages(body: &mut Json) -> bool {
+    let Obj(fields) = body else { return false };
+    let reason = fields.get("stop_reason").and_then(|value| value.text().ok()).unwrap_or("").to_string();
+    let limited = super::provider::limit_reason("messages", &reason);
+    let mut changed = false;
+    let mut inserted = false;
+    {
+        let Some(Arr(parts)) = fields.get_mut("content") else { return false };
+        let mut index = 0;
+        for mut part in std::mem::take(parts) {
+            let calls = if part.get("type").and_then(Json::text) == Ok("text") {
+                rewrite_text_part(&mut part, &mut changed)
+            } else { Vec::new() };
+            parts.push(part);
+            for call in calls.iter().filter(|_| !limited) {
+                if let (Ok(name), Ok(args)) = (call.get("tool").and_then(|value| value.text()), call.get("args")) {
+                    parts.push(obj(vec![("type", s("tool_use")), ("id", s(&format!("namespaced-{index}"))), ("name", s(name)), ("input", args.clone())]));
+                    index += 1;
+                    inserted = true;
+                }
+            }
+        }
+    }
+    if inserted { fields.insert("stop_reason".into(), s("tool_use")); }
+    changed || inserted
+}
+
+fn adopt_content(body: &mut Json) -> bool {
+    let Obj(fields) = body else { return false };
+    let Some(Arr(candidates)) = fields.get_mut("candidates") else { return false };
+    let Some(candidate) = candidates.iter_mut().find(|candidate| match candidate.get("index") {
+        Ok(Num(value)) => value == "0",
+        Ok(Null) | Err(_) => true,
+        _ => false,
+    }) else { return false };
+    let Obj(candidate_fields) = candidate else { return false };
+    let reason = candidate_fields.get("finishReason").and_then(|value| value.text().ok()).unwrap_or("").to_string();
+    let limited = super::provider::limit_reason("content", &reason);
+    let mut changed = false;
+    let mut inserted = false;
+    {
+        let Some(Obj(content_fields)) = candidate_fields.get_mut("content") else { return false };
+        let Some(Arr(parts)) = content_fields.get_mut("parts") else { return false };
+        for mut part in std::mem::take(parts) {
+            let calls = if part.get("functionCall").is_err() && part.get("thought") != Ok(&Bool(true)) {
+                rewrite_text_part(&mut part, &mut changed)
+            } else { Vec::new() };
+            parts.push(part);
+            for call in calls.iter().filter(|_| !limited) {
+                if let (Ok(name), Ok(args)) = (call.get("tool").and_then(|value| value.text()), call.get("args")) {
+                    parts.push(obj(vec![("functionCall", obj(vec![("name", s(name)), ("args", args.clone())]))]));
+                    inserted = true;
+                }
+            }
+        }
+    }
+    if inserted { candidate_fields.insert("finishReason".into(), s("STOP")); }
+    changed || inserted
+}
+
+fn rewrite_text_part(part: &mut Json, changed: &mut bool) -> Vec<Json> {
+    let Ok(original) = part.get("text").and_then(Json::text) else { return Vec::new() };
+    if !namespaced_markup(original) { return Vec::new(); }
+    let (clean, calls) = namespaced_tool_calls(original);
+    if clean != original {
+        if let Obj(fields) = part { fields.insert("text".into(), s(&clean)); }
+        *changed = true;
+    }
+    calls
+}
+
+fn rewrite_message(message: &mut Json, protocol: &str, limited: bool) -> Rewrite {
+    let Obj(fields) = message else { return Rewrite { changed: false, inserted: false } };
+    let Some(original) = fields.get("content").and_then(|value| value.text().ok()).map(|value| value.to_string()) else { return Rewrite { changed: false, inserted: false } };
+    if !namespaced_markup(&original) { return Rewrite { changed: false, inserted: false } };
+    let (clean, calls) = namespaced_tool_calls(&original);
+    let changed = clean != original;
+    if changed { fields.insert("content".into(), s(&clean)); }
+    if !limited && !calls.is_empty() {
+        let mut wires = match fields.get("tool_calls") {
+            Some(Arr(items)) => items.clone(),
+            _ => Vec::new(),
+        };
+        for call in &calls {
+            if let Some(wire) = wire_call(protocol, call, wires.len()) {
+                wires.push(wire);
+            }
+        }
+        if !wires.is_empty() {
+            fields.insert("tool_calls".into(), Arr(wires));
+            return Rewrite { changed: true, inserted: true };
+        }
+    }
+    Rewrite { changed, inserted: false }
+}
+
+fn wire_call(protocol: &str, call: &Json, index: usize) -> Option<Json> {
+    let name = call.get("tool").ok()?.text().ok()?;
+    let args = call.get("args").ok()?;
+    if !matches!(args, Obj(_)) { return None; }
+    let function = match protocol {
+        "chat" => obj(vec![("name", s(name)), ("arguments", s(&args.string()))]),
+        "local" => obj(vec![("name", s(name)), ("arguments", args.clone())]),
+        _ => return None,
+    };
+    Some(obj(vec![("id", s(&format!("namespaced-{index}"))), ("type", s("function")), ("function", function)]))
+}
+
+pub(super) fn namespaced_tool_calls(text: &str) -> (String, Vec<Json>) {
+    if !namespaced_markup(text) { return (text.to_string(), Vec::new()); }
+    let mut ordered: Vec<(usize, usize, Json)> = Vec::new();
+    let mut ranges = Vec::new();
+    let mut cursor = 0;
+    while let Some((start, open_end)) = find_wrapped(text, cursor, "tool_call", false) {
+        if let Some((close_start, close_end)) = find_wrapped(text, open_end, "tool_call", true) {
+            let inner = &text[open_end..close_start];
+            let invokes = invoke_spans(inner);
+            let objects = json_call_spans(inner);
+            for (call, from, to) in invokes.into_iter().chain(objects) {
+                ordered.push((open_end + from, open_end + to, call));
+            }
+            ranges.push((start, close_end));
+            cursor = close_end;
+        } else {
+            ranges.push((start, open_end));
+            cursor = open_end;
+        }
+        if cursor <= start { break; }
+    }
+    for (call, start, end) in json_call_spans(text) {
+        if range_covers(&ranges, start) { continue; }
+        ordered.push((start, end, call));
+        ranges.push((start, end));
+    }
+    for (call, start, end) in invoke_spans(text) {
+        if range_covers(&ranges, start) { continue; }
+        ordered.push((start, end, call));
+        ranges.push((start, end));
+    }
+    ordered.sort_by_key(|(start, end, _)| (*start, *end));
+    let mut calls = Vec::new();
+    for (start, end, call) in ordered {
+        push_call(&mut calls, call);
+        if calls.len() >= 32 { break; }
+        ranges.push((start, end));
+    }
+    for needle in [NAMESPACE_MARK, "<tool_call>", "</tool_call>", "<tool_calls>", "</tool_calls>"] {
+        let mut from = 0;
+        while let Some(rel) = text[from..].find(needle) {
+            let start = from + rel;
+            ranges.push((start, start + needle.len()));
+            from = start + needle.len();
+        }
+    }
+    (excise(text, &ranges).trim().to_string(), calls)
+}
+
+fn push_call(calls: &mut Vec<Json>, call: Json) {
+    if calls.len() >= 32 { return; }
+    calls.push(call);
+}
+
+fn range_covers(ranges: &[(usize, usize)], index: usize) -> bool {
+    ranges.iter().any(|(start, end)| index >= *start && index < *end)
+}
+
+fn invoke_calls(text: &str) -> Vec<Json> { invoke_spans(text).into_iter().map(|(call, _, _)| call).collect() }
+fn json_calls(text: &str) -> Vec<Json> { json_call_spans(text).into_iter().map(|(call, _, _)| call).collect() }
+
+fn invoke_spans(text: &str) -> Vec<(Json, usize, usize)> {
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    while let Some(at) = find_invoke(text, cursor) {
+        if let Some((name, value, end)) = take_element(text, at, 0) {
+            if name == "invoke" {
+                if let Some(tool) = open_attribute(text, at, "name") {
+                    if let Some(call) = invoke_call(&tool, &value) { out.push((call, at, end)); }
+                }
+            }
+            cursor = end.max(at + 1);
+        } else {
+            cursor = at + "<invoke".len();
+        }
+        if cursor > text.len() { break; }
+    }
+    out
+}
+
+fn json_call_spans(text: &str) -> Vec<(Json, usize, usize)> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < text.len() {
+        if bytes[index] == b'{' {
+            if let Some((end, value)) = balanced_object(text, index) {
+                if let Some(call) = tool_call_value(&value) {
+                    out.push((call, index, end));
+                    index = end;
+                    continue;
+                }
+            }
+        }
+        index += text[index..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+    }
+    out
+}
+
+fn tool_call_value(value: &Json) -> Option<Json> {
+    let name = value.get("tool").ok()?.text().ok()?;
+    let args = value.get("args").ok()?;
+    super::provider_calls::canonical(name, args).ok()
+}
+
+fn invoke_call(name: &str, value: &Json) -> Option<Json> {
+    let args = match value {
+        Obj(fields) => Obj(fields.clone()),
+        Str(text) if text.is_empty() => obj(vec![]),
+        _ => return None,
+    };
+    super::provider_calls::canonical(name, &args).ok()
+}
+
+fn balanced_object(text: &str, start: usize) -> Option<(usize, Json)> {
+    let bytes = text.as_bytes();
+    if bytes.get(start) != Some(&b'{') { return None; }
+    let mut index = start;
+    let mut depth = 0i32;
+    let mut quoted = false;
+    let mut escaped = false;
+    while index < bytes.len() && index - start <= 65536 {
+        let byte = bytes[index];
+        if quoted {
+            if escaped { escaped = false; }
+            else if byte == b'\\' { escaped = true; }
+            else if byte == b'"' { quoted = false; }
+        } else {
+            match byte {
+                b'"' => quoted = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let end = index + 1;
+                        return parse(&text[start..end]).ok().map(|value| (end, value));
+                    }
+                }
+                _ => {}
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn find_invoke(text: &str, from: usize) -> Option<usize> {
+    let mut cursor = from;
+    while let Some(rel) = text[cursor..].find("<invoke") {
+        let at = cursor + rel;
+        let after = at + "<invoke".len();
+        if tag_boundary(text, after) {
+            return Some(mark_start(text, at));
+        }
+        cursor = after;
+    }
+    None
+}
+
+fn find_wrapped(text: &str, from: usize, name: &str, closing: bool) -> Option<(usize, usize)> {
+    let needle = if closing { format!("</{name}") } else { format!("<{name}") };
+    let mut cursor = from;
+    while cursor < text.len() {
+        let Some(rel) = text[cursor..].find(&needle) else { return None };
+        let at = cursor + rel;
+        let after = at + needle.len();
+        if tag_boundary(text, after) {
+            if let Some(gt) = text[after..].find('>') {
+                return Some((mark_start(text, at), after + gt + 1));
+            }
+        }
+        cursor = after;
+    }
+    None
+}
+
+fn mark_start(text: &str, at: usize) -> usize {
+    if at >= NAMESPACE_MARK.len() && text.is_char_boundary(at - NAMESPACE_MARK.len()) && &text[at - NAMESPACE_MARK.len()..at] == NAMESPACE_MARK {
+        at - NAMESPACE_MARK.len()
+    } else { at }
+}
+
+fn tag_boundary(text: &str, pos: usize) -> bool {
+    if pos > text.len() || !text.is_char_boundary(pos) { return false; }
+    match text[pos..].chars().next() {
+        Some(c) if c == '>' || c == '/' || c.is_whitespace() => true,
+        _ => false,
+    }
+}
+
+fn take_element(text: &str, pos: usize, depth: usize) -> Option<(String, Json, usize)> {
+    if depth > 16 || pos >= text.len() { return None; }
+    let lt = if text[pos..].starts_with(NAMESPACE_MARK) {
+        let next = pos + NAMESPACE_MARK.len();
+        if !text[next..].starts_with('<') || text[next..].starts_with("</") { return None; }
+        next
+    } else if text[pos..].starts_with('<') && !text[pos..].starts_with("</") { pos } else { return None; };
+    let name_at = lt + 1;
+    let name_len = text[name_at..].find(|c: char| !c.is_ascii_alphanumeric() && c != '_').unwrap_or(text.len() - name_at);
+    if name_len == 0 || name_len > 64 { return None; }
+    let name = text[name_at..name_at + name_len].to_string();
+    let after = name_at + name_len;
+    if !tag_boundary(text, after) { return None; }
+    let gt = text[after..].find('>')?;
+    let open_end = after + gt + 1;
+    if text[after..open_end].ends_with("/>") { return Some((name, scalar(""), open_end)); }
+    let mut level = 1usize;
+    let mut cursor = open_end;
+    while level > 0 {
+        let next_open = find_wrapped(text, cursor, &name, false);
+        let next_close = find_wrapped(text, cursor, &name, true);
+        match (next_open, next_close) {
+            (_, None) => return None,
+            (Some((open_at, open_to)), Some((close_at, _))) if open_at < close_at => { level += 1; cursor = open_to; }
+            (_, Some((close_at, close_to))) => {
+                level -= 1;
+                if level == 0 { return Some((name, value_of(&text[open_end..close_at], depth + 1), close_to)); }
+                cursor = close_to;
+            }
+        }
+    }
+    None
+}
+
+fn value_of(inner: &str, depth: usize) -> Json {
+    if let Some(items) = parse_sequence(inner, depth) {
+        if items.iter().all(|(name, _)| name == "item") { return Arr(items.into_iter().map(|(_, value)| value).collect()); }
+        let mut fields = BTreeMap::new();
+        for (name, value) in items { fields.entry(name).or_insert(value); }
+        return Obj(fields);
+    }
+    scalar(inner)
+}
+
+fn parse_sequence(text: &str, depth: usize) -> Option<Vec<(String, Json)>> {
+    let mut pos = 0;
+    let mut items = Vec::new();
+    let bytes = text.as_bytes();
+    while pos < text.len() {
+        while pos < text.len() && bytes[pos].is_ascii_whitespace() { pos += 1; }
+        if pos >= text.len() { break; }
+        let (name, value, next) = take_element(text, pos, depth)?;
+        if next <= pos { return None; }
+        items.push((name, value));
+        pos = next;
+    }
+    if items.is_empty() { None } else { Some(items) }
+}
+
+fn open_attribute(text: &str, pos: usize, key: &str) -> Option<String> {
+    let lt = if text[pos..].starts_with(NAMESPACE_MARK) { pos + NAMESPACE_MARK.len() } else { pos };
+    let gt = text[lt..].find('>')?;
+    attribute(&text[lt..lt + gt + 1], key)
+}
+
+fn attribute(tag: &str, key: &str) -> Option<String> {
+    let mut rest = tag;
+    while let Some(at) = rest.find(key) {
+        let before = at == 0 || rest[..at].chars().next_back().is_some_and(|c| c.is_whitespace() || c == '<');
+        rest = &rest[at + key.len()..];
+        if !before { continue; }
+        let rest_trim = rest.trim_start();
+        if !rest_trim.starts_with('=') { continue; }
+        let rest_trim = rest_trim[1..].trim_start();
+        let quote = rest_trim.chars().next()?;
+        if quote != '"' && quote != '\'' { return None; }
+        let rest_trim = &rest_trim[quote.len_utf8()..];
+        let end = rest_trim.find(quote)?;
+        return Some(rest_trim[..end].to_string());
+    }
+    None
+}
+
+fn scalar(text: &str) -> Json {
+    let text = xml_text(text);
+    match text.as_str() {
+        "true" => Bool(true),
+        "false" => Bool(false),
+        _ if plain_number(&text) => Num(text),
+        _ => s(&text),
+    }
+}
+
+fn xml_text(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let token = &rest[at..];
+        let Some(end) = token.find(';') else { out.push_str(token); return out.trim().to_string() };
+        match &token[..=end] {
+            "&amp;" => out.push('&'),
+            "&lt;" => out.push('<'),
+            "&gt;" => out.push('>'),
+            "&quot;" => out.push('"'),
+            "&apos;" => out.push('\''),
+            _ => { out.push('&'); rest = &rest[at + 1..]; continue; }
+        }
+        rest = &token[end + 1..];
+    }
+    out.push_str(rest);
+    out.trim().to_string()
+}
+
+fn plain_number(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.is_empty() { return false; }
+    let mut index = 0;
+    if bytes[0] == b'-' {
+        if bytes.len() == 1 { return false; }
+        index = 1;
+    }
+    let digits = index;
+    if bytes[index] == b'0' { index += 1; }
+    else if bytes[index].is_ascii_digit() { while index < bytes.len() && bytes[index].is_ascii_digit() { index += 1; } }
+    else { return false; }
+    if index < bytes.len() && bytes[index] == b'.' {
+        index += 1;
+        let fraction = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() { index += 1; }
+        if index == fraction { return false; }
+    }
+    if index < bytes.len() && (bytes[index] == b'e' || bytes[index] == b'E') {
+        index += 1;
+        if index < bytes.len() && (bytes[index] == b'+' || bytes[index] == b'-') { index += 1; }
+        let exponent = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() { index += 1; }
+        if index == exponent { return false; }
+    }
+    index == bytes.len() && !(bytes[digits] == b'0' && index > digits + 1 && bytes[digits + 1].is_ascii_digit())
+}
+
+fn excise(text: &str, ranges: &[(usize, usize)]) -> String {
+    let mut spans: Vec<(usize, usize)> = ranges.iter().copied().filter(|(start, end)| *start < *end && *end <= text.len() && text.is_char_boundary(*start) && text.is_char_boundary(*end)).collect();
+    spans.sort_by_key(|span| span.0);
+    let mut merged = Vec::new();
+    for span in spans {
+        if let Some((_, end)) = merged.last_mut() {
+            if span.0 <= *end { *end = (*end).max(span.1); continue; }
+        }
+        merged.push(span);
+    }
+    let mut out = String::new();
+    let mut cursor = 0;
+    for (start, end) in merged {
+        out.push_str(&text[cursor..start]);
+        cursor = end;
+    }
+    out.push_str(&text[cursor..]);
+    out
 }
 
 fn content_part(part:&Json)->Result<Option<&str>> {
