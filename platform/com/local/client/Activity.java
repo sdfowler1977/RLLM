@@ -45,6 +45,11 @@ public final class Activity extends android.app.Activity {
     private String apkPickerChat = "";
     private String documentTicket="";
     private int documentGeneration;
+    private Uri pendingDeviceProviderDocument;
+    private int pendingDeviceProviderFlags;
+    private boolean pendingDeviceProviderGrant;
+    private boolean pendingDeviceProviderPicker;
+    private boolean pendingBrowserTreePicker;
     private JSONObject state;
     private final Handler rateHandler=new Handler(Looper.getMainLooper());
     private boolean loopArmed;
@@ -74,6 +79,10 @@ public final class Activity extends android.app.Activity {
 
     private final Map<String,View> fields=new LinkedHashMap<>();
     private final ExecutorService workers=Executors.newFixedThreadPool(Math.max(2,Math.min(4,Runtime.getRuntime().availableProcessors())));
+    private final android.util.LruCache<String,android.graphics.Bitmap> deviceThumbnailCache=new android.util.LruCache<String,android.graphics.Bitmap>(4*1024*1024){
+        @Override protected int sizeOf(String key,android.graphics.Bitmap value){return value.getByteCount();}
+    };
+    private final Set<String> deviceThumbnailPending=ConcurrentHashMap.newKeySet();
     private final Media media=new Media(this,workers,(action,input)->dispatch(action,input));
     private final Set<Socket> activeConnections=ConcurrentHashMap.newKeySet();
     private final Set<Socket> cleanupConnections=ConcurrentHashMap.newKeySet();
@@ -88,6 +97,8 @@ public final class Activity extends android.app.Activity {
     private volatile int generation=0;
     private volatile String appOwner="";
     private AlertDialog dialog;
+    private DeviceBrowser deviceBrowser;
+    private JSONObject lastRenderedUi;
     private EditText draft;
     private boolean rendering=false;
     private boolean canNavigateBack=false;
@@ -574,7 +585,7 @@ public final class Activity extends android.app.Activity {
         if(!phoneStorageAccess||state.optString("phone_access_mode").equals("off")){
             deviceNotice("Device file tools are off in Setup");return;
         }
-        if(!phoneAccessGranted()){
+        if(!phoneAccessGranted()&&state.optString("phone_uri").isEmpty()){
             pendingDeviceBrowse=true;
             deviceNotice("Open Android all-files Settings and grant access to browse shared storage. The selected folder remains available if broad access is not granted.");
             requestPhoneAccess();return;
@@ -585,9 +596,17 @@ public final class Activity extends android.app.Activity {
     private void openDeviceBrowser(){
         if(closed||state==null)return;
         if(!phoneStorageAccess||state.optString("phone_access_mode").equals("off")){deviceNotice("Device file tools are off in Setup");return;}
+        if(deviceBrowser!=null)return;
         if(deviceRootStatus.equals("checking")){pendingDeviceBrowse=true;return;}
-        try{DeviceBrowser browser=new DeviceBrowser();browser.show(browser.initialPath);}
-        catch(Exception problem){deviceNotice("Device files could not be opened: "+safe(problem));}
+        try{DeviceBrowser browser=new DeviceBrowser();deviceBrowser=browser;browser.show(browser.initialPath);}
+        catch(Exception problem){deviceBrowser=null;deviceNotice("Device files could not be opened: "+safe(problem));}
+    }
+
+    private void openDeviceBrowser(Uri tree,boolean releaseGrant){
+        if(closed||state==null)return;
+        if(deviceBrowser!=null)deviceBrowser.close();
+        try{DeviceBrowser browser=new DeviceBrowser(tree,releaseGrant);deviceBrowser=browser;browser.show(browser.initialPath);}
+        catch(Exception problem){if(releaseGrant&&tree!=null)try{getContentResolver().releasePersistableUriPermission(tree,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}deviceBrowser=null;deviceNotice("Selected folder could not be browsed: "+safe(problem));}
     }
 
     private void openPendingDeviceBrowse(){
@@ -595,51 +614,122 @@ public final class Activity extends android.app.Activity {
         pendingDeviceBrowse=false;openDeviceBrowser();
     }
 
+    private final class DeviceBrowserItem {
+        final String name,documentId,mime,key;
+        final boolean directory;
+        final long bytes,modified;
+        final File file;
+        DeviceBrowserItem(String name,boolean directory,long bytes,long modified,String mime,String documentId,File file,String key){
+            this.name=name;this.directory=directory;this.bytes=bytes;this.modified=modified;this.mime=mime;
+            this.documentId=documentId;this.file=file;this.key=key;
+        }
+    }
+
     private final class DeviceBrowser {
         private final int token=generation;
         private final String selected=state.optString("phone_uri");
         private final boolean limited=state.optString("phone_access_mode").equals("limited");
-        private final boolean rootMode=deviceRootEnabled;
-        private final boolean useTree=!rootMode&&(limited||!phoneAccessGranted())&&!selected.isEmpty();
-        private final Uri treeUri=useTree?Uri.parse(selected):null;
-        private final File base;
+        private boolean rootMode,useTree,providerTree,temporaryTree,releaseTreeGrant;
+        private Uri treeUri;
+        private File base;
         private final String initialPath;
         private AlertDialog current;
-        private android.os.CancellationSignal activeSignal;
+        private TextView locationText,countText;
+        private ListView listing;
+        private BrowserRows rows;
+        private Button attachButton,readButton,openButton;
+        private final Set<android.os.CancellationSignal> listingSignals=ConcurrentHashMap.newKeySet();
+        private DeviceBrowserItem selectedItem;
+        private String currentPath;
         private int loadSerial;
+        private boolean replacing;
 
-        DeviceBrowser()throws IOException{
-            if(rootMode){base=null;initialPath="/";}
-            else if(useTree){base=null;initialPath="";}
-            else if(limited){throw new IOException("Choose a selected device folder before browsing in selected-folder scope");}
+        DeviceBrowser()throws IOException{this(null,false);}
+
+        DeviceBrowser(Uri pickedTree,boolean releaseGrant)throws IOException{
+            rootMode=pickedTree==null&&deviceRootEnabled;
+            temporaryTree=pickedTree!=null;releaseTreeGrant=releaseGrant;
+            if(pickedTree!=null){
+                DocumentAccess.check(pickedTree,phoneStorageAccess,cloudStorageAccess,false);
+                if(!android.provider.DocumentsContract.isTreeUri(pickedTree))throw new IOException("Choose a document-provider folder");
+                useTree=true;treeUri=pickedTree;providerTree=DocumentAccess.provider(pickedTree);base=null;initialPath="";
+            }else if(rootMode){base=null;initialPath="/";}
+            else if((limited||!phoneAccessGranted())&&!selected.isEmpty()){
+                useTree=true;treeUri=Uri.parse(selected);providerTree=DocumentAccess.provider(treeUri);base=null;initialPath="";
+            }else if(limited){throw new IOException("Choose a selected device folder before browsing in selected-folder scope");}
             else if(phoneAccessGranted()){base=DocumentAccess.primary();initialPath="";}
             else{throw new IOException("Broad access was not granted and no selected device folder is available");}
         }
 
         void show(String path){
             if(closed||token!=generation)return;
-            if(current!=null&&current.isShowing())current.dismiss();
-            final String folder=path;
-            final long serial=++loadSerial;
-            LinearLayout body=column();body.setPadding(dp(16),dp(8),dp(16),dp(8));body.setBackgroundColor(surface);
-            TextView location=label(location(folder),12);location.setTextIsSelectable(true);body.addView(location);
-            ListView listing=new ListView(Activity.this);ArrayAdapter<String> rows=new ArrayAdapter<>(Activity.this,android.R.layout.simple_list_item_1,new ArrayList<>());listing.setAdapter(rows);
-            listing.setDivider(new android.graphics.drawable.ColorDrawable(border));listing.setDividerHeight(dp(1));
-            body.addView(listing,new LinearLayout.LayoutParams(-1,dp(360)));
-            AlertDialog popup=new AlertDialog.Builder(Activity.this).setTitle(rootMode?"Device files · system":"Device files")
+            currentPath=path;selectedItem=null;
+            if(current==null||!current.isShowing())createDialog();
+            locationText.setText(location(path));countText.setText("Loading complete folder listing…");
+            Button up=current.getButton(AlertDialog.BUTTON_NEGATIVE);boolean canGoUp=parent(path)!=null;up.setEnabled(canGoUp);up.setAlpha(canGoUp?1f:.45f);
+            rows.reset(true);listing.setOnItemClickListener((parent,view,position,id)->rowTapped(position));updateActions();
+            load(path,++loadSerial,current,listing,rows);
+        }
+
+        private void createDialog(){
+            LinearLayout body=column();body.setPadding(dp(14),dp(6),dp(14),dp(8));body.setBackgroundColor(surface);
+            LinearLayout tools=new LinearLayout(Activity.this);tools.setOrientation(LinearLayout.HORIZONTAL);
+            Button locations=browserButton("Locations",false);locations.setOnClickListener(v->showLocations());
+            Button providers=browserButton("Browse providers",false);providers.setOnClickListener(v->startProviderPicker());
+            tools.addView(locations,new LinearLayout.LayoutParams(0,-2,1));tools.addView(providers,new LinearLayout.LayoutParams(0,-2,1));body.addView(tools);
+            locationText=label("",12);locationText.setTextColor(ink);locationText.setTextIsSelectable(true);locationText.setPadding(dp(4),dp(8),dp(4),dp(4));body.addView(locationText);
+            countText=label("",12);countText.setTextColor(muted);countText.setPadding(dp(4),0,dp(4),dp(4));body.addView(countText);
+            listing=new ListView(Activity.this);listing.setBackgroundColor(surface);listing.setCacheColorHint(surface);listing.setClipToPadding(false);listing.setPadding(0,dp(2),0,dp(2));
+            rows=new BrowserRows();listing.setAdapter(rows);listing.setDivider(new android.graphics.drawable.ColorDrawable(border));listing.setDividerHeight(dp(1));
+            body.addView(listing,new LinearLayout.LayoutParams(-1,dp(352)));
+            LinearLayout actions=new LinearLayout(Activity.this);actions.setOrientation(LinearLayout.HORIZONTAL);actions.setPadding(0,dp(4),0,0);
+            attachButton=browserButton("Attach selected",true);attachButton.setOnClickListener(v->attachSelected());
+            readButton=browserButton("Read device text",true);readButton.setOnClickListener(v->readSelectedText());
+            openButton=browserButton("Open",true);openButton.setOnClickListener(v->openSelected());
+            actions.addView(attachButton,new LinearLayout.LayoutParams(0,-2,1));actions.addView(readButton,new LinearLayout.LayoutParams(0,-2,1));actions.addView(openButton,new LinearLayout.LayoutParams(0,-2,1));body.addView(actions);
+            TextView title=label(rootMode?"Device files · system":"Device files",20);title.setTextColor(ink);title.setTypeface(proseFont,Typeface.BOLD);title.setBackgroundColor(surface);title.setPadding(dp(20),dp(14),dp(20),dp(12));
+            AlertDialog popup=new AlertDialog.Builder(Activity.this).setCustomTitle(title)
                 .setView(body).setNegativeButton("Up",null).setPositiveButton("Close",null).create();
             current=popup;
-            popup.setOnDismissListener(d->{android.os.CancellationSignal signal=activeSignal;if(signal!=null)signal.cancel();});
+            popup.setOnDismissListener(d->{if(current==popup){current=null;if(!replacing){for(android.os.CancellationSignal signal:listingSignals)signal.cancel();finish();}}});
             popup.show();
-            Button up=popup.getButton(AlertDialog.BUTTON_NEGATIVE);String parent=parent(folder);up.setEnabled(parent!=null);up.setAlpha(parent==null?.45f:1f);
-            up.setOnClickListener(v->{if(parent!=null)show(parent);});
-            rows.add("Loading folder…");
-            load(folder,serial,popup,listing,rows);
+            styleBrowserPopup(popup);
+            popup.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->{String up=parent(currentPath);if(up!=null)show(up);});
+            popup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->popup.dismiss());
         }
+
+        private void styleBrowserPopup(AlertDialog popup){
+            android.view.Window window=popup.getWindow();
+            if(window!=null){
+                android.graphics.drawable.GradientDrawable background=new android.graphics.drawable.GradientDrawable();
+                background.setColor(surface);background.setCornerRadius(dp(18));background.setStroke(dp(1),border);
+                window.setBackgroundDrawable(background);
+            }
+            int panelId=getResources().getIdentifier("buttonPanel","id","android");
+            View buttonPanel=panelId==0?null:popup.findViewById(panelId);if(buttonPanel!=null)buttonPanel.setBackgroundColor(surface);
+            for(int id:new int[]{AlertDialog.BUTTON_NEGATIVE,AlertDialog.BUTTON_POSITIVE}){
+                Button button=popup.getButton(id);if(button!=null){button.setTextColor(accent);button.setAllCaps(false);button.setTypeface(proseFont,Typeface.BOLD);button.setMinHeight(dp(48));}
+            }
+        }
+
+        private Button browserButton(String text,boolean action){
+            Button button=new Button(Activity.this);button.setText(text);button.setAllCaps(false);button.setTextSize(12*textScale);button.setTypeface(proseFont,Typeface.BOLD);
+            button.setTextColor(action?accent:ink);button.setMinHeight(dp(48));button.setPadding(dp(3),dp(4),dp(3),dp(4));
+            button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(action?card:surface));return button;
+        }
+
+        private void finish(){
+            if(deviceBrowser!=this)return;
+            deviceBrowser=null;
+            if(releaseTreeGrant&&treeUri!=null)try{getContentResolver().releasePersistableUriPermission(treeUri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}
+            if(!closed&&lastRenderedUi!=null)try{render(lastRenderedUi);}catch(Exception problem){deviceNotice("Storage menu could not be refreshed: "+safe(problem));}
+        }
+
+        void close(){if(current!=null)current.dismiss();else finish();}
 
         private String location(String path){
             if(rootMode)return path;
-            if(useTree)return path.isEmpty()?"Selected device folder":"Selected device folder / "+path;
+            if(useTree){String prefix=temporaryTree?(providerTree?"Provider · "+treeUri.getAuthority():"Android folder · "+treeUri.getAuthority()):"Selected device folder";return path.isEmpty()?prefix:prefix+" / "+path;}
             String root=base.getAbsolutePath();return path.isEmpty()?root:new File(base,path).getAbsolutePath();
         }
 
@@ -648,56 +738,386 @@ public final class Activity extends android.app.Activity {
             if(path.isEmpty())return null;int split=path.lastIndexOf('/');return split<0?"":path.substring(0,split);
         }
 
-        private String child(String path,String name){
-            if(rootMode)return path.equals("/")?"/"+name:path+"/"+name;
-            return path.isEmpty()?name:path+"/"+name;
-        }
+        private String child(String path,String name){if(rootMode)return path.equals("/")?"/"+name:path+"/"+name;return path.isEmpty()?name:path+"/"+name;}
 
         private JSONArray list(String path,android.os.CancellationSignal signal)throws Exception{
             if(rootMode){
                 deviceActive(token,signal,false,true);File su=DocumentAccess.findSu();
                 if(su==null){deviceRootLost("absent");throw new IOException("Device root executable not found");}
                 DocumentAccess.Root root=new DocumentAccess.Root(su,deadlines,signal);
-                try{root.verify();JSONArray rows=root.list(DocumentAccess.absolute(path),()->deviceActive(token,signal,false,true));deviceActive(token,signal,false,true);return rows;}
+                try{root.verify();JSONArray result=root.list(DocumentAccess.absolute(path),()->deviceActive(token,signal,false,true));deviceActive(token,signal,false,true);return result;}
                 catch(Exception problem){if(!signal.isCanceled())deviceRootLost("denied_or_unavailable");throw problem;}
             }
             if(useTree){
-                DocumentAccess.Check check=()->{deviceActive(token,signal,false,false);documentSourceAccess(treeUri);};check.run();
-                DocumentAccess.Tree tree=new DocumentAccess.Tree(getContentResolver(),treeUri,false,signal,check);
-                JSONArray rows=tree.list(tree.resolve(path));check.run();return rows;
+                DocumentAccess.Check check=()->{deviceActive(token,signal,false,false);DocumentAccess.check(treeUri,phoneStorageAccess,cloudStorageAccess,false);};check.run();
+                DocumentAccess.Tree tree=new DocumentAccess.Tree(getContentResolver(),treeUri,false,signal,check,providerTree);
+                JSONArray result=tree.browserList(tree.browserResolve(path));check.run();return result;
             }
             DocumentAccess.Check check=()->deviceActive(token,signal,true,false);check.run();
             File folder=path.isEmpty()?base:DocumentAccess.within(base,path);
-            JSONArray rows=DocumentAccess.list(folder,check,5000);check.run();return rows;
+            JSONArray result=DocumentAccess.browserList(folder,check);check.run();return result;
         }
 
-        private void load(String path,long serial,AlertDialog popup,ListView listing,ArrayAdapter<String> adapter){
-            android.os.CancellationSignal previous=activeSignal;if(previous!=null)previous.cancel();
-            android.os.CancellationSignal signal=new android.os.CancellationSignal();activeSignal=signal;documentSignals.add(signal);
+        private ArrayList<DeviceBrowserItem> parse(JSONArray source,String path){
+            ArrayList<DeviceBrowserItem> entries=new ArrayList<>(source.length());
+            for(int i=0;i<source.length();i++){
+                JSONObject row=source.optJSONObject(i);if(row==null)continue;
+                String name=row.optString("name");if(name.isEmpty()||name.equals(".")||name.equals(".."))continue;
+                String documentId=row.optString("document_id");if(documentId.isEmpty())documentId=null;
+                boolean directory=row.optBoolean("directory");File file=null;
+                if(documentId==null){try{file=rootMode?DocumentAccess.absolute(child(path,name)):new File(base,child(path,name));}catch(Exception ignored){}}
+                String mime=row.optString("mime","application/octet-stream");
+                String key=documentId==null?(file==null?location(child(path,name)):file.getAbsolutePath()):treeUri.toString()+"/"+documentId;
+                entries.add(new DeviceBrowserItem(name,directory,row.optLong("bytes",0),row.optLong("modified",0),mime,documentId,file,key));
+            }
+            Collections.sort(entries,(left,right)->{
+                if(left.directory!=right.directory)return left.directory?-1:1;
+                int byName=String.CASE_INSENSITIVE_ORDER.compare(left.name,right.name);
+                return byName!=0?byName:left.name.compareTo(right.name);
+            });
+            return entries;
+        }
+
+        private void load(String path,int serial,AlertDialog popup,ListView target,BrowserRows adapter){
+            android.os.CancellationSignal signal=new android.os.CancellationSignal();listingSignals.add(signal);documentSignals.add(signal);
             try{workers.execute(()->{
-                JSONArray listed=null;String failure="";
-                try{listed=list(path,signal);}catch(Exception problem){failure=safe(problem);}
-                finally{documentSignals.remove(signal);}
-                final JSONArray result=listed;final String error=failure;
+                ArrayList<DeviceBrowserItem> entries=null;String failure="";
+                try{entries=parse(list(path,signal),path);}catch(Exception problem){failure=safe(problem);}
+                finally{listingSignals.remove(signal);documentSignals.remove(signal);}
+                final ArrayList<DeviceBrowserItem> result=entries;final String error=failure;
                 runOnUiThread(()->{
                     if(closed||token!=generation||serial!=loadSerial||!popup.isShowing())return;
-                    adapter.clear();
-                    if(!error.isEmpty()){adapter.add("Unable to browse this folder: "+error);listing.setOnItemClickListener(null);return;}
-                    List<JSONObject> entries=new ArrayList<>();
-                    for(int i=0;i<result.length();i++){JSONObject row=result.optJSONObject(i);if(row==null)continue;String name=row.optString("name");if(name.isEmpty()||name.equals(".")||name.equals(".."))continue;entries.add(row);}
-                    Collections.sort(entries,(left,right)->{boolean a=left.optBoolean("directory"),b=right.optBoolean("directory");if(a!=b)return a?-1:1;return left.optString("name").compareToIgnoreCase(right.optString("name"));});
-                    if(entries.isEmpty())adapter.add("This folder is empty");
-                    for(JSONObject entry:entries)adapter.add((entry.optBoolean("directory")?"▸  ":"     ")+entry.optString("name"));
-                    listing.setOnItemClickListener((parent,view,position,id)->{
-                        if(position<0||position>=entries.size())return;JSONObject entry=entries.get(position);String name=entry.optString("name"),selectedPath=child(path,name);
-                        if(entry.optBoolean("directory"))show(selectedPath);
-                        else new AlertDialog.Builder(Activity.this).setTitle("Device file").setMessage(location(selectedPath)).setPositiveButton("Close",null).show();
-                    });
+                    if(!error.isEmpty()){countText.setText("Folder could not be read");adapter.setMessage("Unable to browse this folder: "+error);return;}
+                    countText.setText(result.size()+(result.size()==1?" item":" items"));
+                    if(result.isEmpty()){adapter.setMessage("This folder is empty");return;}
+                    adapter.reset(false);appendBatch(result,0,serial,popup,target,adapter);
                 });
             });}catch(RejectedExecutionException problem){
-                documentSignals.remove(signal);adapter.clear();adapter.add("Unable to browse this folder: "+safe(problem));listing.setOnItemClickListener(null);
+                listingSignals.remove(signal);documentSignals.remove(signal);countText.setText("Folder could not be read");adapter.setMessage("Unable to browse this folder: "+safe(problem));
             }
         }
+
+        private void appendBatch(ArrayList<DeviceBrowserItem> entries,int start,int serial,AlertDialog popup,ListView target,BrowserRows adapter){
+            if(closed||token!=generation||serial!=loadSerial||!popup.isShowing())return;
+            int end=Math.min(entries.size(),start+72);adapter.append(entries.subList(start,end));
+            if(end<entries.size())target.postDelayed(()->appendBatch(entries,end,serial,popup,target,adapter),12);
+        }
+
+        private void rowTapped(int position){
+            if(rows==null||position<0||position>=rows.entries.size())return;
+            DeviceBrowserItem item=rows.entries.get(position);
+            if(item.directory){show(child(currentPath,item.name));return;}
+            selectedItem=item;rows.notifyDataSetChanged();updateActions();
+        }
+
+        private void updateActions(){
+            boolean selected=selectedItem!=null&&!selectedItem.directory;
+            if(attachButton!=null)attachButton.setEnabled(selected);
+            if(readButton!=null)readButton.setEnabled(selected);
+            if(openButton!=null)openButton.setEnabled(selected);
+        }
+
+        private void attachSelected(){if(selectedItem!=null)dispatch("phone_file");}
+
+        private void readSelectedText(){
+            if(selectedItem==null)return;
+            String path=child(currentPath,selectedItem.name);
+            boolean insidePhoneReaderScope=useTree||(!rootMode&&!temporaryTree&&base!=null&&base.equals(DocumentAccess.primary()));
+            if(insidePhoneReaderScope){
+                if(current!=null)current.dismiss();
+                dispatch("phone_reader");
+                View field=fields.get("path");if(field instanceof EditText)((EditText)field).setText(path);
+                dispatch("manual_tool");return;
+            }
+            previewSelectedText(this,selectedItem);
+        }
+
+        private void openSelected(){if(selectedItem!=null)openBrowserItem(this,selectedItem);}
+
+        private void showLocations(){
+            final ArrayList<File> volumes=new ArrayList<>();final ArrayList<String> labels=new ArrayList<>();
+            if(phoneAccessGranted())try{
+                for(File volume:DocumentAccess.volumes(Activity.this)){
+                    volumes.add(volume);labels.add(volume.equals(DocumentAccess.primary())?"Device storage · "+volume.getAbsolutePath():"External storage · "+volume.getAbsolutePath());
+                }
+            }catch(Exception problem){deviceNotice("Storage locations could not be listed: "+safe(problem));}
+            String[] choices=labels.toArray(new String[0]);
+            new AlertDialog.Builder(Activity.this).setTitle("Storage locations")
+                .setItems(choices,(dialog,which)->{if(which>=0&&which<volumes.size()){Uri priorTree=treeUri;boolean release=releaseTreeGrant;rootMode=false;useTree=false;temporaryTree=false;providerTree=false;releaseTreeGrant=false;treeUri=null;if(release&&priorTree!=null)try{getContentResolver().releasePersistableUriPermission(priorTree,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}base=volumes.get(which);show("");}})
+                .setNeutralButton("Choose folder…",(dialog,which)->startFolderPicker())
+                .setPositiveButton("Browse providers…",(dialog,which)->startProviderPicker())
+                .setNegativeButton("Close",null).show();
+        }
+
+        private void startProviderPicker(){
+            if(current!=null)current.dismiss();pendingDeviceProviderPicker=true;
+            try{
+                Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                startActivityForResult(intent,50);
+            }catch(Exception problem){pendingDeviceProviderPicker=false;deviceNotice("Document providers could not be opened: "+safe(problem));}
+        }
+
+        private void startFolderPicker(){
+            if(current!=null)current.dismiss();pendingBrowserTreePicker=true;
+            try{
+                Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                startActivityForResult(intent,51);
+            }catch(Exception problem){pendingBrowserTreePicker=false;deviceNotice("Android file locations could not be opened: "+safe(problem));}
+        }
+
+        Uri entryUri(DeviceBrowserItem item)throws Exception{
+            if(item.documentId!=null)return android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri,item.documentId);
+            if(item.file==null)throw new IOException("The selected file path is unavailable");
+            return externalStorageDocumentUri(item.file);
+        }
+
+        private final class BrowserRows extends BaseAdapter {
+            final ArrayList<DeviceBrowserItem> entries=new ArrayList<>();
+            boolean loading=true;String message="Loading folder contents…";
+            void reset(boolean showLoading){entries.clear();loading=showLoading;message=showLoading?"Loading folder contents…":"";notifyDataSetChanged();}
+            void setMessage(String value){entries.clear();loading=false;message=value;notifyDataSetChanged();}
+            void append(List<DeviceBrowserItem> values){entries.addAll(values);notifyDataSetChanged();}
+            @Override public int getCount(){return entries.isEmpty()?1:entries.size();}
+            @Override public Object getItem(int position){return position>=0&&position<entries.size()?entries.get(position):message;}
+            @Override public long getItemId(int position){return position;}
+            @Override public View getView(int position,View convertView,android.view.ViewGroup parent){
+                if(entries.isEmpty()){
+                    TextView text=convertView instanceof TextView?(TextView)convertView:label("",14);
+                    text.setText(message.isEmpty()?(loading?"Loading folder contents…":"This folder is empty"):message);text.setTextColor(ink);text.setTextSize(14*textScale);
+                    text.setTypeface(proseFont);text.setGravity(Gravity.CENTER_VERTICAL);text.setPadding(dp(14),dp(8),dp(14),dp(8));text.setMinHeight(dp(64));text.setBackgroundColor(surface);return text;
+                }
+                DeviceBrowserItem item=entries.get(position);
+                LinearLayout row=convertView instanceof LinearLayout?(LinearLayout)convertView:new LinearLayout(Activity.this);
+                row.removeAllViews();row.setOrientation(LinearLayout.HORIZONTAL);row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(dp(10),dp(7),dp(10),dp(7));row.setMinimumHeight(dp(74));
+                android.graphics.drawable.GradientDrawable background=new android.graphics.drawable.GradientDrawable();
+                background.setCornerRadius(dp(10));background.setColor(selectedItem!=null&&selectedItem.key.equals(item.key)?blend(surface,accent,.18f):surface);row.setBackground(background);
+                android.widget.ImageView icon=new android.widget.ImageView(Activity.this);icon.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);icon.setContentDescription(item.directory?"Folder":"File");
+                LinearLayout.LayoutParams iconParams=new LinearLayout.LayoutParams(dp(52),dp(52));iconParams.setMargins(0,0,dp(12),0);row.addView(icon,iconParams);setEntryIcon(icon,item);
+                LinearLayout texts=new LinearLayout(Activity.this);texts.setOrientation(LinearLayout.VERTICAL);texts.setGravity(Gravity.CENTER_VERTICAL);
+                row.addView(texts,new LinearLayout.LayoutParams(0,-2,1));
+                TextView name=label(item.name,14);name.setTextColor(ink);name.setTypeface(proseFont,Typeface.BOLD);name.setSingleLine(true);name.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);texts.addView(name,new LinearLayout.LayoutParams(-1,-2));
+                TextView details=label((item.directory?"Folder":formatSize(item.bytes))+" · "+formatModified(item.modified),11);details.setTextColor(muted);details.setSingleLine(true);details.setEllipsize(android.text.TextUtils.TruncateAt.END);texts.addView(details,new LinearLayout.LayoutParams(-1,-2));
+                row.setContentDescription((item.directory?"Folder, ":"File, ")+item.name+", "+(selectedItem!=null&&selectedItem.key.equals(item.key)?"selected":"not selected"));row.setSelected(selectedItem!=null&&selectedItem.key.equals(item.key));return row;
+            }
+
+            private void setEntryIcon(android.widget.ImageView view,DeviceBrowserItem item){
+                if(item.directory){view.setImageDrawable(new BrowserGlyph(0,accent));return;}
+                String lower=item.name.toLowerCase(java.util.Locale.ROOT);
+                boolean image=item.mime.startsWith("image/")||lower.endsWith(".jpg")||lower.endsWith(".jpeg")||lower.endsWith(".png")||lower.endsWith(".webp")||lower.endsWith(".heic")||lower.endsWith(".heif");
+                view.setImageDrawable(new BrowserGlyph(image?2:1,muted));
+                if(image)requestThumbnail(DeviceBrowser.this,item,view);
+            }
+        }
+    }
+
+    private final class BrowserGlyph extends android.graphics.drawable.Drawable {
+        private final int kind,color;
+        private final android.graphics.Paint paint=new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Path path=new android.graphics.Path();
+        private int alpha=255;
+        BrowserGlyph(int kind,int color){this.kind=kind;this.color=color;}
+        @Override public void draw(android.graphics.Canvas canvas){
+            android.graphics.Rect bounds=getBounds();if(bounds.width()<=0||bounds.height()<=0)return;
+            int save=canvas.save();canvas.translate(bounds.left,bounds.top);canvas.scale(bounds.width()/64f,bounds.height()/64f);
+            paint.setAlpha(alpha);paint.setStyle(android.graphics.Paint.Style.FILL);
+            paint.setColor(blend(surface,color,.12f));canvas.drawRoundRect(4,4,60,60,13,13,paint);
+            if(kind==0){
+                paint.setColor(color);path.reset();path.moveTo(9,17);path.lineTo(26,17);path.lineTo(31,22);path.lineTo(55,22);path.quadTo(58,22,58,26);path.lineTo(58,49);path.quadTo(58,53,54,53);path.lineTo(10,53);path.quadTo(6,53,6,49);path.lineTo(6,21);path.quadTo(6,17,9,17);path.close();canvas.drawPath(path,paint);
+                paint.setColor(blend(color,Color.WHITE,.17f));canvas.drawRoundRect(8,28,56,49,5,5,paint);
+            }else if(kind==2){
+                paint.setColor(blend(color,Color.WHITE,.68f));canvas.drawRoundRect(13,9,51,55,5,5,paint);
+                paint.setColor(blend(color,Color.WHITE,.24f));path.reset();path.moveTo(38,9);path.lineTo(51,22);path.lineTo(38,22);path.close();canvas.drawPath(path,paint);
+                paint.setColor(color);canvas.drawCircle(24,28,3,paint);path.reset();path.moveTo(16,47);path.lineTo(26,36);path.lineTo(32,42);path.lineTo(40,32);path.lineTo(49,43);path.lineTo(49,49);path.lineTo(16,49);path.close();canvas.drawPath(path,paint);
+            }else{
+                paint.setColor(blend(surface,color,.18f));path.reset();path.moveTo(17,8);path.lineTo(39,8);path.lineTo(50,19);path.lineTo(50,55);path.quadTo(50,57,47,57);path.lineTo(17,57);path.quadTo(14,57,14,54);path.lineTo(14,11);path.quadTo(14,8,17,8);path.close();canvas.drawPath(path,paint);
+                paint.setColor(color);path.reset();path.moveTo(38,9);path.lineTo(50,21);path.lineTo(40,21);path.quadTo(38,21,38,19);path.close();canvas.drawPath(path,paint);
+                paint.setStrokeWidth(2.4f);paint.setStrokeCap(android.graphics.Paint.Cap.ROUND);canvas.drawLine(22,31,42,31,paint);canvas.drawLine(22,39,42,39,paint);canvas.drawLine(22,47,37,47,paint);
+            }
+            canvas.restoreToCount(save);
+        }
+        @Override public void setAlpha(int value){alpha=Math.max(0,Math.min(255,value));invalidateSelf();}
+        @Override public void setColorFilter(android.graphics.ColorFilter filter){paint.setColorFilter(filter);invalidateSelf();}
+        @Override public int getOpacity(){return android.graphics.PixelFormat.TRANSLUCENT;}
+    }
+
+    private int blend(int base,int over,float amount){
+        float inverse=1f-amount;
+        return Color.rgb(Math.round(Color.red(base)*inverse+Color.red(over)*amount),
+            Math.round(Color.green(base)*inverse+Color.green(over)*amount),
+            Math.round(Color.blue(base)*inverse+Color.blue(over)*amount));
+    }
+
+    private String formatSize(long bytes){
+        if(bytes<1024)return bytes+" B";
+        if(bytes<1024*1024)return String.format(java.util.Locale.getDefault(),"%.0f KB",bytes/1024.0);
+        if(bytes<1024L*1024L*1024L)return String.format(java.util.Locale.getDefault(),"%.1f MB",bytes/(1024.0*1024.0));
+        return String.format(java.util.Locale.getDefault(),"%.1f GB",bytes/(1024.0*1024.0*1024.0));
+    }
+
+    private String formatModified(long seconds){
+        if(seconds<=0)return "Date unavailable";
+        return java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM,java.text.DateFormat.SHORT)
+            .format(new Date(seconds>100000000000L?seconds:seconds*1000L));
+    }
+
+    private void requestThumbnail(DeviceBrowser browser,DeviceBrowserItem item,android.widget.ImageView target){
+        String key=item.key;
+        target.setTag(key);
+        android.graphics.Bitmap cached=deviceThumbnailCache.get(key);
+        if(cached!=null){target.setImageBitmap(cached);target.clearColorFilter();return;}
+        if(!deviceThumbnailPending.add(key))return;
+        try{workers.execute(()->{
+            android.graphics.Bitmap bitmap=null;
+            try{
+                android.graphics.BitmapFactory.Options bounds=new android.graphics.BitmapFactory.Options();bounds.inJustDecodeBounds=true;
+                try(InputStream input=thumbnailInput(browser,item)){android.graphics.BitmapFactory.decodeStream(input,null,bounds);}
+                if(bounds.outWidth>0&&bounds.outHeight>0){
+                    int sample=1;int side=Math.max(bounds.outWidth,bounds.outHeight);
+                    while(side/sample>240)sample*=2;
+                    android.graphics.BitmapFactory.Options options=new android.graphics.BitmapFactory.Options();options.inSampleSize=sample;options.inPreferredConfig=android.graphics.Bitmap.Config.RGB_565;
+                    try(InputStream input=thumbnailInput(browser,item)){bitmap=android.graphics.BitmapFactory.decodeStream(input,null,options);}
+                }
+            }catch(Exception ignored){}finally{deviceThumbnailPending.remove(key);}
+            if(bitmap!=null)deviceThumbnailCache.put(key,bitmap);
+            final android.graphics.Bitmap result=bitmap;
+            runOnUiThread(()->{if(!closed&&result!=null&&key.equals(target.getTag())){target.setImageBitmap(result);target.clearColorFilter();}});
+        });}catch(RejectedExecutionException unavailable){deviceThumbnailPending.remove(key);}
+    }
+
+    private InputStream thumbnailInput(DeviceBrowser browser,DeviceBrowserItem item)throws Exception{
+        if(item.documentId!=null){
+            Uri uri=android.provider.DocumentsContract.buildDocumentUriUsingTree(browser.treeUri,item.documentId);
+            selectedDocumentAccess(uri);
+            android.os.ParcelFileDescriptor descriptor=getContentResolver().openFileDescriptor(uri,"r");
+            if(descriptor==null)throw new IOException("Image thumbnail could not be opened");
+            return new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor);
+        }
+        if(item.file==null)throw new IOException("Image thumbnail path is unavailable");
+        deviceActive(browser.token,null,true,false);
+        return DocumentAccess.regularInput(item.file);
+    }
+
+    private void previewSelectedText(DeviceBrowser browser,DeviceBrowserItem item){
+        TextView content=label("Loading text…",14);content.setTextColor(ink);content.setTextIsSelectable(true);content.setPadding(dp(16),dp(12),dp(16),dp(12));
+        ScrollView scroll=new ScrollView(this);scroll.setBackgroundColor(surface);scroll.addView(content,new ScrollView.LayoutParams(-1,-2));
+        AlertDialog preview=new AlertDialog.Builder(this).setTitle(item.name).setView(scroll).setPositiveButton("Close",null).create();preview.show();
+        try{workers.execute(()->{
+            String result;
+            try{
+                Uri uri=browser.entryUri(item);selectedDocumentAccess(uri);
+                byte[] bytes;try(InputStream input=getContentResolver().openInputStream(uri)){if(input==null)throw new IOException("Selected text file could not be opened");bytes=read(input,1024*1024+1);}
+                if(bytes.length>1024*1024)throw new IOException("Text file exceeds 1 MiB");
+                result=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+                if(result.indexOf('\0')>=0)throw new IOException("Choose a UTF-8 text document without NUL bytes");
+            }catch(Exception problem){result="Unable to read device text: "+safe(problem);}
+            final String shown=result;runOnUiThread(()->{if(preview.isShowing())content.setText(shown);});
+        });}catch(RejectedExecutionException unavailable){content.setText("Unable to read device text: "+safe(unavailable));}
+    }
+
+    private Uri externalStorageDocumentUri(File file)throws Exception{
+        String path=file.getAbsolutePath();
+        for(File volume:DocumentAccess.volumes(this)){
+            String root=volume.getAbsolutePath();
+            if(!DocumentAccess.contains(volume,file))continue;
+            String relative=path.equals(root)?"":path.substring(root.length());
+            while(relative.startsWith(File.separator))relative=relative.substring(1);
+            String volumeId=volume.equals(DocumentAccess.primary())?"primary":volume.getName();
+            String documentId=volumeId+":"+relative.replace(File.separatorChar,'/');
+            return android.provider.DocumentsContract.buildDocumentUri("com.android.externalstorage.documents",documentId);
+        }
+        throw new IOException("The selected path is outside Android shared storage");
+    }
+
+    private void openBrowserItem(DeviceBrowser browser,DeviceBrowserItem item){
+        try{
+            Uri uri=browser.entryUri(item);selectedDocumentAccess(uri);
+            String mime=item.mime;
+            if(mime==null||mime.isEmpty()||mime.equals("application/octet-stream")){String actual=getContentResolver().getType(uri);if(actual!=null&&!actual.isEmpty())mime=actual;}
+            if(mime==null||mime.isEmpty())mime="*/*";
+            Intent view=new Intent(Intent.ACTION_VIEW).setDataAndType(uri,mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(view,"Open file"));
+        }catch(Exception problem){deviceNotice("This file could not be opened: "+safe(problem));}
+    }
+
+    private static final class AttachmentImage {
+        final byte[] bytes;final String mime;
+        AttachmentImage(byte[] bytes,String mime){this.bytes=bytes;this.mime=mime;}
+    }
+
+    private byte[] imageBytesForAttachment(byte[] source,String mime)throws IOException{
+        boolean png=source.length>=8&&source[0]==(byte)137&&source[1]==80&&source[2]==78&&source[3]==71;
+        boolean jpeg=source.length>=2&&source[0]==(byte)255&&source[1]==(byte)216;
+        boolean image=(mime!=null&&mime.startsWith("image/"))||png||jpeg;
+        if(!image)return source;
+        android.graphics.BitmapFactory.Options bounds=new android.graphics.BitmapFactory.Options();bounds.inJustDecodeBounds=true;
+        android.graphics.BitmapFactory.decodeByteArray(source,0,source.length,bounds);
+        long pixels=(long)bounds.outWidth*bounds.outHeight;
+        if(bounds.outWidth<=0||bounds.outHeight<=0)throw new IOException("The selected image could not be decoded by Android");
+        if((png||jpeg)&&source.length<=2*1024*1024&&bounds.outWidth<=16384&&bounds.outHeight<=16384&&pixels<=32_000_000L)return source;
+        int sample=1;
+        while(bounds.outWidth/sample>4096||bounds.outHeight/sample>4096||(long)(bounds.outWidth/sample)*(bounds.outHeight/sample)>12_000_000L)sample*=2;
+        android.graphics.BitmapFactory.Options options=new android.graphics.BitmapFactory.Options();options.inSampleSize=sample;options.inPreferredConfig=android.graphics.Bitmap.Config.RGB_565;
+        android.graphics.Bitmap bitmap=android.graphics.BitmapFactory.decodeByteArray(source,0,source.length,options);
+        if(bitmap==null)throw new IOException("Android could not decode this image type");
+        try{
+            for(int scale=0;scale<5;scale++){
+                for(int quality:new int[]{88,82,76,70,64}){
+                    ByteArrayOutputStream output=new ByteArrayOutputStream();
+                    if(!bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,quality,output))throw new IOException("Selected image could not be encoded as JPEG");
+                    if(output.size()<=2*1024*1024)return output.toByteArray();
+                }
+                int width=Math.max(1,(int)(bitmap.getWidth()*.78f)),height=Math.max(1,(int)(bitmap.getHeight()*.78f));
+                android.graphics.Bitmap smaller=android.graphics.Bitmap.createScaledBitmap(bitmap,width,height,true);
+                if(smaller!=bitmap)bitmap.recycle();bitmap=smaller;
+            }
+        }finally{bitmap.recycle();}
+        throw new IOException("The selected image could not be reduced below 2 MiB");
+    }
+
+    private void readPickedAttachment(Uri uri,String ticket,int token,int limit,boolean releaseGrant){
+        try{workers.execute(()->{
+            try{
+                selectedDocumentAccess(uri);
+                byte[] bytes=pickedDocumentBytes(uri,limit,token);
+                String name="Selected file",mime=getContentResolver().getType(uri);
+                try(android.database.Cursor cursor=getContentResolver().query(uri,new String[]{android.provider.OpenableColumns.DISPLAY_NAME},null,null,null)){
+                    if(cursor!=null&&cursor.moveToFirst()){String value=cursor.getString(0);if(value!=null&&!value.isEmpty())name=value;}
+                }
+                if(name.length()>128)name=name.substring(0,128);
+                String contentType=mime==null?"application/octet-stream":mime;
+                AttachmentImage image=null;
+                boolean png=bytes.length>=8&&bytes[0]==(byte)137&&bytes[1]==80&&bytes[2]==78&&bytes[3]==71;
+                boolean jpeg=bytes.length>=2&&bytes[0]==(byte)255&&bytes[1]==(byte)216;
+                if(png||jpeg||contentType.startsWith("image/")){
+                    byte[] prepared=imageBytesForAttachment(bytes,contentType);
+                    boolean preparedPng=prepared.length>=8&&prepared[0]==(byte)137&&prepared[1]==80&&prepared[2]==78&&prepared[3]==71;
+                    image=new AttachmentImage(prepared,preparedPng?"image/png":"image/jpeg");
+                }
+                final String selectedName=name;
+                final AttachmentImage selectedImage=image;
+                if(selectedImage!=null){
+                    JSONObject result=new JSONObject().put("document_ticket",ticket).put("name",selectedName).put("mime",selectedImage.mime)
+                        .put("bytes",selectedImage.bytes.length).put("data",Base64.encodeToString(selectedImage.bytes,Base64.NO_WRAP));
+                    deliverPickedDocument(token,()->{documentTicket="";dispatch("image_result",result);});
+                }else{
+                    if(bytes.length>1024*1024)throw new IOException("Text document exceeds 1 MiB");
+                    String text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+                    if(text.indexOf('\0')>=0)throw new IOException("Select a PNG/JPEG image or UTF-8 text document");
+                    JSONObject result=new JSONObject().put("document_ticket",ticket).put("content",text);
+                    deliverPickedDocument(token,()->{documentTicket="";dispatch("document_result",result);});
+                }
+            }catch(Exception problem){failPickedAttachment(ticket,token,problem);}
+            finally{if(releaseGrant)try{getContentResolver().releasePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}}
+        });}catch(RejectedExecutionException unavailable){failPickedAttachment(ticket,token,unavailable);}
+    }
+
+    private void failPickedAttachment(String ticket,int token,Exception failure){
+        deliverPickedDocument(token,()->{
+            documentTicket="";
+            try{dispatch("document_failure",new JSONObject().put("document_ticket",ticket).put("error",safe(failure)));}
+            catch(Exception problem){Toast.makeText(this,safe(failure),Toast.LENGTH_LONG).show();}
+        });
     }
 
     private static byte[] deviceWriteBytes(String content)throws IOException {
@@ -1121,8 +1541,9 @@ public final class Activity extends android.app.Activity {
         restoreConversation(conversationList,prior,prior==null||prior[2]==1);
     }
     private void render(JSONObject ui) throws Exception {
+        lastRenderedUi=ui;boolean browserOpen=deviceBrowser!=null;
         boolean composerFocus=draft!=null&&draft.hasFocus();int selection=draft==null?0:Math.max(0,draft.getSelectionStart());rememberScroll();conversationScrollRevision++;restoringConversation=false;conversationWidth=0;conversationHeight=0;conversationList=null;latestReply=null;displayedMessages=null;statusView=null;chatBanner=null;conversationHeading=null;activeComposer=null;modelFooter=null;composerMenu=null;rateBadge=null;rateValue=null;rateCaption=null;rateDiagram=null;
-        rendering=true;if(dialog!=null){dialog.dismiss();dialog=null;}fields.clear();draft=null;composerActions=ui.optJSONArray("composer_menu");
+        rendering=true;if(!browserOpen&&dialog!=null){dialog.dismiss();dialog=null;}fields.clear();draft=null;composerActions=ui.optJSONArray("composer_menu");
         JSONObject appearance=ui.optJSONObject("appearance");if(appearance==null)appearance=new JSONObject();textScale=Math.max(1f,Math.min(2f,appearance.optInt("scale",100)/100f));proseFont=Typeface.create(appearance.optString("font","sans-serif"),Typeface.NORMAL);
         canNavigateBack=ui.optBoolean("can_navigate_back");JSONObject geometry=layout(ui);String page=ui.optString("page");boolean busy=ui.optBoolean("busy"),dark=ui.optString("theme").equals("dark");
         JSONObject palette=ui.getJSONObject("palette");ink=Color.parseColor(palette.getString("ink"));surface=Color.parseColor(palette.getString("surface"));card=Color.parseColor(palette.getString("card"));muted=Color.parseColor(palette.getString("muted"));accent=Color.parseColor(palette.getString("accent"));glass=Color.parseColor(palette.getString("glass"));border=Color.parseColor(palette.getString("border"));
@@ -1201,7 +1622,7 @@ public final class Activity extends android.app.Activity {
         if(busy&&state.optBoolean("mcp_client_resumable")&&state.optString("mcp_client_expected").startsWith("mcp_client_server:"))outer.addView(button("Pause server stream",()->dispatch("mcp_client_pause")),new LinearLayout.LayoutParams(-1,dp(48)));
         if(page.equals("chat"))applyChatGeometry(geometry);
         outer.setOnApplyWindowInsetsListener((view,insets)->{readContentInsets(insets);view.setPadding(dp(8)+insetLeft,insetTop,dp(8)+insetRight,dp(8)+insetBottom);queueViewport();return insets;});
-        setContentView(scene);showSystemBarAppearance(dark);syncPlatformBack();outer.requestApplyInsets();JSONObject modal=ui.optJSONObject("modal");if(modal!=null)modal(modal);else if(composerFocus&&draft!=null){draft.requestFocus();draft.setSelection(Math.min(selection,draft.length()));}rendering=false;
+        setContentView(scene);showSystemBarAppearance(dark);syncPlatformBack();outer.requestApplyInsets();JSONObject modal=ui.optJSONObject("modal");if(!browserOpen&&modal!=null)modal(modal);else if(!browserOpen&&composerFocus&&draft!=null){draft.requestFocus();draft.setSelection(Math.min(selection,draft.length()));}rendering=false;
     }
     private void composerChoices(View anchor){
         JSONArray actions=composerActions;if(actions==null||actions.length()==0)return;
@@ -1394,7 +1815,23 @@ public final class Activity extends android.app.Activity {
         if(kind.equals("document_zip")){pendingImport=null;Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/zip").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,45);return;}
         if(kind.equals("conversation_document")){Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/json").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,46);return;}
         if(kind.equals("archive_clear")){pendingImport=null;return;}
-        if(kind.equals("document")){documentTicket=e.getString("document_ticket");documentGeneration=generation;try{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,41);}catch(android.content.ActivityNotFoundException|SecurityException problem){String failedTicket=documentTicket;documentTicket="";dispatch("document_failure",new JSONObject().put("document_ticket",failedTicket).put("error",safe(problem)));}return;}
+        if(kind.equals("document")){
+            documentTicket=e.getString("document_ticket");documentGeneration=generation;
+            if(pendingDeviceProviderDocument!=null){
+                Uri uri=pendingDeviceProviderDocument;int flags=pendingDeviceProviderFlags;boolean acquired=pendingDeviceProviderGrant;
+                pendingDeviceProviderDocument=null;pendingDeviceProviderFlags=0;pendingDeviceProviderGrant=false;
+                readPickedAttachment(uri,documentTicket,documentGeneration,32*1024*1024,acquired);return;
+            }
+            DeviceBrowser browser=deviceBrowser;
+            if(browser!=null&&browser.selectedItem!=null){
+                try{readPickedAttachment(browser.entryUri(browser.selectedItem),documentTicket,documentGeneration,32*1024*1024,false);}
+                catch(Exception problem){failPickedAttachment(documentTicket,documentGeneration,problem);}
+                return;
+            }
+            try{Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(intent,41);}
+            catch(android.content.ActivityNotFoundException|SecurityException problem){String failedTicket=documentTicket;documentTicket="";dispatch("document_failure",new JSONObject().put("document_ticket",failedTicket).put("error",safe(problem)));}
+            return;
+        }
         if(kind.equals("network")&&e.optString("purpose").equals("project_file"))pendingImport=null;
         final boolean model=kind.equals("network")&&e.optString("purpose").equals("model");
         final int token=model?TurnService.nextToken():++generation;
@@ -1900,6 +2337,51 @@ public final class Activity extends android.app.Activity {
         }catch(Exception problem){if(expired.get())throw new IOException("Selected document read timed out",problem);throw problem;}
         finally{if(timeout!=null)timeout.cancel(false);documentSignals.remove(signal);android.os.ParcelFileDescriptor file=opened.get();if(file!=null)documentFiles.remove(file);}
     }
+
+    private boolean persistedReadGrant(Uri uri){
+        for(android.content.UriPermission permission:getContentResolver().getPersistedUriPermissions())
+            if(uri.equals(permission.getUri())&&permission.isReadPermission())return true;
+        return false;
+    }
+
+    private void finishBrowserProviderPick(int result,Intent data){
+        boolean launched=pendingDeviceProviderPicker;pendingDeviceProviderPicker=false;
+        if(!launched||result!=RESULT_OK||data==null||data.getData()==null)return;
+        Uri uri=data.getData();int flags=data.getFlags();
+        if((flags&Intent.FLAG_GRANT_READ_URI_PERMISSION)==0){deviceNotice("The provider did not grant read access to the selected file");return;}
+        boolean acquired=false;
+        try{
+            selectedDocumentAccess(uri);
+            if((flags&Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)!=0&&!persistedReadGrant(uri)){
+                try{getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);acquired=true;}catch(SecurityException ignored){}
+            }
+            pendingDeviceProviderDocument=uri;pendingDeviceProviderFlags=flags;pendingDeviceProviderGrant=acquired;
+            dispatch("phone_file");
+        }catch(Exception problem){
+            if(acquired)try{getContentResolver().releasePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}
+            pendingDeviceProviderDocument=null;pendingDeviceProviderFlags=0;pendingDeviceProviderGrant=false;deviceNotice("The selected provider file could not be opened: "+safe(problem));
+        }
+    }
+
+    private void finishBrowserTreePick(int result,Intent data){
+        boolean launched=pendingBrowserTreePicker;pendingBrowserTreePicker=false;
+        if(!launched||result!=RESULT_OK||data==null||data.getData()==null)return;
+        Uri tree=data.getData();int flags=data.getFlags();
+        if((flags&Intent.FLAG_GRANT_READ_URI_PERMISSION)==0){deviceNotice("Android Files did not grant read access to that folder");return;}
+        boolean already=persistedReadGrant(tree),acquired=false;
+        try{
+            if(!android.provider.DocumentsContract.isTreeUri(tree))throw new IOException("Choose a folder from Android Files");
+            DocumentAccess.check(tree,phoneStorageAccess,cloudStorageAccess,false);
+            if(!already&&(flags&Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)!=0){
+                getContentResolver().takePersistableUriPermission(tree,Intent.FLAG_GRANT_READ_URI_PERMISSION);acquired=true;
+            }
+            openDeviceBrowser(tree,acquired);
+        }catch(Exception problem){
+            if(acquired)try{getContentResolver().releasePersistableUriPermission(tree,Intent.FLAG_GRANT_READ_URI_PERMISSION);}catch(Exception ignored){}
+            deviceNotice("That folder could not be browsed: "+safe(problem));
+        }
+    }
+
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
         if(request==PICK_APK){
@@ -1915,6 +2397,8 @@ public final class Activity extends android.app.Activity {
         if(media.result(request,result,data))return;
         if(request==48){finishPhoneAccessRequest();return;}
         if(request==49){cloudSelection(result,data);return;}
+        if(request==50){finishBrowserProviderPick(result,data);return;}
+        if(request==51){finishBrowserTreePick(result,data);return;}
 
         if(request==42||request==44){finishSavedExport(result,data);return;}
         if(result!=RESULT_OK||data==null||data.getData()==null){if(request==41){try{dispatch("document_cancel",new JSONObject().put("document_ticket",documentTicket));}catch(JSONException ignored){}documentTicket="";}if(request==45){pendingImport=null;dispatch("archive_reject");}return;}

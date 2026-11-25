@@ -90,6 +90,43 @@ final class DocumentAccess {
         used[0]+=addition;
     }
 
+    private static JSONObject browserEntry(String name,boolean directory,long bytes,long modified,String mime)throws Exception {
+        if(name==null||name.isEmpty()||name.indexOf('/')>=0||name.indexOf(0)>=0)throw new IOException("Invalid device directory entry");
+        for(int i=0;i<name.length();i++)if(Character.isISOControl(name.charAt(i)))throw new IOException("Invalid device directory entry");
+        if(name.length()>MAX_ENTRY_CHARS)throw new IOException("Device folder entry name exceeds 1024 characters");
+        byte[] encoded=name.getBytes(StandardCharsets.UTF_8);
+        if(encoded.length>MAX_ENTRY_CHARS)throw new IOException("Device folder entry name exceeds 1024 bytes");
+        return new JSONObject().put("name",name).put("directory",directory).put("bytes",Math.max(0,bytes))
+            .put("modified",Math.max(0,modified)).put("mime",mime==null||mime.isEmpty()?"application/octet-stream":mime);
+    }
+
+    static JSONArray browserList(File folder,Check check)throws Exception {
+        HeldDirectory directory=openDirectory(folder);
+        try{
+            JSONArray rows=new JSONArray();
+            try(java.nio.file.DirectoryStream<java.nio.file.Path> entries=java.nio.file.Files.newDirectoryStream(java.nio.file.Paths.get("/proc/self/fd/"+directory.number()))){
+                for(java.nio.file.Path entry:entries){
+                    check.run();
+                    String name=entry.getFileName().toString();
+                    if(name.equals(".")||name.equals(".."))continue;
+                    android.system.StructStat stat;
+                    try{stat=android.system.Os.lstat(directory.childPath(name));}
+                    catch(android.system.ErrnoException problem){throw new IOException("Device path is unavailable: "+name+". "+problem.getMessage(),problem);}
+                    int kind=stat.st_mode&android.system.OsConstants.S_IFMT;
+                    boolean isDirectory=kind==android.system.OsConstants.S_IFDIR;
+                    String mime="application/octet-stream";
+                    if(!isDirectory){
+                        String extension=android.webkit.MimeTypeMap.getFileExtensionFromUrl(name);
+                        String guessed=android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.toLowerCase(java.util.Locale.ROOT));
+                        if(guessed!=null)mime=guessed;
+                    }
+                    rows.put(browserEntry(name,isDirectory,stat.st_size,stat.st_mtime,mime));
+                }
+            }
+            return rows;
+        }finally{directory.quiet();}
+    }
+
     static void check(Uri uri,boolean phone,boolean providers,boolean selected)throws IOException {
         if(!valid(uri))throw new IOException("Select a valid document from the device file locations");
         if((selected||provider(uri))&&!providers)throw new IOException("Document provider access is off in Setup");
@@ -186,29 +223,42 @@ final class DocumentAccess {
     }
 
     private static HeldDirectory openDirectory(File directory)throws IOException {
-        String absolute=directory.getAbsolutePath();
-        // The walked path includes the volume prefix already counted against the user-path cap.
+        String absolute=directory.getAbsoluteFile().toPath().normalize().toString();
         if(absolute.length()>8192)throw new IOException("Device path exceeds 8192 characters");
         if(pathParts(absolute)>512)throw new IOException("Device path exceeds 512 components");
         if(!absolute.startsWith("/"))throw new IOException("Enter an absolute device path");
-        FileDescriptor root;
+        File anchor=directoryAnchor(new File(absolute));
+        if(anchor==null)throw new IOException("Device path is outside an accessible storage volume or app directory: "+absolute);
+        String anchorPath=anchor.getAbsolutePath();
+        FileDescriptor root=null;
         try{
-            root=android.system.Os.open("/",android.system.OsConstants.O_RDONLY|OPEN_DIRECTORY
-                |android.system.OsConstants.O_NOFOLLOW|android.system.OsConstants.O_CLOEXEC,0);
+            // Volume and app-private anchors come from Android APIs; O_NOFOLLOW protects every child below them.
+            try{root=android.system.Os.open(anchorPath,android.system.OsConstants.O_RDONLY|OPEN_DIRECTORY
+                |android.system.OsConstants.O_CLOEXEC,0);}
+            catch(android.system.ErrnoException problem){
+                if(problem.errno!=android.system.OsConstants.EINVAL)throw problem;
+                root=android.system.Os.open(anchorPath,android.system.OsConstants.O_RDONLY|android.system.OsConstants.O_CLOEXEC,0);
+            }
+            android.system.StructStat stat=android.system.Os.fstat(root);
+            if((stat.st_mode&android.system.OsConstants.S_IFMT)!=android.system.OsConstants.S_IFDIR){
+                android.system.Os.close(root);root=null;
+                throw new IOException("Device path anchor is not a directory: "+anchorPath);
+            }
         }catch(android.system.ErrnoException problem){
-            throw new IOException("Device path is unavailable: /. "+problem.getMessage(),problem);
+            if(root!=null)try{android.system.Os.close(root);}catch(android.system.ErrnoException ignored){}
+            throw new IOException("Device path is unavailable: "+anchorPath+". "+problem.getMessage(),problem);
         }
         HeldDirectory current=new HeldDirectory(root);
         try{
-            StringBuilder walked=new StringBuilder();
-            for(String part:absolute.split("/")){
+            StringBuilder walked=new StringBuilder(anchorPath);
+            String relative=absolute.equals(anchorPath)?"":absolute.substring(anchorPath.length()+1);
+            for(String part:relative.split("/")){
                 if(part.isEmpty())continue;
                 leafName(part);
                 walked.append('/').append(part);
                 FileDescriptor next;
                 try{
-                    next=android.system.Os.open(current.childPath(part),android.system.OsConstants.O_RDONLY
-                        |OPEN_DIRECTORY|android.system.OsConstants.O_NOFOLLOW|android.system.OsConstants.O_CLOEXEC,0);
+                    next=openRelative(current,part,android.system.OsConstants.O_RDONLY|OPEN_DIRECTORY,0);
                 }catch(android.system.ErrnoException problem){
                     if(problem.errno==android.system.OsConstants.ELOOP)throw new IOException("Device path is a symbolic link: "+walked);
                     if(problem.errno==android.system.OsConstants.ENOTDIR)throw new IOException("Device path is not a directory: "+walked);
@@ -236,9 +286,31 @@ final class DocumentAccess {
         }finally{if(current!=null)current.quiet();}
     }
 
+    private static volatile File[] directoryAnchors=new File[0];
+
+    private static File directoryAnchor(File path){
+        File best=null;
+        File[] anchors=directoryAnchors;
+        for(File anchor:anchors)if(anchor!=null&&contains(anchor,path)
+            &&(best==null||anchor.getPath().length()>best.getPath().length()))best=anchor;
+        return best;
+    }
+
+    private static void addAnchor(ArrayList<File> anchors,File directory){
+        if(directory==null)return;
+        File absolute=directory.getAbsoluteFile().toPath().normalize().toFile();
+        if(!anchors.contains(absolute))anchors.add(absolute);
+    }
+
     private static FileDescriptor openRelative(HeldDirectory directory,String name,int flags,int mode)throws IOException,android.system.ErrnoException {
         leafName(name);
-        return android.system.Os.open(directory.childPath(name),flags|android.system.OsConstants.O_NOFOLLOW|android.system.OsConstants.O_CLOEXEC,mode);
+        int safeFlags=flags|android.system.OsConstants.O_NOFOLLOW|android.system.OsConstants.O_CLOEXEC;
+        try{return android.system.Os.open(directory.childPath(name),safeFlags,mode);}
+        catch(android.system.ErrnoException problem){
+            if((flags&OPEN_DIRECTORY)==0||problem.errno!=android.system.OsConstants.EINVAL)throw problem;
+            return android.system.Os.open(directory.childPath(name),(flags&~OPEN_DIRECTORY)
+                |android.system.OsConstants.O_NONBLOCK|android.system.OsConstants.O_NOFOLLOW|android.system.OsConstants.O_CLOEXEC,mode);
+        }
     }
 
     private static void bind(File file)throws IOException {
@@ -281,6 +353,7 @@ final class DocumentAccess {
 
     /** User path under a shared volume. Every component is opened with O_NOFOLLOW; a symbolic link is refused. */
     static File sharedFile(Context context,String path)throws IOException {
+        rememberVolumeAnchors(context);
         File requested=path.isEmpty()?primary():absolute(path);
         if(lexicalVolume(context,requested)==null)throw new IOException("Choose a path on a shared device volume");
         bind(requested);
@@ -331,6 +404,7 @@ final class DocumentAccess {
 
     static File directTree(Context context,String tree)throws IOException {
         if(!directGranted(context)||tree.isEmpty())return null;
+        rememberVolumeAnchors(context);
         if(tree.startsWith("/")) {
             File folder=absolute(tree);
             if(lexicalVolume(context,folder)==null)throw new IOException("Selected folder is outside shared device storage");
@@ -1063,10 +1137,14 @@ final class DocumentAccess {
 
     static void prepareHolding(Context context){
         ArrayList<File> roots=new ArrayList<>();
+        ArrayList<File> anchors=new ArrayList<>();
+        try{for(File volume:volumes(context))addAnchor(anchors,volume);}
+        catch(IOException unavailable){addAnchor(anchors,primary());}
         File internal=context.getFilesDir();
         if(internal!=null){
             if(!internal.isDirectory())internal.mkdirs();
             roots.add(internal);
+            addAnchor(anchors,internal);
         }
         File[] external=context.getExternalFilesDirs(null);
         if(external!=null)for(File directory:external){
@@ -1075,6 +1153,14 @@ final class DocumentAccess {
             if(directory.isDirectory())roots.add(directory);
         }
         holdingDirectories=roots.toArray(new File[0]);
+        directoryAnchors=anchors.toArray(new File[0]);
+    }
+
+    private static void rememberVolumeAnchors(Context context)throws IOException {
+        ArrayList<File> anchors=new ArrayList<>();
+        for(File anchor:directoryAnchors)addAnchor(anchors,anchor);
+        for(File volume:volumes(context))addAnchor(anchors,volume);
+        directoryAnchors=anchors.toArray(new File[0]);
     }
 
     static String holdingArgument(){
@@ -1718,8 +1804,14 @@ final class DocumentAccess {
         final String root;
 
         Tree(ContentResolver resolver,Uri tree,boolean write,CancellationSignal signal,Check check)throws IOException {
+            this(resolver,tree,write,signal,check,false);
+        }
+
+        Tree(ContentResolver resolver,Uri tree,boolean write,CancellationSignal signal,Check check,boolean allowProvider)throws IOException {
             this.resolver=resolver;this.tree=tree;this.signal=signal;this.check=check;
-            requireLocalTree(tree);
+            if(allowProvider){
+                if(!valid(tree)||!DocumentsContract.isTreeUri(tree))throw new IOException("Choose a valid document-provider folder first");
+            }else requireLocalTree(tree);
             for(UriPermission grant:resolver.getPersistedUriPermissions()){
                 if(tree.equals(grant.getUri())&&grant.isReadPermission()&&(!write||grant.isWritePermission())){
                     root=DocumentsContract.getTreeDocumentId(tree);
@@ -1731,13 +1823,16 @@ final class DocumentAccess {
 
         private Uri uri(String id) { return DocumentsContract.buildDocumentUriUsingTree(tree,id); }
 
+        Uri documentUri(String id) { return uri(id); }
+
         private Cursor children(String id)throws Exception { return children(id,true); }
 
         private Cursor children(String id,boolean observe)throws Exception {
             if(observe)check.run();
             Cursor cursor=resolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree,id),
                 new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                    DocumentsContract.Document.COLUMN_MIME_TYPE},null,null,null,observe?signal:null);
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,DocumentsContract.Document.COLUMN_SIZE,
+                    DocumentsContract.Document.COLUMN_LAST_MODIFIED},null,null,null,observe?signal:null);
             if(cursor==null)throw new IOException("Device folder is unavailable");
             return cursor;
         }
@@ -1769,6 +1864,25 @@ final class DocumentAccess {
             return id;
         }
 
+        String browserResolve(String path)throws Exception {
+            String id=root;
+            if(path.isEmpty())return id;
+            boundPath(path);
+            for(String part:path.split("/",-1)){
+                leaf(part);
+                String match=null;
+                try(Cursor cursor=children(id)){
+                    while(cursor.moveToNext()){
+                        check.run();
+                        if(part.equals(cursor.getString(1))){if(match!=null)throw new IOException("Ambiguous device filename");match=cursor.getString(0);}
+                    }
+                }
+                if(match==null)throw new IOException("Device document is unavailable: "+part);
+                id=match;
+            }
+            return id;
+        }
+
         JSONArray list(String id)throws Exception {
             JSONArray rows=new JSONArray();
             int[] used=new int[]{2};
@@ -1776,6 +1890,24 @@ final class DocumentAccess {
                 while(cursor.moveToNext()){
                     check.run();
                     addListed(rows,cursor.getString(1),DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(2)),5000,"Device folder exceeds 5000 entries",used);
+                }
+            }
+            return rows;
+        }
+
+        JSONArray browserList(String id)throws Exception {
+            JSONArray rows=new JSONArray();
+            try(Cursor cursor=children(id)){
+                int sizeColumn=cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE);
+                int modifiedColumn=cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED);
+                while(cursor.moveToNext()){
+                    check.run();
+                    String name=cursor.getString(1),mime=cursor.isNull(2)?"application/octet-stream":cursor.getString(2);
+                    boolean directory=DocumentsContract.Document.MIME_TYPE_DIR.equals(mime);
+                    long bytes=sizeColumn<0||cursor.isNull(sizeColumn)?0:cursor.getLong(sizeColumn);
+                    long modified=modifiedColumn<0||cursor.isNull(modifiedColumn)?0:cursor.getLong(modifiedColumn);
+                    if(modified>100000000000L)modified/=1000L;
+                    rows.put(browserEntry(name,directory,bytes,modified,mime).put("document_id",cursor.getString(0)));
                 }
             }
             return rows;
@@ -2854,7 +2986,7 @@ final class DocumentAccess {
                         check.run();
                         String entry=name.toString(StandardCharsets.UTF_8.name());
                         if(entry.length()<2||(entry.charAt(0)!='d'&&entry.charAt(0)!='f'))throw new IOException("Invalid device directory entry");
-                        addListed(rows,entry.substring(1),entry.charAt(0)=='d',5000,"Device folder exceeds 5000 entries",used);
+                        rows.put(browserEntry(entry.substring(1),entry.charAt(0)=='d',0,0,"application/octet-stream"));
                         name.reset();
                     }else{
                         if(name.size()>=MAX_ENTRY_CHARS)throw new IOException("Device folder entry name exceeds 1024 characters");
