@@ -35,7 +35,7 @@ All screenshots are unedited captures of RLLM running on a Surface Laptop 7 (Win
 
 | Platform | File | Details |
 |---|---|---|
-| Android 8.0 or later (ARM64, x86-64) | [`RLLM-Lab-1795533287.apk`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Android-Launch-Fix__2026-11-24__15-35-00Z/RLLM-Lab-1795533287.apk) | Package `com.local.client.lab`, 6,641,606 bytes. Signing certificate SHA-256 `ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5`. |
+| Android 8.0 or later (ARM64, x86-64) | [`RLLM-Lab-1795559476.apk`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Android-File-Picker__2026-11-25__05-45-00Z/RLLM-Lab-1795559476.apk) | Package `com.local.client.lab`, 6,682,566 bytes. Signing certificate SHA-256 `ba3d016eb002221f6305378f9efe9b7dd9531a525bad8044cedd2cf63a3dbbd5`. |
 | Windows 10 or 11, ARM64 or x64 | [`RLLM-Setup.exe`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Windows-Installers__2026-11-20__21-35-25Z/RLLM-Setup.exe) | One installer for both kinds of PC: it detects the processor and installs the native ARM64 or x64 build. |
 | Windows 10 or 11, x64 | [`RLLM-Windows-x64.zip`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Windows-Installers__2026-11-20__21-35-25Z/RLLM-Windows-x64.zip) | A smaller package to send to x64 PCs: `RLLM-Setup-x64.exe`, a short read-me and the public certificate. |
 | Windows, no installer | [`RLLM-Desktop-arm64.exe`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Windows-Installers__2026-11-20__21-35-25Z/RLLM-Desktop-arm64.exe) · [`RLLM-Desktop-x64.exe`](https://github.com/sdfowler1977/RLLM/releases/download/RLLM__Windows-Installers__2026-11-20__21-35-25Z/RLLM-Desktop-x64.exe) | A single executable to run from any folder, with no runtime to add. |
@@ -50,7 +50,7 @@ Build instructions for both platforms are in [docs/BUILD.md](docs/BUILD.md).
 
 ## Feature details
 
-The Windows installers are signed candidate 1795208207. They add the Windows on ARM desktop app, HTTPS on Windows and compatibility with MiniMax's streaming replies, on top of the MCP connections, conversation menu, web search, transport and authorization changes described in the release notes. The Android download is package 1795533287. Its + button opens New conversation, Attach image or file, and More options, and More options opens the conversation menu. A saved agent profile belongs to one LLM, and a stream limit is capacity on that connection. Owner validation, unavailable historical comparisons and pending device/independent acceptance are recorded separately.
+The Windows installers are signed candidate 1795208207. They add the Windows on ARM desktop app, HTTPS on Windows and compatibility with MiniMax's streaming replies, on top of the MCP connections, conversation menu, web search, transport and authorization changes described in the release notes. The Android download is package 1795559476, whose Browse device files opens a real file browser with icons, thumbnails, selection and the system document picker. Its + button opens New conversation, Attach image or file, and More options, and More options opens the conversation menu. A saved agent profile belongs to one LLM, and a stream limit is capacity on that connection. Owner validation, unavailable historical comparisons and pending device/independent acceptance are recorded separately.
 
 RLLM connects your Android device to configured language models and integrates investigation into ordinary command following.
 
